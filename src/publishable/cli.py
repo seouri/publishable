@@ -813,9 +813,11 @@ def _comparison_step_blocks(
     arrangement a weighted condition gets from `summarize_step`.
 
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences unless `resample_columns` is set **and the pairing has at least
+    differences — `weighted_paired_t_over_units` instead, under a declared
+    weight — unless `resample_columns` is set **and the pairing has at least
     two units**, when it instead takes `paired_percentile_of_derived` over its
-    own column mean, the same construction a derived metric uses. A derived
+    own column mean (weighted inside the closure when a weight is declared),
+    the same construction a derived metric uses. A derived
     metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both

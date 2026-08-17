@@ -10026,9 +10026,16 @@ def test_a_weighted_column_contrast_with_no_resample_takes_the_weighted_t():
 def test_a_resampled_column_contrasts_member_carries_no_weights():
     """`corrected_from_pool = is_derived or resample_columns`, so the payoff path's
     member carries the POOL — already drawn from weighted values — and `Member`
-    refuses weights beside one. Pinned because setting `weights` unconditionally is
-    the natural mistake, and task 4's second `__post_init__` rule is what would
-    turn it into a loud `ValueError` rather than a doubled weighting."""
+    refuses weights beside one.
+
+    The real pin on `cli`'s pool guard is `Member.__post_init__` itself
+    (`test_weights_beside_a_pool_is_refused` in `test_correction.py`): once
+    `members[0].pool is not None` holds, `members[0].weights is None` follows
+    from the object having been constructed at all rather than from anything
+    this test's own assertions distinguish. What this test adds is that `cli`
+    reaches that shape at all — `pool is not None` and `diffs is None` — on a
+    real weighted, resampled call, not merely that the invariant holds in the
+    abstract."""
     weighted, members = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
     assert members[0].pool is not None
     assert members[0].diffs is None
@@ -10156,8 +10163,12 @@ def test_the_c1_shape_publishes_a_weighted_stratified_vs_baseline_delta():
     # The derived draw was stratified too: its own forced floor is the UNWEIGHTED
     # stratified one, 5.0, because core does not weight a derived metric.
     assert derived["ci95"][0] >= 5.0 - 1e-9
-    # Both metrics joined the correction family, and the column's member carries
-    # the pool rather than the differences.
+    # Both metrics joined the correction family, and the column's member
+    # carries the pool rather than the differences. `weights is None` follows
+    # from `pool is not None` alone (`Member.__post_init__` refuses the two
+    # together), so this is a shape check on `cli`'s output, not an
+    # independent pin on the guard itself — that pin is
+    # `test_weights_beside_a_pool_is_refused` in `test_correction.py`.
     assert {(m.step, m.metric) for m in members} == {
         ("step03_screen", "prob"),
         ("step03_screen", "auroc"),
@@ -10215,3 +10226,23 @@ def test_a_weighted_report_by_level_mints_no_member_and_no_delta():
     assert out is not None
     assert set(out[1]["step03_screen"]) == {"prob", "auroc"}
     assert len(members) == 2
+
+
+def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
+    """Fix round 1, M4. § Validation's *Allocation deltas aren't computed* row
+    cited *Weighted deltas aren't computed* by name — the identical dangling
+    citation task 11 removed from its § Errors twin, `E-DATA-ALLOCATION-
+    CONTRAST`'s row, in the same commit. Task 13 deletes *Weighted deltas
+    aren't computed*, so the § Validation row would have gone on citing a row
+    that no longer exists. *Clustered deltas aren't computed* is not deleted
+    by task 13, so that citation stays.
+
+    Located by heading rather than by row-relative position, so a later
+    insertion above this row cannot make the assertion pass by accident."""
+    lines = REFERENCE_MD.read_text().split("\n")
+    allocation = next(
+        line for line in lines if line.startswith("| Allocation deltas aren't computed")
+    )
+    assert "Clustered deltas aren't computed" in allocation  # the control
+    assert "per comparison" in allocation  # the control
+    assert "Weighted deltas aren't computed" not in allocation

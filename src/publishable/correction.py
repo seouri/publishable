@@ -185,8 +185,9 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
 
     **What decides the construction is which field the member carries, not what
     kind of metric it is.** A member carrying per-unit differences re-runs
-    `paired_t_over_units` over them — exact at any α. A member carrying a draw
-    pool reads a second rank pair off it. A derived metric always carries a
+    `paired_t_over_units` over them, or `weighted_paired_t_over_units` when the
+    member also carries `weights` — exact at any α either way. A member
+    carrying a draw pool reads a second rank pair off it. A derived metric always carries a
     pool; a recorded column carries differences by default and **carries a pool
     instead under a declared `statistics.resample`**, because its raw interval
     was then a percentile and a *t* corrected bound would be its counterpart in

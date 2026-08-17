@@ -588,7 +588,16 @@ def test_a_corrected_bound_over_weighted_differences_is_weighted_too():
 
     Two members, identical but for the weights, at a family size of one so the
     level is α itself and the corrected bound is the raw one's own construction.
-    The centres are exact: 8.0 weighted, 6.0 unweighted."""
+    The centres are exact: 8.0 weighted, 6.0 unweighted.
+
+    A second check, at family size **two**, pins the α itself rather than only
+    the construction: at family size one, `1.0 - level` is `0.95`, the default
+    `confidence` `weighted_paired_t_over_units` would fall back to even with
+    `confidence=1.0 - level` dropped from the call — so that first check alone
+    cannot tell a threaded α from a silently-defaulted one. At family size two
+    the bonferroni level is `0.05 / 2`, so `confidence=0.975`, a value nothing
+    defaults to. The exact bound at that level, verified directly against the
+    weighted construction: `[1.4426305905416408, 14.55736940945836]`."""
     diffs = (1.0, 2.0, 3.0, 9.0, 10.0, 11.0)
     common = dict(step="s", metric="m", ci95=(4.0, 12.0), pool=None, declaration_index=0)
     weighted = Member(where="cond:1", delta=8.0, diffs=diffs, weights=(1, 1, 1, 3, 3, 3), **common)
@@ -599,6 +608,11 @@ def test_a_corrected_bound_over_weighted_differences_is_weighted_too():
     low_p, high_p = got_p[("cond:2", "s", "m")]["ci95_corrected"]
     assert (low_w + high_w) / 2 == pytest.approx(8.0)
     assert (low_p + high_p) / 2 == pytest.approx(6.0)
+
+    got_w2 = corrected_for([weighted], "bonferroni", 2, {"comparisons": 1, "metrics": 1})
+    low_w2, high_w2 = got_w2[("cond:1", "s", "m")]["ci95_corrected"]
+    assert low_w2 == pytest.approx(1.4426305905416408)
+    assert high_w2 == pytest.approx(14.55736940945836)
 
 
 def test_a_pool_carrying_member_is_unaffected_by_the_weights_branch():

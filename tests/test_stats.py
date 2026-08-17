@@ -4087,8 +4087,10 @@ def test_a_weighted_paired_t_is_the_weighted_construction_under_a_paired_name():
     assert plain.method == "paired_t_over_units"
     # The df moved too, and it is the part that bites: Kish's size here is
     # 12²/30 = 4.8 against 6 units, so the weighted half-width is wider than the
-    # weighted sem alone would give. Pinned as the half-width ratio against the
-    # unweighted one, which no equal-weight implementation can reproduce.
+    # weighted sem alone would give. Pinned only as an inequality against the
+    # unweighted half-width — the Kish df itself is pinned elsewhere, by
+    # `test_the_weighted_interval_is_the_t_interval_at_kishs_effective_size`
+    # and by this file's own equal-weights oracle above.
     assert (weighted.high - weighted.low) != pytest.approx(plain.high - plain.low)
 
 
