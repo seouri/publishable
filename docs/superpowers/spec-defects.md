@@ -5871,6 +5871,17 @@ undocumented behavior-changing variable `CLAUDE.md`'s first invariant rules out.
 `tests/test_secrets.py::test_python_dotenv_disabled_is_not_honoured` and
 `::test_a_bare_key_with_no_value_is_missing_not_empty`.
 
+**AMENDED 2026-08-16 (H7c whole-branch re-review, finding N1):** `dotenv_values` hardcodes
+`override=True` internally, and that flag is also what `python-dotenv`'s `resolve_variables`
+consults to decide whether a `${VAR}` reference inside the file resolves against the shell or
+against the file — so the parse above silently stopped honouring an exported variable inside an
+interpolated value, even though a direct assignment still won via `setdefault`. `secrets.load_env`
+now parses with `dotenv.main.DotEnv(path, stream=None, verbose=False, interpolate=True,
+override=False).dict()` instead — the constructor `dotenv_values` itself calls, with the flag it
+hardcodes passed explicitly — which never consults `PYTHON_DOTENV_DISABLED` either, so this
+amendment does not reopen the struck gap. Pinned by
+`tests/test_secrets.py::test_interpolation_resolves_from_the_shell_not_a_stale_file_value`.
+
 ## OPEN — `declared_credential_names` reports a template-default credential for a parameter value never written
 
 `cli.declared_credential_names` and `validate._check_requires_env` both resolve a swept parameter's

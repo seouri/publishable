@@ -836,7 +836,12 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
     One finding per variable, attributed to the first condition that selected it:
     one missing value is one thing to fix, whatever selected it.
     """
-    spec = getattr(template, "parameter_spec", None) or {}
+    spec = getattr(template, "parameter_spec", None)
+    if not isinstance(spec, dict):
+        # A malformed `parameter_spec` (not a dict) is `E-TEMPLATE-LOAD`'s
+        # finding to make, not this collector's crash to cause — same
+        # guard shape as `required_env` above.
+        return
     wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
     if not wanted:
         return
@@ -901,11 +906,16 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
     template answers nothing rather than guessing.
     """
     raw_required = getattr(template, "required_env", None)
-    # Same guard `_check_required_env` reports against — a template declaring
-    # something other than a list is that check's finding to make, not this
-    # collector's shape to guess at.
+    # Same guard as `_check_required_env`: nothing reports a `required_env`
+    # that is not a list, so it is ignored here alike rather than iterated as
+    # characters.
     names: list[str] = list(raw_required) if isinstance(raw_required, list) else []
-    spec = getattr(template, "parameter_spec", None) or {}
+    spec = getattr(template, "parameter_spec", None)
+    if not isinstance(spec, dict):
+        # Same guard as `_check_requires_env`: a malformed `parameter_spec`
+        # is that check's finding to make, not this collector's crash to
+        # cause.
+        return names
     wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
     if not wanted:
         return names

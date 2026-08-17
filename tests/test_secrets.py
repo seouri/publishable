@@ -51,8 +51,9 @@ def test_python_dotenv_disabled_is_not_honoured(tmp_path: Path, monkeypatch):
     """`spec-defects.md`'s struck `PYTHON_DOTENV_DISABLED` entry: `load_dotenv`
     itself honours this undocumented, behavior-changing variable, which
     `CLAUDE.md`'s first invariant rules out. `load_env` is built on
-    `dotenv_values` plus `os.environ.setdefault` instead — `dotenv_values`
-    never consults it — so setting it must not disable the load."""
+    `dotenv.main.DotEnv(...).dict()` plus `os.environ.setdefault` instead —
+    like the `dotenv_values` helper it underlies, `DotEnv.dict()` never
+    consults it — so setting it must not disable the load."""
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     monkeypatch.delenv(_NAME, raising=False)
     (tmp_path / ".env").write_text(f"{_NAME}=from-the-file\n")
@@ -62,7 +63,7 @@ def test_python_dotenv_disabled_is_not_honoured(tmp_path: Path, monkeypatch):
 
 
 def test_a_bare_key_with_no_value_is_missing_not_empty(tmp_path: Path, monkeypatch):
-    """`FOO` alone parses to `None` (`dotenv_values`'s own contract), where
+    """`FOO` alone parses to `None` (`DotEnv.dict()`'s own contract), where
     `load_dotenv` would have set `os.environ["FOO"] = ""`. Skipped rather than
     set — `missing_env` already treats an empty value as missing, so this
     lands in the same place either way."""
@@ -72,6 +73,26 @@ def test_a_bare_key_with_no_value_is_missing_not_empty(tmp_path: Path, monkeypat
     assert load_env(tmp_path) is True  # parsing found one entry
     assert _NAME not in os.environ
     assert missing_env([_NAME]) == [_NAME]
+
+
+def test_interpolation_resolves_from_the_shell_not_a_stale_file_value(tmp_path: Path, monkeypatch):
+    """H7c whole-branch re-review, N1: the `dotenv_values`-based rewrite passed
+    `override=True` internally (that is what `dotenv_values` hardcodes), and
+    that flag is what decides whether a `${VAR}` reference inside the file
+    resolves against the shell or against the file itself — not only what
+    gets written to `os.environ` afterward. `ACCOUNT` is exported in the shell
+    as `staging`; `.env` sets it to `prod` and interpolates it into `API_URL`.
+    A direct assignment (`ACCOUNT`) is unaffected either way because the shell
+    value already wins via `setdefault` — the discriminating value is the
+    *interpolated* one (`API_URL`), which must still resolve against the
+    shell's `staging`, not the file's `prod`."""
+    monkeypatch.setenv("ACCOUNT", "staging")
+    monkeypatch.delenv("API_URL", raising=False)
+    (tmp_path / ".env").write_text("ACCOUNT=prod\nAPI_URL=https://${ACCOUNT}.example.com/key\n")
+
+    assert load_env(tmp_path) is True
+    assert os.environ["ACCOUNT"] == "staging"  # direct assignment: shell still wins
+    assert os.environ["API_URL"] == "https://staging.example.com/key"
 
 
 def test_missing_env_answers_in_declared_order_and_dedupes(monkeypatch):

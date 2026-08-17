@@ -32,10 +32,13 @@ class Collector:
     declarations it checks, and `command_run` for the collectors it builds after
     it. Redaction happens at `render`, the one place a finding's text becomes
     output, rather than at each site that builds an exception string into a
-    diagnostic: every one of those constructions reaches a reader through a
-    `Collector`, whatever their number, and a site added later is covered
-    without a second edit here. (Not every exception-interpolating site in core
-    is a diagnostic — `main`'s catch-all is one that isn't, and redacting it is
+    diagnostic: every diagnostic's text passes through this one method on its
+    way to a reader. That is not the same as every site being covered — a
+    `Collector` whose `credentials` was never set (`command_run` builds a few
+    this way) redacts nothing, so a later diagnostic-producing site is only
+    covered if whatever constructs its `Collector` also populates
+    `credentials`. (Not every exception-interpolating site in core is a
+    diagnostic — `main`'s catch-all is one that isn't, and redacting it is
     tracked separately in `spec-defects.md`.) `Diagnostic` stays a plain frozen
     record so a message is never rewritten before the collector that owns it
     decides to print.

@@ -8815,3 +8815,67 @@ def test_a_declared_credential_reaches_no_diagnostic_when_its_own_template_fails
     # Surrounding text survives — the finding is still diagnosable.
     assert "startup failed for key" in out, out
     assert _SENTINEL not in out
+
+
+_LOAD_FAILING_MALFORMED_SPEC_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("bad_spec_assay")
+class BadSpecAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = "not-a-dict"
+
+
+raise RuntimeError("startup failed after registering a non-dict parameter_spec")
+"""
+
+
+def test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malformed_parameter_spec(
+    tmp_path, capsys
+):
+    """`declared_credential_names_for` and `_check_requires_env` both read
+    `template.parameter_spec.items()` after a load fault, over
+    `exc.partial_templates` — a class whose body finished running before its
+    own `@register_template` raised. A `parameter_spec` that is not a `dict`
+    (a str, here) used to reach that `.items()` call unguarded and raise
+    `AttributeError`, escaping `validate`, which is contracted never to raise.
+
+    Scaffolded by hand, the same way as the sibling load-failing-credential
+    test above and for the same reason: the raising file must exist only
+    after the config and repo are already committed, so scaffolding itself
+    (which imports every `templates/*.py` regardless of the name being
+    resolved) does not blow up first.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a malformed parameter_spec behind a template load fault"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "bad_spec_assay"
+    cfg.write_text(yaml.safe_dump(doc))
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "bad_spec_assay.py").write_text(_LOAD_FAILING_MALFORMED_SPEC_TEMPLATE)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        cwd=root,
+        check=True,
+    )
+
+    # Must report a diagnostic rather than raise `AttributeError`.
+    assert main(["validate", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    assert "E-TEMPLATE-LOAD" in out, out
+    assert "startup failed after registering a non-dict parameter_spec" in out, out

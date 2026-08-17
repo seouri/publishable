@@ -15,7 +15,7 @@ import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from dotenv import dotenv_values
+from dotenv.main import DotEnv
 
 ENV_FILENAME = ".env"
 
@@ -33,18 +33,23 @@ def load_env(repo_root: Path | None) -> bool:
     **Never overrides.** A variable already exported in the shell wins over
     the file, which is the direction that fails safe: a stale `.env` cannot
     silently redirect a run to the wrong account, and a machine that supplies
-    its credentials through a secret manager needs no file at all. Built from
-    `dotenv_values` plus `os.environ.setdefault` rather than `load_dotenv`
-    itself, deliberately: `load_dotenv` honours `PYTHON_DOTENV_DISABLED`, an
-    undocumented environment variable that changes behavior with no flag and
-    no config field — exactly what `CLAUDE.md`'s first invariant rules out for
-    anything this repo builds. `dotenv_values` does not consult it (it only
-    parses and returns a mapping; it never touches `os.environ` itself), so
-    building the override-safe write here instead closes that gap rather than
-    inheriting it. A key written bare (`FOO`, no `=value`) parses to `None`
-    rather than `""`; skipped rather than set, which lands in the same place
-    `missing_env` would either way, since it already treats an empty value as
-    missing.
+    its credentials through a secret manager needs no file at all. This
+    includes `${VAR}` interpolation inside the file: `dotenv.main.DotEnv` is
+    called with `override=False` directly, and that flag is what decides
+    whether a `${VAR}` reference resolves against the shell or against the
+    file being parsed — not only what gets written afterward. Built from
+    `DotEnv(...).dict()` plus `os.environ.setdefault` rather than
+    `load_dotenv` itself, deliberately: `load_dotenv` honours
+    `PYTHON_DOTENV_DISABLED`, an undocumented environment variable that
+    changes behavior with no flag and no config field — exactly what
+    `CLAUDE.md`'s first invariant rules out for anything this repo builds.
+    `DotEnv.dict()`, like the `dotenv_values` helper it underlies, does not
+    consult it (it only parses and returns a mapping; it never touches
+    `os.environ` itself), so building the override-safe write here instead
+    closes that gap rather than inheriting it. A key written bare (`FOO`, no
+    `=value`) parses to `None` rather than `""`; skipped rather than set,
+    which lands in the same place `missing_env` would either way, since it
+    already treats an empty value as missing.
 
     Idempotent, because it is called twice on a `run` — once by `validate` and
     once before any step executes — and a second load can only re-set what is
@@ -61,7 +66,7 @@ def load_env(repo_root: Path | None) -> bool:
     path = repo_root / ENV_FILENAME
     if not path.is_file():
         return False
-    values = dotenv_values(path)
+    values = DotEnv(path, stream=None, verbose=False, interpolate=True, override=False).dict()
     for key, value in values.items():
         if value is None:
             continue
