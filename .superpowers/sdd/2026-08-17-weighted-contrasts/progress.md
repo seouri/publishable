@@ -130,3 +130,24 @@ trap in a new dress: a check whose job is to detect something was narrowed until
 Also: a branch the report called "structurally unreachable" is reachable with two legal weights
 (`weighted_cohens_dz([1.0, 2.0], [1e17, 1.0])` → denominator exactly 0.0), asserted in **two**
 docstrings with no test behind it.
+
+**Fix round 1 — all ten findings closed** (`fc898ca`, `2b69f1b`), confirmed by a scoped re-review
+that verified four **by running**: the `weights=None` mutation now fails a named test; `strata=None`
+at **both** `command_run` call sites fails an unweighted-`stratify_by`-through-`run` test on the
+**full, unfiltered** suite — which is the direct refutation of the "refused means unreachable"
+claim; the zero denominator returns `None` and its cause is now correctly documented as
+floating-point rounding of `Σw²/Σw` to `Σw` rather than weight concentration; and `weighted_by`'s
+value no longer passes under a hardcoded constant. Suite 2147 passed, 1 skipped, 2 xfailed.
+Tasks 6-8 complete.
+
+**Process note.** The re-reviewer backgrounded its test run, lost its place, and stopped with a
+mutation possibly still applied. Recovered by resuming it with revert-and-verify as its first
+instruction; tree confirmed clean by re-running, not by `git status`. **The foreground-only rule for
+the suite is not a preference** — a backgrounded run is how an agent loses track of an applied
+mutation, which is the one state in this workflow that can silently corrupt every later measurement.
+
+**Ruling: tasks 9-12 dispatch as one batch, 13-15 as the last.** 9-10 are the corrected and general
+paths, 11 is the § Validation rows, 12 exercises the three C configs by direct call. 13 retires the
+refusal and carries the `validate`-clean and `run`-through halves; 14 sweeps; 15 dates the count.
+**Cost if wrong:** the last batch is the one that changes what the tool refuses, so it gets its own
+gate — which is the point of the seam.
