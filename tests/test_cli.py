@@ -8952,3 +8952,130 @@ def test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malfor
     out = capsys.readouterr().out
     assert "E-TEMPLATE-LOAD" in out, out
     assert "startup failed after registering a non-dict parameter_spec" in out, out
+
+
+def test_generate_experiment_installs_the_plugin_before_it_scaffolds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The order is the behaviour: `uv add` runs before `resolve_template`,
+    because the template the config names is the one being installed.
+
+    Patched at `publishable.generators.experiment.uv_add` — the full module
+    attribute path, since a same-named helper in `cli` would be a plausible
+    wrong target.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        calls.append((str(repo_root), requirement))
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "generic",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_OK
+    )
+    assert calls == [(str(root), "git+https://github.com/someuser/publishable-llm")]
+    config = yaml.safe_load((root / "configs" / "pilot" / "config.yaml").read_text())
+    assert config["plugin"] == "someuser/publishable-llm"
+
+    # THE CONTROL: no `--plugin`, no install, and the field stays `null`. Without
+    # it, an implementation that always installed would pass the assertion above.
+    calls.clear()
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot2",
+                "--template",
+                "generic",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results2"),
+            ]
+        )
+        == EXIT_OK
+    )
+    assert calls == []
+    plain = yaml.safe_load((root / "configs" / "pilot2" / "config.yaml").read_text())
+    assert plain["plugin"] is None
+
+
+def test_a_failed_plugin_install_scaffolds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """A retry after a failed install must find a clean tree — `generate
+    experiment` refuses an existing `src/<pkg>/`, so a half-scaffolded package
+    would make the failure permanent."""
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        raise ContractError("uv add failed: no such repository", code="E-UV-ADD")
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "generic",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_WRONG
+    )
+    assert "E-UV-ADD" in capsys.readouterr().err
+    assert not (root / "src" / "pilot").exists()
+    assert not (root / "configs" / "pilot").exists()
+
+
+@pytest.mark.slow
+def test_uv_add_really_installs(tmp_path: Path):
+    """`markers = ["slow: exercises real uv or network"]`. The patched tests
+    above prove the wiring; this proves the command line.
+
+    Skipped rather than run: this project depends on no `git+https://...`
+    requirement it could reuse offline, and inventing a throwaway repository
+    to install from would need network access this suite does not assume.
+    """
+    pytest.skip(
+        "no git+https dependency this project already carries to install offline; "
+        "would need real network access to a real repository"
+    )

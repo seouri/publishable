@@ -2798,6 +2798,7 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
             template_name=opts["template"],
             input_dir=opts["input-dir"],
             output_dir=opts["output-dir"],
+            plugin=opts.get("plugin"),
         )
         return EXIT_OK
     if kind == "step":

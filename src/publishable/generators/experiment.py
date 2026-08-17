@@ -1,5 +1,6 @@
 """`generate experiment` — always creates, never wraps. Greenfield only."""
 
+import subprocess
 from pathlib import Path
 
 from publishable.errors import ContractError
@@ -50,9 +51,46 @@ def class_name(experiment: str) -> str:
     return "".join(part.capitalize() for part in experiment.split("-")) + "Experiment"
 
 
+def uv_add(repo_root: Path, requirement: str) -> None:
+    """`uv add <requirement>` in the project, and nothing more.
+
+    `reference.md` § Plugins: no registry, no bespoke installer, no new trust
+    boundary beyond "this is a git dependency," because it is one. The install
+    is what makes the plugin a normal `pyproject.toml` line and a pinned
+    `uv.lock` entry, which is what gives `reproduce` the exact version free.
+    """
+    result = subprocess.run(
+        ["uv", "add", requirement], cwd=repo_root, capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        raise ContractError(
+            f"`uv add {requirement}` failed: {result.stderr.strip() or result.stdout.strip()}",
+            code="E-UV-ADD",
+        )
+
+
+def plugin_requirement(spec: str) -> str:
+    """`<user>/<repo>` or `<user>/<repo>@<ref>` to what `uv add` takes."""
+    return f"git+https://github.com/{spec}"
+
+
 def generate_experiment(
-    *, repo_root: Path, name: str, template_name: str, input_dir: str, output_dir: str
+    *,
+    repo_root: Path,
+    name: str,
+    template_name: str,
+    input_dir: str,
+    output_dir: str,
+    plugin: str | None = None,
 ) -> Path:
+    # Installed first, and before `_claims` resolves anything: the whole point
+    # of `--plugin` is that the template it names comes from the package being
+    # installed, so resolving first would refuse a name the install is about
+    # to provide. And a failed install must leave no half-scaffolded package —
+    # this function refuses if `src/<pkg>/` exists, so a retry after a failed
+    # install must find a clean tree.
+    if plugin:
+        uv_add(repo_root, plugin_requirement(plugin))
     # One merge for both halves — the resolution and the known-name list the
     # message prints — so a repo's `templates/` is imported once here too.
     # Read through `_claims` rather than `resolve_template`, because this site
@@ -114,6 +152,7 @@ def generate_experiment(
             input_dir=input_dir,
             output_dir=output_dir,
             entrypoint=entrypoint,
+            plugin=plugin,
         )
     )
     return config_path

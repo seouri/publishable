@@ -444,3 +444,31 @@ def test_a_non_two_segment_parameter_path_fails_loudly():
             output_dir="/secure/results",
             entrypoint="bad.experiment:BadExperiment",
         )
+
+
+def test_the_plugin_field_carries_what_generate_was_told(tmp_path: Path):
+    """`plugin` is a readable note beside the authoritative pin in `uv.lock`
+    rather than a second one — so it records the argument verbatim, including a
+    version suffix, and core never installs from the field itself."""
+    text = materialize_config(
+        template=get_template("generic"),
+        template_name="generic",
+        name="cohort-pilot",
+        input_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+        plugin="someuser/publishable-llm@v1.2.0",
+    )
+    assert yaml.safe_load(text)["plugin"] == "someuser/publishable-llm@v1.2.0"
+
+    # THE CONTROL, and the regression: with no plugin the field is `null`, which
+    # is what every other test in this file's generated config asserts.
+    plain = materialize_config(
+        template=get_template("generic"),
+        template_name="generic",
+        name="cohort-pilot",
+        input_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    assert yaml.safe_load(plain)["plugin"] is None

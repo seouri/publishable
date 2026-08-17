@@ -99,6 +99,7 @@ def materialize_config(
     input_dir: str,
     output_dir: str,
     entrypoint: str,
+    plugin: str | None = None,
 ) -> str:
     local = is_local_template(type(template))
     reported = None if local else type(template).version
@@ -111,7 +112,7 @@ def materialize_config(
         'schema_version: "1.0"',
         f"experiment_type: {template_name}",
         *([] if reported is None else [f'template_version: "{reported}"']),
-        "plugin: null",
+        f"plugin: {plugin if plugin else 'null'}",
         "",
         "metadata:",
         f"  name: {name}",
