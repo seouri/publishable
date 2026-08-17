@@ -5834,32 +5834,42 @@ implements it.
 contradiction between a built check and its documentation — filed so it is not silently assumed
 closed by a later slice's scoping.
 
-## OPEN — `python-dotenv` honours an undocumented behavior-changing environment variable
+~~## OPEN — `python-dotenv` honours an undocumented behavior-changing environment variable~~
 
-`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
+~~`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
 is set to a truthy value (confirmed 2026-08-16 against the installed package,
 `.venv/lib/python3.13/site-packages/dotenv/main.py`: `if "PYTHON_DOTENV_DISABLED" not in
 os.environ: ...`). `secrets.load_env` calls `load_dotenv` directly and inherits this, so core's
 `.env` load path honours an environment variable that changes behavior — no flag, no config field,
 nothing in `reference.md` names it — which is exactly what `CLAUDE.md`'s first invariant (operation
 commands take paths and nothing else, no behavior-changing env vars) rules out for anything this
-repo builds itself.
+repo builds itself.~~
 
-It fails **closed**: setting it silently disables `.env` loading, so a declared credential that
+~~It fails **closed**: setting it silently disables `.env` loading, so a declared credential that
 would otherwise be satisfied from the file instead reports `E-CRED-MISSING`/`E-CRED-PARAM-MISSING`
 rather than executing with a value nobody meant to hide. It is not core's own code — it is a
 property of the dependency `secrets.py` calls, present in `python-dotenv` before this slice added
 the dependency to this project — so this is a filing rather than a fix. A fix would mean core
 either not calling `load_dotenv` at all (losing the mechanism this slice built) or pre-emptively
 clearing the variable before every call (a behavior change of its own, and one that would fight a
-developer's own shell rather than serve them).
+developer's own shell rather than serve them).~~
 
-**Owner:** unassigned. Worth a `reference.md` § Secrets & credentials footnote naming the variable
-and its fail-closed direction, the next time that section is touched.
+~~**Owner:** unassigned. Worth a `reference.md` § Secrets & credentials footnote naming the variable
+and its fail-closed direction, the next time that section is touched.~~
 
-**Found by:** H7c, Task 14. **Severity:** Minor. Fails closed (a missing credential is refused, not
+~~**Found by:** H7c, Task 14. **Severity:** Minor. Fails closed (a missing credential is refused, not
 silently accepted), and no config in this repository sets the variable — filed because it exists
-and is undocumented, not because it has been observed to bite anyone.
+and is undocumented, not because it has been observed to bite anyone.~~
+
+**STRUCK 2026-08-16 (H7c whole-branch review, finding 5): FIXED, not merely re-reasoned.** The
+"fix would mean" paragraph argued a false dichotomy: `load_dotenv` consults
+`PYTHON_DOTENV_DISABLED`, but `dotenv_values` — read against the installed package — does not touch
+it at all, and never touches `os.environ` itself either. `secrets.load_env` now parses with
+`dotenv_values(path)`, skips the `None` values a bare `KEY` line produces, and
+`os.environ.setdefault`s the rest — keeping the mechanism, keeping the dependency, and removing the
+undocumented behavior-changing variable `CLAUDE.md`'s first invariant rules out. Pinned by
+`tests/test_secrets.py::test_python_dotenv_disabled_is_not_honoured` and
+`::test_a_bare_key_with_no_value_is_missing_not_empty`.
 
 ## OPEN — `declared_credential_names` reports a template-default credential for a parameter value never written
 
@@ -5878,17 +5888,22 @@ Confirmed by reading `cli.py`'s `_flatten_parameters` (recurses on `isinstance(v
 in `validate._check_requires_env`'s `param.requires_env.get(value)` against the same resolution.
 
 This is cosmetic rather than a correctness gap: `llm.provider: {a: 1}` is not a member of `choices`
-regardless, so the config is refused either way (a `choices`-constrained parameter given a dict
-value fails its own constraint check). What is wrong is only the *message* — it asserts a
+regardless, so the config is refused either way — **CORRECTED 2026-08-16 (H7c whole-branch review,
+finding 6): not by the `choices` check**, which never sees `llm.provider` at all (`_flatten`
+produces `llm.provider.a`, never the parent path, so the leaf that reaches the `choices` check does
+not exist). Probed: the refusal is `E-PARAM-UNKNOWN` on the nested leaf `parameters.llm.provider.a`
+("is not a parameter of this template"), reported alongside `E-CRED-PARAM-MISSING` for the
+template-default fallback this entry is about. What is wrong is only the *message* — it asserts a
 resolution (the template default was in effect) that never actually happened, because the config
 supplied a value that just isn't visible to a path-flattening reader.
 
 **Owner:** whichever slice next touches `_flatten_parameters`/`_flatten` or
 `declared_credential_names`.
 
-**Found by:** H7c, Task 14. **Severity:** Minor. The config is refused regardless (by the
-`choices` check), so nothing invalid runs — the defect is a misleading message on an already-refused
-config, not a missed refusal.
+**Found by:** H7c, Task 14. **Severity:** Minor. The config is refused regardless (by
+`E-PARAM-UNKNOWN` on the nested leaf, not by the `choices` check — corrected above), so nothing
+invalid runs — the defect is a misleading message on an already-refused config, not a missed
+refusal.
 
 ## OPEN — `main`'s last-resort stderr handler prints an exception un-redacted, by construction
 

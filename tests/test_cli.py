@@ -8634,9 +8634,9 @@ class CredAssay(BaseTemplate):
 def test_a_template_exception_printed_as_a_warning_is_redacted_too(tmp_path, monkeypatch, capsys):
     """The second serialization boundary, `Collector.render()`.
 
-    `aggregate` raising is one of five places core builds a
-    `f"...{type(exc).__name__}: {exc}"` string, and four of them are diagnostics
-    rather than records. This one reaches stdout and nothing else, so the step
+    `aggregate` raising is one of several places core builds a
+    `f"...{type(exc).__name__}: {exc}"` string, and this one is a diagnostic
+    rather than a record. This one reaches stdout and nothing else, so the step
     tests above are blind to it — reverting `diagnostics.py` alone leaves all of
     them green and this one red, which is the whole reason it exists.
 
@@ -8738,3 +8738,80 @@ def test_a_project_local_template_s_credentials_are_redacted_too(tmp_path, monke
     assert swept, "no artifacts were written — the sweep would be vacuous"
     for path in swept:
         assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_LOAD_FAILING_CRED_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_LOADFAIL"]
+    parameter_spec = {}
+
+
+raise RuntimeError("startup failed for key " + os.environ["PUBLISHABLE_TEST_LOADFAIL"])
+"""
+
+
+def test_a_declared_credential_reaches_no_diagnostic_when_its_own_template_fails_to_load(
+    tmp_path, monkeypatch, capsys
+):
+    """`validate_config`'s `E-TEMPLATE-LOAD` early return used to append its
+    finding and `return None` before `c.credentials` was ever set, so the
+    raising file's own exception text — `discovery.py`'s `{exc!r}` — reached
+    stdout unredacted. This is the single-file, discriminating shape: the
+    *same* file both declares `required_env` and raises after its own
+    `@register_template` call, so the sole template declaring the variable is
+    the one whose text leaks if this is ever undone. `@register_template` runs
+    before the module-level raise below it, so the class survives — as
+    `exc.partial_templates` — even though its registration is discarded.
+
+    Scaffolded by hand rather than through `run_a_project`: that helper writes
+    `_local_template` to disk *before* `generate_experiment` resolves
+    `template_name="generic"` — and `discover_local` imports every
+    `templates/*.py` regardless of which name is being resolved, so a template
+    that raises unconditionally would blow up scaffolding itself, before
+    `.env` is ever written or loaded. Here the raising file is written only
+    after the config exists, and `.env` is loaded by `validate_config` itself.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_LOADFAIL", raising=False)
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a declared credential behind a template that fails to load"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "cred_assay"
+    cfg.write_text(yaml.safe_dump(doc))
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "cred_assay.py").write_text(_LOAD_FAILING_CRED_TEMPLATE)
+    (root / ".env").write_text(f"PUBLISHABLE_TEST_LOADFAIL={_SENTINEL}\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    # SOMETHING THAT MUST REPORT: the load fault fired at all.
+    assert "E-TEMPLATE-LOAD" in out, out
+    assert "<redacted:PUBLISHABLE_TEST_LOADFAIL>" in out, out
+    # Surrounding text survives — the finding is still diagnosable.
+    assert "startup failed for key" in out, out
+    assert _SENTINEL not in out

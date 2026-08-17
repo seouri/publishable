@@ -47,6 +47,33 @@ def test_no_repo_and_no_file_are_both_quiet(tmp_path: Path, monkeypatch):
     assert credential_values([_NAME]) == {}
 
 
+def test_python_dotenv_disabled_is_not_honoured(tmp_path: Path, monkeypatch):
+    """`spec-defects.md`'s struck `PYTHON_DOTENV_DISABLED` entry: `load_dotenv`
+    itself honours this undocumented, behavior-changing variable, which
+    `CLAUDE.md`'s first invariant rules out. `load_env` is built on
+    `dotenv_values` plus `os.environ.setdefault` instead — `dotenv_values`
+    never consults it — so setting it must not disable the load."""
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.delenv(_NAME, raising=False)
+    (tmp_path / ".env").write_text(f"{_NAME}=from-the-file\n")
+
+    assert load_env(tmp_path) is True
+    assert credential_values([_NAME]) == {_NAME: "from-the-file"}
+
+
+def test_a_bare_key_with_no_value_is_missing_not_empty(tmp_path: Path, monkeypatch):
+    """`FOO` alone parses to `None` (`dotenv_values`'s own contract), where
+    `load_dotenv` would have set `os.environ["FOO"] = ""`. Skipped rather than
+    set — `missing_env` already treats an empty value as missing, so this
+    lands in the same place either way."""
+    monkeypatch.delenv(_NAME, raising=False)
+    (tmp_path / ".env").write_text(f"{_NAME}\n")
+
+    assert load_env(tmp_path) is True  # parsing found one entry
+    assert _NAME not in os.environ
+    assert missing_env([_NAME]) == [_NAME]
+
+
 def test_missing_env_answers_in_declared_order_and_dedupes(monkeypatch):
     monkeypatch.setenv(_NAME, "set")
     monkeypatch.delenv(_OTHER, raising=False)

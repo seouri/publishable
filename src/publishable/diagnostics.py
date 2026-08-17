@@ -31,9 +31,12 @@ class Collector:
     Set by whoever knows them — `validate_config`, which resolves the same two
     declarations it checks, and `command_run` for the collectors it builds after
     it. Redaction happens at `render`, the one place a finding's text becomes
-    output, rather than at each of the five sites that build an exception string:
-    a diagnostic carrying a template's or a user package's exception is minted in
-    four places and a sixth is one commit away. `Diagnostic` stays a plain frozen
+    output, rather than at each site that builds an exception string into a
+    diagnostic: every one of those constructions reaches a reader through a
+    `Collector`, whatever their number, and a site added later is covered
+    without a second edit here. (Not every exception-interpolating site in core
+    is a diagnostic — `main`'s catch-all is one that isn't, and redacting it is
+    tracked separately in `spec-defects.md`.) `Diagnostic` stays a plain frozen
     record so a message is never rewritten before the collector that owns it
     decides to print.
 

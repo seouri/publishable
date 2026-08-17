@@ -341,7 +341,11 @@ def declared_credential_names(
     declaring no credentials, so the caller's job is to pass a template that was
     resolved WITH `repo_root`.
     """
-    names: list[str] = list(getattr(template, "required_env", None) or [])
+    raw_required = getattr(template, "required_env", None)
+    # Same guard `validate._check_required_env` reports against — a template
+    # declaring something other than a list is that check's finding to make,
+    # not this collector's shape to guess at.
+    names: list[str] = list(raw_required) if isinstance(raw_required, list) else []
     spec = getattr(template, "parameter_spec", None) or {}
     declared = _flatten_parameters(doc.get("parameters"))
     for condition in conditions:

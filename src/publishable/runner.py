@@ -700,9 +700,12 @@ def execute_plan(
             # Redacted where this string is BUILT rather than at each writer:
             # both records — `run.yaml` through `run_record` and
             # `executions.jsonl` below — read from it, so one edit covers both
-            # and they cannot diverge. The *other* four places core interpolates
-            # an exception are diagnostics, and `Collector.render` covers all of
-            # them at once (`docs/reference.md` § Secrets & credentials).
+            # and they cannot diverge. Every other place core interpolates an
+            # exception into a *diagnostic* goes through `Collector.render`
+            # instead, which redacts all of them at once, whatever their
+            # number (`docs/reference.md` § Secrets & credentials) — this site
+            # is separate because a step's error is a record, not a
+            # diagnostic, and reaches no `Collector` at all.
             returned, status = {}, "failed"
             error = redact(f"{prefix}{type(exc).__name__}: {exc}", credentials or {})
 

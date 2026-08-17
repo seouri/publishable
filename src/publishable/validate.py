@@ -542,6 +542,26 @@ def validate_config(
         # surfaces stay one fault, and reported at all because `validate` is
         # contracted never to raise. Nothing later can run: which template a name
         # means is exactly what either leaves unanswered.
+        #
+        # `c.credentials` is normally set below, once `template` resolves — but
+        # a load or collision fault means it never will, and the finding just
+        # appended can itself carry a raising file's own exception text
+        # (`E-TEMPLATE-LOAD` embeds `{exc!r}`). A class body finishes running
+        # before its own `@register_template` call is reached, so a file that
+        # raises *after* that call, or a file that raises while a sibling in
+        # the same directory already registered cleanly, still leaves a fully
+        # formed class behind — `discover_local`/`_merged` hand it back as
+        # `exc.partial_templates` for exactly this. Read the same way a
+        # resolved template's declarations are read below, so the set does not
+        # drift from `declared_credential_names_for`. A raise from *inside* a
+        # class body, before its own `@register_template` runs, leaves no
+        # class to read; that residual is `reference.md`'s to describe rather
+        # than this call's to close.
+        partial = getattr(exc, "partial_templates", None) or []
+        names: list[str] = []
+        for cls in partial:
+            names.extend(declared_credential_names_for(doc, cls))
+        c.credentials = credential_values(names)
         c.error(exc.code, "experiment_type", str(exc))
         return None
     if template is None:
@@ -775,7 +795,13 @@ def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
     """
     names = getattr(template, "required_env", None)
     if not isinstance(names, list):
-        return  # a template declaring something else is not this check's fault to report
+        # Nothing reports a `required_env` that is not a list — this repo has
+        # no check for it anywhere — so a template declaring one this way is a
+        # silent author mistake rather than a diagnosed one.
+        # `declared_credential_names_for`/`cli.declared_credential_names` use
+        # this same guard, precisely so a malformed `required_env` is ignored
+        # everywhere alike rather than iterated as characters in one place.
+        return
     name = doc.get("experiment_type", "")
     for variable in missing_env(str(n) for n in names):
         c.error(
@@ -874,7 +900,11 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
     early — yields the empty list, since `getattr(None, ...)` on a missing
     template answers nothing rather than guessing.
     """
-    names: list[str] = list(getattr(template, "required_env", None) or [])
+    raw_required = getattr(template, "required_env", None)
+    # Same guard `_check_required_env` reports against — a template declaring
+    # something other than a list is that check's finding to make, not this
+    # collector's shape to guess at.
+    names: list[str] = list(raw_required) if isinstance(raw_required, list) else []
     spec = getattr(template, "parameter_spec", None) or {}
     wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
     if not wanted:
