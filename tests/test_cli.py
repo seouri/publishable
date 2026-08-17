@@ -49,6 +49,8 @@ def run_a_project(
     roster_csv: str | None = None,
     units_overrides: dict[str, Any] | None = None,
     expect_exit: int = EXIT_OK,
+    _env_file: str | None = None,
+    _local_template: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -144,6 +146,18 @@ def run_a_project(
     read — a caller expecting `EXIT_WRONG` gets `run_dir`/`results` back as
     `None` rather than this function raising `StopIteration` looking for output
     that a refused config never produced.
+
+    `_env_file` writes a `.env` at the project root with the given text, before
+    the scaffold is committed — the scaffold's own `.gitignore` opens with `.env`,
+    so the file stays untracked exactly as it would in a real project. It could
+    not have made the tree dirty in any case: the refusal reads
+    `git status --porcelain -- src templates`, and a file at the project root is
+    in neither.
+
+    `_local_template` writes a project-local template module at
+    `templates/cred_assay.py` with the given source, before the config is
+    generated — `code_hash` covers `templates/**`, so the file must exist
+    before `git add .` or `run` refuses the tree as dirty.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -161,6 +175,18 @@ def run_a_project(
         roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
     )
     assert main(["new", str(root)]) == EXIT_OK
+    if _env_file is not None:
+        # The scaffold's own `.gitignore` opens with `.env`, so this never reaches
+        # the commit below and never makes `src/**`+`templates/**` dirty.
+        (root / ".env").write_text(_env_file)
+    if _local_template is not None:
+        # The opposite property, and it is why this is written HERE rather than
+        # after the config is generated: `code_hash` covers `templates/**`, so this
+        # file must exist before the `git add .` below or `run` refuses the tree as
+        # dirty. Written as `templates/cred_assay.py`, the one name every caller
+        # that passes this registers.
+        (root / "templates").mkdir(exist_ok=True)
+        (root / "templates" / "cred_assay.py").write_text(_local_template)
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
             import publishable.generators.experiment as experiment_gen
@@ -7685,6 +7711,26 @@ class Step(BaseStep):
 """
 
 
+_ENV_READING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Reads the environment directly, which is how `reference.md` § Secrets &
+        # credentials says a step gets a credential: core hands it none.
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"token_len": len(token)}}
+"""
+
+
 def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, capsys):
     """The whole-roster shape a run with no `data.units.holdout` produces.
 
@@ -8369,3 +8415,467 @@ def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, ca
     assert all(r["status"] == "completed" for r in ledger), ledger
     # The guard fired: the plan stopped short of its full length.
     assert len(ledger) < _planned_execution_count(doc)
+
+
+def test_run_loads_dot_env_itself_rather_than_relying_on_validate(tmp_path, monkeypatch):
+    """The second load site earns its existence. `publishable.validate.load_env` is
+    patched to a no-op — NOT `publishable.cli.load_env`, which is a different
+    module attribute and the one under test — so if `command_run` did not load
+    for itself, the step's `os.environ[...]` would raise `KeyError` and the
+    execution would land `failed`.
+
+    `expect_exit=EXIT_OK` is the assertion: a `KeyError` in the one step makes the
+    run `partial`, which is `EXIT_PARTIAL`.
+    """
+    import publishable.validate as validate_mod
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(validate_mod, "load_env", lambda repo_root: False)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        _starter_step=_ENV_READING_STEP,
+        _env_file="PUBLISHABLE_TEST_TOKEN=abcdefgh\n",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    per_repeat = run["results"]["conditions"][0]
+    # Something that must REPORT, not an absence: the step got the real value and
+    # returned its length. 8 is `len("abcdefgh")`, derived from the fixture above.
+    assert json.dumps(per_repeat).count('"token_len": 8') >= 1
+
+
+_SENTINEL = "sk-h7c-sentinel-9f3a1c"
+
+_LEAKY_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        # A client library interpolating a key into a URL in its error message is
+        # ordinary, and this is the one surface on which that value can reach a
+        # record: `runner` writes a failed execution's exception text into both
+        # `executions.jsonl` and `run.yaml`.
+        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
+"""
+
+_LEAKY_AZURE_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_AZURE"]
+        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
+"""
+
+_SECRET_USING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"token_len": len(token)}}
+"""
+
+
+def _files_under(results_dir):
+    """Every file a run wrote, as a list of paths — the FILE LIST is what gets
+    filtered, never the sweep's output. Filtering the output of a search for a
+    string is how this repo lost a true hit once already.
+
+    Globbed rather than enumerated: `allocation.json` exists only under an
+    assignment or a holdout, and a fixture that declares neither would make a
+    named-file assertion vacuous or wrong.
+    """
+    return [p for p in sorted(results_dir.rglob("*")) if p.is_file()]
+
+
+def test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    """The one accident this slice must survive: a step whose exception text
+    carries the value core read.
+
+    Three assertions, and the first is the one that makes the other two mean
+    something — a sweep for absence passes identically if nothing ran.
+
+    `extra_steps=["control"]` adds the generated no-op step (`return {{}}`,
+    always completes) beside the leaky one. Without it the scaffold's one step
+    fails on every one of its repeats, `run_status` sees no completed execution
+    anywhere, and the run is wholly `"failed"` (`EXIT_FAILED`) rather than
+    `"partial"` — the same fixture defect
+    `test_io_units_train_raises_without_a_fold_or_holdout` already found and
+    named: a step that fails on every repeat with no completing step anywhere
+    leaves the run `failed`, not `partial`, regardless of what the brief assumed.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_STEP)
+    monkeypatch.setattr(
+        "publishable.templates.builtin.generic.GenericTemplate.required_env",
+        ["PUBLISHABLE_TEST_TOKEN"],
+    )
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        extra_steps=["control"],
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n",
+        expect_exit=EXIT_PARTIAL,
+        capsys=capsys,
+    )
+    run_dir = doc["run_dir"]
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    # 1. SOMETHING THAT MUST REPORT. The execution failed, its error was recorded,
+    #    and the redaction announced itself by naming the variable.
+    ledger = [
+        json.loads(line)
+        for line in (run_dir / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    errors = [e["error"] for e in ledger if e["error"]]
+    assert errors, "no execution failed — the sweep below would be vacuous"
+    assert all("<redacted:PUBLISHABLE_TEST_TOKEN>" in e for e in errors), errors
+    # The surrounding text SURVIVES: scrubbing the whole message destroys the
+    # debugging the record exists for.
+    assert all("RuntimeError" in e and "returned 401" in e for e in errors), errors
+
+    # 2. The same, as `run.yaml` arranges it — a second surface, not a rephrasing
+    #    of the first.
+    recorded = json.dumps(run)
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in recorded
+
+    # 3. The sweep. The FILE LIST is filtered, never the output.
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+    # stdout/stderr, captured by the helper because `capsys` was passed.
+    assert _SENTINEL not in (doc["stdout"] or "")
+    assert _SENTINEL not in (doc["stderr"] or "")
+
+
+def test_a_step_reads_its_credential_and_the_value_still_reaches_no_artifact(
+    tmp_path, monkeypatch, capsys
+):
+    """The success path, with something that must report: the step got the real
+    value and returned its length. Without this, the sweep above proves only that
+    a *failed* run leaks nothing."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SECRET_USING_STEP)
+    monkeypatch.setattr(
+        "publishable.templates.builtin.generic.GenericTemplate.required_env",
+        ["PUBLISHABLE_TEST_TOKEN"],
+    )
+
+    doc = run_a_project(
+        tmp_path, units=4, _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n", capsys=capsys
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # Pin ONE spelling, derived from the document rather than guessed: print
+    # `run["results"]` once for this fixture, find where `token_len` lands, and
+    # write that access path here. An `or` between two candidate spellings passes
+    # if either happens to hold and proves nothing about which.
+    assert json.dumps(run).count(f'"token_len": {len(_SENTINEL)}') >= 1, run["results"]
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+    assert _SENTINEL not in (doc["stdout"] or "")
+    assert _SENTINEL not in (doc["stderr"] or "")
+
+
+_AGGREGATE_LEAKING_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_AZURE"]
+    parameter_spec = {}
+
+    def aggregate(self, units, cfg):
+        # A template's own exception reaches stdout through
+        # `W-STATS-AGGREGATE-FAILED`, never through `run.yaml` — `run_record`
+        # has no diagnostics channel. So this is a leak the step-error path
+        # cannot see and the render boundary must catch.
+        raise RuntimeError("upstream rejected key " + os.environ["PUBLISHABLE_TEST_AZURE"])
+"""
+
+
+def test_a_template_exception_printed_as_a_warning_is_redacted_too(tmp_path, monkeypatch, capsys):
+    """The second serialization boundary, `Collector.render()`.
+
+    `aggregate` raising is one of several places core builds a
+    `f"...{type(exc).__name__}: {exc}"` string, and this one is a diagnostic
+    rather than a record. This one reaches stdout and nothing else, so the step
+    tests above are blind to it — reverting `diagnostics.py` alone leaves all of
+    them green and this one red, which is the whole reason it exists.
+
+    `parameters={}`: `CredAssay.parameter_spec` is empty, and the generic
+    scaffold's default `parameters.analysis.*` block is not a parameter of this
+    template — `E-PARAM-UNKNOWN` for each key, refused before `run` ever gets to
+    `execute_plan`.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_AZURE", raising=False)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="cred_assay",
+        parameters={},
+        _local_template=_AGGREGATE_LEAKING_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_AZURE={_SENTINEL}\n",
+        capsys=capsys,
+    )
+    out = doc["stdout"] or ""
+    # SOMETHING THAT MUST REPORT: the warning fired, and it announced the
+    # redaction by naming the variable. Without the first assertion the two
+    # below pass identically on a build where `aggregate` was never called.
+    assert "W-STATS-AGGREGATE-FAILED" in out, out
+    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in out, out
+    # The surrounding text survives — the warning is still diagnosable.
+    assert "upstream rejected key" in out, out
+    # And the value is nowhere: stdout, stderr, and every artifact.
+    assert _SENTINEL not in out
+    assert _SENTINEL not in (doc["stderr"] or "")
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_LOCAL_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai"],
+            requires_env={
+                "azure_openai": ["PUBLISHABLE_TEST_AZURE"],
+                "openai": ["PUBLISHABLE_TEST_OPENAI"],
+            },
+        )
+    }
+"""
+
+
+def test_a_project_local_template_s_credentials_are_redacted_too(tmp_path, monkeypatch, capsys):
+    """The case `get_template` answers wrongly when `repo_root` is not passed.
+
+    Both tests above patch `GenericTemplate`, which resolves either way — so
+    neither can see a `declared_credential_names` that got `None` back and
+    returned `[]`. This one can: nothing here is a core template, and the value
+    that must be redacted is the one `requires_env` names.
+
+    `extra_steps=["control"]`, for the same reason the first test in this file
+    needs it: the scaffolded step fails on every one of its repeats, and with no
+    completing step anywhere `run_status` reports the run wholly `"failed"`
+    rather than `"partial"`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    for name in ("PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_AZURE", "PUBLISHABLE_TEST_OPENAI"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_AZURE_STEP)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        extra_steps=["control"],
+        experiment_type="cred_assay",
+        parameters={"llm": {"provider": "azure_openai"}},
+        _local_template=_LOCAL_CRED_TEMPLATE,
+        _env_file=(f"PUBLISHABLE_TEST_TOKEN=irrelevant\nPUBLISHABLE_TEST_AZURE={_SENTINEL}\n"),
+        expect_exit=EXIT_PARTIAL,
+        capsys=capsys,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    errors = [e["error"] for e in ledger if e["error"]]
+    assert errors, "no execution failed — the sweep below would be vacuous"
+    assert all("<redacted:PUBLISHABLE_TEST_AZURE>" in e for e in errors), errors
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_LOAD_FAILING_CRED_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_LOADFAIL"]
+    parameter_spec = {}
+
+
+raise RuntimeError("startup failed for key " + os.environ["PUBLISHABLE_TEST_LOADFAIL"])
+"""
+
+
+def test_a_declared_credential_reaches_no_diagnostic_when_its_own_template_fails_to_load(
+    tmp_path, monkeypatch, capsys
+):
+    """`validate_config`'s `E-TEMPLATE-LOAD` early return used to append its
+    finding and `return None` before `c.credentials` was ever set, so the
+    raising file's own exception text — `discovery.py`'s `{exc!r}` — reached
+    stdout unredacted. This is the single-file, discriminating shape: the
+    *same* file both declares `required_env` and raises after its own
+    `@register_template` call, so the sole template declaring the variable is
+    the one whose text leaks if this is ever undone. `@register_template` runs
+    before the module-level raise below it, so the class survives — as
+    `exc.partial_templates` — even though its registration is discarded.
+
+    Scaffolded by hand rather than through `run_a_project`: that helper writes
+    `_local_template` to disk *before* `generate_experiment` resolves
+    `template_name="generic"` — and `discover_local` imports every
+    `templates/*.py` regardless of which name is being resolved, so a template
+    that raises unconditionally would blow up scaffolding itself, before
+    `.env` is ever written or loaded. Here the raising file is written only
+    after the config exists, and `.env` is loaded by `validate_config` itself.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_LOADFAIL", raising=False)
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a declared credential behind a template that fails to load"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "cred_assay"
+    cfg.write_text(yaml.safe_dump(doc))
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "cred_assay.py").write_text(_LOAD_FAILING_CRED_TEMPLATE)
+    (root / ".env").write_text(f"PUBLISHABLE_TEST_LOADFAIL={_SENTINEL}\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    # SOMETHING THAT MUST REPORT: the load fault fired at all.
+    assert "E-TEMPLATE-LOAD" in out, out
+    assert "<redacted:PUBLISHABLE_TEST_LOADFAIL>" in out, out
+    # Surrounding text survives — the finding is still diagnosable.
+    assert "startup failed for key" in out, out
+    assert _SENTINEL not in out
+
+
+_LOAD_FAILING_MALFORMED_SPEC_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("bad_spec_assay")
+class BadSpecAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = "not-a-dict"
+
+
+raise RuntimeError("startup failed after registering a non-dict parameter_spec")
+"""
+
+
+def test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malformed_parameter_spec(
+    tmp_path, capsys
+):
+    """`declared_credential_names_for` and `_check_requires_env` both read
+    `template.parameter_spec.items()` after a load fault, over
+    `exc.partial_templates` — a class whose body finished running before its
+    own `@register_template` raised. A `parameter_spec` that is not a `dict`
+    (a str, here) used to reach that `.items()` call unguarded and raise
+    `AttributeError`, escaping `validate`, which is contracted never to raise.
+
+    Scaffolded by hand, the same way as the sibling load-failing-credential
+    test above and for the same reason: the raising file must exist only
+    after the config and repo are already committed, so scaffolding itself
+    (which imports every `templates/*.py` regardless of the name being
+    resolved) does not blow up first.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a malformed parameter_spec behind a template load fault"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "bad_spec_assay"
+    cfg.write_text(yaml.safe_dump(doc))
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "bad_spec_assay.py").write_text(_LOAD_FAILING_MALFORMED_SPEC_TEMPLATE)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        cwd=root,
+        check=True,
+    )
+
+    # Must report a diagnostic rather than raise `AttributeError`.
+    assert main(["validate", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    assert "E-TEMPLATE-LOAD" in out, out
+    assert "startup failed after registering a non-dict parameter_spec" in out, out

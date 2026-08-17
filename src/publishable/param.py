@@ -1,6 +1,12 @@
 """One parameter's type, default, constraints and help text.
 
 The constraint vocabulary is closed on purpose: docs/reference.md § Templates.
+
+`requires_env` is the one keyword here that is **not** a constraint and is
+deliberately absent from that closed table: it constrains the *environment* a
+value may be used in, not the value. `docs/reference.md` § A credential can belong to a parameter
+value states the boundary and the reason — the provider is something you decide,
+so it is a `Param`, and what that decision requires travels with it.
 """
 
 import re
@@ -9,6 +15,10 @@ from typing import Any
 
 MISSING = object()
 _TYPE_NAMES = {str: "string", int: "integer", float: "float", bool: "bool", list: "list"}
+
+
+def _joined(values: list[Any]) -> str:
+    return ", ".join(str(v) for v in values)
 
 
 class Param:
@@ -27,6 +37,7 @@ class Param:
         min_items: int | None = None,
         max_items: int | None = None,
         nullable: bool = False,
+        requires_env: dict[Any, list[str]] | None = None,
         help: str | None = None,
     ) -> None:
         if type_ not in _TYPE_NAMES:
@@ -42,6 +53,25 @@ class Param:
             raise ValueError(
                 f"ge/gt/le/lt require type_=int or type_=float, not {_TYPE_NAMES[type_]}"
             )
+        if requires_env is not None:
+            if choices is None:
+                raise ValueError(
+                    "requires_env requires choices: a credential requirement is "
+                    "only checkable over a closed set of values"
+                )
+            absent = [c for c in choices if c not in requires_env]
+            extra = [k for k in requires_env if k not in choices]
+            if absent or extra:
+                detail = ""
+                if absent:
+                    detail += f"; no key for {_joined(absent)}"
+                if extra:
+                    detail += f"; keys naming no choice: {_joined(extra)}"
+                raise ValueError(
+                    "requires_env must be total over choices: "
+                    f"choices are {_joined(choices)}; "
+                    f"requires_env names {_joined(list(requires_env))}{detail}"
+                )
         self.type_ = type_
         self.default = default
         self.choices = choices
@@ -50,6 +80,7 @@ class Param:
         self.item_type = item_type
         self.min_items, self.max_items = min_items, max_items
         self.nullable = nullable
+        self.requires_env = requires_env
         self.help = help
 
     @property
@@ -106,9 +137,16 @@ class Param:
         return isinstance(value, expected)
 
     def comment(self) -> str:
-        """The inline comment `init` renders. One constraint claims it, else `help`."""
+        """The inline comment `init` renders. One constraint claims it, else `help`.
+
+        A `choices` comment additionally carries each value's `requires_env`
+        variables. Those are not a constraint — see this module's docstring —
+        and they are rendered against *every* choice rather than the written
+        one, because nothing ever writes back into a config and a comment about
+        the current value would be wrong the first time the file was edited.
+        """
         if self.choices is not None:
-            return "choices: " + " | ".join(str(c) for c in self.choices)
+            return "choices: " + " | ".join(self._choice_label(c) for c in self.choices)
         if self.gt is not None and self.lt is not None:
             return f"float in ({self.gt}, {self.lt})"
         for bound, sym in ((self.ge, ">="), (self.gt, ">"), (self.le, "<="), (self.lt, "<")):
@@ -119,3 +157,9 @@ class Param:
         if self.type_ is list and self.item_type is not None:
             return f"list of {_TYPE_NAMES[self.item_type]}"
         return self.help or ""
+
+    def _choice_label(self, choice: Any) -> str:
+        needs = (self.requires_env or {}).get(choice) or []
+        if not needs:
+            return str(choice)
+        return f"{choice} (needs {', '.join(needs)})"

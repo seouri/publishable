@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from publishable.secrets import redact
+
 EXIT_OK = 0
 EXIT_WRONG = 1
 EXIT_INVOCATION = 2
@@ -23,6 +25,27 @@ class Collector:
     """`validate` collects rather than stops, so findings are appended, never raised."""
 
     findings: list[Diagnostic] = field(default_factory=list)
+    credentials: dict[str, str] = field(default_factory=dict)
+    """The credential values core read for a DECLARED variable, if any were.
+
+    Set by whoever knows them — `validate_config`, which resolves the same two
+    declarations it checks, and `command_run` for the collectors it builds after
+    it. Redaction happens at `render`, the one place a finding's text becomes
+    output, rather than at each site that builds an exception string into a
+    diagnostic: every diagnostic's text passes through this one method on its
+    way to a reader. That is not the same as every site being covered — a
+    `Collector` whose `credentials` was never set (`command_run` builds a few
+    this way) redacts nothing, so a later diagnostic-producing site is only
+    covered if whatever constructs its `Collector` also populates
+    `credentials`. (Not every exception-interpolating site in core is a
+    diagnostic — `main`'s catch-all is one that isn't, and redacting it is
+    tracked separately in `spec-defects.md`.) `Diagnostic` stays a plain frozen
+    record so a message is never rewritten before the collector that owns it
+    decides to print.
+
+    Empty is the default and the honest one: a collector nobody gave values to
+    redacts nothing, because there is nothing it was told to look for.
+    """
 
     def error(self, code: str, path: str, message: str) -> None:
         self.findings.append(Diagnostic("error", code, path, message))
@@ -41,7 +64,9 @@ class Collector:
         lines = []
         for f in self.findings:
             lines.append(f"  {f.level:<7} {f.code:<20} {f.path}")
-            lines.append(f"          {f.message}")
+            # `or f.message` narrows `str | None` to `str` for the type checker;
+            # `redact` returns its argument unchanged when there is nothing to do.
+            lines.append(f"          {redact(f.message, self.credentials) or f.message}")
         n_err = sum(1 for f in self.findings if f.level == "error")
         n_warn = len(self.findings) - n_err
         total = len(self.findings)

@@ -1,0 +1,979 @@
+# Review package: a7c664b..1979a78
+
+## Commits
+1979a78 docs: task 12 report — mutation outcomes, fixture reachability, three brief disagreements
+248c152 feat: redact credential values at the two serialization boundaries, and state the limit
+
+## Files changed
+ .../task-12-report.md                              | 102 +++++++
+ docs/reference.md                                  |   4 +
+ src/publishable/cli.py                             |  70 ++++-
+ src/publishable/diagnostics.py                     |  21 +-
+ src/publishable/runner.py                          |  21 +-
+ src/publishable/validate.py                        |  62 ++++-
+ tests/test_cli.py                                  | 295 +++++++++++++++++++++
+ 7 files changed, 571 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-12-report.md b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-12-report.md
+new file mode 100644
+index 0000000..f791a3d
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-12-report.md
+@@ -0,0 +1,102 @@
++# Task 12 report
++
++**Status:** complete. Commit `248c152` on `h7c-credentials`.
++
++**Tests:** `uv run pytest -q` → 1993 passed, 2 xfailed (1989 + 4 new before this
++task, per the brief's baseline). `uv run ruff check .`, `uv run ruff format --check .`,
++`uv run mypy` all clean.
++
++## The four new tests
++
++1. `test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so` — step-error
++   boundary, `GenericTemplate.required_env`.
++2. `test_a_step_reads_its_credential_and_the_value_still_reaches_no_artifact` — success
++   path, same boundary.
++3. `test_a_template_exception_printed_as_a_warning_is_redacted_too` — the
++   `Collector.render()` boundary, via a project-local template's `aggregate` raising.
++4. `test_a_project_local_template_s_credentials_are_redacted_too` — step-error boundary
++   again, but through a project-local template resolved with `repo_root`, closing the
++   `requires_env` half neither `GenericTemplate` fixture reaches.
++
++## Mutation outcomes (all four, both halves each)
++
++**(a) Removed the step-error boundary** (`runner.py`'s `error = redact(...)` reverted to
++the plain f-string): tests 1 and 4 (both step-error-path fixtures) went **RED** on the
++`<redacted:...>` assertion; test 3 (the render-boundary fixture) stayed **GREEN**, exactly
++as expected since its sentinel never touches `ExecutionResult.error`. Reverted by editing
++the file back; `diff` against a pre-mutation copy confirmed byte-identical; re-ran to
++confirm green again.
++
++**(b) Removed the `Collector.render()` boundary** (`diagnostics.py`'s message line
++reverted to `f"          {f.message}"`): test 3 went **RED** on both the
++`<redacted:PUBLISHABLE_TEST_AZURE>` assertion and the bare `_SENTINEL not in out`
++assertion; tests 1 and 4 stayed **GREEN**. Reverted and re-confirmed the same way.
++
++Both pairs discriminate correctly — no mutation reddened both boundaries' tests, and no
++mutation left its own boundary's test green. Mutation (c) — redact-by-pattern on a
++`sk-`-prefix — was not run here; it is named in the brief as blind and already covered by
++`tests/test_secrets.py`'s `test_redaction_replaces_the_exact_value_and_names_the_variable`.
++
++## Render-boundary fixture reachability — verified, not assumed
++
++Confirmed by running `test_a_template_exception_printed_as_a_warning_is_redacted_too` alone:
++the run reaches `EXIT_OK` (the default `expect_exit`, and the test passed against it), and
++`"W-STATS-AGGREGATE-FAILED" in out` held before the redaction assertion was even reached —
++i.e. `aggregate` was genuinely invoked (the scaffold's default `STARTER_STEP` calls
++`io.record`, so a recording step existed for it to run over). The failing mutation (b) run
++above shows the same warning line reaching `out` with the raw sentinel still in it,
++independently confirming the route is live: `raise` → `W-STATS-AGGREGATE-FAILED` →
++`aggregate_c.render()` → `print(...)` → `capsys` → `doc["stdout"]`.
++
++## `_local_template`
++
++Had zero real callers before this task (only present in `run_a_project`'s signature and
++docstring from task 8) — confirmed by grepping `tests/test_cli.py` for `_local_template=`
++before writing anything. This task's tests 3 and 4 are its first two callers.
++
++## Where the brief/spec disagreed with the code
++
++1. **`expect_exit=EXIT_PARTIAL` was wrong for the step-error fixtures as the brief wrote
++   them.** The scaffolded project has exactly one `repeat`-scope step; when that one step
++   raises unconditionally, *every* execution fails and `run_status` sees no completed
++   execution anywhere, giving `"failed"` (`EXIT_FAILED`, code 4) rather than `"partial"`.
++   This is the identical fixture defect `tests/test_cli.py`'s
++   `test_io_units_train_raises_without_a_fold_or_holdout` already found and documented in
++   this same slice ("a real mismatch against the brief this test started from"). Fixed the
++   same way that test fixed it: added `extra_steps=["control"]` (the generated no-op step,
++   always completes) to both `test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so`
++   and `test_a_project_local_template_s_credentials_are_redacted_too`, so the run genuinely
++   mixes a failure with a success and `run_status` reports `partial` for real.
++2. **`test_a_template_exception_printed_as_a_warning_is_redacted_too`'s config needed
++   `parameters={}`.** `CredAssay.parameter_spec` is empty, but `run_a_project`'s generated
++   config carries the generic scaffold's default `parameters.analysis.*` block, which
++   `validate` refuses as `E-PARAM-UNKNOWN` for a template declaring no parameters at all —
++   before `run` ever reaches `execute_plan`, so the run never started (`EXIT_WRONG`) until
++   this was added.
++3. **Decision 1 (validate-side helper naming/hoisting).** The brief offered
++   `declared_credential_names_for(doc, template)` in `validate.py` or hoisting a single
++   shared function with `cli.declared_credential_names`. Wrote them as two separate
++   functions rather than one: `cli.py`'s must take the already-expanded `conditions` to
++   avoid a second `expand(doc)` derivation that could drift from the plan actually
++   executed (mandated by correction 3 in the design doc), while `validate.py`'s
++   `declared_credential_names_for` re-derives `expand(doc)` under a guard — matching this
++   module's own existing convention (`_check_requires_env`, `_check_sweep`,
++   `_check_contrasts` all independently re-derive `expand(doc)` the same guarded way,
++   since `validate` collects per-check rather than threading one resolved plan through
++   every check function). A true merge would have required changing that file-wide
++   convention, which is out of scope for this task. Not shipping two *identical*
++   functions — the logic core (spec walk + condition-value resolution) is genuinely
++   shared in shape but the signatures differ for a stated reason.
++4. Everything else in the brief (the `Collector`/`Diagnostic` boundary split, the
++   `run_template`/`credentials` placement in `command_run`, the `_flatten_parameters`
++   local mirror, the quoted `"list[Condition]"` annotation, the five construction sites)
++   matched the code as found, verbatim.
++
++## Concerns
++
++None outstanding. `aggregate_c` and `drift_c` (both constructed after `credentials` is in
++scope in `command_run`) were given `.credentials = credentials`; `dirty_c`, the
++pre-execution `c`, and `warn_c` are constructed before `credentials` exists and carry only
++core-authored text, so they were left alone; `io_c` lives in `main`, a different function
++with no `credentials` in scope at all, and carries only a filesystem-error message, so it
++was left alone too.
+diff --git a/docs/reference.md b/docs/reference.md
+index 63ac117..288e30d 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -3477,20 +3477,24 @@ INSTRUMENT_API_TOKEN=...
+ ```
+ 
+ ```yaml
+ parameters:
+   instrument:
+     credential_env_var: "INSTRUMENT_API_TOKEN"   # the NAME, never the value
+ ```
+ 
+ A template lists what it always needs in `required_env`, and a parameter value lists what *it* needs in [`requires_env`](#a-credential-can-belong-to-a-parameter-value); `validate` confirms each is set — the second only for the conditions a sweep actually resolves — without printing or logging it. Steps read `os.environ[cfg.parameters.instrument.credential_env_var]` normally. This is why `report` and `diff` output is safe to send as-is: there's nothing secret to redact, because there was never anything secret in it.
+ 
++**An exception's text can carry a value by accident, and it is refused rather than tolerated.** A client library that interpolates a key into a URL in its error message is ordinary, and core turns an exception into text a reader sees in two places: a failed execution's `error`, written into both `run.yaml` and `executions.jsonl`, and a [diagnostic](#exit-codes-and-diagnostics) printed to stdout or stderr — which is how a template's `aggregate` failure and an entrypoint that raises at import reach you. Core replaces each credential value it read with `<redacted:VARIABLE_NAME>` at both, and leaves the rest of the message intact, because the record exists to be debugged from — and it says a redaction happened rather than scrubbing silently, so a reader knows both what was removed and which variable to look at. The match is by **exact value, never by pattern**: core knows what it read out of the environment, so it answers the direct question instead of guessing from a name ending `_KEY` or from how random a string looks.
++
++**The limit of that, stated rather than discovered.** Core redacts only values it read for a **declared** variable — one named in a template's `required_env`, or in the `requires_env` of a value a condition resolves. `io` hands a step no credential, so a step that reaches `os.environ` for a name no declaration mentions holds a value core never saw and cannot match. Declare it, and it is covered; don't, and the redaction is not a guarantee the code can provide.
++
+ ---
+ 
+ ## Naming conventions & repeat defaults
+ 
+ Templates encode what a field's reviewers expect. Core enforces whatever the template declares and warns rather than silently passing when a config falls below `default_repeats`.
+ 
+ `default_repeats` is a plain integer in every class, because core [does not compute power](experimental-designs.md#what-core-will-not-do-for-you) and a default it cannot derive would be a number pretending to be a calculation. Where a field expects an a-priori sample size, the template asks for it as a parameter — declared by you, recorded in the config, and checkable against the units actually resolved.
+ 
+ | Convention class | Naming | Repeat floor |
+ |---|---|---|
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 8fbbfe1..4df0947 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -49,21 +49,21 @@ from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+ from publishable.run_record import assemble_run_yaml, run_status, summary_values
+ from publishable.runner import (
+     _arm_keys,
+     attrition,
+     execute_plan,
+     resolve_condition_cfg,
+     resolve_wide_cfg,
+ )
+ from publishable.scaffold import scaffold_project
+ from publishable.scope import Execution, build_plan
+-from publishable.secrets import load_env
++from publishable.secrets import credential_values, load_env
+ from publishable.stats import (
+     UnitTable,
+     cohens_dz,
+     collapse_repeats,
+     mean_of,
+     min_honest_draws,
+     paired_delta_of_derived,
+     paired_keys,
+     paired_percentile_of_derived,
+     paired_t_over_units,
+@@ -302,20 +302,72 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+     longer refuses a declared `groups` axis outright.
+     """
+     selectors = set(selector_paths(sweep_block))
+     return (
+         set(_swept_paths(sweep_block))
+         | set(ablated_paths(sweep_block))
+         | set(sweep_block.get("baseline") or {})
+     ) - selectors
+ 
+ 
++def _flatten_parameters(node: Any, prefix: str = "") -> dict[str, Any]:
++    """Mirrors `validate._flatten` for this one caller, rather than reaching
++    across a module boundary for a name private to that module."""
++    flat: dict[str, Any] = {}
++    for key, value in (node or {}).items():
++        path = f"{prefix}.{key}" if prefix else key
++        if isinstance(value, dict):
++            flat.update(_flatten_parameters(value, path))
++        else:
++            flat[path] = value
++    return flat
++
++
++def declared_credential_names(
++    doc: dict[str, Any], template: Any, conditions: "list[Condition]"
++) -> list[str]:
++    """Every environment variable this config's declarations name.
++
++    The same two collectors `validate` checks — the template's `required_env` and
++    the `requires_env` of every value a resolved condition selects — read here for
++    their *values* rather than for their presence. Deliberately the same set: core
++    redacts exactly what it was told to look for, which is what makes the answer a
++    fact rather than a guess.
++
++    Takes the already-expanded `conditions` rather than expanding again, so the
++    set core redacts is derived from the same condition list the run executes.
++
++    A `None` template yields the empty list, which is the honest answer for a name
++    that resolves to nothing — but it is also indistinguishable from a template
++    declaring no credentials, so the caller's job is to pass a template that was
++    resolved WITH `repo_root`.
++    """
++    names: list[str] = list(getattr(template, "required_env", None) or [])
++    spec = getattr(template, "parameter_spec", None) or {}
++    declared = _flatten_parameters(doc.get("parameters"))
++    for condition in conditions:
++        resolved = dict(declared)
++        for path, value in condition.values.items():
++            if path not in condition.selectors:
++                resolved[path] = value
++        for path, param in spec.items():
++            mapping = getattr(param, "requires_env", None)
++            if not mapping:
++                continue
++            value = resolved.get(path, param.default)
++            try:
++                names.extend(mapping.get(value) or [])
++            except TypeError:
++                continue
++    return names
++
++
+ def _resolved_group_axes(
+     units_decl: dict[str, Any] | None,
+     sweep_block: dict[str, Any],
+     roster: "UnitList | None",
+     digest: str,
+     clusters: dict[str, str] | None = None,
+ ) -> dict[str, ArmPlan]:
+     """Every `sweep.groups` axis **realized** — one `units.ArmPlan` per axis,
+     `units.arm_members`'s own input shape and `artifacts.build_allocation_document`'s.
+ 
+@@ -1468,20 +1520,33 @@ def command_run(config_path: Path) -> int:
+         # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
+         # nothing downstream does arithmetic on it, and one type keeps a hand-built
+         # roster and a table-sourced one giving the same split.
+         strata: dict[str, str] | None = None
+         if fold_level.stratify_by:
+             strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+         partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
+     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
+ 
+     conditions = expand(doc)
++    # Resolved here rather than read off the later `get_template` call, which is
++    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
++    # because without it `registry._merged` never runs `discover_local`, and every
++    # project-local template resolves to `None` — which would empty `credentials`
++    # and silently turn the redaction below into a no-op for exactly the templates
++    # this check is for. Cannot raise: `validate_config` already made the same
++    # call and returned without error, or `command_run` returned above.
++    run_template = get_template(doc.get("experiment_type", ""), repo_root)
++    # Every credential core read for a DECLARED variable — the template's own
++    # `required_env`, plus the union its parameters' `requires_env` resolves to.
++    # Held for this command only and written nowhere; its single consumer is the
++    # redaction in `execute_plan`.
++    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
+     sweep_block = doc.get("sweep") or {}
+     swept_paths = _wide_swept_paths(sweep_block)
+     # One frozenset of unit keys per condition that selects a group axis — `None`
+     # for a design declaring none. Reachable now that task 17 retired
+     # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+     # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
+     # subset view through a real `command_run`.
+     #
+     # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
+     # already used `selector_paths` to decide which paths are group cells, so
+@@ -1647,20 +1712,21 @@ def command_run(config_path: Path) -> int:
+             units=eval_roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
+             arm_members=arm_members_map,
+             holdout_train=(
+                 UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                 if holdout_plan is not None and roster is not None
+                 else None
+             ),
+             measurements=(units_decl or {}).get("measurements"),
++            credentials=credentials,
+         )
+ 
+         status = run_status(results)
+         # No roster means nothing to aggregate over, so `aggregated` stays `None`
+         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
+         # that case, instead of every condition reporting a misleading empty
+         # `aggregated: {}`.
+         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
+         # Same absent-not-empty rule as `aggregated`, for the same reason: a run
+         # with no baseline and no declared contrast compares nothing, and
+@@ -1689,20 +1755,21 @@ def command_run(config_path: Path) -> int:
+         condition_meta = {
+             c.index: {"label": c.label, "is_baseline": c.is_baseline, "values": dict(c.values)}
+             for c in conditions
+         }
+         # Declared here rather than only under `if roster is not None:` below: a
+         # `summary` step's `Estimate` is reachable whether or not `data.units` is
+         # declared at all (`reference.md` § Units: undeclared `data.units` still
+         # runs, it just leaves `io.units`/`io.units.train` unreachable), so the
+         # warning this collector carries must not be coupled to a roster existing.
+         aggregate_c = Collector()
++        aggregate_c.credentials = credentials
+         # An `Estimate` reaches here already valid (`coerce_scalars` refused a
+         # `ci95` with no `method`, E-STEP-ESTIMATE-METHOD, and any non-`summary`
+         # scope, E-STEP-ESTIMATE-SCOPE) — the one thing left unchecked is `n`.
+         # `n` is optional (the run completes either way) but its absence beside
+         # a real `ci95` is surfaced rather than passed in silence: an interval
+         # with no stated denominator is exactly the disclosure risk
+         # `limits.min_reported_n` exists to catch, and `study add` cannot check
+         # what it cannot see. A bare `Estimate` with no `ci95` makes no interval
+         # claim at all, so it is not warned about here.
+         for r in results:
+@@ -2571,20 +2638,21 @@ def command_run(config_path: Path) -> int:
+             # `status = "failed"` for a different reason (the data a
+             # completed run rested on is no longer what it read). This is
+             # printed to stdout only: `run.yaml` has no diagnostics channel
+             # to carry a finding that isn't a metric, an interval, or a
+             # status.
+             print(aggregate_c.render())
+         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
+         if changed_inputs:
+             status = "failed"
+             drift_c = Collector()
++            drift_c.credentials = credentials
+             noun = "path" if len(changed_inputs) == 1 else "paths"
+             drift_c.error(
+                 "E-INPUT-CHANGED",
+                 "data.input_dir",
+                 f"{len(changed_inputs)} {noun} changed since the manifest was built "
+                 f"at run start: {', '.join(changed_inputs)}",
+             )
+             print(drift_c.render())
+ 
+         provenance: dict[str, Any] = {
+diff --git a/src/publishable/diagnostics.py b/src/publishable/diagnostics.py
+index c66ffcc..c516918 100644
+--- a/src/publishable/diagnostics.py
++++ b/src/publishable/diagnostics.py
+@@ -1,14 +1,16 @@
+ """Collected findings. See docs/reference.md § Exit codes and diagnostics."""
+ 
+ from dataclasses import dataclass, field
+ 
++from publishable.secrets import redact
++
+ EXIT_OK = 0
+ EXIT_WRONG = 1
+ EXIT_INVOCATION = 2
+ EXIT_PARTIAL = 3
+ EXIT_FAILED = 4
+ EXIT_EXTERNAL = 5
+ 
+ 
+ @dataclass(frozen=True)
+ class Diagnostic:
+@@ -16,37 +18,54 @@ class Diagnostic:
+     code: str
+     path: str
+     message: str
+ 
+ 
+ @dataclass
+ class Collector:
+     """`validate` collects rather than stops, so findings are appended, never raised."""
+ 
+     findings: list[Diagnostic] = field(default_factory=list)
++    credentials: dict[str, str] = field(default_factory=dict)
++    """The credential values core read for a DECLARED variable, if any were.
++
++    Set by whoever knows them — `validate_config`, which resolves the same two
++    declarations it checks, and `command_run` for the collectors it builds after
++    it. Redaction happens at `render`, the one place a finding's text becomes
++    output, rather than at each of the five sites that build an exception string:
++    a diagnostic carrying a template's or a user package's exception is minted in
++    four places and a sixth is one commit away. `Diagnostic` stays a plain frozen
++    record so a message is never rewritten before the collector that owns it
++    decides to print.
++
++    Empty is the default and the honest one: a collector nobody gave values to
++    redacts nothing, because there is nothing it was told to look for.
++    """
+ 
+     def error(self, code: str, path: str, message: str) -> None:
+         self.findings.append(Diagnostic("error", code, path, message))
+ 
+     def warn(self, code: str, path: str, message: str) -> None:
+         self.findings.append(Diagnostic("warning", code, path, message))
+ 
+     @property
+     def has_errors(self) -> bool:
+         return any(f.level == "error" for f in self.findings)
+ 
+     def exit_code(self) -> int:
+         return EXIT_WRONG if self.has_errors else EXIT_OK
+ 
+     def render(self) -> str:
+         lines = []
+         for f in self.findings:
+             lines.append(f"  {f.level:<7} {f.code:<20} {f.path}")
+-            lines.append(f"          {f.message}")
++            # `or f.message` narrows `str | None` to `str` for the type checker;
++            # `redact` returns its argument unchanged when there is nothing to do.
++            lines.append(f"          {redact(f.message, self.credentials) or f.message}")
+         n_err = sum(1 for f in self.findings if f.level == "error")
+         n_warn = len(self.findings) - n_err
+         total = len(self.findings)
+         problem_noun = "problem" if total == 1 else "problems"
+         error_noun = "error" if n_err == 1 else "errors"
+         warning_noun = "warning" if n_warn == 1 else "warnings"
+         lines.append(f"{total} {problem_noun} ({n_err} {error_noun}, {n_warn} {warning_noun})")
+         return "\n".join(lines)
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index 2cdc034..f21eedc 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -7,20 +7,21 @@ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.artifacts import StepIO
+ from publishable.coercion import coerce_scalars
+ from publishable.config import Config, SweptAway
+ from publishable.errors import ContractError
+ from publishable.replication import LABEL_JOIN, Repeat
+ from publishable.scope import Execution
++from publishable.secrets import redact
+ from publishable.stats import handed_to, kish_effective_n
+ from publishable.sweep import Condition, condition_dir_name
+ from publishable.units import UnitList, cluster_count_of
+ 
+ 
+ @dataclass(frozen=True)
+ class ExecutionResult:
+     execution: Execution
+     status: str
+     started_at: str
+@@ -464,20 +465,21 @@ def execute_plan(
+     input_dir: Path,
+     cfgs: dict[int, Any],
+     repeats: list[Repeat],
+     digest: str,
+     units: UnitList | None = None,
+     max_failed_fraction: float | None = None,
+     fold_members: dict[str, frozenset[str]] | None = None,
+     arm_members: "dict[int, frozenset[str]] | None" = None,
+     holdout_train: "UnitList | None" = None,
+     measurements: dict[str, Any] | None = None,
++    credentials: dict[str, str] | None = None,
+ ) -> list[ExecutionResult]:
+     """Run every execution in the plan, in order, one at a time.
+ 
+     A failed execution never stops the run — the plan runs to its end, because
+     abandoning it throws away every execution still pending and `resume` cannot
+     un-abort a plan that was never attempted. `max_failed_fraction` is the one
+     documented exception: unit failures only accumulate, so once the fraction of
+     the roster that has failed in at least one execution crosses the threshold, no
+     later execution can bring it back, and spending the remaining compute to
+     confirm that is waste.
+@@ -498,20 +500,30 @@ def execute_plan(
+     the other arm's units into `.train` — the same class of leak
+     `units.partition_units` exists to prevent for a cluster, one level up.
+ 
+     `holdout_train` is `data.units.holdout`'s training roster, already resolved
+     by the caller (`cli.command_run`'s single-authority narrowing) — this
+     function derives nothing from it beyond wrapping it. Unlike a `fold`, a
+     holdout's split is fixed for the whole run, so when `holdout_train` is given,
+     `units` is the test partition and `io.units.train` is `holdout_train` at
+     every scope — `run`, `condition`, `repeat` and `summary` alike, not only
+     `repeat` the way a fold's `.train` is.
++
++    `credentials` is `{variable: value}` for every credential core read for a
++    *declared* variable — `required_env` and the `requires_env` union. A failed
++    execution's exception text is the one surface on which such a value can enter
++    a record, so each is replaced there by a marker naming its variable. By exact
++    value, never by pattern: core knows what it read, and a pattern check fails
++    open on a credential named `instrument_pw` and fails closed on a config value
++    that happens to look random. A value a step read from `os.environ` for a name
++    nothing declared is outside what core saw and is not matched — see
++    `docs/reference.md` § Secrets & credentials.
+     """
+     # Two evaluation splits is two answers to "which units is this metric
+     # over?", which is exactly what `validate` refuses. No config can reach this
+     # at this commit: `E-DATA-HOLDOUT-FOLD` (task 6) refuses a `holdout` beside a
+     # declared `fold` level, and `E-DATA-HOLDOUT-CELLS` (task 8) refuses a
+     # holdout beside the group axis `arm_members` comes from. So this asserts
+     # something about core's own callers rather than about a config — and it is
+     # an assertion rather than silent precedence because if either refusal ever
+     # stops holding, a crash here is what makes that visible instead of a
+     # partition chosen by whichever branch happened to be written first.
+@@ -678,21 +690,28 @@ def execute_plan(
+                 )
+             returned = coerce_scalars(returned, execution.step_name, scope=execution.scope)
+             io.finalize()
+             recorded = frozenset(io.recorded_keys)
+             skipped = frozenset(io.skipped)
+             rows = tuple(io.rows())
+             status, error = "completed", None
+         except Exception as exc:  # a failed execution never stops the run
+             code = getattr(exc, "code", None)
+             prefix = f"{code} " if code else ""
+-            returned, status, error = {}, "failed", f"{prefix}{type(exc).__name__}: {exc}"
++            # Redacted where this string is BUILT rather than at each writer:
++            # both records — `run.yaml` through `run_record` and
++            # `executions.jsonl` below — read from it, so one edit covers both
++            # and they cannot diverge. The *other* four places core interpolates
++            # an exception are diagnostics, and `Collector.render` covers all of
++            # them at once (`docs/reference.md` § Secrets & credentials).
++            returned, status = {}, "failed"
++            error = redact(f"{prefix}{type(exc).__name__}: {exc}", credentials or {})
+ 
+         result = ExecutionResult(
+             execution=execution,
+             status=status,
+             started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+             wall_seconds=round(time.monotonic() - clock, 3),
+             returned=returned,
+             error=error,
+             recorded=recorded,
+             skipped=skipped,
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 1b4fdfb..a88011b 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -14,21 +14,21 @@ from publishable.correction import ALPHA
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
+ from publishable.hashes import design_digest
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+-from publishable.secrets import load_env, missing_env
++from publishable.secrets import credential_values, load_env, missing_env
+ from publishable.stats import min_honest_draws
+ from publishable.strata import levels_for
+ from publishable.sweep import (
+     NAMEABLE_CHAR,
+     SWEEP_MODES,
+     check_swept_value,
+     expand,
+     parameter_axis_modes_present,
+     removal_value,
+     render_value,
+@@ -583,20 +583,27 @@ def validate_config(
+             c.error(
+                 "E-ENTRYPOINT-IMPORT",
+                 "entrypoint",
+                 str(exc) if own else f"could not be imported: {type(exc).__name__}: {exc}",
+             )
+ 
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
+     _check_required_env(doc, template, c)
+     _check_requires_env(doc, template, c)
++    # Set once `template` is resolved, so `c.render()` — whenever it is finally
++    # called, by `command_validate` or `command_run` — redacts a credential value
++    # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
++    # built before this line runs. Redaction happens at render, not at
++    # construction (`Diagnostic` is a frozen record with no methods), so setting
++    # this after the fact still covers every finding already appended.
++    c.credentials = credential_values(declared_credential_names_for(doc, template))
+     _check_parameters(doc, template, c)
+     _check_versions(doc, template, c)
+     _check_data(doc, config_path, c)
+     roster, technical_n, columns = _check_units(doc, c)
+     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
+     _check_measurements(units_decl, roster, technical_n, columns, c)
+     _check_weight_by(units_decl, roster, c)
+     _check_cluster_by(doc, units_decl, roster, c)
+     _check_assign(doc, units_decl, roster, c)
+     # How many indivisible things a `fold` may be drawn from: the resolved unit
+@@ -817,20 +824,73 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
+         path, value, label = first_seen[variable]
+         where = f"condition `{label}`" if label else "the base parameters"
+         c.error(
+             "E-CRED-PARAM-MISSING",
+             f"parameters.{path}",
+             f"is `{value}` in {where}, which requires `{variable}` — no value in the "
+             "environment or in `.env`",
+         )
+ 
+ 
++def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:
++    """Every environment variable this config's declarations name.
++
++    The same two collectors `_check_required_env` and `_check_requires_env`
++    check for *presence* above, read here for their *values* — deliberately the
++    same set, which is what makes the redaction this feeds a fact rather than a
++    guess. Not shared as one function with `cli.declared_credential_names`: that
++    one takes the `conditions` its caller already expanded, because a second
++    `expand(doc)` there would be a second derivation of the plan actually
++    executed; this module's every other check (`_check_requires_env`,
++    `_check_sweep`, `_check_contrasts`) already re-derives `expand(doc)` locally
++    under the same guard, since `validate` collects findings rather than
++    threading one resolved plan through them, so re-deriving here matches this
++    file's own convention rather than breaking it.
++
++    A `None` template — reached only when `resolve_template` already returned
++    early — yields the empty list, since `getattr(None, ...)` on a missing
++    template answers nothing rather than guessing.
++    """
++    names: list[str] = list(getattr(template, "required_env", None) or [])
++    spec = getattr(template, "parameter_spec", None) or {}
++    wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
++    if not wanted:
++        return names
++    try:
++        conditions = expand(doc)
++    except Exception:
++        # Guarded the same way `_check_requires_env` guards its own `expand(doc)`:
++        # an unexpandable sweep is `_check_sweep`'s finding to make, not this
++        # collector's crash to cause.
++        return names
++    declared = _flatten(doc.get("parameters"), "")
++    for condition in conditions:
++        resolved = dict(declared)
++        for path, value in condition.values.items():
++            if path in condition.selectors:
++                continue
++            resolved[path] = value
++        for path, param in wanted.items():
++            if path in resolved:
++                value = resolved[path]
++            elif param.default is not MISSING:
++                value = param.default
++            else:
++                continue
++            try:
++                needs = param.requires_env.get(value)
++            except TypeError:
++                continue
++            names.extend(needs or [])
++    return names
++
++
+ def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
+     declared = _flatten(doc.get("parameters"), "")
+     spec = template.parameter_spec
+     for path, value in declared.items():
+         param = spec.get(path)
+         if param is None:
+             import difflib
+ 
+             near = difflib.get_close_matches(path, list(spec), n=1)
+             hint = f" — did you mean `{near[0]}`?" if near else ""
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 327cf47..def2293 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -8436,10 +8436,305 @@ def test_run_loads_dot_env_itself_rather_than_relying_on_validate(tmp_path, monk
+         tmp_path,
+         units=4,
+         _starter_step=_ENV_READING_STEP,
+         _env_file="PUBLISHABLE_TEST_TOKEN=abcdefgh\n",
+     )
+     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+     per_repeat = run["results"]["conditions"][0]
+     # Something that must REPORT, not an absence: the step got the real value and
+     # returned its length. 8 is `len("abcdefgh")`, derived from the fixture above.
+     assert json.dumps(per_repeat).count('"token_len": 8') >= 1
++
++
++_SENTINEL = "sk-h7c-sentinel-9f3a1c"
++
++_LEAKY_STEP = """\
++# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
++import os
++
++from publishable import BaseStep
++
++
++class Step(BaseStep):
++    scope = "repeat"
++
++    def run(self, cfg, io):
++        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
++        # A client library interpolating a key into a URL in its error message is
++        # ordinary, and this is the one surface on which that value can reach a
++        # record: `runner` writes a failed execution's exception text into both
++        # `executions.jsonl` and `run.yaml`.
++        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
++"""
++
++_LEAKY_AZURE_STEP = """\
++# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
++import os
++
++from publishable import BaseStep
++
++
++class Step(BaseStep):
++    scope = "repeat"
++
++    def run(self, cfg, io):
++        token = os.environ["PUBLISHABLE_TEST_AZURE"]
++        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
++"""
++
++_SECRET_USING_STEP = """\
++# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
++import os
++
++from publishable import BaseStep
++
++
++class Step(BaseStep):
++    scope = "repeat"
++
++    def run(self, cfg, io):
++        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
++        for unit in io.units:
++            io.record(unit.key, {{"present": True}})
++        return {{"token_len": len(token)}}
++"""
++
++
++def _files_under(results_dir):
++    """Every file a run wrote, as a list of paths — the FILE LIST is what gets
++    filtered, never the sweep's output. Filtering the output of a search for a
++    string is how this repo lost a true hit once already.
++
++    Globbed rather than enumerated: `allocation.json` exists only under an
++    assignment or a holdout, and a fixture that declares neither would make a
++    named-file assertion vacuous or wrong.
++    """
++    return [p for p in sorted(results_dir.rglob("*")) if p.is_file()]
++
++
++def test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so(
++    tmp_path, monkeypatch, capsys
++):
++    """The one accident this slice must survive: a step whose exception text
++    carries the value core read.
++
++    Three assertions, and the first is the one that makes the other two mean
++    something — a sweep for absence passes identically if nothing ran.
++
++    `extra_steps=["control"]` adds the generated no-op step (`return {{}}`,
++    always completes) beside the leaky one. Without it the scaffold's one step
++    fails on every one of its repeats, `run_status` sees no completed execution
++    anywhere, and the run is wholly `"failed"` (`EXIT_FAILED`) rather than
++    `"partial"` — the same fixture defect
++    `test_io_units_train_raises_without_a_fold_or_holdout` already found and
++    named: a step that fails on every repeat with no completing step anywhere
++    leaves the run `failed`, not `partial`, regardless of what the brief assumed.
++    """
++    import publishable.generators.experiment as experiment_gen
++
++    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
++    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_STEP)
++    monkeypatch.setattr(
++        "publishable.templates.builtin.generic.GenericTemplate.required_env",
++        ["PUBLISHABLE_TEST_TOKEN"],
++    )
++
++    doc = run_a_project(
++        tmp_path,
++        units=4,
++        extra_steps=["control"],
++        _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n",
++        expect_exit=EXIT_PARTIAL,
++        capsys=capsys,
++    )
++    run_dir = doc["run_dir"]
++    run = yaml.safe_load((run_dir / "run.yaml").read_text())
++
++    # 1. SOMETHING THAT MUST REPORT. The execution failed, its error was recorded,
++    #    and the redaction announced itself by naming the variable.
++    ledger = [
++        json.loads(line)
++        for line in (run_dir / "executions.jsonl").read_text().splitlines()
++        if line.strip()
++    ]
++    errors = [e["error"] for e in ledger if e["error"]]
++    assert errors, "no execution failed — the sweep below would be vacuous"
++    assert all("<redacted:PUBLISHABLE_TEST_TOKEN>" in e for e in errors), errors
++    # The surrounding text SURVIVES: scrubbing the whole message destroys the
++    # debugging the record exists for.
++    assert all("RuntimeError" in e and "returned 401" in e for e in errors), errors
++
++    # 2. The same, as `run.yaml` arranges it — a second surface, not a rephrasing
++    #    of the first.
++    recorded = json.dumps(run)
++    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in recorded
++
++    # 3. The sweep. The FILE LIST is filtered, never the output.
++    swept = _files_under(doc["results_dir"])
++    assert swept, "no artifacts were written — the sweep would be vacuous"
++    for path in swept:
++        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
++    # stdout/stderr, captured by the helper because `capsys` was passed.
++    assert _SENTINEL not in (doc["stdout"] or "")
++    assert _SENTINEL not in (doc["stderr"] or "")
++
++
++def test_a_step_reads_its_credential_and_the_value_still_reaches_no_artifact(
++    tmp_path, monkeypatch, capsys
++):
++    """The success path, with something that must report: the step got the real
++    value and returned its length. Without this, the sweep above proves only that
++    a *failed* run leaks nothing."""
++    import publishable.generators.experiment as experiment_gen
++
++    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
++    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SECRET_USING_STEP)
++    monkeypatch.setattr(
++        "publishable.templates.builtin.generic.GenericTemplate.required_env",
++        ["PUBLISHABLE_TEST_TOKEN"],
++    )
++
++    doc = run_a_project(
++        tmp_path, units=4, _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n", capsys=capsys
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    # Pin ONE spelling, derived from the document rather than guessed: print
++    # `run["results"]` once for this fixture, find where `token_len` lands, and
++    # write that access path here. An `or` between two candidate spellings passes
++    # if either happens to hold and proves nothing about which.
++    assert json.dumps(run).count(f'"token_len": {len(_SENTINEL)}') >= 1, run["results"]
++    swept = _files_under(doc["results_dir"])
++    assert swept, "no artifacts were written — the sweep would be vacuous"
++    for path in swept:
++        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
++    assert _SENTINEL not in (doc["stdout"] or "")
++    assert _SENTINEL not in (doc["stderr"] or "")
++
++
++_AGGREGATE_LEAKING_TEMPLATE = """\
++import os
++
++from publishable import BaseTemplate, Param, register_template
++
++
++@register_template("cred_assay")
++class CredAssay(BaseTemplate):
++    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
++    required_env = ["PUBLISHABLE_TEST_AZURE"]
++    parameter_spec = {}
++
++    def aggregate(self, units, cfg):
++        # A template's own exception reaches stdout through
++        # `W-STATS-AGGREGATE-FAILED`, never through `run.yaml` — `run_record`
++        # has no diagnostics channel. So this is a leak the step-error path
++        # cannot see and the render boundary must catch.
++        raise RuntimeError("upstream rejected key " + os.environ["PUBLISHABLE_TEST_AZURE"])
++"""
++
++
++def test_a_template_exception_printed_as_a_warning_is_redacted_too(tmp_path, monkeypatch, capsys):
++    """The second serialization boundary, `Collector.render()`.
++
++    `aggregate` raising is one of five places core builds a
++    `f"...{type(exc).__name__}: {exc}"` string, and four of them are diagnostics
++    rather than records. This one reaches stdout and nothing else, so the step
++    tests above are blind to it — reverting `diagnostics.py` alone leaves all of
++    them green and this one red, which is the whole reason it exists.
++
++    `parameters={}`: `CredAssay.parameter_spec` is empty, and the generic
++    scaffold's default `parameters.analysis.*` block is not a parameter of this
++    template — `E-PARAM-UNKNOWN` for each key, refused before `run` ever gets to
++    `execute_plan`.
++    """
++    monkeypatch.delenv("PUBLISHABLE_TEST_AZURE", raising=False)
++
++    doc = run_a_project(
++        tmp_path,
++        units=4,
++        experiment_type="cred_assay",
++        parameters={},
++        _local_template=_AGGREGATE_LEAKING_TEMPLATE,
++        _env_file=f"PUBLISHABLE_TEST_AZURE={_SENTINEL}\n",
++        capsys=capsys,
++    )
++    out = doc["stdout"] or ""
++    # SOMETHING THAT MUST REPORT: the warning fired, and it announced the
++    # redaction by naming the variable. Without the first assertion the two
++    # below pass identically on a build where `aggregate` was never called.
++    assert "W-STATS-AGGREGATE-FAILED" in out, out
++    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in out, out
++    # The surrounding text survives — the warning is still diagnosable.
++    assert "upstream rejected key" in out, out
++    # And the value is nowhere: stdout, stderr, and every artifact.
++    assert _SENTINEL not in out
++    assert _SENTINEL not in (doc["stderr"] or "")
++    swept = _files_under(doc["results_dir"])
++    assert swept, "no artifacts were written — the sweep would be vacuous"
++    for path in swept:
++        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
++
++
++_LOCAL_CRED_TEMPLATE = """\
++from publishable import BaseTemplate, Param, register_template
++
++
++@register_template("cred_assay")
++class CredAssay(BaseTemplate):
++    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
++    required_env = ["PUBLISHABLE_TEST_TOKEN"]
++    parameter_spec = {
++        "llm.provider": Param(
++            str,
++            default="azure_openai",
++            choices=["azure_openai", "openai"],
++            requires_env={
++                "azure_openai": ["PUBLISHABLE_TEST_AZURE"],
++                "openai": ["PUBLISHABLE_TEST_OPENAI"],
++            },
++        )
++    }
++"""
++
++
++def test_a_project_local_template_s_credentials_are_redacted_too(tmp_path, monkeypatch, capsys):
++    """The case `get_template` answers wrongly when `repo_root` is not passed.
++
++    Both tests above patch `GenericTemplate`, which resolves either way — so
++    neither can see a `declared_credential_names` that got `None` back and
++    returned `[]`. This one can: nothing here is a core template, and the value
++    that must be redacted is the one `requires_env` names.
++
++    `extra_steps=["control"]`, for the same reason the first test in this file
++    needs it: the scaffolded step fails on every one of its repeats, and with no
++    completing step anywhere `run_status` reports the run wholly `"failed"`
++    rather than `"partial"`.
++    """
++    import publishable.generators.experiment as experiment_gen
++
++    for name in ("PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_AZURE", "PUBLISHABLE_TEST_OPENAI"):
++        monkeypatch.delenv(name, raising=False)
++    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_AZURE_STEP)
++
++    doc = run_a_project(
++        tmp_path,
++        units=4,
++        extra_steps=["control"],
++        experiment_type="cred_assay",
++        parameters={"llm": {"provider": "azure_openai"}},
++        _local_template=_LOCAL_CRED_TEMPLATE,
++        _env_file=(f"PUBLISHABLE_TEST_TOKEN=irrelevant\nPUBLISHABLE_TEST_AZURE={_SENTINEL}\n"),
++        expect_exit=EXIT_PARTIAL,
++        capsys=capsys,
++    )
++    ledger = [
++        json.loads(line)
++        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
++        if line.strip()
++    ]
++    errors = [e["error"] for e in ledger if e["error"]]
++    assert errors, "no execution failed — the sweep below would be vacuous"
++    assert all("<redacted:PUBLISHABLE_TEST_AZURE>" in e for e in errors), errors
++
++    swept = _files_under(doc["results_dir"])
++    assert swept, "no artifacts were written — the sweep would be vacuous"
++    for path in swept:
++        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path

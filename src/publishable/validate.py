@@ -21,6 +21,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
+from publishable.secrets import credential_values, load_env, missing_env
 from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -507,6 +508,20 @@ def validate_config(
         # skipped rather than reported here — `generic` still resolves as a
         # core template regardless.
         repo_root = None
+    # `.env`, once, before the first check that reads the environment —
+    # `_check_required_env` below, today, which is what
+    # `test_a_required_env_variable_may_be_supplied_by_dot_env` pins. That is
+    # weaker than "before `resolve_template`", and deliberately so: no test
+    # distinguishes the two placements, so the stronger claim would be one the
+    # suite cannot hold. It is not that resolution is environment-free —
+    # `resolve_template` imports every project-local `templates/*.py`, executing
+    # user top level, which may read anything. Loading before that is why the
+    # call sits here rather than lower; only the weaker property is pinned.
+    # `reference.md` § CLI reference promises `validate` "creates nothing and
+    # reaches nothing off the machine"; a file in the repository root is
+    # on-machine, so this is inside that promise rather than an exception to it.
+    # Never overrides an exported variable — see `secrets.load_env`.
+    load_env(repo_root)
     try:
         # One merge, so one local discovery: the known-name list the unknown-name
         # finding prints comes back from the same call that resolved the name.
@@ -516,12 +531,37 @@ def validate_config(
         # import would escape `validate_config` and discard every other finding.
         template, known = resolve_template(name, repo_root)
     except ContractError as exc:
-        # The load-time refusals resolving a template can make — two today,
-        # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Reported under the code
-        # the raise carries rather than a code chosen here, so the two surfaces
-        # stay one fault, and reported at all because `validate` is contracted
-        # never to raise. Nothing later can run: which template a name means is
-        # exactly what either leaves unanswered.
+        # The load-time refusals resolving a template can make — two codes,
+        # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Two *codes*, not two
+        # faults: `E-TEMPLATE-LOAD` covers three shapes of its own (see its
+        # § Errors row), and a `Param` whose construction raises — `default=None`
+        # without `nullable=True`, or a `requires_env` mapping that is not total
+        # over `choices` — is the first of them, "raises while importing". Adding
+        # such a fault adds no code and does not move this count. Reported under
+        # the code the raise carries rather than a code chosen here, so the two
+        # surfaces stay one fault, and reported at all because `validate` is
+        # contracted never to raise. Nothing later can run: which template a name
+        # means is exactly what either leaves unanswered.
+        #
+        # `c.credentials` is normally set below, once `template` resolves — but
+        # a load or collision fault means it never will, and the finding just
+        # appended can itself carry a raising file's own exception text
+        # (`E-TEMPLATE-LOAD` embeds `{exc!r}`). A class body finishes running
+        # before its own `@register_template` call is reached, so a file that
+        # raises *after* that call, or a file that raises while a sibling in
+        # the same directory already registered cleanly, still leaves a fully
+        # formed class behind — `discover_local`/`_merged` hand it back as
+        # `exc.partial_templates` for exactly this. Read the same way a
+        # resolved template's declarations are read below, so the set does not
+        # drift from `declared_credential_names_for`. A raise from *inside* a
+        # class body, before its own `@register_template` runs, leaves no
+        # class to read; that residual is `reference.md`'s to describe rather
+        # than this call's to close.
+        partial = getattr(exc, "partial_templates", None) or []
+        names: list[str] = []
+        for cls in partial:
+            names.extend(declared_credential_names_for(doc, cls))
+        c.credentials = credential_values(names)
         c.error(exc.code, "experiment_type", str(exc))
         return None
     if template is None:
@@ -568,6 +608,15 @@ def validate_config(
 
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
+    _check_required_env(doc, template, c)
+    _check_requires_env(doc, template, c)
+    # Set once `template` is resolved, so `c.render()` — whenever it is finally
+    # called, by `command_validate` or `command_run` — redacts a credential value
+    # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
+    # built before this line runs. Redaction happens at render, not at
+    # construction (`Diagnostic` is a frozen record with no methods), so setting
+    # this after the fact still covers every finding already appended.
+    c.credentials = credential_values(declared_credential_names_for(doc, template))
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
@@ -663,8 +712,32 @@ def validate_config(
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
-    for message in template.validate(doc):
-        c.error("E-TEMPLATE-RULE", "parameters", message)
+    # `template.validate` is contracted to return `list[str]` (`BaseTemplate.validate`),
+    # never to raise — but it is user code, reachable through a project-local
+    # `templates/*.py`, and `validate` collects rather than raises. Unguarded, a
+    # raise here would propagate out of `validate_config`, out of `_dispatch`, and
+    # land in `main`'s bare `except PublishableError`, which prints straight to
+    # stderr and bypasses `c.render()` — the one place a credential in the text
+    # gets redacted. `c.credentials` is already set above, so catching here keeps
+    # this inside the same collector every other `E-TEMPLATE-RULE` finding goes
+    # through, rather than opening a second, unredacted exit for the same fault.
+    # Mirrors `load_experiment`'s guard above: `SystemExit` is a `BaseException`
+    # and would otherwise end the process with the user's own exit code.
+    try:
+        for message in template.validate(doc):
+            c.error("E-TEMPLATE-RULE", "parameters", message)
+    except SystemExit as exc:
+        c.error(
+            "E-TEMPLATE-RULE",
+            "parameters",
+            f"raised while validating: SystemExit: {exc.code}",
+        )
+    except Exception as exc:
+        c.error(
+            "E-TEMPLATE-RULE",
+            "parameters",
+            f"raised while validating: {type(exc).__name__}: {exc}",
+        )
     return doc
 
 
@@ -705,6 +778,174 @@ def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:
             "entrypoint",
             "is empty, and is required — `run` cannot import a step without it",
         )
+
+
+def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The template-level credential set — `reference.md` § Secrets & credentials.
+
+    Read from the class, so it needs no roster and no expansion: a `required_env`
+    list says what an experiment *type* always needs, which is the wrong shape
+    exactly when the credential follows a choice. That case belongs to
+    `_check_requires_env`, below.
+
+    Reported at `experiment_type`, the field that decided which template's list
+    applies. The value is never printed — the message names the variable and
+    where to put a value, which is the whole of what is safe to say and the whole
+    of what a reader needs.
+    """
+    names = getattr(template, "required_env", None)
+    if not isinstance(names, list):
+        # Nothing reports a `required_env` that is not a list — this repo has
+        # no check for it anywhere — so a template declaring one this way is a
+        # silent author mistake rather than a diagnosed one.
+        # `declared_credential_names_for`/`cli.declared_credential_names` use
+        # this same guard, precisely so a malformed `required_env` is ignored
+        # everywhere alike rather than iterated as characters in one place.
+        return
+    name = doc.get("experiment_type", "")
+    for variable in missing_env(str(n) for n in names):
+        c.error(
+            "E-CRED-MISSING",
+            "experiment_type",
+            f"template `{name}` requires `{variable}`, which has no value in the "
+            "environment or in `.env` — the config records the NAME, so put the value "
+            "in `.env` at the repository root",
+        )
+
+
+def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The union over the conditions the sweep actually resolves.
+
+    That union is the entire reason a value carries its own credential
+    requirement instead of a template carrying a static list: a config selecting
+    Azure and OpenAI must say nothing about Ollama's key, and one selecting none
+    of them must say nothing about any. `reference.md` § A credential can belong
+    to a parameter value.
+
+    A condition's value is resolved the way `runner.resolve_condition_cfg`
+    resolves it — declared parameters, then each of `condition.values` whose path
+    is not a **selector**, a group cell naming no parameter at all — computed
+    locally rather than by importing the runner, since this needs one path's
+    value rather than a whole `Config`.
+
+    A resolved value with no key in the mapping requires nothing. `requires_env`
+    is total over `choices`, so that case is exactly the values `choices` does
+    not hold: `sweep.ablate.remove` sets a nullable parameter to `null`, which is
+    a legal resolved value and not a choice.
+
+    One finding per variable, attributed to the first condition that selected it:
+    one missing value is one thing to fix, whatever selected it.
+    """
+    spec = getattr(template, "parameter_spec", None)
+    if not isinstance(spec, dict):
+        # A malformed `parameter_spec` (not a dict) is `E-TEMPLATE-LOAD`'s
+        # finding to make, not this collector's crash to cause — same
+        # guard shape as `required_env` above.
+        return
+    wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
+    if not wanted:
+        return
+    try:
+        conditions = expand(doc)
+    except Exception:
+        # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+        # an unexpandable sweep is `_check_sweep`'s to report, and this module
+        # collects rather than raises.
+        return
+    declared = _flatten(doc.get("parameters"), "")
+    # `dict`, so insertion order is condition order then declared-parameter
+    # order — a deterministic finding order without sorting away the attribution.
+    first_seen: dict[str, tuple[str, Any, str | None]] = {}
+    for condition in conditions:
+        resolved = dict(declared)
+        for path, value in condition.values.items():
+            if path in condition.selectors:
+                continue
+            resolved[path] = value
+        for path, param in wanted.items():
+            if path in resolved:
+                value = resolved[path]
+            elif param.default is not MISSING:
+                value = param.default
+            else:
+                continue  # required and absent — `E-PARAM-MISSING`'s finding, not this one
+            try:
+                needs = param.requires_env.get(value)
+            except TypeError:
+                continue  # an unhashable resolved value cannot key the mapping
+            for variable in needs or []:
+                first_seen.setdefault(variable, (path, value, condition.label))
+    for variable in missing_env(first_seen):
+        path, value, label = first_seen[variable]
+        where = f"condition `{label}`" if label else "the base parameters"
+        c.error(
+            "E-CRED-PARAM-MISSING",
+            f"parameters.{path}",
+            f"is `{value}` in {where}, which requires `{variable}` — no value in the "
+            "environment or in `.env`",
+        )
+
+
+def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:
+    """Every environment variable this config's declarations name.
+
+    The same two collectors `_check_required_env` and `_check_requires_env`
+    check for *presence* above, read here for their *values* — deliberately the
+    same set, which is what makes the redaction this feeds a fact rather than a
+    guess. Not shared as one function with `cli.declared_credential_names`: that
+    one takes the `conditions` its caller already expanded, because a second
+    `expand(doc)` there would be a second derivation of the plan actually
+    executed; this module's every other check (`_check_requires_env`,
+    `_check_sweep`, `_check_contrasts`) already re-derives `expand(doc)` locally
+    under the same guard, since `validate` collects findings rather than
+    threading one resolved plan through them, so re-deriving here matches this
+    file's own convention rather than breaking it.
+
+    A `None` template — reached only when `resolve_template` already returned
+    early — yields the empty list, since `getattr(None, ...)` on a missing
+    template answers nothing rather than guessing.
+    """
+    raw_required = getattr(template, "required_env", None)
+    # Same guard as `_check_required_env`: nothing reports a `required_env`
+    # that is not a list, so it is ignored here alike rather than iterated as
+    # characters.
+    names: list[str] = list(raw_required) if isinstance(raw_required, list) else []
+    spec = getattr(template, "parameter_spec", None)
+    if not isinstance(spec, dict):
+        # Same guard as `_check_requires_env`: a malformed `parameter_spec`
+        # is that check's finding to make, not this collector's crash to
+        # cause.
+        return names
+    wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
+    if not wanted:
+        return names
+    try:
+        conditions = expand(doc)
+    except Exception:
+        # Guarded the same way `_check_requires_env` guards its own `expand(doc)`:
+        # an unexpandable sweep is `_check_sweep`'s finding to make, not this
+        # collector's crash to cause.
+        return names
+    declared = _flatten(doc.get("parameters"), "")
+    for condition in conditions:
+        resolved = dict(declared)
+        for path, value in condition.values.items():
+            if path in condition.selectors:
+                continue
+            resolved[path] = value
+        for path, param in wanted.items():
+            if path in resolved:
+                value = resolved[path]
+            elif param.default is not MISSING:
+                value = param.default
+            else:
+                continue
+            try:
+                needs = param.requires_env.get(value)
+            except TypeError:
+                continue
+            names.extend(needs or [])
+    return names
 
 
 def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:

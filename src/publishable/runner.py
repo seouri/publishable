@@ -14,6 +14,7 @@ from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
+from publishable.secrets import redact
 from publishable.stats import handed_to, kish_effective_n
 from publishable.sweep import Condition, condition_dir_name
 from publishable.units import UnitList, cluster_count_of
@@ -471,6 +472,7 @@ def execute_plan(
     arm_members: "dict[int, frozenset[str]] | None" = None,
     holdout_train: "UnitList | None" = None,
     measurements: dict[str, Any] | None = None,
+    credentials: dict[str, str] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -505,6 +507,16 @@ def execute_plan(
     `units` is the test partition and `io.units.train` is `holdout_train` at
     every scope — `run`, `condition`, `repeat` and `summary` alike, not only
     `repeat` the way a fold's `.train` is.
+
+    `credentials` is `{variable: value}` for every credential core read for a
+    *declared* variable — `required_env` and the `requires_env` union. A failed
+    execution's exception text is the one surface on which such a value can enter
+    a record, so each is replaced there by a marker naming its variable. By exact
+    value, never by pattern: core knows what it read, and a pattern check fails
+    open on a credential named `instrument_pw` and fails closed on a config value
+    that happens to look random. A value a step read from `os.environ` for a name
+    nothing declared is outside what core saw and is not matched — see
+    `docs/reference.md` § Secrets & credentials.
     """
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this
@@ -685,7 +697,17 @@ def execute_plan(
         except Exception as exc:  # a failed execution never stops the run
             code = getattr(exc, "code", None)
             prefix = f"{code} " if code else ""
-            returned, status, error = {}, "failed", f"{prefix}{type(exc).__name__}: {exc}"
+            # Redacted where this string is BUILT rather than at each writer:
+            # both records — `run.yaml` through `run_record` and
+            # `executions.jsonl` below — read from it, so one edit covers both
+            # and they cannot diverge. Every other place core interpolates an
+            # exception into a *diagnostic* goes through `Collector.render`
+            # instead, which redacts all of them at once, whatever their
+            # number (`docs/reference.md` § Secrets & credentials) — this site
+            # is separate because a step's error is a record, not a
+            # diagnostic, and reaches no `Collector` at all.
+            returned, status = {}, "failed"
+            error = redact(f"{prefix}{type(exc).__name__}: {exc}", credentials or {})
 
         result = ExecutionResult(
             execution=execution,

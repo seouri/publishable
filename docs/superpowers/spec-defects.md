@@ -5743,3 +5743,234 @@ closed one.
 **Found by:** H3d, Task 8. **Severity:** Was Major for `fold` while open — a validated
 config produced empty folds per arm — and is now closed as a refusal rather than as a
 capability.
+
+## OPEN — the generated README's `credentials` region does not exist, so nothing can merge into it
+
+`reference.md` § The generated README shows a scaffolded README carrying a
+`<!-- publishable:begin credentials -->` region with a *"(none yet — added as experiments declare
+them)"* placeholder row, and a `cp .env.example .env` setup line above it. **Neither is emitted.**
+Measured at `d86290c` and re-confirmed on 2026-08-16 for this filing: a freshly scaffolded
+`README.md` grepped for `publishable:begin` returns `overview` and `experiments` and nothing else
+(`scaffold.py`'s `README` constant holds exactly two such regions), and there is no `cp` line
+anywhere in that constant. The control — the same grep for the two regions that do exist — hits
+both.
+
+Three consequences, in the order they bite. `reference.md` § Generators already marks *"merging any
+new `required_env` into the credentials table"* **NOT BUILT** (`docs` is in `cli.NOT_BUILT_COMMANDS`,
+re-confirmed) and used to say in the same paragraph that `required_env` "compounds that gap rather
+than merely sharing it" because the attribute had no reader — that half is now stale and has been
+corrected in place, since H7c gave `required_env` its first reader at `validate`; what remains
+unbuilt is the merge, not the reader. `publishable docs`, which § The generated README says
+regenerates every managed region, is in `cli.NOT_BUILT_COMMANDS`. And a merge built against an
+absent region would have nothing to merge into, which is why H7c refused the charter item rather
+than absorbing it.
+
+**Routing, and it corrects `H7b-SCOPING.md` § 11.** That document routes "the README managed
+regions — `credentials`, a parameter-table region, `generate experiment`'s merge" wholesale to
+**`docs`**. It is right about the merge and wrong about the region: the *static* `credentials`
+region and the `cp .env.example .env` line are written by **`new`**, i.e. `scaffold.py`'s `README`
+constant, and `docs` has nothing to populate until they exist.
+
+**Owner:** whichever slice next edits `new`'s README emission owns the region and the setup line;
+`docs`'s slice owns regenerating it; `generate experiment`'s merge follows both.
+
+**Found by:** H7c, Task 14, re-measured against `main` on 2026-08-16. **Severity:** Minor. No
+config is affected — this is scaffolding output, not validation — but a reader following
+§ Reproducing on another device or § Secrets & credentials today gets instructions for a file
+region that was never written.
+
+## OPEN — two specified readers of `required_env` belong to unbuilt commands
+
+H7c made `BaseTemplate.required_env` readable and gave it its first reader, at `validate`. Two more
+readers are specified and cannot be built here, because each belongs to a command in
+`cli.NOT_BUILT_COMMANDS` (re-confirmed 2026-08-16: both `reproduce` and `dry-run` are still listed).
+Filed so neither is folded into a slice that has no business with it.
+
+| Specified | Owner |
+|---|---|
+| `reference.md` § Reproducing on another device, step 6 — `reproduce` *"copies `.env.example` and lists the `required_env` variables that need values"*, and the consequence stated beneath it | **`reproduce`'s slice** |
+| `reference.md` § Metering — `dry-run` *"needs … real credentials"* | **`dry-run`'s slice**, which inherits H7c's load site and its two checks without change |
+
+H7c owes only that the attribute is readable, which it now is.
+
+**Found by:** H7c, Task 14, re-measured against `main` on 2026-08-16. **Severity:** None — both
+are present-tense specification of unbuilt commands, not defects; filed to prevent either reader
+being folded into an unrelated slice's scope.
+
+## OPEN — `BaseTemplate.field_convention` is declarable and read by nothing
+
+Measured at `478c1f3` and re-confirmed on 2026-08-16: `grep -rn "field_convention" src/publishable/`
+returns two declarations (`templates/base.py`, `templates/builtin/generic.py`) and one comment in
+`generators/template.py` naming it among the members the `generate template` stub omits. Nothing
+reads it. `reference.md` § Naming conventions & repeat defaults specifies what it means — a naming
+pattern and a repeat floor per convention class — and `naming_pattern` and `default_repeats` are
+both read while the class that groups them is not.
+
+This is `CLAUDE.md`'s *unbuilt reader of a shipped surface*, and it is now that row's worked
+example: H7c retired `required_env` from that role by giving it a reader, and of the three
+remaining members `apparatus_probe` is **H7b task 13's** and `apparatus_facts` is **H7d's**, which
+leaves this one unowned.
+
+**Owner:** unassigned. Whichever slice next touches § Naming conventions & repeat defaults should
+either give it a reader or state in `reference.md` that it is declarative only.
+
+**Found by:** H7c, Task 14. **Severity:** Minor. The value is inert rather than misleading — no
+config field references it — but it is a second shipped-and-unread surface alongside the ones this
+repo has already tracked.
+
+## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
+
+`docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
+`io.reuse_from` as "unbuilt and unowned by any H7 sub-slice, which is a gap this slice files rather
+than closes." Re-confirmed on 2026-08-16: `grep -n "reuse_from" docs/superpowers/spec-defects.md`
+returned nothing before this entry, so there was no prior filing to re-owner. `reference.md` §
+Steps that consume an earlier run's artifacts is where `reuse_from` is specified — a step that
+reads another run's output records it as an upstream with its own hashes — and nothing in `src/`
+implements it.
+
+**Owner:** unassigned. No H7 sub-slice (H7a, H7b, H7c, H7d) claims it in its charter.
+
+**Found by:** H7c, Task 14. **Severity:** Minor. Specification of an unbuilt feature, not a
+contradiction between a built check and its documentation — filed so it is not silently assumed
+closed by a later slice's scoping.
+
+~~## OPEN — `python-dotenv` honours an undocumented behavior-changing environment variable~~
+
+~~`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
+is set to a truthy value (confirmed 2026-08-16 against the installed package,
+`.venv/lib/python3.13/site-packages/dotenv/main.py`: `if "PYTHON_DOTENV_DISABLED" not in
+os.environ: ...`). `secrets.load_env` calls `load_dotenv` directly and inherits this, so core's
+`.env` load path honours an environment variable that changes behavior — no flag, no config field,
+nothing in `reference.md` names it — which is exactly what `CLAUDE.md`'s first invariant (operation
+commands take paths and nothing else, no behavior-changing env vars) rules out for anything this
+repo builds itself.~~
+
+~~It fails **closed**: setting it silently disables `.env` loading, so a declared credential that
+would otherwise be satisfied from the file instead reports `E-CRED-MISSING`/`E-CRED-PARAM-MISSING`
+rather than executing with a value nobody meant to hide. It is not core's own code — it is a
+property of the dependency `secrets.py` calls, present in `python-dotenv` before this slice added
+the dependency to this project — so this is a filing rather than a fix. A fix would mean core
+either not calling `load_dotenv` at all (losing the mechanism this slice built) or pre-emptively
+clearing the variable before every call (a behavior change of its own, and one that would fight a
+developer's own shell rather than serve them).~~
+
+~~**Owner:** unassigned. Worth a `reference.md` § Secrets & credentials footnote naming the variable
+and its fail-closed direction, the next time that section is touched.~~
+
+~~**Found by:** H7c, Task 14. **Severity:** Minor. Fails closed (a missing credential is refused, not
+silently accepted), and no config in this repository sets the variable — filed because it exists
+and is undocumented, not because it has been observed to bite anyone.~~
+
+**STRUCK 2026-08-16 (H7c whole-branch review, finding 5): FIXED, not merely re-reasoned.** The
+"fix would mean" paragraph argued a false dichotomy: `load_dotenv` consults
+`PYTHON_DOTENV_DISABLED`, but `dotenv_values` — read against the installed package — does not touch
+it at all, and never touches `os.environ` itself either. `secrets.load_env` now parses with
+`dotenv_values(path)`, skips the `None` values a bare `KEY` line produces, and
+`os.environ.setdefault`s the rest — keeping the mechanism, keeping the dependency, and removing the
+undocumented behavior-changing variable `CLAUDE.md`'s first invariant rules out. Pinned by
+`tests/test_secrets.py::test_python_dotenv_disabled_is_not_honoured` and
+`::test_a_bare_key_with_no_value_is_missing_not_empty`.
+
+**AMENDED 2026-08-16 (H7c whole-branch re-review, finding N1):** `dotenv_values` hardcodes
+`override=True` internally, and that flag is also what `python-dotenv`'s `resolve_variables`
+consults to decide whether a `${VAR}` reference inside the file resolves against the shell or
+against the file — so the parse above silently stopped honouring an exported variable inside an
+interpolated value, even though a direct assignment still won via `setdefault`. `secrets.load_env`
+now parses with `dotenv.main.DotEnv(path, stream=None, verbose=False, interpolate=True,
+override=False).dict()` instead — the constructor `dotenv_values` itself calls, with the flag it
+hardcodes passed explicitly — which never consults `PYTHON_DOTENV_DISABLED` either, so this
+amendment does not reopen the struck gap. Pinned by
+`tests/test_secrets.py::test_interpolation_resolves_from_the_shell_not_a_stale_file_value`.
+
+## OPEN — `declared_credential_names` reports a template-default credential for a parameter value never written
+
+`cli.declared_credential_names` and `validate._check_requires_env` both resolve a swept parameter's
+value by flattening `parameters` with `_flatten_parameters`/`_flatten`, which recurses into every
+nested `dict` and only ever stores leaf, non-dict values. A dict-valued parameter — for example
+`parameters.llm.provider: {a: 1}` — is therefore flattened to `llm.provider.a` alone; `llm.provider`
+itself is absent from the flattened mapping. Both call sites then do `resolved.get(path,
+param.default)`, so the lookup falls through to the **template's default** for `llm.provider`, and
+if that default's `requires_env` entry names a credential, the config reports
+`E-CRED-PARAM-MISSING` for a value that was never actually written or resolved — the config's own
+dict value is silently ignored by this check.
+
+Confirmed by reading `cli.py`'s `_flatten_parameters` (recurses on `isinstance(value, dict)`) and
+`declared_credential_names`'s `resolved.get(path, param.default)` fallback, and the identical shape
+in `validate._check_requires_env`'s `param.requires_env.get(value)` against the same resolution.
+
+This is cosmetic rather than a correctness gap: `llm.provider: {a: 1}` is not a member of `choices`
+regardless, so the config is refused either way — **CORRECTED 2026-08-16 (H7c whole-branch review,
+finding 6): not by the `choices` check**, which never sees `llm.provider` at all (`_flatten`
+produces `llm.provider.a`, never the parent path, so the leaf that reaches the `choices` check does
+not exist). Probed: the refusal is `E-PARAM-UNKNOWN` on the nested leaf `parameters.llm.provider.a`
+("is not a parameter of this template"), reported alongside `E-CRED-PARAM-MISSING` for the
+template-default fallback this entry is about. What is wrong is only the *message* — it asserts a
+resolution (the template default was in effect) that never actually happened, because the config
+supplied a value that just isn't visible to a path-flattening reader.
+
+**Owner:** whichever slice next touches `_flatten_parameters`/`_flatten` or
+`declared_credential_names`.
+
+**Found by:** H7c, Task 14. **Severity:** Minor. The config is refused regardless (by
+`E-PARAM-UNKNOWN` on the nested leaf, not by the `choices` check — corrected above), so nothing
+invalid runs — the defect is a misleading message on an already-refused config, not a missed
+refusal.
+
+## OPEN — `main`'s last-resort stderr handler prints an exception un-redacted, by construction
+
+`cli.main`'s bare `except PublishableError as exc:` handler (the catch-all around `_dispatch`)
+prints `f"  error   {exc.code:<20} {exc}"` straight to stderr, with no redaction. This sits outside
+both of decision 3's serialization boundaries (`runner.execute_plan`'s step-error path and
+`Collector.render()`) **by construction**: it exists to catch whatever escapes every collector, and
+`main` holds no config or condition context, so it has no credential values to check against — it
+cannot know what to redact without a global carrying the run's declared credentials into a
+function that today takes only `argv`.
+
+The demonstrated path into it is closed: task 12's review found `template.validate(doc)` raising
+unguarded in `validate.py`, letting a credential-bearing raise reach this exact handler verbatim,
+and the fix (commit `cd72c3a`) routed that call through `Collector.render()` instead, closing the
+one path this slice built that could reach it with a declared value. The handler itself is
+unchanged and remains reachable by any other `PublishableError` raised outside a collector.
+
+**Owner:** unassigned. Not a task for this slice — closing it would mean giving `main` a way to
+know which values are credentials, which is a design question (a module-level or threaded
+credential set) rather than a redaction-site fix. Filed with its reasoning rather than as a bug to
+patch, per the routing brief.
+
+**Found by:** H7c, Task 12 review; filed at Task 14. **Severity:** Minor today (the one reachable
+path was closed in the same slice) but structural — any future `PublishableError` raised with a
+credential in its text, outside a collector, reaches stderr unredacted.
+
+## OPEN — the constraint table documents `min_items`/`max_items` in the rendered comment; `Param.comment()` doesn't render them
+
+`reference.md` § Templates: where parameters are defined documents the `list` row's constraint
+column as `item_type` · `min_items` · `max_items`, with the example inline comment `# list of
+float, 2 to 5 items`. Confirmed 2026-08-16: `Param.comment()`'s `list` branch is `if self.type_ is
+list and self.item_type is not None: return f"list of {_TYPE_NAMES[self.item_type]}"` — it names
+the item type and nothing else. `min_items`/`max_items` are stored on the instance and enforced by
+`Param.violation` (both raise a message when the length bound is crossed), but no renderer reads
+either for the inline comment `init` writes, so a generated config's comment never states the item
+count bound the parameter actually enforces.
+
+Pre-existing, unrelated to `requires_env`/`required_env` — found while sweeping `param.py` for this
+slice's own changes to `comment()` and not owned by any H7c task.
+
+**Owner:** whichever slice next touches `Param.comment()` or the list constraint row.
+
+**Found by:** H7c, Task 14. **Severity:** Minor. `validate` still enforces the bound at value time
+regardless of what the comment says — a reader is under-informed, not let through a bad config.
+
+## OPEN — a pre-existing positional reference at § the provenance table
+
+`reference.md`'s participant-identity paragraph (beside § the provenance table) reads "this
+section, and the table above, have never named it" — a positional reference (`CLAUDE.md` bans
+locating anything by position: "the two rows above", "further up"). Confirmed 2026-08-16 still
+present, unchanged by this slice. Pre-existing and out of scope for every H7c task — none of them
+touches this paragraph or the table it refers to.
+
+**Owner:** whichever slice next edits that paragraph or the provenance table it names
+positionally; should name the table by its heading instead.
+
+**Found by:** H7c, Task 14 (surfaced while sweeping `reference.md`, not itself part of the
+credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
+makes is still true, only the cross-reference is positional.

@@ -19,10 +19,9 @@ template too, and there is no order left for a merge to express.
 from collections.abc import Sequence
 from pathlib import Path
 
-from publishable.errors import ContractError
 from publishable.templates.base import BaseTemplate
 from publishable.templates.builtin.generic import GenericTemplate
-from publishable.templates.discovery import discover_local
+from publishable.templates.discovery import PartialLoadError, discover_local
 
 _BUILTIN: dict[str, type[BaseTemplate]] = {"generic": GenericTemplate}
 
@@ -34,7 +33,7 @@ def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
     for name in sorted(local):  # name order: import order may decide nothing here
         if name in _BUILTIN:
             core = _BUILTIN[name]
-            raise ContractError(
+            raise PartialLoadError(
                 f"the project-local template `{local[name].provider}` claims the name "
                 f"`{name}`, which core itself registers as "
                 f"{core.__module__}.{core.__qualname__} — a local template that could "
@@ -42,6 +41,7 @@ def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
                 "changing the config, which is what `parameters_hash` exists to make "
                 "impossible. Rename yours.",
                 code="E-TEMPLATE-COLLISION",
+                partial_templates=[found.cls for found in local.values()],
             )
     return {name: found.cls for name, found in local.items()} | _BUILTIN
 

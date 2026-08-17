@@ -1,0 +1,147 @@
+import os
+from pathlib import Path
+
+import pytest
+
+from publishable.secrets import credential_values, load_env, missing_env, redact
+
+_NAME = "PUBLISHABLE_TEST_TOKEN"
+_OTHER = "PUBLISHABLE_TEST_OTHER"
+
+
+# `os.environ` is restored around every test by an autouse fixture in `conftest.py`.
+# It lives there because `load_dotenv` writes past `monkeypatch`, and every module
+# exercising a load path inherits that hazard.
+
+
+def test_a_shell_value_wins_over_the_file(tmp_path: Path, monkeypatch):
+    """`override=False` is the safety property, not a default that happened to be
+    there: a stale `.env` must never silently redirect a run to another account.
+    Flipping it is a one-word change, so it is pinned by a test rather than by a
+    comment."""
+    monkeypatch.setenv(_NAME, "from-the-shell")
+    (tmp_path / ".env").write_text(f"{_NAME}=from-the-file\n")
+
+    assert load_env(tmp_path) is True  # the file WAS read — a positive companion
+    assert credential_values([_NAME]) == {_NAME: "from-the-shell"}
+
+
+def test_an_unset_variable_takes_the_file_s_value_and_the_load_is_idempotent(
+    tmp_path: Path, monkeypatch
+):
+    """The honouring half. `delenv` first, because `load_dotenv` writes straight
+    into `os.environ` and monkeypatch is the only thing that puts it back."""
+    monkeypatch.delenv(_NAME, raising=False)
+    (tmp_path / ".env").write_text(f"{_NAME}=from-the-file\n")
+
+    assert load_env(tmp_path) is True
+    assert credential_values([_NAME]) == {_NAME: "from-the-file"}
+    assert load_env(tmp_path) is True  # twice, same answer
+    assert credential_values([_NAME]) == {_NAME: "from-the-file"}
+
+
+def test_no_repo_and_no_file_are_both_quiet(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(_NAME, raising=False)
+    assert load_env(None) is False
+    assert load_env(tmp_path) is False  # a real directory holding no `.env`
+    assert credential_values([_NAME]) == {}
+
+
+def test_python_dotenv_disabled_is_not_honoured(tmp_path: Path, monkeypatch):
+    """`spec-defects.md`'s struck `PYTHON_DOTENV_DISABLED` entry: `load_dotenv`
+    itself honours this undocumented, behavior-changing variable, which
+    `CLAUDE.md`'s first invariant rules out. `load_env` is built on
+    `dotenv.main.DotEnv(...).dict()` plus `os.environ.setdefault` instead —
+    like the `dotenv_values` helper it underlies, `DotEnv.dict()` never
+    consults it — so setting it must not disable the load."""
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.delenv(_NAME, raising=False)
+    (tmp_path / ".env").write_text(f"{_NAME}=from-the-file\n")
+
+    assert load_env(tmp_path) is True
+    assert credential_values([_NAME]) == {_NAME: "from-the-file"}
+
+
+def test_a_bare_key_with_no_value_is_missing_not_empty(tmp_path: Path, monkeypatch):
+    """`FOO` alone parses to `None` (`DotEnv.dict()`'s own contract), where
+    `load_dotenv` would have set `os.environ["FOO"] = ""`. Skipped rather than
+    set — `missing_env` already treats an empty value as missing, so this
+    lands in the same place either way."""
+    monkeypatch.delenv(_NAME, raising=False)
+    (tmp_path / ".env").write_text(f"{_NAME}\n")
+
+    assert load_env(tmp_path) is True  # parsing found one entry
+    assert _NAME not in os.environ
+    assert missing_env([_NAME]) == [_NAME]
+
+
+def test_interpolation_resolves_from_the_shell_not_a_stale_file_value(tmp_path: Path, monkeypatch):
+    """H7c whole-branch re-review, N1: the `dotenv_values`-based rewrite passed
+    `override=True` internally (that is what `dotenv_values` hardcodes), and
+    that flag is what decides whether a `${VAR}` reference inside the file
+    resolves against the shell or against the file itself — not only what
+    gets written to `os.environ` afterward. `ACCOUNT` is exported in the shell
+    as `staging`; `.env` sets it to `prod` and interpolates it into `API_URL`.
+    A direct assignment (`ACCOUNT`) is unaffected either way because the shell
+    value already wins via `setdefault` — the discriminating value is the
+    *interpolated* one (`API_URL`), which must still resolve against the
+    shell's `staging`, not the file's `prod`."""
+    monkeypatch.setenv("ACCOUNT", "staging")
+    monkeypatch.delenv("API_URL", raising=False)
+    (tmp_path / ".env").write_text("ACCOUNT=prod\nAPI_URL=https://${ACCOUNT}.example.com/key\n")
+
+    assert load_env(tmp_path) is True
+    assert os.environ["ACCOUNT"] == "staging"  # direct assignment: shell still wins
+    assert os.environ["API_URL"] == "https://staging.example.com/key"
+
+
+def test_missing_env_answers_in_declared_order_and_dedupes(monkeypatch):
+    monkeypatch.setenv(_NAME, "set")
+    monkeypatch.delenv(_OTHER, raising=False)
+    monkeypatch.delenv("PUBLISHABLE_TEST_AAA", raising=False)
+    assert missing_env([_OTHER, _NAME, "PUBLISHABLE_TEST_AAA", _OTHER]) == [
+        _OTHER,
+        "PUBLISHABLE_TEST_AAA",
+    ]
+    # THE CONTROL: with everything set, the answer is empty — so a function that
+    # returned its whole argument would fail here rather than only above.
+    monkeypatch.setenv(_OTHER, "set")
+    monkeypatch.setenv("PUBLISHABLE_TEST_THIRD", "set")
+    assert missing_env([_OTHER, _NAME, "PUBLISHABLE_TEST_THIRD"]) == []
+
+
+def test_an_empty_string_counts_as_unset():
+    """A variable exported as the empty string is a name someone wrote down and
+    never filled in, which is the fault this family exists to catch — not a
+    credential whose value happens to be empty."""
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(_NAME, "")
+        assert missing_env([_NAME]) == [_NAME]
+        assert credential_values([_NAME]) == {}
+    assert _NAME not in os.environ  # the context restored it
+
+
+def test_redaction_replaces_the_exact_value_and_names_the_variable():
+    text = "RuntimeError: POST https://api/v1?key=sk-abc123 failed"
+    assert redact(text, {"OPENAI_API_KEY": "sk-abc123"}) == (
+        "RuntimeError: POST https://api/v1?key=<redacted:OPENAI_API_KEY> failed"
+    )
+    # By exact value, never by pattern: a string that merely LOOKS like a
+    # credential is untouched, because core did not read it out of the
+    # environment. This is the fail-closed direction of decision 4.
+    assert redact("RuntimeError: token sk-zzzzzz rejected", {"OPENAI_API_KEY": "sk-abc123"}) == (
+        "RuntimeError: token sk-zzzzzz rejected"
+    )
+    assert redact(None, {"OPENAI_API_KEY": "sk-abc123"}) is None
+    assert redact("nothing to do", {}) == "nothing to do"
+
+
+def test_a_value_that_contains_another_value_is_redacted_whole():
+    """Longest first. With `SHORT` applied before `LONG`, the longer value is left
+    half-exposed as `<redacted:SHORT>def` — a leak that reads as a redaction.
+    Two credentials where one value is a prefix of the other is the only fixture
+    that can tell the two orders apart."""
+    values = {"SHORT": "abc", "LONG": "abcdef"}
+    assert redact("saw abcdef here", values) == "saw <redacted:LONG> here"
+    assert redact("saw abc here", values) == "saw <redacted:SHORT> here"

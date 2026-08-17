@@ -75,3 +75,127 @@ def test_check_never_raises_on_a_mistyped_value(bad_value):
     ):
         result = param.check(bad_value)
         assert result is None or isinstance(result, str)
+
+
+def test_requires_env_is_stored_and_needs_choices():
+    """The keyword `Param.__init__` rejects today. `choices` is required because a
+    credential requirement is only checkable when the value set is closed —
+    `reference.md` § A credential can belong to a parameter value."""
+    p = Param(
+        str,
+        default="azure_openai",
+        choices=["azure_openai", "openai", "ollama"],
+        requires_env={
+            "azure_openai": ["AZURE_OPENAI_API_KEY"],
+            "openai": ["OPENAI_API_KEY"],
+            "ollama": [],
+        },
+    )
+    assert p.requires_env["openai"] == ["OPENAI_API_KEY"]
+    assert p.requires_env["ollama"] == []  # `[]` is a claim, not an omission
+
+    with pytest.raises(ValueError, match="choices"):
+        Param(str, default="a", requires_env={"a": ["A_KEY"]})
+
+
+def test_a_param_without_requires_env_reports_none_rather_than_an_empty_mapping():
+    """`None` and `{}` are different claims — the first is "this parameter declares
+    nothing", the second would be "every choice needs nothing", which is only
+    legal for an empty `choices`. Tasks 10 and 11 gate on truthiness, so the
+    distinction is load-bearing rather than cosmetic."""
+    assert Param(str, default="a", choices=["a", "b"]).requires_env is None
+
+
+def test_requires_env_must_be_total_over_choices_and_the_message_names_both_sets():
+    """Both directions, each with its own distinguishing fragment.
+
+    `reference.md` § A credential can belong to a parameter value requires the
+    message to name *both sets*; the direction clause is what makes the two
+    branches separately pinnable, since both raise `ValueError` and both surface
+    to a user as one `E-TEMPLATE-LOAD`.
+    """
+    with pytest.raises(ValueError) as short:
+        Param(
+            str,
+            default="a",
+            choices=["a", "b", "c"],
+            requires_env={"a": ["A_KEY"], "b": []},
+        )
+    text = str(short.value)
+    assert "choices are a, b, c" in text  # both sets named
+    assert "requires_env names a, b" in text  # both sets named
+    assert "no key for c" in text  # only the missing-key branch says this
+    assert "naming no choice" not in text  # and only that branch
+
+    with pytest.raises(ValueError) as extra:
+        Param(
+            str,
+            default="a",
+            choices=["a", "b"],
+            requires_env={"a": ["A_KEY"], "b": [], "zz": ["Z_KEY"]},
+        )
+    text = str(extra.value)
+    assert "choices are a, b" in text
+    assert "requires_env names a, b, zz" in text
+    assert "keys naming no choice: zz" in text  # only the unknown-key branch
+    assert "no key for" not in text
+
+    # Both directions at once, in one message: the fault a real edit makes when a
+    # choice is renamed. Neither clause may swallow the other.
+    with pytest.raises(ValueError) as both:
+        Param(str, default="a", choices=["a", "b"], requires_env={"a": ["A_KEY"], "zz": []})
+    text = str(both.value)
+    assert "no key for b" in text
+    assert "keys naming no choice: zz" in text
+
+
+def test_a_total_requires_env_constructs_and_leaves_every_other_check_alone():
+    """The honouring: a total `requires_env` constructs, and every other check on the
+    same `Param` still answers as it did.
+
+    What this pins that the refusal tests above do not: `requires_env` must stay OUT of
+    the value-checking path. Leaking it into `check()` at all turns this test red while
+    leaving the refusal tests above green, which makes this the only guard on the
+    closed-vocabulary invariant.
+    """
+    p = Param(
+        str, default=None, nullable=True, choices=["a", "b"], requires_env={"a": ["A_KEY"], "b": []}
+    )
+    assert p.check("a") is None
+    assert p.check("zz") is not None
+    assert p.check(None) is None
+
+
+def test_a_choices_comment_carries_each_value_s_credential_against_every_choice():
+    """`reference.md` § A credential can belong to a parameter value shows this
+    exact string. Every choice is annotated, not the default — a comment about
+    the current value would be wrong the first time the config was edited.
+
+    Three choices, not two, and the annotated ones are NOT contiguous with the
+    default: with two, "annotate every choice" and "annotate the written one"
+    both produce a one-annotation string for some arrangement.
+    """
+    p = Param(
+        str,
+        default="azure_openai",
+        choices=["azure_openai", "openai", "ollama"],
+        requires_env={
+            "azure_openai": ["AZURE_OPENAI_API_KEY"],
+            "openai": ["OPENAI_API_KEY"],
+            "ollama": [],
+        },
+    )
+    assert p.comment() == (
+        "choices: azure_openai (needs AZURE_OPENAI_API_KEY) | "
+        "openai (needs OPENAI_API_KEY) | ollama"
+    )
+
+
+def test_a_value_needing_two_variables_names_both_in_its_own_parenthesis():
+    p = Param(
+        str,
+        default="a",
+        choices=["a", "b"],
+        requires_env={"a": ["A_ONE", "A_TWO"], "b": []},
+    )
+    assert p.comment() == "choices: a (needs A_ONE, A_TWO) | b"

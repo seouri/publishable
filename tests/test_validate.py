@@ -12227,3 +12227,583 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(write_config, 
         )
     )
     assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
+
+
+_CRED_TOTALITY_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"]},
+        )
+    }
+"""
+
+
+def test_a_requires_env_totality_fault_surfaces_as_a_template_load_finding(
+    git_repo: Path, write_config
+):
+    """The route, probed end to end rather than reasoned from the phrasing:
+    `Param.__init__` raises `ValueError`, `discover_local` catches it and
+    interpolates `{exc!r}` into an `E-TEMPLATE-LOAD` message. No new identifier.
+
+    `!r` is why the fragments below are quoted the way they are — the message
+    carries `ValueError('...')`, not the bare text.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_CRED_TOTALITY_TEMPLATE)
+
+    found = messages_by_code(write_config({"experiment_type": "cred_assay", "parameters": {}}))
+    assert "E-CRED-MISSING" not in found  # a load fault is not a credential finding
+    assert "E-CRED-PARAM-MISSING" not in found
+    message = found["E-TEMPLATE-LOAD"]
+    assert "cred_assay.py" in message
+    assert "ValueError(" in message  # the repr, per `{exc!r}`
+    assert "no key for openai, ollama" in message
+    assert "choices are azure_openai, openai, ollama" in message
+
+    # THE CONTROL, and it is what makes the assertion above about the totality
+    # check rather than about local discovery: the same template with a total
+    # mapping loads, and `E-TEMPLATE-LOAD` disappears.
+    (templates / "cred_assay.py").write_text(
+        _CRED_TOTALITY_TEMPLATE.replace(
+            'requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"]},',
+            'requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"],\n'
+            '                          "openai": ["OPENAI_API_KEY"],\n'
+            '                          "ollama": []},',
+        )
+    )
+    assert "E-TEMPLATE-LOAD" not in codes(
+        write_config({"experiment_type": "cred_assay", "parameters": {}})
+    )
+
+
+def test_validate_loads_dot_env_from_the_repository_root(git_repo: Path, write_config, monkeypatch):
+    """`validate` reads `.env`. Not a breach of its promise — `reference.md`
+    § CLI reference promises it "creates nothing and reaches nothing **off the
+    machine**", and a file in the repository root is on-machine.
+
+    `delenv` first: `load_dotenv` writes straight into `os.environ` and only
+    monkeypatch puts it back.
+    """
+    import os
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    (git_repo / ".env").write_text("PUBLISHABLE_TEST_TOKEN=from-the-file\n")
+
+    path = write_config()
+    assert codes(path) == set()  # the config itself is clean
+    assert os.environ.get("PUBLISHABLE_TEST_TOKEN") == "from-the-file"
+
+    # THE CONTROL: with no `.env`, the same validate leaves the name unset — so
+    # this test fails on a build that never loads rather than passing on a
+    # machine that happened to export it.
+    (git_repo / ".env").unlink()
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    assert codes(write_config()) == set()
+    assert os.environ.get("PUBLISHABLE_TEST_TOKEN") is None
+
+
+_REQUIRED_ENV_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    required_env = ["PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_OTHER"]
+    parameter_spec = {}
+"""
+
+
+def test_an_unset_required_env_variable_is_reported_with_its_name(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The first reader of `BaseTemplate.required_env`.
+
+    `delenv` on both names is what makes this a test of the check rather than of
+    the machine: `os.environ` is inherited from the test runner, and without it
+    this passes on a laptop where nothing was ever set — including on a build
+    where the check does not exist.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.delenv("PUBLISHABLE_TEST_OTHER", raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+
+    c = Collector()
+    validate_config(write_config({"experiment_type": "cred_assay", "parameters": {}}), c)
+    found = [f for f in c.findings if f.code == "E-CRED-MISSING"]
+
+    # One finding per unset variable, in declared order — a template needing two
+    # keys names both rather than one at a time. Asserted as a fragment per
+    # finding rather than by splitting the message on backticks: the message
+    # already carries a backticked template name, so an index-based split pins
+    # the message's backtick COUNT and breaks on any reworded clause.
+    assert len(found) == 2, [f.message for f in found]
+    assert "`PUBLISHABLE_TEST_TOKEN`" in found[0].message
+    assert "`PUBLISHABLE_TEST_OTHER`" in found[1].message
+    assert {f.path for f in found} == {"experiment_type"}
+    # The message names the template, which is the only thing this code CAN name
+    # — the fragment that distinguishes it from `E-CRED-PARAM-MISSING`, whose
+    # message names a parameter, a value and a condition and never a template.
+    assert "template `cred_assay`" in found[0].message
+    assert "condition" not in found[0].message
+
+
+def test_a_satisfied_required_env_validates_clean(git_repo: Path, write_config, monkeypatch):
+    """The honouring, and the control the negative test needs. Without it, a check
+    that reported unconditionally would pass every assertion above."""
+    monkeypatch.setenv("PUBLISHABLE_TEST_TOKEN", "x")
+    monkeypatch.setenv("PUBLISHABLE_TEST_OTHER", "y")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+
+    assert codes(write_config({"experiment_type": "cred_assay", "parameters": {}})) == set()
+
+
+def test_a_required_env_variable_may_be_supplied_by_dot_env(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The two halves wired together: task 8's load makes `.env` a legal place to
+    put the value, which is the whole point of the mechanism."""
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.delenv("PUBLISHABLE_TEST_OTHER", raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+    (git_repo / ".env").write_text("PUBLISHABLE_TEST_TOKEN=a\nPUBLISHABLE_TEST_OTHER=b\n")
+
+    assert codes(write_config({"experiment_type": "cred_assay", "parameters": {}})) == set()
+
+
+def test_a_template_declaring_no_required_env_reports_nothing(write_config, monkeypatch):
+    """`generic` declares `required_env = []`. A check that reported for an empty
+    list would break every existing config in the suite — asserted here anyway,
+    so the reason a green suite is green is stated rather than assumed."""
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    assert "E-CRED-MISSING" not in codes(write_config())
+
+
+_CRED_IMPORT_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_import_assay")
+class CredImportAssay(BaseTemplate):
+    required_env = ["PUBLISHABLE_TEST_ENTRYPOINT_TOKEN"]
+    parameter_spec = {}
+"""
+
+_BROKEN_EXPERIMENT_WITH_CRED = (
+    "import os\nraise RuntimeError('boom ' + os.environ['PUBLISHABLE_TEST_ENTRYPOINT_TOKEN'])\n"
+)
+
+
+def test_a_credential_in_an_entrypoint_import_failure_is_redacted_through_render(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`validate.py`'s `c.credentials = credential_values(declared_credential_names_for(...))`
+    line, and all of `declared_credential_names_for`, are read by nothing in the
+    suite before this: `codes()`/`messages_by_code()` only ever inspect
+    `c.findings` directly, never call `c.render()`, so a mutation emptying that
+    assignment leaves the full suite green. It is not dead code — a declared
+    credential surfacing in an entrypoint's import failure is a real path, and
+    without the assignment it reaches `render()` unredacted. This pins the
+    assignment and the helper together, through the boundary a reader actually
+    sees output from."""
+    monkeypatch.setenv("PUBLISHABLE_TEST_ENTRYPOINT_TOKEN", "sk-i1-sentinel-7788")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_import_assay.py").write_text(_CRED_IMPORT_TEMPLATE)
+    write_experiment_module(git_repo, _BROKEN_EXPERIMENT_WITH_CRED)
+
+    path = write_config({"experiment_type": "cred_import_assay", "parameters": {}})
+    c = Collector()
+    validate_config(path, c)
+    assert "E-ENTRYPOINT-IMPORT" in {f.code for f in c.findings}  # the fault actually fired
+
+    rendered = c.render()
+    assert "sk-i1-sentinel-7788" not in rendered
+    assert "<redacted:PUBLISHABLE_TEST_ENTRYPOINT_TOKEN>" in rendered
+
+
+_UNION_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={
+                "azure_openai": ["AZURE_TEST_KEY"],
+                "openai": ["OPENAI_TEST_KEY"],
+                "ollama": ["OLLAMA_TEST_KEY"],
+            },
+        ),
+        "llm.retries": Param(int, default=2, ge=0),
+    }
+"""
+
+_UNION_NAMES = ("AZURE_TEST_KEY", "OPENAI_TEST_KEY", "OLLAMA_TEST_KEY")
+
+
+def _union_project(git_repo: Path, monkeypatch, *, set_names: tuple[str, ...]) -> None:
+    """The decision-6 fixture: three choices, a sweep selecting two, a third whose
+    variable is deliberately unset and whose requirement is deliberately NON-empty.
+
+    `reference.md`'s own example gives `ollama` an empty `[]`; copying it here
+    would collapse "union over resolved conditions" into "union over all
+    choices", since an unselected choice requiring nothing answers the same
+    either way.
+
+    Every one of the three names is `delenv`-ed first and only `set_names` is
+    exported, so the answer is a property of the check rather than of the machine
+    the suite runs on.
+    """
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    for name in set_names:
+        monkeypatch.setenv(name, "value")
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "cred_assay.py").write_text(_UNION_TEMPLATE)
+
+
+def test_the_union_is_over_the_conditions_the_sweep_resolves(
+    git_repo: Path, write_config, monkeypatch
+):
+    """Reading A. B would additionally report `OLLAMA_TEST_KEY`; C would report
+    nothing, `azure_openai` being the written value and its key set."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"grid": {"llm.provider": ["azure_openai", "openai"]}},
+        }
+    )
+
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+
+    assert len(found) == 1, [f.message for f in found]
+    message = found[0].message
+    assert found[0].path == "parameters.llm.provider"
+    assert "OPENAI_TEST_KEY" in message  # reading A's answer …
+    assert "OLLAMA_TEST_KEY" not in message  # … and not reading B's
+    # The three facts this code's message must name and the other one cannot:
+    # the parameter (via `path` above), the value, and the condition.
+    assert "`openai`" in message
+    assert "condition `provider=openai`" in message
+
+
+def test_the_union_says_nothing_when_every_selected_value_s_key_is_set(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The honouring. The unselected `ollama`'s key stays unset throughout — so a
+    check that reported over all `choices` fails here while passing the test
+    above."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY", "OPENAI_TEST_KEY"))
+    assert (
+        codes(
+            write_config(
+                {
+                    "experiment_type": "cred_assay",
+                    "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+                    "sweep": {"grid": {"llm.provider": ["azure_openai", "openai"]}},
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_an_undeclared_parameter_falls_back_to_the_template_s_default(
+    git_repo: Path, write_config, monkeypatch
+):
+    """A config that omits the parameter still resolves to a value — the
+    template's default — and that value's credential is still required."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config({"experiment_type": "cred_assay", "parameters": {}})
+    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
+    assert "AZURE_TEST_KEY" in message
+    assert "the base parameters" in message  # no sweep, so no condition label
+
+
+def test_a_variable_two_conditions_need_is_reported_once(git_repo: Path, write_config, monkeypatch):
+    """One missing value is one thing to fix: `openai` is selected by two of the
+    four expanded conditions (`retries` is 1 and 2 in turn), and the finding
+    names the first — `provider=openai__retries=1`, since `expand` orders the
+    grid by `llm.provider` before `llm.retries`."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "grid": {
+                    "llm.provider": ["openai", "azure_openai"],
+                    "llm.retries": [1, 2],
+                }
+            },
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message
+    assert "condition `provider=openai__retries=1`" in found[0].message
+
+
+def test_a_template_declaring_no_requires_env_reports_nothing(write_config, monkeypatch):
+    """`generic`'s four parameters declare none, which is why every test in this
+    suite that validates a `generic` config is unaffected by this check. Asserted
+    rather than assumed."""
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    assert "E-CRED-PARAM-MISSING" not in codes(write_config())
+
+
+def test_a_list_valued_parameter_is_reported_by_e_param_value_not_a_traceback(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`_check_requires_env` runs before `_check_parameters`, so a list resolved
+    for a `str`-typed parameter reaches `param.requires_env.get(value)` before
+    `_check_parameters` ever gets to reject it. The `except TypeError` guard is
+    what turns that into a collected `E-PARAM-VALUE` finding instead of an
+    unhandled `TypeError: unhashable type: 'list'` out of `validate_config`."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": ["azure_openai", "openai"], "retries": 2}},
+        }
+    )
+    assert codes(path) == {"E-PARAM-VALUE"}
+
+
+def test_a_group_axis_colliding_with_a_credentialed_parameter_still_runs_the_check(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`condition.selectors` is skipped so a group axis's cell — which names a
+    path but plants no parameter — cannot masquerade as a resolved value. That
+    skip is not structurally unreachable: `sweep.groups` naming a path the
+    template also declares as a parameter is refused (`E-SWEEP-PATH-DUPLICATE`),
+    but `validate` collects findings rather than aborting on the first one, so
+    this check still runs over the same expanded conditions and would, without
+    the skip, misread the group axis's `ollama` cell as a resolved value for
+    `llm.provider` and additionally report `E-CRED-PARAM-MISSING` for a
+    credential the config never actually selects."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"groups": [{"by": "llm.provider", "levels": ["ollama"]}]},
+        }
+    )
+    found = codes(path)
+    assert found == {"E-DATA-ALLOCATION-WITHIN-ARMS", "E-SWEEP-PATH-DUPLICATE"}
+    assert "E-CRED-PARAM-MISSING" not in found
+
+
+def test_two_missing_variables_are_reported_in_condition_order_not_sorted(
+    git_repo: Path, write_config, monkeypatch
+):
+    """Two variables missing at once are reported condition order then
+    declared-parameter order, not sorted: the grid selects `openai` before
+    `azure_openai`, so `OPENAI_TEST_KEY` is reported first even though
+    `AZURE_TEST_KEY` sorts first. A fixture ordered the other way
+    (`["azure_openai", "openai"]`) would not distinguish the two orderings,
+    since insertion order and sorted order would then agree."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"grid": {"llm.provider": ["openai", "azure_openai"]}},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+    variables_in_order = [next(name for name in _UNION_NAMES if name in f.message) for f in found]
+    assert variables_in_order == ["OPENAI_TEST_KEY", "AZURE_TEST_KEY"]
+
+
+def _findings_of(path: Path) -> list:
+    """Every finding, not just its code or its message — the shape a test needs
+    when it must count findings of one code rather than test membership."""
+    c = Collector()
+    validate_config(path, c)
+    return list(c.findings)
+
+
+_ABLATABLE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            nullable=True,
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={
+                "azure_openai": ["AZURE_TEST_KEY"],
+                "openai": ["OPENAI_TEST_KEY"],
+                "ollama": ["OLLAMA_TEST_KEY"],
+            },
+        ),
+        "llm.retries": Param(int, default=2, ge=0),
+    }
+"""
+
+
+def test_a_baseline_is_a_resolved_condition_whose_credential_joins_the_union(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`sweep.NON_PRODUCT_MODES` is `("baseline", "ablate")` — a baseline is not a
+    description of a condition, it IS one, so the value it fixes is resolved and
+    its credential is required. No fixture for this existed anywhere in the
+    evidence base."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "baseline": {"llm.provider": "openai"},
+                "grid": {"llm.retries": [1, 2]},
+            },
+        }
+    )
+    # `messages_by_code` collapses same-code findings last-wins, so it cannot
+    # see a spurious second one; count explicitly via `_findings_of` instead,
+    # the way the groups and ablate tests below do.
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message
+    assert "OLLAMA_TEST_KEY" not in found[0].message
+
+
+def test_a_paired_cell_resolves_both_of_its_paths(git_repo: Path, write_config, monkeypatch):
+    """A `paired` entry couples two paths into one cell — the shape the
+    feasibility analysis describes in prose for its Ollama case and shows in no
+    YAML (`sweep.paired` is `[]` in both configs that have the key)."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "paired": [
+                    {"llm.provider": "azure_openai", "llm.retries": 1},
+                    {"llm.provider": "ollama", "llm.retries": 4},
+                ]
+            },
+        }
+    )
+    # `messages_by_code` collapses same-code findings last-wins: if the union
+    # wrongly reported both cells, insertion order (azure cell first, ollama
+    # cell second) would keep ollama's message and this test would pass while
+    # missing a spurious azure finding. Count explicitly instead.
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OLLAMA_TEST_KEY" in found[0].message
+    # Azure's key IS set, so the union reports one variable and not two. The
+    # `len(found) == 1` above is what keeps this from being absence-only; this
+    # line narrows WHICH variable, and is not itself the positive half.
+    assert "AZURE_TEST_KEY" not in found[0].message
+
+
+def test_a_groups_axis_contributes_no_parameter_value(
+    git_repo: Path, tmp_path: Path, write_config, monkeypatch
+):
+    """A group level is a *set of units*, so it names no parameter and the union
+    over a groups-only sweep is the base value's requirement — which is the
+    correct answer rather than a gap.
+
+    The roster is rewritten first so the config is realistic: without it,
+    `attributes: ["cohort"]` over the `write_config` fixture's one-column file
+    earns `E-UNITS-ATTR-MISSING`. That extra finding changes no assertion here —
+    `expand` reads the document, not the roster, so deleting the rewrite leaves
+    all four assertions passing — which is why the rewrite buys realism rather
+    than being what keeps this test honest.
+    """
+    _union_project(git_repo, monkeypatch, set_names=())
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,cohort\np1,derivation\np2,derivation\np3,validation\np4,validation\n"
+    )
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"groups": [{"by": "cohort", "levels": ["derivation", "validation"]}]},
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["cohort"],
+            },
+        }
+    )
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "AZURE_TEST_KEY" in found[0].message  # the base value's, in both cells
+    assert "OPENAI_TEST_KEY" not in found[0].message
+    # Both group cells resolve the identical `llm.provider` value, so one
+    # variable is required by two conditions carrying two different labels —
+    # the same first-wins-attribution shape task 10's
+    # `test_a_variable_two_conditions_need_is_reported_once` pins for `grid`.
+    # `expand` emits `cohort=derivation` before `cohort=validation`, so
+    # first-attribution names the former.
+    assert "condition `cohort=derivation`" in found[0].message
+
+
+def test_ablate_remove_resolves_a_value_with_no_key_and_requires_nothing(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`sweep.removal_value` sets a nullable parameter to `null`. `requires_env` is
+    total over `choices`, and `null` is not a choice — so the ablated condition
+    requires nothing, silently. Reporting it would be a second report of a fault
+    `_check_sweep` owns.
+
+    The control is on the same document: the BASELINE condition still resolves
+    `openai` and still reports, so this test cannot pass by the check never
+    running.
+    """
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "cred_assay.py").write_text(_ABLATABLE_TEMPLATE)
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "baseline": {"llm.provider": "openai"},
+                "ablate": {"remove": ["llm.provider"]},
+            },
+        }
+    )
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message  # the baseline's, and only it

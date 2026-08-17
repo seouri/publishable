@@ -46,6 +46,26 @@ class LocalTemplate(NamedTuple):
 _pending: list[tuple[str, type[BaseTemplate]]] = []
 
 
+class PartialLoadError(ContractError):
+    """A `ContractError` from resolving a name that also carries every class this
+    discovery pass got far enough to construct, whether or not it ended up usable.
+
+    Not a new public error kind — every existing catch of `ContractError` still
+    matches, and `.code`/`str(exc)` are unchanged. `partial_templates` exists so
+    `validate_config` can ask an abandoned or shadowed class what credentials it
+    declares (`required_env`, `parameter_spec`) even though the class itself is
+    not going anywhere: a class body finishes running before `@register_template`
+    ever sees it, so a raise *after* that decorator leaves the class fully formed
+    in memory even when the file that defined it is refused wholesale.
+    """
+
+    def __init__(
+        self, message: str, *, code: str, partial_templates: list[type[BaseTemplate]]
+    ) -> None:
+        super().__init__(message, code=code)
+        self.partial_templates = partial_templates
+
+
 def register_template(
     name: str,
 ) -> Callable[[type[BaseTemplate]], type[BaseTemplate]]:
@@ -292,6 +312,13 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     found: dict[str, LocalTemplate] = {}
     claims: dict[str, list[str]] = {}
     load_faults: list[ContractError] = []
+    # Every class this pass constructs, whether or not it ends up registered,
+    # usable, or refused — a class body finishes running before
+    # `@register_template` sees it, so a file that raises *after* declaring one
+    # still leaves that class fully formed. Carried on a raised `ContractError`
+    # (see `PartialLoadError`) so a caller that never gets a resolved template
+    # can still ask an abandoned class what credentials it declares.
+    partial: list[type[BaseTemplate]] = []
     for path in sorted(templates_dir.glob("*.py")):
         if path.stem.startswith("__"):
             continue
@@ -305,7 +332,9 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             # guards against, one import earlier: a `templates/*.py` calling `sys.exit()`
             # at module scope, or building an `argparse` parser at import, would otherwise
             # end the process with no diagnostic at all.
-            drain_pending()  # discard a partial registration — not this path's to keep
+            # Not registered — that would misattribute the class as usable — but
+            # still read for its credentials, so drained rather than discarded.
+            partial.extend(cls for _, cls in drain_pending())
             load_faults.append(
                 ContractError(
                     f"the project-local template `{path}` called `sys.exit()` while "
@@ -323,7 +352,7 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             # accidental: `E-TEMPLATE-LOAD` is what names *this* fault, "a file this
             # repo's `templates/` cannot use", and a coded exception from arbitrary user
             # code reaching this point is exactly as unusable as an uncoded one.
-            drain_pending()  # discard a partial registration — not this path's to keep
+            partial.extend(cls for _, cls in drain_pending())
             load_faults.append(
                 ContractError(
                     f"the project-local template `{path}` raised while importing and "
@@ -352,6 +381,7 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
         )
         if bad is not None:
             name, cls = bad
+            partial.append(cls)
             load_faults.append(
                 ContractError(
                     f"the project-local template `{path}` registered `{name}` as "
@@ -369,8 +399,10 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             provider = f"{path}::{cls.__name__}"
             claims.setdefault(name, []).append(provider)
             found.setdefault(name, LocalTemplate(cls, provider))
+            partial.append(cls)
     if load_faults:
-        raise load_faults[0]
+        fault = load_faults[0]
+        raise PartialLoadError(str(fault), code=fault.code, partial_templates=partial)
     # Every file is imported before any collision is raised, and a colliding
     # name is reported in name order rather than in the order the files
     # happened to be read: the whole point of the refusal is that import order
@@ -390,11 +422,12 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
                 who, remedy = " and ".join(distinct), "Rename one."
             else:
                 who, remedy = f"{distinct[0]}, twice by the same class", "Remove one."
-            raise ContractError(
+            raise PartialLoadError(
                 f"the project-local template name `{name}` is claimed more than once: "
                 f"{who} — install order and import order are the "
                 "only tie-breaks available, and both are properties of a machine "
                 f"rather than of a design. {remedy}",
                 code="E-TEMPLATE-COLLISION",
+                partial_templates=partial,
             )
     return found
