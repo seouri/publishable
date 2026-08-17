@@ -40,6 +40,7 @@ class Member:
     pool: tuple[float, ...] | None
     diffs: tuple[float, ...] | None
     declaration_index: int
+    weights: tuple[Any, ...] | None = None
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
@@ -60,7 +61,30 @@ class Member:
         prevent. Neither set would make `_corrected_bounds` return `None` for
         a reason that has nothing to do with the pool being too small, so
         `thin: True` would fire over a member that was never thin.
+
+        **`weights` is a modifier on `diffs`, not a third kind of evidence**, so
+        it does not enter the exactly-one rule and is checked separately. A
+        weighted column contrast's raw interval is `weighted_paired_t_over_units`
+        over those differences, and the corrected bound has to be the same
+        construction at a smaller α or it is a counterpart in name only. Beside
+        `pool` it would be applied twice — a percentile pool is already built
+        from weighted draws — and at a different length it is a misaligned vector,
+        the failure class that produces a plausible number rather than an error.
+        Both are `cli`'s bookkeeping to get right, so both raise `ValueError` for
+        the reason the rule above does.
         """
+        if self.weights is not None:
+            if self.pool is not None:
+                raise ValueError(
+                    "Member weights modify diffs, not a pool; a percentile pool is "
+                    "already drawn from weighted values"
+                )
+            if self.diffs is None or len(self.weights) != len(self.diffs):
+                raise ValueError(
+                    "Member weights must be the same length as diffs, not "
+                    f"{len(self.weights)} against "
+                    f"{'no diffs' if self.diffs is None else len(self.diffs)}"
+                )
         if self.ci95 is None:
             return
         if (self.pool is None) == (self.diffs is None):
