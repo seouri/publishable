@@ -582,10 +582,13 @@ def validate_config(
                 "for now",
             )
         else:
+            plugin = doc.get("plugin")
             c.error(
                 "E-TEMPLATE-UNKNOWN",
                 "experiment_type",
-                unknown_template_message(name, known),
+                unknown_template_message(
+                    name, known, plugin if isinstance(plugin, str) and plugin else None
+                ),
             )
         return None  # every later check reads the spec
 

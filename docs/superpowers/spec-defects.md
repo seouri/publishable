@@ -3713,6 +3713,13 @@ distribution is precisely what core still has no way to check. Two load-time ref
 surface (`E-TEMPLATE-LOAD`, `E-TEMPLATE-COLLISION`), reported under the code the raise carries;
 neither bears on this row. **Owner stays H7 — specifically H7b**, which owns entry-point resolution.
 
+**STRUCK 2026-08-16 (H7b Part A task 11).** `unknown_template_message` takes the config's `plugin`
+field and renders it, so `validate`'s finding names where the template was expected to come from.
+The row's stated precondition — that an unresolvable `experiment_type` can name a template some
+uninstalled distribution registers — is satisfied by task 7's metadata scan and task 8's merge.
+`generate experiment` passes `None` and shows no hint, deliberately: it is writing the file that
+would hold the field.
+
 ### Row 212 "Template version moved", first half — **Owner: H7 Plugins and the apparatus**
 
 `_check_versions` compares the declared `template_version` against the module constant

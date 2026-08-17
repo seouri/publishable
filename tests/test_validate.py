@@ -12871,3 +12871,27 @@ def test_an_installed_only_template_name_is_known_and_refused(installed, write_c
     # refusal above is about the installed claim rather than about any
     # unresolved name.
     assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "nothing_claims_this"}))
+
+
+def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write_config):
+    """Row 211. The hint is the config's own `plugin` field, which is a readable
+    note beside `uv.lock` rather than an install instruction — so the message
+    says where the template was expected to come from and does not offer to
+    fetch it.
+    """
+    found = messages_by_code(
+        write_config({"experiment_type": "llm_diagnostic", "plugin": "someuser/publishable-llm"})
+    )
+    message = found["E-TEMPLATE-UNKNOWN"]
+    assert "llm_diagnostic" in message
+    assert "someuser/publishable-llm" in message
+    assert "generic" in message  # the known list is still printed
+
+    # THE CONTROL: with no `plugin` declared the message must not invent one, and
+    # must not carry the hint's connective either — a fragment that appeared
+    # under both declarations would pin nothing.
+    plain = messages_by_code(write_config({"experiment_type": "llm_diagnostic"}))[
+        "E-TEMPLATE-UNKNOWN"
+    ]
+    assert "someuser/publishable-llm" not in plain
+    assert "`plugin` says" not in plain

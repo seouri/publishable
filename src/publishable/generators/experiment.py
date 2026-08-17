@@ -54,7 +54,7 @@ def generate_experiment(
     template, known = resolve_template(template_name, repo_root)
     if template is None:
         raise ContractError(
-            unknown_template_message(template_name, known),
+            unknown_template_message(template_name, known, plugin=None),
             code="E-TEMPLATE-UNKNOWN",
         )
     root = repo_root.resolve()

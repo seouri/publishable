@@ -150,7 +150,7 @@ def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
     return claim.provenance if claim is not None else None
 
 
-def unknown_template_message(name: str, known: Sequence[str]) -> str:
+def unknown_template_message(name: str, known: Sequence[str], plugin: str | None = None) -> str:
     """The one wording for a name neither `resolve_template` call site resolved —
     `validate`'s finding and `generate_experiment`'s raise both read this
     rather than each keeping its own copy, so the two surfaces cannot drift
@@ -159,9 +159,16 @@ def unknown_template_message(name: str, known: Sequence[str]) -> str:
     Takes the already-resolved names rather than a repo root, so building the
     message costs no second discovery: each caller has just merged, and has
     them in hand.
+
+    `plugin` is the config's own field, when the caller has a config. It is a
+    readable note beside the authoritative pin in `uv.lock` rather than a second
+    one — core never installs from it — so the hint says where the template was
+    expected to come from and stops there. A caller with no config passes
+    `None`: `generate experiment` is writing the file that would hold it.
     """
+    hint = f" — `plugin` says it should come from `{plugin}`" if plugin else ""
     return (
         f"names `{name}`, which no template — core's, an installed plugin's, "
         f"or this project's own `templates/` — registers "
-        f"(known: {', '.join(known)})"
+        f"(known: {', '.join(known)}){hint}"
     )
