@@ -38,7 +38,7 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
-from publishable.templates.registry import resolve_template, unknown_template_message
+from publishable.templates.registry import _claims, unknown_template_message
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -525,12 +525,14 @@ def validate_config(
     load_env(repo_root)
     try:
         # One merge, so one local discovery: the known-name list the unknown-name
-        # finding prints comes back from the same call that resolved the name.
-        # Asking for it separately would import every `templates/*.py` a second
-        # time — every user top level executed twice — and, since the message is
-        # built after this guard closes, a `ContractError` from that second
-        # import would escape `validate_config` and discard every other finding.
-        template, known = resolve_template(name, repo_root)
+        # finding prints, and the claim (provenance and provider) an unresolved
+        # name's finding reads, both come back from the same call that resolved
+        # the name. Asking for any of them separately would import every
+        # `templates/*.py` a second time — every user top level executed twice —
+        # and, since a later finding is built after this guard closes, a
+        # `ContractError` from that second import would escape `validate_config`
+        # and discard every other finding.
+        claims = _claims(repo_root)
     except ContractError as exc:
         # The load-time refusals resolving a template can make — two codes,
         # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Two *codes*, not two
@@ -565,12 +567,27 @@ def validate_config(
         c.credentials = credential_values(names)
         c.error(exc.code, "experiment_type", str(exc))
         return None
+    claim = claims.get(name)
+    template = claim.cls() if claim is not None and claim.cls is not None else None
+    known = sorted(claims)
     if template is None:
-        c.error(
-            "E-TEMPLATE-UNKNOWN",
-            "experiment_type",
-            unknown_template_message(name, known),
-        )
+        if claim is not None and claim.provenance == "installed":
+            c.error(
+                "E-TEMPLATE-INSTALLED-UNSUPPORTED",
+                "experiment_type",
+                f"names `{name}`, which {claim.provider} registers as a "
+                "`publishable.templates` entry point — but core resolves an installed "
+                "template's name without importing its package, and loading one is not "
+                "implemented in this build; installed templates will be honored in a "
+                "later slice. Use a project-local `templates/` file or a core template "
+                "for now",
+            )
+        else:
+            c.error(
+                "E-TEMPLATE-UNKNOWN",
+                "experiment_type",
+                unknown_template_message(name, known),
+            )
         return None  # every later check reads the spec
 
     entrypoint = doc.get("entrypoint")
@@ -933,9 +950,10 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
     threading one resolved plan through them, so re-deriving here matches this
     file's own convention rather than breaking it.
 
-    A `None` template — reached only when `resolve_template` already returned
-    early — yields the empty list, since `getattr(None, ...)` on a missing
-    template answers nothing rather than guessing.
+    A `None` template — reached only when `validate_config` already returned
+    early, since it never calls this once `template` is `None` — yields the
+    empty list, since `getattr(None, ...)` on a missing template answers
+    nothing rather than guessing.
     """
     raw_required = getattr(template, "required_env", None)
     # Same guard as `_check_required_env`: nothing reports a `required_env`

@@ -39,6 +39,7 @@ class Claim(NamedTuple):
     declarations could be read.
     """
 
+    provenance: str
     provider: str
     cls: type[BaseTemplate] | None
 
@@ -61,14 +62,18 @@ def _claims(repo_root: Path | None) -> dict[str, Claim]:
     claims: dict[str, list[Claim]] = {}
     for name, core in _BUILTIN.items():
         claims.setdefault(name, []).append(
-            Claim(provider=f"{core.__module__}.{core.__qualname__}", cls=core)
+            Claim(provenance="core", provider=f"{core.__module__}.{core.__qualname__}", cls=core)
         )
     for name, entries in scan_group("publishable.templates").items():
         for ep in entries:
-            claims.setdefault(name, []).append(Claim(provider=provider_of(ep), cls=None))
+            claims.setdefault(name, []).append(
+                Claim(provenance="installed", provider=provider_of(ep), cls=None)
+            )
     local = discover_local(repo_root) if repo_root is not None else {}
     for name, found in local.items():
-        claims.setdefault(name, []).append(Claim(provider=found.provider, cls=found.cls))
+        claims.setdefault(name, []).append(
+            Claim(provenance="local", provider=found.provider, cls=found.cls)
+        )
     for name in sorted(claims):
         if len(claims[name]) > 1:
             who = " and ".join(sorted(claim.provider for claim in claims[name]))
@@ -128,6 +133,21 @@ def resolve_template(
 
 def template_names(repo_root: Path | None = None) -> list[str]:
     return sorted(_claims(repo_root))
+
+
+def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
+    """Where the template `name` resolves from — `core`, `local`, `installed` — or
+    `None` if nothing claims it.
+
+    Asked at the merge, which is the one place holding all three sources, and
+    answered from which source a claim came from rather than from anything
+    observable on a class afterward. `discovery.is_local_template` answers a
+    narrower question about a class that is already in hand, and keeps its two
+    callers: nothing in this build ever holds an installed template's class, so a
+    class-taking predicate has no third value to return.
+    """
+    claim = _claims(repo_root).get(name)
+    return claim.provenance if claim is not None else None
 
 
 def unknown_template_message(name: str, known: Sequence[str]) -> str:

@@ -5989,3 +5989,22 @@ and none of them was this one.
 **Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
 decorator `register_reader`, with `register_writer` refusing a suffix that has no reader. The code
 is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not before.
+
+## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
+
+H7b Part A task 8 makes an installed distribution's `publishable.templates` entry point a claim in
+the merge, so its name is known, collisions against it are decided, and `template_names` lists it.
+Task 9 refuses a config naming one, as `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the `-UNSUPPORTED` build
+family, no § Errors row.
+
+The refusal exists because decision 3 of `2026-08-16-plugin-registries-design.md` states the
+entry-point invariant of **resolution** and not merely of the negative answer: "`validate` resolves a
+name *without importing a line*". Loading the one entry point a config names would answer a narrower
+reading of the same sentence and is the natural next step, but it is a decision, not an oversight,
+and it is not H7b Part B's — Part B is the resolver half and its nine tasks do not touch template
+loading.
+
+**What retiring it needs:** `Claim.cls` populated for an installed claim; `is_local_template`'s two
+class-taking callers (`validate._check_versions`, `materialize.materialize_config`) reading
+`Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
+`provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**

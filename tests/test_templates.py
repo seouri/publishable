@@ -8,7 +8,7 @@ from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.stats import UnitTable
 from publishable.templates.discovery import discover_local, is_local_template
-from publishable.templates.registry import get_template, template_names
+from publishable.templates.registry import get_template, template_names, template_provenance
 from publishable.validate import validate_config
 
 
@@ -1112,3 +1112,20 @@ def test_a_clean_installed_claim_is_not_a_collision(installed, tmp_path):
     installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
     assert "my_assay" in template_names(tmp_path)
     assert get_template("my_assay", tmp_path) is None  # known, and not loaded — decision 3
+
+
+def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
+    """The direct question, asked where all three sources are in hand.
+
+    All three values in one arrangement, because a fixture with two could not
+    tell a three-valued answer from a boolean one renamed.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    assert template_provenance("generic", tmp_path) == "core"
+    assert template_provenance("my_assay", tmp_path) == "local"
+    assert template_provenance("vendor_assay", tmp_path) == "installed"
+    assert template_provenance("nothing_claims_this", tmp_path) is None

@@ -4285,9 +4285,10 @@ def test_an_unknown_input_manifest_policy_is_reported(write_config):
 
 def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
     """`generic` has no cross-field rule of its own, so `E-TEMPLATE-RULE` is exercised
-    through a stub template swapped in for the registry lookup `validate_config` makes."""
+    through a stub template swapped in for the merge `validate_config` reads."""
     import publishable.validate as validate_mod
     from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.templates.registry import Claim
 
     class RuleBreaker(GenericTemplate):
         def validate(self, config):
@@ -4295,8 +4296,10 @@ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
 
     monkeypatch.setattr(
         validate_mod,
-        "resolve_template",
-        lambda name, repo_root=None: (RuleBreaker(), ["generic"]),
+        "_claims",
+        lambda repo_root=None: {
+            "generic": Claim(provenance="core", provider="stub", cls=RuleBreaker)
+        },
     )
     assert "E-TEMPLATE-RULE" in codes(write_config())
 
@@ -12849,3 +12852,22 @@ def test_one_distribution_per_plugin_name_reports_nothing(installed, write_confi
         },
     )
     assert "E-PLUGIN-COLLISION" not in codes(write_config())
+
+
+def test_an_installed_only_template_name_is_known_and_refused(installed, write_config):
+    """Known, and not resolved: core answers the name from metadata and does not
+    import the distribution to get a class. So the finding is neither
+    `E-TEMPLATE-UNKNOWN` — which would be false — nor silence.
+    """
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
+    assert "E-TEMPLATE-UNKNOWN" not in found
+    message = found["E-TEMPLATE-INSTALLED-UNSUPPORTED"]
+    assert "vendor_assay" in message
+    assert "dist-one 1.0" in message
+
+    # THE CONTROL: a name nothing claims is still `E-TEMPLATE-UNKNOWN`, so the
+    # refusal above is about the installed claim rather than about any
+    # unresolved name.
+    assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "nothing_claims_this"}))
