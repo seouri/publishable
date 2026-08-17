@@ -79,3 +79,16 @@ future caller that passes unsorted keys, which is precisely what the enforced co
 
 This is `CLAUDE.md`'s "a mutation whose two branches cannot differ" firing on a mutation **I**
 prescribed — the fourth blind mutation this slice's briefs have shipped.
+
+**Fix round 1 — all nine findings closed** (`efa13bc`), confirmed by a scoped re-review that
+verified four of them **by running** rather than by reading: the label-order mutation now FAILS on
+the replacement fixture and PASSES on revert; the sorted-`keys` contract is **enforced**, not merely
+documented, and deleting the guard fails a named test; `_section_text`'s control discriminates under
+a depth-comparison mutation; and the "until the paired estimators weight" sweep was proved able to
+fail. Suite 2133 passed, 1 skipped, 2 xfailed; four gates clean. Tasks 1-5 complete.
+
+**Ruling: tasks 6-8 dispatch as one batch, 9-10 as the next.** 6→7→8 is the payoff path — thread,
+closure, record — and 9-10 are the corrected and general paths that build on the record 8 defines.
+Reviewing at that seam puts a gate on the payoff *before* anything is built on top of it, which the
+spec's decision 2 argues is the half that can be built against the wrong estimator entirely.
+**Cost if wrong:** one extra review cycle.
