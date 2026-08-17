@@ -7435,6 +7435,99 @@ def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_toge
     assert strat_derived_width < plain_derived_width
 
 
+_COHORT_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        # `bias` is 0.0 for cohort `a` and 5.0 for cohort `b`, and only the
+        # SPEARMAN condition applies it — so every cohort-`a` unit's
+        # spearman-minus-pearson difference is exactly 0.0 and every cohort-`b`
+        # unit's is exactly 5.0, a population that is half one point mass and
+        # half the other. Stratifying by `cohort` then draws a fixed 50/50 split
+        # every single resample, so the stratified mean is deterministic at 2.5;
+        # an unstratified draw mixes the two point masses in a proportion that
+        # varies draw to draw, which is real, measurable width a wrong or
+        # dropped `strata` cannot reproduce.
+        shift = {{"pearson": 0.0, "spearman": 1.0}}.get(cfg.parameters.analysis.method, 0.0)
+        for i, unit in enumerate(units):
+            bias = 0.0 if unit.attributes["cohort"] == "a" else 5.0
+            io.record(unit.key, {{"pred": float(i) / 40.0 + bias * shift}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_a_declared_stratify_by_reaches_a_contrasts_interval_through_run(tmp_path, capsys):
+    """Major 2 of fix round 1: task 6's report excused an unpinned `strata=None`
+    mutation at `command_run`'s two `_compute_vs_baseline`/
+    `_compute_declared_contrasts` call sites by citing `E-DATA-WEIGHT-CONTRAST`
+    — a refusal gated on `weight_by`, not on `stratify_by`. An **unweighted**
+    config declaring `statistics.resample.stratify_by` beside a baseline sweep
+    AND a declared `statistics.contrasts` entry validates clean and runs today,
+    so decision 5's production sites (not just the direct-call ones tasks 6-8
+    already cover) are pinnable now, at **both** call sites in one run. No
+    `weight_by` anywhere in this config.
+
+    `_COHORT_CONTRAST_STEP`'s bimodal design (see its own comment) makes a
+    stratified contrast draw a near-constant 2.5 every time and an unstratified
+    one draw a mix that varies — a measurably narrower interval, the same shape
+    the per-condition tests above already use, but through `vs_baseline` and
+    `results.contrasts` rather than a bare condition block."""
+    common_statistics = {
+        "correction": "holm",
+        "contrasts": [{"id": "c1", "of": "method=spearman", "against": "baseline"}],
+    }
+    doc_plain = run_a_project(
+        tmp_path / "plain",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={**common_statistics, "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    doc_strat = run_a_project(
+        tmp_path / "strat",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            **common_statistics,
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]},
+        },
+    )
+
+    def widths(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        vs_baseline_entry = _first_contrast(run, "method=spearman")
+        declared_entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+        assert vs_baseline_entry is not None
+        for entry in (vs_baseline_entry, declared_entry):
+            assert entry["method"] == "paired_percentile_over_units"
+        return (
+            vs_baseline_entry["ci95"][1] - vs_baseline_entry["ci95"][0],
+            declared_entry["ci95"][1] - declared_entry["ci95"][0],
+        )
+
+    plain_vs_baseline_width, plain_declared_width = widths(doc_plain)
+    strat_vs_baseline_width, strat_declared_width = widths(doc_strat)
+    assert strat_vs_baseline_width < plain_vs_baseline_width
+    assert strat_declared_width < plain_declared_width
+
+
 _RAGGED_COLUMN_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
@@ -9624,7 +9717,17 @@ def test_the_three_comparison_functions_accept_weights_and_strata():
     on a declared `resample` (§ Weighted samples). So a weight passed here, even
     with `resample_columns=False`, now moves `delta` from 6.0 to 8.0 — and this
     test asserts that rather than the pre-task-7 no-op, so the regression this
-    file pins stays true of the code that exists."""
+    file pins stays true of the code that exists.
+
+    **What this pins is half of the record § Contrasts requires.** At
+    `resample_columns=False` the interval below is `paired_t_over_units(diffs)`
+    — unweighted — beside this weighted `delta` and a weighted `cohens_d`,
+    which is the exact combination § Contrasts forbids ("all four move
+    together or none of them does"). Task 10 owns building
+    `weighted_t_over_units` into this branch and is not reachable through `run`
+    while `E-DATA-WEIGHT-CONTRAST` stands, so it is a scoped gap rather than a
+    shipped defect — recorded here rather than left for a reader to discover
+    by noticing the interval never moved."""
     from publishable.cli import _compute_declared_contrasts, _compute_vs_baseline
     from publishable.sweep import Condition
 
@@ -9654,6 +9757,10 @@ def test_the_three_comparison_functions_accept_weights_and_strata():
     out, _ = _compute_declared_contrasts(doc=doc, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
     assert out is not None
     assert out[0]["s"]["m"]["n_paired"] == 6
+    # `n_paired` alone is true under any weighting — a dropped `weights` still
+    # gives 6 — so the declared-contrast arm needs its own delta pin, the same
+    # one `_compute_vs_baseline`'s arm has above.
+    assert out[0]["s"]["m"]["delta"] == pytest.approx(8.0)
 
 
 def test_a_weighted_column_contrast_weights_its_delta_and_its_draws():
@@ -9737,9 +9844,18 @@ def test_a_weighted_stratified_column_contrast_weights_inside_the_strata():
     """The ordering constraint task 5 exists for, made observable. A weighted
     stratified draw is three `A` keys and three `B` keys with `B` carrying weight
     3, so its forced floor is (3·1·1 + 3·3·9)/12 = 7.0 — above the unweighted
-    stratified floor of 5.0 and far above the unweighted unstratified 4.33. A
-    closure built before the strata decision would weight over the wrong pool and
-    miss this bound."""
+    stratified floor of 5.0 and far above the unweighted unstratified 4.33.
+
+    **What this separates, precisely** (narrowed in fix round 1: the review
+    found the mispairing mutation below — the weight vector taken from
+    `col_keys` instead of the drawn keys, i.e. weighting over the wrong pool —
+    passes this test): weighted-and-stratified from stratified-alone (7.0 vs
+    5.0) and stratified-alone from unweighted-unstratified (5.0 vs the 4.33
+    documented above but not asserted here). It does not by itself separate a
+    correctly-drawn weight vector from a mispaired one; the payoff test
+    (`test_a_weighted_column_contrast_weights_its_delta_and_its_draws`) is what
+    catches that, since only there does the draw's own key list, not a fixed
+    external one, distinguish the two."""
     both, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS, strata=_W_STRATA)
     stratified_only, _ = _weighted_contrast_block(resample_columns=True, strata=_W_STRATA)
     assert both["ci95"][0] >= 7.0 - 1e-9
@@ -9782,6 +9898,19 @@ def test_a_weighted_contrast_entry_carries_the_three_documented_keys():
     assert "weighted_by" not in plain
     assert "n_paired_effective" not in plain
     assert plain["cohens_d"] == pytest.approx(1.3416407864998738)
+
+
+def test_a_weighted_contrast_records_the_declared_attribute_name_not_a_constant():
+    """Minor 8 of fix round 1: every fixture in this file declares the same
+    attribute name (`"sampling_weight"`, via `_weighted_contrast_block`'s own
+    `setdefault`), so a production site that hardcoded that literal instead of
+    threading `weighted_by` through would pass every other test here silently.
+    A second name, distinct from the fixtures' default, is the only way to tell
+    "threaded" from "hardcoded" apart."""
+    weighted, _ = _weighted_contrast_block(
+        resample_columns=True, weights=_W_WEIGHTS, weighted_by="cohort_inverse_probability"
+    )
+    assert weighted["weighted_by"] == "cohort_inverse_probability"
 
 
 def test_kish_is_taken_over_the_paired_intersection_not_the_weight_mapping():

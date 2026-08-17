@@ -437,9 +437,17 @@ def weighted_cohens_dz(diffs: Sequence[float], weights: Sequence[Any]) -> float 
     both the mean and the variance divide the scale out.
 
     `None` below two differences and `None` at zero dispersion, the two refusals
-    `cohens_dz` carries, kept so the pair refuses the same inputs — and `None` for
-    a zero denominator, which is all the weight concentrated on one unit and the
-    same n − 1 = 0 fact the length guard answers.
+    `cohens_dz` carries, kept so the pair refuses the same inputs. `None` also
+    for a non-positive denominator — reachable not by concentrating all the
+    weight on one unit (`checked_weights` admits that; `Σw − Σw²/Σw` is still
+    strictly positive for two or more strictly positive weights, algebraically)
+    but by a **weight ratio wide enough that `Σw²/Σw` rounds to `Σw` in floating
+    point** — `weighted_cohens_dz([1.0, 2.0], [1e17, 1.0])`'s `Σw² / Σw` computes
+    to exactly `1e17`, indistinguishable from `Σw` at that magnitude, so the
+    subtraction is exactly `0.0` rather than merely small. Reporting no *d* for
+    an under-determined variance is the same honesty `t_over_units` already
+    practises below two values; inventing one from a denominator that has
+    rounded away is not.
 
     `weights` is annotated `Any` for the reason `weighted_t_over_units`' is: a
     weight is a unit attribute, `units._from_table` builds those from

@@ -796,12 +796,26 @@ def _comparison_step_blocks(
     a recorded column would be the asymmetry § Weighted samples' pairing of
     `weight_by` with `resample.stratify_by` exists to rule out.
 
+    Under a declared weight, a recorded column's `delta` is the weighted mean of
+    the differences and `cohens_d` is `weighted_cohens_dz(diffs, col_weights)` —
+    `col_weights` being the intersection's own weights, in `col_keys` order, so
+    the point estimate and the effect size can't disagree about which units were
+    weighted. A resampled column's interval additionally gets `method =
+    "weighted_paired_percentile_over_units"` in place of the unweighted spelling.
+    The entry also carries `weighted_by` (the attribute name) and
+    `n_paired_effective` (Kish's size over that same intersection) — § Contrasts
+    requires all four to move together. A derived metric is never weighted by
+    core (the weight column reaches `aggregate` as a unit attribute instead, so a
+    template weights its own metric if it needs to), which is why its `method`
+    and `cohens_d: None` stay the unweighted spellings under a declared weight —
+    but `weighted_by` and `n_paired_effective` still travel beside it, the same
+    arrangement a weighted condition gets from `summarize_step`.
+
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
-    is set **and the pairing has at least two units**, when it instead takes
-    `paired_percentile_of_derived` over its own column mean, the same
-    construction a derived metric uses, while `cohens_d`
-    keeps computing from the local `diffs` list regardless. A derived metric — one
+    differences unless `resample_columns` is set **and the pairing has at least
+    two units**, when it instead takes `paired_percentile_of_derived` over its
+    own column mean, the same construction a derived metric uses. A derived
+    metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
     over `base_keys`: the point estimate is `aggregate` evaluated on each side
@@ -1027,11 +1041,12 @@ def _comparison_step_blocks(
                 else:
                     interval = paired_t_over_units(diffs)
                 metric_block[metric_key] = {
-                    # The mean of the per-unit differences over `col_keys` — the
-                    # same unit set the interval is drawn from, and identical to
-                    # the difference of the two column means over that set, so
-                    # the point estimate and the pool cannot drift onto
-                    # different rosters.
+                    # The (weighted, when `col_weights` is not `None`) mean of
+                    # the per-unit differences over `col_keys` — the same unit
+                    # set the interval is drawn from, and identical to the
+                    # difference of the two column means over that set, so the
+                    # point estimate and the pool cannot drift onto different
+                    # rosters.
                     "delta": (
                         mean_of(diffs)
                         if col_weights is None
@@ -1061,12 +1076,11 @@ def _comparison_step_blocks(
             # weight is declared, the same absent-not-null shape `weighted_by`
             # already has per condition.
             #
-            # **Kish is over the PAIRED INTERSECTION**, whose weights are
-            # `entry_weights` below, not over the roster-wide mapping `weights`
-            # holds: under a declared `holdout` the collapsed table is the test
-            # partition alone, and the size reported beside an interval has to be
-            # the size the interval was computed at. Summing the mapping is the
-            # natural implementation and the wrong one.
+            # **Kish is over the PAIRED INTERSECTION**, not over the roster-wide
+            # mapping `weights` holds: under a declared `holdout` the collapsed
+            # table is the test partition alone, and the size reported beside an
+            # interval has to be the size the interval was computed at. Summing
+            # the mapping is the natural implementation and the wrong one.
             if weights is not None:
                 metric_block[metric_key]["weighted_by"] = weighted_by
                 metric_block[metric_key]["n_paired_effective"] = kish_effective_n(

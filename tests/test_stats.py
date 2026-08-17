@@ -4045,10 +4045,20 @@ def test_a_weighted_dz_at_equal_weights_is_the_unweighted_one():
 
 def test_a_weighted_dz_refuses_the_degenerate_shapes_the_unweighted_one_does():
     """`None` below two differences, and `None` at zero dispersion — the two
-    refusals `cohens_dz` carries, kept so the pair refuses the same inputs. Plus
-    the one the weights add: a denominator of zero, which is all the weight on one
-    unit, is the same n − 1 = 0 fact the length guard answers."""
+    refusals `cohens_dz` carries, kept so the pair refuses the same inputs.
+
+    Plus the one the weights add: a non-positive denominator. It is NOT
+    reachable by concentrating all the weight on one unit — `Σw − Σw²/Σw` for
+    two or more strictly positive weights is algebraically positive, and a
+    fixture that only probed `[1, 0]` (refused earlier, by `checked_weights`)
+    would wrongly generalize that no fixture reaches this line. It IS reachable
+    by a weight ratio wide enough that `Σw²/Σw` rounds to `Σw` in floating
+    point: `[1e17, 1.0]` computes a denominator of exactly `0.0`, verified
+    directly below rather than only through the `None` it produces."""
     from publishable.stats import weighted_cohens_dz
 
     assert weighted_cohens_dz([1.0], [1]) is None
     assert weighted_cohens_dz([2.0, 2.0], [1, 3]) is None
+    total = 1e17 + 1.0
+    assert total - (1e17 * 1e17 + 1.0) / total == 0.0
+    assert weighted_cohens_dz([1.0, 2.0], [1e17, 1.0]) is None
