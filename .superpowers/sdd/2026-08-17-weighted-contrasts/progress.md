@@ -107,3 +107,26 @@ unconditionally on `resample_columns`. **A failing test edited to match the code
 falsified assertion look identical from the diff**, so the reviewer decides which this is. (2) Task
 8's brief omitted the `weighted_by` keyword its own assertion needs — verified empirically to return
 `None` without it.
+
+### Tasks 6-8 — task review: spec compliance PASS, four quality Majors, fix round 1 dispatched
+
+Review at `task-6-8-review.md`. **No wrong arithmetic shipped** — the controller's fixture figures
+(6.0/8.0, 1.3416.../2.0, 6 versus 4.8) are present exactly, and the second fixture separates all
+three Kish readings. Every Major is a missing pin or a false sentence.
+
+**Adjudicated for the implementer:** the task-6 amendment from 6.0 to 8.0 is **legitimate**, not a
+failing test edited to fit code — task 7's brief prescribes the unconditional weighted `delta` in
+both prose and snippet, and the amended assertion is now the only pin on the weighted delta at
+`resample_columns=False`.
+
+**The finding worth carrying past this slice — Major 2.** The implementer recorded two production
+sites as unpinnable because `E-DATA-WEIGHT-CONTRAST` blocks them. It does not: the emit at
+`validate.py:5020` is gated on `weight_by`, so an **unweighted** `stratify_by` config with a sweep
+validates and runs **today**. Two compounding errors in one claim — inferring "this path does not
+run" from "this config is refused" (`CLAUDE.md` names it, and this is now the **fourth** reader to
+make it), and offering **`-k`-filtered output as evidence of silence**, which is the filter-the-output
+trap in a new dress: a check whose job is to detect something was narrowed until it detected nothing.
+
+Also: a branch the report called "structurally unreachable" is reachable with two legal weights
+(`weighted_cohens_dz([1.0, 2.0], [1e17, 1.0])` → denominator exactly 0.0), asserted in **two**
+docstrings with no test behind it.
