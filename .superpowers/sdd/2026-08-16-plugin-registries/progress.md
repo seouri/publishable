@@ -88,3 +88,30 @@ Task 7: reviewed (opus). Both verdicts PASS after the reviewer closed two gaps i
   `load()` is the sole `import_module` site, `.dist` is stamped by `_for`, `.name`/`.value`/`.group` are
   instance vars, and `Distribution.name`/`.version` parse METADATA. No shipped path imports.
 Task 7: complete at 46e62d2 / c909080. 2006 passed + 2 xfailed; gates clean.
+
+Tasks 8-11: BATCHED (all build on task 7's scan, all touch `registry.py`/`validate.py`). Committed
+  separately 0b5e909..69458c3. 2018 passed + 2 xfailed.
+  FOUR brief/code disagreements, all caught before the tests were trusted. The one that mattered:
+  **task 9's prescribed code called `_claims` a SECOND time**, breaking two pinned regressions — one of
+  which exists to prove a second import can raise and destroy every finding. Reworked to one `_claims()`
+  per `validate_config`, and a monkeypatch aimed at `resolve_template` was rerouted, which `validate.py`
+  no longer imports.
+Tasks 8-11: reviewed (opus), eight verdicts. **One CRITICAL blocked.**
+  C1: `generate_experiment` still raised `E-TEMPLATE-UNKNOWN` for an installed-only name — the exact
+  claim spec correction 1 calls FALSE — and the reviewer probed a message contradicting itself in one
+  string: the name "which no template registers" listed among the known ones. Task 9 minted
+  `E-TEMPLATE-INSTALLED-UNSUPPORTED` for this and closed only the `validate` surface.
+  Ruling on the fix's shape: the second surface was closed by extracting a SHARED
+  `installed_template_message`, not by duplicating the branch — the duplication is what produced the
+  divergence in the first place. And `resolve_template` was DELETED rather than left with a docstring
+  whose premise ("the two callers need both halves") had stopped being true.
+  I1 and I2 were both "the reader is unpinned": reversing the provider sort left the full suite green,
+  and reverting `type(template).version` to the module constant did too. Both closed with mutations.
+  The fix agent caught its OWN non-discriminating mutation mid-round — `list(...)[::-1]` coincidentally
+  equals sorted order for a two-element fixture — and switched to plain insertion order. That is the
+  eighth blind mutation across four slices and the second caught by the agent proposing it.
+  The no-import caveat was ACTED ON rather than filed: the guarantee had been pinned at `scan_group`
+  only, and below that merely by fixture targets being unimportable — so tasks 13 or 15 making one
+  importable would have silently retired it. Now asserted at `get_template` with a genuinely importable
+  fixture.
+Tasks 8-11: fix round. Commit 3f477de. All six closed. 2021 passed + 2 xfailed; gates clean.

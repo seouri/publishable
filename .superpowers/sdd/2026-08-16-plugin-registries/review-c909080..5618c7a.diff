@@ -1,0 +1,2164 @@
+# Review package: c909080..5618c7a
+
+## Commits
+5618c7a docs: task 8-11 report — record the four commit shas and mutation findings
+69458c3 feat: an unresolved experiment_type names the plugin the config points at
+78b6276 feat: a template reports its own version, and W-TEMPLATE-VERSION compares against it
+6e223d4 feat: template provenance is three-valued at the merge, and an installed name is known but unloaded
+0b5e909 feat: the template collision matrix over three sources, decided from metadata
+c7273b2 docs: task 7 ledger — a test that named the invariant and measured something adjacent
+
+## Files changed
+ .../sdd/2026-08-16-plugin-registries/progress.md   |  27 ++
+ .../review-1a0570b..e744b44.diff                   | 414 +++++++++++++++++++++
+ .../2026-08-16-plugin-registries/task-7-brief.md   | 334 +++++++++++++++++
+ .../task-8-11-report.md                            | 142 +++++++
+ docs/reference.md                                  |  11 +-
+ docs/superpowers/spec-defects.md                   |  40 ++
+ src/publishable/generators/experiment.py           |   2 +-
+ src/publishable/generators/template.py             |  21 +-
+ src/publishable/materialize.py                     |   5 +-
+ src/publishable/templates/base.py                  |   6 +
+ src/publishable/templates/builtin/generic.py       |   2 +
+ src/publishable/templates/registry.py              | 127 +++++--
+ src/publishable/validate.py                        | 102 +++--
+ tests/test_templates.py                            | 163 +++++++-
+ tests/test_validate.py                             |  94 ++++-
+ 15 files changed, 1423 insertions(+), 67 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-16-plugin-registries/progress.md b/.superpowers/sdd/2026-08-16-plugin-registries/progress.md
+index 657959d..e32827d 100644
+--- a/.superpowers/sdd/2026-08-16-plugin-registries/progress.md
++++ b/.superpowers/sdd/2026-08-16-plugin-registries/progress.md
+@@ -54,10 +54,37 @@ Tasks 1-6: reviewed (opus), twelve verdicts. **Tasks 2 and 3 FAILED spec complia
+   (`grep -c "Not yet emitted"` is 3, and `E-PROBE-UNKNOWN` carries none), which makes the real line
+   coherent — codes this slice emits go unmarked, codes only Part B emits are marked. The exception was
+   I4's two, which are further from emission than the marked rows and asserted their call sites flatly.
+   A report's framing of an inconsistency is a claim too.
+   I3: three more stale count phrases, replaced by naming the set rather than by writing the new number —
+   the fourth such replacement across three slices.
+   Disclosure gap (a) closed here: `CLAUDE.md` said "keep the registered artifacts to the **four**
+   registries" and task 3 minted a fifth. **`CLAUDE.md` names itself in the consistency sweep regardless
+   of a brief's file list**, which is why this was task 3's rather than a later sweep's.
+ Tasks 1-6: fix round. Commit 24a56ff. All thirteen closed. 2000 passed + 2 xfailed; gates clean.
++
++Task 7: implemented at 9d28200 / e744b44 — the entry-point METADATA scan over five groups, and the
++  installed-distribution fixture neither prior document budgeted. 2006 passed + 2 xfailed.
++  The implementer confirmed the invariant by an independent script OUTSIDE pytest — snapshotting
++  `sys.modules` around the scan and then calling `.load()` to show it would have imported. It also
++  found brief mutation (c) NON-DISCRIMINATING (the fixture's values sort the same way its providers do)
++  and reverted it rather than altering a verbatim test. Seventh blind mutation caught across four
++  slices, and the first caught by an implementer rather than a reviewer.
++Task 7: reviewed (opus). Both verdicts PASS after the reviewer closed two gaps in place. `plugins.py`
++  itself was correct throughout — **the tests could not see it change.**
++  **C1: `test_the_scan_imports_nothing` could not fail on the guarantee its own name states.** Its
++  target was `no_such_module`, so it caught a load only if the exception ESCAPED — wrapping the scan's
++  loop in `try: ep.load() except Exception: pass` left all six green. The test named the invariant and
++  measured something adjacent to it. Closed: the target now genuinely imports, the assertion is its
++  absence from `sys.modules`, and the trailing `.load()` became the positive control.
++  I1 is sharper than the implementer's own finding: claimant order was pinned by NOTHING — **deleting
++  the inner sort entirely also passed**, because `syspath_prepend` made walk order equal provider order.
++  Ruling on where that belonged: closed in task 7, not routed to task 8. "Claimants in provider order"
++  is `scan_group`'s own shipped docstring claim and `scan_group` is task 7's deliverable; task 8 asserts
++  on message text and would not pin this list's order even incidentally. And "the tests are verbatim
++  from the brief" is not a spec constraint — the brief's own mutation argued from a fixture property
++  that does not hold, so repairing the fixture IS the brief's stated methodology. The implementer was
++  right to refuse to change the CODE; changing the fixture cost nothing.
++  The reviewer also attacked the no-import invariant against CPython 3.13.7 source rather than assuming:
++  `load()` is the sole `import_module` site, `.dist` is stamped by `_for`, `.name`/`.value`/`.group` are
++  instance vars, and `Distribution.name`/`.version` parse METADATA. No shipped path imports.
++Task 7: complete at 46e62d2 / c909080. 2006 passed + 2 xfailed; gates clean.
+diff --git a/.superpowers/sdd/2026-08-16-plugin-registries/review-1a0570b..e744b44.diff b/.superpowers/sdd/2026-08-16-plugin-registries/review-1a0570b..e744b44.diff
+new file mode 100644
+index 0000000..323409c
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-plugin-registries/review-1a0570b..e744b44.diff
+@@ -0,0 +1,414 @@
++# Review package: 1a0570b..e744b44
++
++## Commits
++e744b44 docs: task 7 report — record the commit sha
++9d28200 feat: the entry-point metadata scan, five groups, and no .load()
++
++## Files changed
++ .../2026-08-16-plugin-registries/task-7-report.md  | 119 +++++++++++++++++++++
++ docs/reference.md                                  |   2 +-
++ src/publishable/plugins.py                         |  67 ++++++++++++
++ tests/conftest.py                                  |  51 +++++++++
++ tests/test_plugins.py                              |  91 ++++++++++++++++
++ 5 files changed, 329 insertions(+), 1 deletion(-)
++
++## Diff
++diff --git a/.superpowers/sdd/2026-08-16-plugin-registries/task-7-report.md b/.superpowers/sdd/2026-08-16-plugin-registries/task-7-report.md
++new file mode 100644
++index 0000000..4edd96f
++--- /dev/null
+++++ b/.superpowers/sdd/2026-08-16-plugin-registries/task-7-report.md
++@@ -0,0 +1,119 @@
+++# Task 7 report — the entry-point metadata scan, five groups, no `.load()`
+++
+++**Status:** done.
+++
+++**Commit:** `9d28200` — `feat: the entry-point metadata scan, five groups, and no .load()`
+++
+++**Test summary:** `uv run pytest -q` → **2006 passed, 2 xfailed** (2000 + 2 xfailed baseline + 6 new
+++tests in `tests/test_plugins.py`). `uv run mypy` clean over 44 source files, no `[[tool.mypy.overrides]]`
+++needed — `EntryPoint`/`EntryPoints` are typed in the stdlib as the brief anticipated. `uv run ruff check .`
+++and `uv run ruff format --check .` both clean (78 files formatted, up from the stated baseline of 76 —
+++the two new files).
+++
+++## Files
+++
+++- Created `src/publishable/plugins.py` — `GROUPS`, `scan_group`, `provider_of`, `names`, verbatim from
+++  the brief.
+++- Created `tests/test_plugins.py` — six tests, verbatim from the brief.
+++- Modified `tests/conftest.py` — added `import importlib` to the existing import block, appended the
+++  `_DIST_METADATA` constant and the `installed` fixture, verbatim from the brief, at the end of the
+++  file (not autouse, requested by name).
+++- Modified `docs/reference.md` § Package layout — removed `— not yet built` from the `plugins.py` tree
+++  line.
+++- Restored `.superpowers/sdd/.gitignore` — `scripts/task-brief` had clobbered it to a bare `*` before
+++  this task started (per CLAUDE.md's documented hazard); restored to its tracked content with
+++  `git checkout --` (safe here: reverting a tracked file to HEAD, not destroying uncommitted work).
+++
+++## The invariant: confirmed by direct probe that the scan imports nothing
+++
+++Ran a standalone script (outside pytest, so no fixture machinery could be laundering the answer):
+++installed a real `dist-info` directory whose one entry point is `plate_wells = no_such_module:resolve`,
+++prepended it to `sys.path`, called `importlib.invalidate_caches()`, snapshotted `sys.modules` before and
+++after `from publishable.plugins import scan_group; scan_group("publishable.resolvers")`.
+++
+++Result: the only modules newly present in `sys.modules` were stdlib (`importlib.metadata._adapters`,
+++`email.*`, `csv`, `hashlib`, etc. — `importlib.metadata`'s own machinery for parsing `METADATA`) and
+++`publishable`'s own package (`publishable`, `publishable.plugins`, `publishable.units`,
+++`publishable.templates.*`, etc. — the ordinary cost of `import publishable.plugins` pulling in the
+++package `__init__.py`). **`no_such_module` never appeared**, and a subsequent
+++`found["plate_wells"][0].load()` raised `ModuleNotFoundError: No module named 'no_such_module'` —
+++proof the entry point was returned unresolved. `test_the_scan_imports_nothing` in the committed suite
+++asserts the same thing inside pytest; the standalone script is the independent check that no test
+++fixture (autouse `_restore_environ`, `monkeypatch.syspath_prepend`, etc.) was masking an import.
+++
+++## Mutations run
+++
+++All three from Step 7, each reverted by hand-editing the file back (never `git checkout --` on
+++`plugins.py`), `__pycache__` cleared before each run, green re-confirmed by re-running (not by
+++`git status`).
+++
+++**(a) Walk order instead of name order** — changed `scan_group`'s return to
+++`{name: found[name] for name in found}`.
+++Ran `tests/test_plugins.py` → **`test_names_are_sorted_and_the_sort_is_not_the_install_order` FAILED**
+++(`AssertionError: assert ['zz_first', ... 'mm_third'] == ['aa_second', ... 'zz_first']`), 5 passed.
+++Matches the brief exactly: the three-name fixture (`zz_first`, `aa_second`, `mm_third`, declared in
+++that order) is neither sorted nor reverse-sorted, so the mutant's walk-order output diverges from the
+++asserted sorted list under either reading. Reverted; re-ran; 6 passed.
+++
+++**(b) One claimant per name** — changed the accumulation to `found[ep.name] = [ep]`.
+++Ran `tests/test_plugins.py` → **`test_two_distributions_claiming_one_name_both_arrive` FAILED**
+++(`assert ['dist-two 2.0'] == ['dist-one 1.0', 'dist-two 2.0']` — the mutant kept only the
+++second-installed claimant), 5 passed. Matches the brief. Reverted; re-ran; 6 passed.
+++
+++**(c) Sort claimants by `ep.value` instead of `provider_of`** — changed the inner sort key to
+++`lambda ep: ep.value`.
+++Ran `tests/test_plugins.py` → **all 6 passed. The brief's prediction is wrong; see below.** Reverted
+++anyway (the shipped code sorts by `provider_of`, per the brief's Step 3 implementation, unaffected by
+++this finding); re-ran; 6 passed.
+++
+++## Disagreement with the brief: mutation (c) does not discriminate
+++
+++The brief argues mutation (c) must fail `test_two_distributions_claiming_one_name_both_arrive` because
+++"the fixture's values are `pkg_two.r:resolve` and `pkg_one.r:resolve`, whose sort order is the reverse
+++of the providers' (`dist-one 1.0` before `dist-two 2.0`)."
+++
+++That's incorrect. The test installs `dist-two` (value `pkg_two.r:resolve`) first, then `dist-one`
+++(value `pkg_one.r:resolve`). Sorting the two entry points by `.value` lexicographically gives
+++`pkg_one.r:resolve` before `pkg_two.r:resolve` — i.e. `dist-one`'s entry point first, `dist-two`'s
+++second. Sorting by `provider_of` (`"dist-one 1.0"` before `"dist-two 2.0"`) gives the **same** order.
+++The two sort keys are not opposed here; they agree, because `pkg_one` < `pkg_two` and `dist-one` <
+++`dist-two` alphabetically track each other. So mutation (c) is silently absorbed by this test — I
+++verified it directly (`uv run pytest tests/test_plugins.py -v` showed all 6 green with the mutation
+++applied).
+++
+++Per the brief's own methodology ("checked against the test body" for every prescribed mutation), this
+++one fails that check: no test in the file distinguishes "sort by provider" from "sort by entry-point
+++value" for this fixture. I did not add a new test or change the values, since the task's tests are
+++specified verbatim and mutation (c) not discriminating doesn't make the shipped implementation wrong
+++(it still sorts by `provider_of`, matching the module's docstring and § the brief's Step 3 code) — it
+++just means this particular assertion set has a live gap where a `sorted(..., key=ep.value)` regression
+++would go unnoticed. Filing this as a fact about the test suite, not fixing it, since Step 8 of the
+++brief already names one comparable gap ("nothing catches a caller that loads") and the brief's own
+++convention is that gaps get named rather than silently patched over by the task that finds them.
+++
+++## What no mutation reaches (Step 8, restated, plus the one above)
+++
+++- `GROUPS`' membership is pinned only by a set-equality test against a literal; a group added to both
+++  the tuple and the test in one edit would pass silently. Unavoidable for a constant.
+++- `provider_of`'s `dist is None` branch (`# pragma: no cover`) is unreachable through `entry_points()`
+++  and nothing exercises it.
+++- The no-`.load()` guarantee is pinned only for `scan_group` itself by `test_the_scan_imports_nothing`;
+++  no test here would catch a caller added later (task 8+) that calls `.load()`.
+++- **New finding:** the sort-key mutation (c) is not caught by any test in this file — see above. The
+++  provider-vs-value ordering only diverges when a distribution's name and its entry-point target
+++  string sort in different relative orders, which this fixture's values don't produce.
+++
+++## Other brief/spec vs. code notes
+++
+++- Format baseline: brief says "76 files, 0 to reformat" before this task's tests; confirmed — after
+++  adding the two new files, `ruff format --check .` reports 78 files, still 0 to reformat, consistent.
+++- Test count baseline: brief says "2000 passed + 2 xfailed" before this task; confirmed exactly, and
+++  2006 + 2 xfailed after (6 new tests, no regressions).
+++- No mypy override was needed, as the brief's own "probed... and it is" claim anticipated; not
+++  contradicted.
+++- The `.superpowers/sdd/.gitignore` clobber CLAUDE.md documents was present at the start of this task's
+++  session (visible in `git status` before any of my edits) — restored per that document's instructions,
+++  unrelated to this task's deliverable but noted since CLAUDE.md asks it be restored "when you notice."
+++
+++No other disagreement between the brief/spec and the code found. The five-group count, the fixture
+++layout, the mypy typing, and the two already-passing mutations all matched the brief exactly.
++diff --git a/docs/reference.md b/docs/reference.md
++index 224dd5a..0e94c9e 100644
++--- a/docs/reference.md
+++++ b/docs/reference.md
++@@ -3621,21 +3621,21 @@ publishable/
++ │   ├── contrasts.py           # vs_baseline and declared statistics.contrasts, resolved to comparisons
++ │   ├── correction.py          # correction families: ranking, holm/bonferroni levels, corrected bounds
++ │   ├── estimate.py            # Estimate: an interval a summary step computed itself
++ │   ├── strata.py              # statistics.report_by: stratum levels off the roster
++ │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
++ │   ├── hashes.py              # code_hash (src/** + templates/**), parameters_hash, digest
++ │   ├── config.py              # load + dot-access Config
++ │   ├── run_record.py          # run.yaml assembly; Estimate storage and attribution
++ │   ├── provenance.py          # git discovery (user repo), uv env capture
++ │   ├── manifest.py            # input_dir manifest build/verify, policies
++-│   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries — not yet built
+++│   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries
++ │   ├── apparatus.py           # probe registry, per-condition facts, change gate — not yet built
++ │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
++ │   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance)
++ │   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built
++ │   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery — not yet built
++ │   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
++ │   └── templates/{base.py,registry.py,discovery.py,builtin/generic.py}
++ ├── tests/
++ ├── examples/generic/
++ └── pyproject.toml
++diff --git a/src/publishable/plugins.py b/src/publishable/plugins.py
++new file mode 100644
++index 0000000..f466365
++--- /dev/null
+++++ b/src/publishable/plugins.py
++@@ -0,0 +1,67 @@
+++"""Entry-point discovery for the registries a plugin declares.
+++
+++docs/reference.md § Creating a plugin. Every name a config can write for a
+++plugin artifact resolves through this module, and it resolves from **package
+++metadata**: nothing here calls `EntryPoint.load()`, and nothing that calls this
+++module may either. That is not a performance choice. § Creating a plugin
+++justifies the whole entry-point mechanism by `validate` being able to answer
+++"no installed package registers `plate_wells`" without importing a line of that
+++package, and `validate` is documented as creating nothing and reaching nothing
+++off the machine. A check that reaches for the object behind a name has changed
+++the guarantee whatever it returns.
+++
+++The cost of that, stated rather than discovered: a claim read from metadata is a
+++name and a provider and nothing else. A refusal computed from it therefore has
+++no class to interrogate — no `parameter_spec`, no `required_env` — which is why
+++a plugin-side collision cannot redact a credential the way a project-local one
+++can. See `templates/registry.py` and § Creating a plugin for that residual.
+++
+++Templates are scanned through here like everything else, but they are *merged*
+++in `templates/registry.py`, because a template name has a second home — a
+++project's own `templates/` — and the merge is the one place holding all three
+++sources at once.
+++"""
+++
+++from importlib.metadata import EntryPoint, entry_points
+++
+++GROUPS = (
+++    "publishable.templates",
+++    "publishable.resolvers",
+++    "publishable.probes",
+++    "publishable.writers",
+++    "publishable.readers",
+++)
+++"""Every entry-point group core reads, one per registry § Creating a plugin declares."""
+++
+++
+++def provider_of(ep: EntryPoint) -> str:
+++    """What a reader uninstalls or pins, which is a distribution rather than a module.
+++
+++    Falls back to the entry point's own target only when `entry_points()` handed
+++    back an unattached object, which its own construction does not produce — kept
+++    so a message can never interpolate `None`.
+++    """
+++    dist = ep.dist
+++    if dist is None:  # pragma: no cover - entry_points() always attaches one
+++        return ep.value
+++    return f"{dist.name} {dist.version}"
+++
+++
+++def scan_group(group: str) -> dict[str, list[EntryPoint]]:
+++    """Every claim on every key in `group`, keyed by the key a config writes.
+++
+++    A list per key rather than a single entry point, because two installed
+++    distributions claiming one key is a fault to *report* — naming both — rather
+++    than one to resolve by whichever the scan walked first. Keys come back in
+++    name order and claimants in provider order for the same reason: install order
+++    is a property of a machine, so it may not decide what a message says either.
+++    """
+++    found: dict[str, list[EntryPoint]] = {}
+++    for ep in entry_points(group=group):
+++        found.setdefault(ep.name, []).append(ep)
+++    return {name: sorted(found[name], key=provider_of) for name in sorted(found)}
+++
+++
+++def names(group: str) -> list[str]:
+++    """The keys `group` registers, in name order."""
+++    return list(scan_group(group))
++diff --git a/tests/conftest.py b/tests/conftest.py
++index 4178235..802c05e 100644
++--- a/tests/conftest.py
+++++ b/tests/conftest.py
++@@ -1,10 +1,11 @@
+++import importlib
++ import os
++ import subprocess
++ from pathlib import Path
++ 
++ import pytest
++ 
++ 
++ @pytest.fixture(autouse=True)
++ def _restore_environ():
++     """Restore `os.environ` around every test in the suite.
++@@ -69,10 +70,60 @@ def git_repo(tmp_path: Path) -> Path:
++     repo = tmp_path / "repo"
++     (repo / "src").mkdir(parents=True)
++     (repo / "src" / "placeholder.py").write_text("# placeholder\n")
++     write_experiment_module(repo)  # committed, so the tree stays clean
++     git("init", "-q", cwd=repo)
++     git("config", "user.email", "test@example.com", cwd=repo)
++     git("config", "user.name", "Test", cwd=repo)
++     git("add", ".", cwd=repo)
++     git("-c", "commit.gpgsign=false", "commit", "-qm", "initial", cwd=repo)
++     return repo
+++
+++
+++_DIST_METADATA = """\
+++Metadata-Version: 2.1
+++Name: {name}
+++Version: {version}
+++"""
+++
+++
+++@pytest.fixture
+++def installed(tmp_path: Path, monkeypatch):
+++    """Write a real installed distribution and put it where `importlib.metadata` looks.
+++
+++    A `<name>-<version>.dist-info/` holding `METADATA` and `entry_points.txt` is
+++    exactly what `uv` and `pip` write, and `importlib.metadata` finds a
+++    distribution by scanning each `sys.path` entry for one — so this exercises
+++    the real discovery path rather than a patch of `entry_points`. What it does
+++    not exercise is a build backend turning a `pyproject.toml` entry-points table
+++    into `entry_points.txt`; core reads no `pyproject.toml`, so that translation
+++    is outside anything a test here could pin.
+++
+++    Each call gets its own directory. `importlib.metadata`'s path cache is keyed
+++    on a directory and its mtime, so adding a second `.dist-info` to a directory
+++    already scanned in the same test can be served from cache; two distributions
+++    therefore means two calls and two directories.
+++
+++    A plain fixture rather than an autouse one, and requested by name:
+++    `monkeypatch.syspath_prepend` already restores `sys.path` per test, and the
+++    environ fixture above is the only autouse fixture this suite has.
+++    """
+++    made = 0
+++
+++    def _install(dist_name: str, version: str, groups: dict[str, dict[str, str]]) -> Path:
+++        nonlocal made
+++        made += 1
+++        site = tmp_path / f"site{made}"
+++        info = site / f"{dist_name.replace('-', '_')}-{version}.dist-info"
+++        info.mkdir(parents=True)
+++        (info / "METADATA").write_text(_DIST_METADATA.format(name=dist_name, version=version))
+++        (info / "entry_points.txt").write_text(
+++            "".join(
+++                f"[{group}]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()) + "\n"
+++                for group, entries in groups.items()
+++            )
+++        )
+++        monkeypatch.syspath_prepend(str(site))
+++        importlib.invalidate_caches()
+++        return site
+++
+++    return _install
++diff --git a/tests/test_plugins.py b/tests/test_plugins.py
++new file mode 100644
++index 0000000..0cf470f
++--- /dev/null
+++++ b/tests/test_plugins.py
++@@ -0,0 +1,91 @@
+++# tests/test_plugins.py
+++import pytest
+++
+++from publishable.plugins import GROUPS, names, provider_of, scan_group
+++
+++
+++def test_the_groups_core_reads_are_the_five_the_document_declares():
+++    """Named rather than counted: `reference.md` § Creating a plugin shows one
+++    `[project.entry-points."publishable.*"]` block per registry."""
+++    assert set(GROUPS) == {
+++        "publishable.templates",
+++        "publishable.resolvers",
+++        "publishable.probes",
+++        "publishable.writers",
+++        "publishable.readers",
+++    }
+++
+++
+++def test_an_absent_group_is_empty_and_a_present_one_is_not(installed):
+++    """The control and its positive companion in one test: an empty answer proves
+++    nothing on a machine where no plugin is installed, so the same call must
+++    return something once a distribution declares it."""
+++    assert scan_group("publishable.resolvers") == {}
+++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"}})
+++    found = scan_group("publishable.resolvers")
+++    assert list(found) == ["plate_wells"]
+++    assert found["plate_wells"][0].value == "pkg_one.r:resolve"
+++
+++
+++def test_a_scan_selects_its_own_group_only(installed):
+++    installed(
+++        "dist-one",
+++        "1.0",
+++        {
+++            "publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"},
+++            "publishable.probes": {"assay_instrument": "pkg_one.p:probe"},
+++            "console_scripts": {"whatever": "pkg_one.cli:main"},
+++        },
+++    )
+++    assert list(scan_group("publishable.resolvers")) == ["plate_wells"]
+++    assert list(scan_group("publishable.probes")) == ["assay_instrument"]
+++    assert scan_group("publishable.writers") == {}
+++
+++
+++def test_two_distributions_claiming_one_name_both_arrive(installed):
+++    """The metadata scan reports every claimant; deciding between them is the
+++    collision check's job and not this function's. Two distributions, because one
+++    cannot produce this arrangement at all."""
+++    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "pkg_two.r:resolve"}})
+++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"}})
+++    providers = [provider_of(ep) for ep in scan_group("publishable.resolvers")["plate_wells"]]
+++    assert providers == ["dist-one 1.0", "dist-two 2.0"]
+++
+++
+++def test_names_are_sorted_and_the_sort_is_not_the_install_order(installed):
+++    """`zz_first` is installed first and sorts last; `aa_second` is installed
+++    second and sorts first. Two names in one arrangement cannot tell sorted order
+++    from insertion order — with two, the reverse of insertion IS sorted for one
+++    arrangement — so three names are declared and their install order is neither
+++    sorted nor reverse-sorted.
+++    """
+++    installed(
+++        "dist-order",
+++        "1.0",
+++        {
+++            "publishable.resolvers": {
+++                "zz_first": "pkg.r:a",
+++                "aa_second": "pkg.r:b",
+++                "mm_third": "pkg.r:c",
+++            }
+++        },
+++    )
+++    assert names("publishable.resolvers") == ["aa_second", "mm_third", "zz_first"]
+++
+++
+++def test_the_scan_imports_nothing(installed, monkeypatch):
+++    """The whole argument for entry points, asserted rather than described.
+++
+++    The entry point points at a module that does not exist, so any `.load()` —
+++    core's or a caller's — raises `ModuleNotFoundError`. The scan returning
+++    normally is the proof, and the second half proves the fixture could have
+++    caught one: calling `.load()` on the very object the scan returned raises.
+++    """
+++    installed(
+++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_such_module:resolve"}}
+++    )
+++    found = scan_group("publishable.resolvers")
+++    assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
+++
+++    with pytest.raises(ModuleNotFoundError):
+++        found["plate_wells"][0].load()
+diff --git a/.superpowers/sdd/2026-08-16-plugin-registries/task-7-brief.md b/.superpowers/sdd/2026-08-16-plugin-registries/task-7-brief.md
+new file mode 100644
+index 0000000..45fbaa9
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-plugin-registries/task-7-brief.md
+@@ -0,0 +1,334 @@
++## Task 7: The entry-point metadata scan, five groups, no `.load()`
++
++**Files:** Create `src/publishable/plugins.py`, `tests/test_plugins.py`. Modify `tests/conftest.py`,
++`docs/reference.md` (§ Package layout's marker, deferred from task 4).
++
++**Interfaces:**
++- Consumes: `importlib.metadata.entry_points(group: str) -> EntryPoints` — the 3.10+ selection API,
++  read from the stdlib; `EntryPoint` carries `.name`, `.value`, `.group` and `.dist`, where `.dist`
++  is a `Distribution | None` carrying `.name` and `.version`. **`EntryPoint.load()` exists and is
++  never called by this module.**
++- Produces, consumed by tasks 8, 9, 11, 13, 14, 15, 16, 17 and 20:
++  - `GROUPS: tuple[str, ...]` — every entry-point group core reads.
++  - `scan_group(group: str) -> dict[str, list[EntryPoint]]` — keys sorted by name, providers within
++    a key sorted by provider string. **Metadata only.**
++  - `provider_of(ep: EntryPoint) -> str` — `"<distribution> <version>"`, the string every collision
++    message names a claimant by.
++  - `names(group: str) -> list[str]` — sorted keys of `scan_group(group)`.
++
++**The guarantee this module exists to keep, stated once.** § Creating a plugin justifies the entry
++point mechanism by "core resolves it from installed package metadata — so `validate` can answer 'no
++installed package registers `plate_wells`' without importing a line of that package". Decision 3
++states that invariant of **resolution**, not merely of the negative answer. So no function in this
++module calls `.load()`, and no caller added in Part A does either. A check that reaches for the
++object behind a name has changed the guarantee whatever it returns.
++
++**The fixture, and what it costs.** See Global Constraints for the full argument and the four
++mechanical rules. In short: a directory holding a hand-written `<name>-<version>.dist-info/` with
++`METADATA` and `entry_points.txt`, prepended to `sys.path` with `monkeypatch.syspath_prepend`, **is**
++an installed distribution to every API this module calls — that is the layout `uv` and `pip` write
++and the layout `importlib.metadata` scans for. It costs no build step, no network, no `slow` marker,
++no mutation of the project venv, and no new dependency in `pyproject.toml`. It does not exercise
++`hatchling` turning a `pyproject.toml` entry-points table into `entry_points.txt`; core reads no
++`pyproject.toml`, so that is outside anything a test here could pin, and it is named as a residual
++rather than left implicit.
++
++**The fixture goes in `tests/conftest.py`, not in `tests/test_plugins.py`.** Tasks 8, 13, 14, 15, 16
++and 17 all need it and three of them write in `tests/test_templates.py` and `tests/test_validate.py`;
++a fixture defined in one test module is not visible from another. **Names already at module level in
++`tests/conftest.py`:** `_restore_environ`, `git`, `EXPERIMENT_MODULE`, `write_experiment_module`,
++`git_repo`. `installed` and `_DIST_METADATA` are free. It is a **plain fixture requested by name**,
++never autouse — the suite already has the only autouse fixture it is allowed, and adding a second is
++forbidden by Global Constraints. `tests/test_conftest_helpers.py` imports `git` from this module and
++asserts on `git_repo`; it must stay green untouched.
++
++- [ ] **Step 1a: Add the fixture to `tests/conftest.py`.** Append:
++
++```python
++_DIST_METADATA = """\
++Metadata-Version: 2.1
++Name: {name}
++Version: {version}
++"""
++
++
++@pytest.fixture
++def installed(tmp_path: Path, monkeypatch):
++    """Write a real installed distribution and put it where `importlib.metadata` looks.
++
++    A `<name>-<version>.dist-info/` holding `METADATA` and `entry_points.txt` is
++    exactly what `uv` and `pip` write, and `importlib.metadata` finds a
++    distribution by scanning each `sys.path` entry for one — so this exercises
++    the real discovery path rather than a patch of `entry_points`. What it does
++    not exercise is a build backend turning a `pyproject.toml` entry-points table
++    into `entry_points.txt`; core reads no `pyproject.toml`, so that translation
++    is outside anything a test here could pin.
++
++    Each call gets its own directory. `importlib.metadata`'s path cache is keyed
++    on a directory and its mtime, so adding a second `.dist-info` to a directory
++    already scanned in the same test can be served from cache; two distributions
++    therefore means two calls and two directories.
++
++    A plain fixture rather than an autouse one, and requested by name:
++    `monkeypatch.syspath_prepend` already restores `sys.path` per test, and the
++    environ fixture above is the only autouse fixture this suite has.
++    """
++    made = 0
++
++    def _install(dist_name: str, version: str, groups: dict[str, dict[str, str]]) -> Path:
++        nonlocal made
++        made += 1
++        site = tmp_path / f"site{made}"
++        info = site / f"{dist_name.replace('-', '_')}-{version}.dist-info"
++        info.mkdir(parents=True)
++        (info / "METADATA").write_text(_DIST_METADATA.format(name=dist_name, version=version))
++        (info / "entry_points.txt").write_text(
++            "".join(
++                f"[{group}]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()) + "\n"
++                for group, entries in groups.items()
++            )
++        )
++        monkeypatch.syspath_prepend(str(site))
++        importlib.invalidate_caches()
++        return site
++
++    return _install
++```
++
++      and add `import importlib` to the file's existing import block (`os`, `subprocess`,
++      `pathlib.Path`, `pytest` today), keeping `ruff`'s `I` rule happy.
++
++- [ ] **Step 1b: Write the failing tests.** Create `tests/test_plugins.py`:
++
++```python
++# tests/test_plugins.py
++import pytest
++
++from publishable.plugins import GROUPS, names, provider_of, scan_group
++
++
++def test_the_groups_core_reads_are_the_five_the_document_declares():
++    """Named rather than counted: `reference.md` § Creating a plugin shows one
++    `[project.entry-points."publishable.*"]` block per registry."""
++    assert set(GROUPS) == {
++        "publishable.templates",
++        "publishable.resolvers",
++        "publishable.probes",
++        "publishable.writers",
++        "publishable.readers",
++    }
++
++
++def test_an_absent_group_is_empty_and_a_present_one_is_not(installed):
++    """The control and its positive companion in one test: an empty answer proves
++    nothing on a machine where no plugin is installed, so the same call must
++    return something once a distribution declares it."""
++    assert scan_group("publishable.resolvers") == {}
++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"}})
++    found = scan_group("publishable.resolvers")
++    assert list(found) == ["plate_wells"]
++    assert found["plate_wells"][0].value == "pkg_one.r:resolve"
++
++
++def test_a_scan_selects_its_own_group_only(installed):
++    installed(
++        "dist-one",
++        "1.0",
++        {
++            "publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"},
++            "publishable.probes": {"assay_instrument": "pkg_one.p:probe"},
++            "console_scripts": {"whatever": "pkg_one.cli:main"},
++        },
++    )
++    assert list(scan_group("publishable.resolvers")) == ["plate_wells"]
++    assert list(scan_group("publishable.probes")) == ["assay_instrument"]
++    assert scan_group("publishable.writers") == {}
++
++
++def test_two_distributions_claiming_one_name_both_arrive(installed):
++    """The metadata scan reports every claimant; deciding between them is the
++    collision check's job and not this function's. Two distributions, because one
++    cannot produce this arrangement at all."""
++    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "pkg_two.r:resolve"}})
++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"}})
++    providers = [provider_of(ep) for ep in scan_group("publishable.resolvers")["plate_wells"]]
++    assert providers == ["dist-one 1.0", "dist-two 2.0"]
++
++
++def test_names_are_sorted_and_the_sort_is_not_the_install_order(installed):
++    """`zz_first` is installed first and sorts last; `aa_second` is installed
++    second and sorts first. Two names in one arrangement cannot tell sorted order
++    from insertion order — with two, the reverse of insertion IS sorted for one
++    arrangement — so three names are declared and their install order is neither
++    sorted nor reverse-sorted.
++    """
++    installed(
++        "dist-order",
++        "1.0",
++        {
++            "publishable.resolvers": {
++                "zz_first": "pkg.r:a",
++                "aa_second": "pkg.r:b",
++                "mm_third": "pkg.r:c",
++            }
++        },
++    )
++    assert names("publishable.resolvers") == ["aa_second", "mm_third", "zz_first"]
++
++
++def test_the_scan_imports_nothing(installed, monkeypatch):
++    """The whole argument for entry points, asserted rather than described.
++
++    The entry point points at a module that does not exist, so any `.load()` —
++    core's or a caller's — raises `ModuleNotFoundError`. The scan returning
++    normally is the proof, and the second half proves the fixture could have
++    caught one: calling `.load()` on the very object the scan returned raises.
++    """
++    installed(
++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_such_module:resolve"}}
++    )
++    found = scan_group("publishable.resolvers")
++    assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
++
++    with pytest.raises(ModuleNotFoundError):
++        found["plate_wells"][0].load()
++```
++
++- [ ] **Step 2: Run and see it fail.** `uv run pytest tests/test_plugins.py -q` →
++      `ModuleNotFoundError: No module named 'publishable.plugins'`.
++
++- [ ] **Step 3: Implement.** Create `src/publishable/plugins.py`:
++
++```python
++"""Entry-point discovery for the registries a plugin declares.
++
++docs/reference.md § Creating a plugin. Every name a config can write for a
++plugin artifact resolves through this module, and it resolves from **package
++metadata**: nothing here calls `EntryPoint.load()`, and nothing that calls this
++module may either. That is not a performance choice. § Creating a plugin
++justifies the whole entry-point mechanism by `validate` being able to answer
++"no installed package registers `plate_wells`" without importing a line of that
++package, and `validate` is documented as creating nothing and reaching nothing
++off the machine. A check that reaches for the object behind a name has changed
++the guarantee whatever it returns.
++
++The cost of that, stated rather than discovered: a claim read from metadata is a
++name and a provider and nothing else. A refusal computed from it therefore has
++no class to interrogate — no `parameter_spec`, no `required_env` — which is why
++a plugin-side collision cannot redact a credential the way a project-local one
++can. See `templates/registry.py` and § Creating a plugin for that residual.
++
++Templates are scanned through here like everything else, but they are *merged*
++in `templates/registry.py`, because a template name has a second home — a
++project's own `templates/` — and the merge is the one place holding all three
++sources at once.
++"""
++
++from importlib.metadata import EntryPoint, entry_points
++
++GROUPS = (
++    "publishable.templates",
++    "publishable.resolvers",
++    "publishable.probes",
++    "publishable.writers",
++    "publishable.readers",
++)
++"""Every entry-point group core reads, one per registry § Creating a plugin declares."""
++
++
++def provider_of(ep: EntryPoint) -> str:
++    """What a reader uninstalls or pins, which is a distribution rather than a module.
++
++    Falls back to the entry point's own target only when `entry_points()` handed
++    back an unattached object, which its own construction does not produce — kept
++    so a message can never interpolate `None`.
++    """
++    dist = ep.dist
++    if dist is None:  # pragma: no cover - entry_points() always attaches one
++        return ep.value
++    return f"{dist.name} {dist.version}"
++
++
++def scan_group(group: str) -> dict[str, list[EntryPoint]]:
++    """Every claim on every key in `group`, keyed by the key a config writes.
++
++    A list per key rather than a single entry point, because two installed
++    distributions claiming one key is a fault to *report* — naming both — rather
++    than one to resolve by whichever the scan walked first. Keys come back in
++    name order and claimants in provider order for the same reason: install order
++    is a property of a machine, so it may not decide what a message says either.
++    """
++    found: dict[str, list[EntryPoint]] = {}
++    for ep in entry_points(group=group):
++        found.setdefault(ep.name, []).append(ep)
++    return {name: sorted(found[name], key=provider_of) for name in sorted(found)}
++
++
++def names(group: str) -> list[str]:
++    """The keys `group` registers, in name order."""
++    return list(scan_group(group))
++```
++
++- [ ] **Step 4: Run and see it pass.** `uv run pytest tests/test_plugins.py -q`, then the whole
++      suite: **the count your predecessor left, plus 6.** `uv run mypy` must be clean — probed
++      against this exact shape under `strict = true` over `files = ["src"]` and it is; `EntryPoint`
++      and `EntryPoints` are typed in the stdlib, so **no `[[tool.mypy.overrides]]` is expected**. If
++      one is reported anyway, add `module = "importlib.metadata"` with `ignore_missing_imports = true`
++      and **say so in the task report** — the contingency is named here so it is not discovered.
++
++- [ ] **Step 5: Retire task 4's marker, in this commit.** In § Package layout, delete
++      `— not yet built` from the `plugins.py` line so it reads:
++
++```
++│   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries
++```
++
++      Deferred from task 4 for the reason task 4 states: the marker means "specified and unbuilt",
++      so retiring it is a build claim and belongs in the commit that makes it true.
++
++- [ ] **Step 6: Mechanical pass** over the § Package layout edit: the tree line's alignment matches
++      its neighbours, no trailing whitespace introduced.
++
++- [ ] **Step 7: Mutate — three, each with the test that must go red, each checked against the test
++      body.**
++
++  **(a) Return in walk order instead of name order.** In `scan_group`, change the return to
++  `{name: found[name] for name in found}`. `test_names_are_sorted_and_the_sort_is_not_the_install_order`
++  must FAIL. **Checked against the test body:** its fixture declares three names whose declaration
++  order (`zz_first`, `aa_second`, `mm_third`) is neither sorted nor reverse-sorted, so the mutant's
++  output differs from the asserted list under either candidate reading. A two-name fixture would
++  **not** discriminate — with two names the reverse of insertion order is sorted order for one
++  arrangement — which is why the fixture has three.
++
++  **(b) Keep one claimant per name.** Change the accumulation to `found[ep.name] = [ep]`.
++  `test_two_distributions_claiming_one_name_both_arrive` must FAIL: it asserts a two-element list of
++  providers, and the mutant yields one. **Checked against the test body:** the fixture installs two
++  distributions in two directories, so both claims genuinely reach the scan; a one-distribution
++  fixture could not tell this mutant from correct code.
++
++  **(c) Sort claimants by something that is not the provider.** Change the inner sort key to
++  `lambda ep: ep.value`. `test_two_distributions_claiming_one_name_both_arrive` must FAIL — its
++  fixture's values are `pkg_two.r:resolve` and `pkg_one.r:resolve`, whose sort order is the reverse
++  of the providers' (`dist-one 1.0` before `dist-two 2.0`). **Checked against the test body:** the
++  fixture was written with the value order deliberately opposed to the provider order, which is what
++  makes this mutation discriminate; had both agreed it would have been blind.
++
++  After each: `find . -name __pycache__ -type d -exec rm -rf {} +`, edit the file back by hand,
++  re-run, confirm green. **Never `git checkout --`.**
++
++- [ ] **Step 8: Which deliverable no mutation reaches.** **`GROUPS`' membership is pinned only by a
++      test asserting set equality against a literal**, so a group added to the tuple and to that
++      test in one edit would pass — which is unavoidable for a constant and is why the test's
++      docstring names § Creating a plugin as the authority rather than counting. **`provider_of`'s
++      `dist is None` branch is unreachable** through `entry_points()` and is marked
++      `# pragma: no cover`; nothing reaches it and nothing will. **The no-`.load()` guarantee is
++      pinned by `test_the_scan_imports_nothing` only for `scan_group`** — a *caller* added later
++      that loads is not caught here, and no test in this slice catches one. Tasks 8, 9, 11, 13, 14
++      and 20 each restate the prohibition in their own text; that is the whole of the enforcement,
++      and it is stated rather than claimed to be more.
++
++- [ ] **Step 9: Verify and commit.** All four commands.
++      `feat: the entry-point metadata scan, five groups, and no .load()`
++
++---
++
+diff --git a/.superpowers/sdd/2026-08-16-plugin-registries/task-8-11-report.md b/.superpowers/sdd/2026-08-16-plugin-registries/task-8-11-report.md
+new file mode 100644
+index 0000000..20adf94
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-plugin-registries/task-8-11-report.md
+@@ -0,0 +1,142 @@
++# Tasks 8-11 report — the collision matrix, three-valued provenance, template version, plugin hint
++
++**Status:** All four tasks implemented, tested, mutation-checked, and committed separately.
++
++**Commits:**
++- Task 8 — `0b5e909` — the template collision matrix over three sources, decided from metadata
++- Task 9 — `6e223d4` — template provenance is three-valued at the merge, and an installed name is known but unloaded
++- Task 10 — `78b6276` — a template reports its own version, and W-TEMPLATE-VERSION compares against it
++- Task 11 — `69458c3` — an unresolved experiment_type names the plugin the config points at
++
++**Test summary:** full suite green at each commit — 2013 / 2015 / 2017 / 2018 passed (+2 xfailed
++throughout), i.e. predecessor's 2006 +7, +2, +2, +1 exactly as each brief predicted. `ruff check`,
++`ruff format --check`, `mypy` clean at every commit.
++
++## `installed` reachability at the two class-taking readers
++
++**Unreachable at both**, as the spec and briefs said it would be. `validate._check_versions` and
++`materialize.materialize_config` both call `is_local_template(type(template))` on a class already
++in hand; no installed claim ever carries a class in Part A (`Claim.cls` is `None` for `provenance ==
++"installed"`), so neither reader's local/non-local branch ever sees the third value. Confirmed by
++construction, not merely asserted: task 9's mutation (b) (answering `template_provenance` from a
++two-valued predicate) only reddens `template_provenance` itself, and no fixture in this batch can
++feed a class-taking reader an installed claim.
++
++## `E-TEMPLATE-INSTALLED-UNSUPPORTED`'s filing
++
++`docs/superpowers/spec-defects.md`, new entry `## OPEN — an installed template's name resolves but
++its class is never loaded`, **owner: unassigned** — exactly as task 9's brief specified. Retiring it
++needs `Claim.cls` populated for an installed claim, `is_local_template`'s two callers reading
++`Claim.provenance` instead, and `provenance.plugin_versions`; none of that is H7b Part B's nine
++tasks (the resolver half), so no slice currently owns it.
++
++## Mutation results (all reverted by hand-editing the file back, never `git checkout --`; `__pycache__` cleared before each rerun)
++
++**Task 8 — `_claims`/`_check_plugin_collisions`, four prescribed:**
++- (a) drop the entry-point loop → all 4 named tests FAIL. Confirmed.
++- (b) `for name in sorted(claims)` → `for name in claims` — **the brief's own fixture did not
++  discriminate.** `test_the_colliding_template_name_reported_is_the_first_in_name_order` passed
++  under both the correct implementation and this mutant, because its three colliding names all come
++  from `scan_group`, which already returns its group pre-sorted by name — so an unsorted walk over an
++  entry-point-only claim set coincides with a sorted one by construction, no matter which claim
++  happens to be scanned "first". Verified empirically both ways before concluding this, not just by
++  inspection. **Fixed** by strengthening the test: added a fourth collision that shadows core's own
++  `generic` (via a local `templates/mine.py`), which is *always* the first key `_claims` inserts
++  (from `_BUILTIN`, before any entry point is scanned) regardless of its alphabetical rank. With that
++  mixed-source collision in the fixture, the correct implementation now provably picks `a_one` (`a` <
++  `g`) while the mutant picks `generic` (inserted first, never sorted) — verified both directions with
++  a standalone reproduction before touching the shipped test. This is exactly the "prescribed mutation
++  turned out blind" shape `CLAUDE.md` warns about, and it would have shipped a non-discriminating test
++  had it not been checked against the mutant before trusting it.
++- (c) name one claimant instead of all → the 2 named tests FAIL (plus the pre-existing shadow test,
++  as the brief anticipated). Confirmed.
++- (d) `.load()` the entry point → `ModuleNotFoundError`, not an `AssertionError`, exactly as
++  prescribed (pins decision 3). Confirmed.
++
++**Task 9 — provenance, two prescribed**, both confirmed exactly as predicted (mutant (a) collapses
++the installed branch, fails on the "not in found" half; mutant (b) answers from a two-valued
++predicate, fails on the `"installed"` assertion since the fixture needs all three values to
++discriminate).
++
++**Task 10 — version, two prescribed:**
++- (a) compare against the module constant again — **failure mode differed from the brief's
++  prediction, because the brief's own test fixture was buggy.** The test declared
++  `template_version: "1.0.0"` in the config while asserting `TEMPLATE_VERSION not in message` —
++  but `TEMPLATE_VERSION == "1.0.0"`, so that value is printed regardless (as the *declared* field,
++  not the *reported* one) even under the correct, un-mutated implementation. Caught before trusting
++  the test: ran it green under the correct code first, then noticed the assertion was checking a
++  string that appears in the message by construction of the fixture, not by the bug it claims to
++  guard. Fixed by declaring `"2.0.0"` instead, which is used nowhere else, so `TEMPLATE_VERSION not
++  in message` is a real property again. Under that fix, mutant (a) fails with an `AssertionError` on
++  `"9.9.9" in message` (not the brief's predicted `StopIteration`) because with `declared="2.0.0"`
++  the mutant's `reported = TEMPLATE_VERSION = "1.0.0"` differs from `declared`, so the early return
++  doesn't fire and a message is built — just the wrong one. Confirmed FAIL, correctly discriminating.
++- (b) drop the `reported is None` guard → nothing reddens, exactly as the brief said (defensive,
++  unpinned; the task that first populates `Claim.cls` for an installed claim is what reaches it).
++  Confirmed and not kept.
++
++**Task 11 — plugin hint, one prescribed (mutation (b) explicitly not run, per brief):**
++- (a) render the hint unconditionally → FAILS on the control half exactly as prescribed
++  (`"`plugin` says" in plain` when the mutant prints "come from `None`"`). Confirmed.
++
++## Where a brief or the spec disagreed with the code
++
++1. **Task 8's own prescribed test fixture for the write_config override syntax was wrong.** The
++   brief's `test_two_installed_distributions_claiming_one_resolver_name_are_reported` used
++   `write_config({"data.units.from": {"resolver": "plate_wells"}})`, but the `write_config` fixture's
++   dotted-override walk requires every intermediate key to already exist in `base_config` — `data`
++   has no `units` key by default, so this raises `KeyError: 'units'` in the fixture itself rather than
++   producing the intended config. Reproduced the `KeyError` standalone before changing anything.
++   Fixed to `write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}})`,
++   matching the convention every other `data.units`-touching test in the file already uses.
++
++2. **Task 8's reference.md instruction to "leave the rest of the row as it stands" was inconsistent
++   with its own new opening clause.** The pre-existing `E-TEMPLATE-COLLISION` row (§ Errors validate
++   reports) carried a sentence — "An installed distribution claiming one of these names is the same
++   fault and is not yet checked here: no entry point is resolved..." — that directly contradicts the
++   new opening clause the same step installs (which already lists all five collision shapes,
++   including two installed-distribution cases, as checked). Removed that now-false sentence rather
++   than leaving it, since keeping it would have shipped a self-contradicting row in the same edit.
++
++3. **Task 9's own prescribed code for the `if template is None:` branch reintroduces the exact
++   double-discovery bug its surrounding comment argues against.** The brief's snippet calls
++   `_claims(repo_root).get(name)` inside that branch, *in addition to* the `resolve_template(name,
++   repo_root)` call already made earlier in `validate_config` (which itself calls `_claims` once) —
++   two full local-discovery passes per call whenever the template is unresolved. This is precisely
++   what `resolve_template`'s own docstring, and the comment the brief supplies for the new code, argue
++   must never happen. Caught immediately by two failing pre-existing regression tests pinned exactly
++   on this property: `test_one_validate_discovers_local_templates_once_on_the_unknown_name_path`
++   (asserts a discovery call count of 1) and `test_a_template_whose_import_is_not_idempotent_survives_
++   an_unknown_name` (a template whose second import raises, proving a second discovery would crash).
++   Fixed by replacing the earlier `resolve_template(name, repo_root)` call with a single
++   `claims = _claims(repo_root)` call, deriving `template`, `known`, and `claim` all from that one
++   merge — restoring the true "one merge per `validate_config` call" invariant the brief's own prose
++   states but its code did not implement.
++
++4. **A pre-existing test's monkeypatch was aimed at a name `validate.py` no longer imports.**
++   `test_a_template_cross_field_rule_is_reported` patched `validate_mod.resolve_template` to inject a
++   stub template; removing that import (per the fix above) silently defused the patch — exactly the
++   "monkeypatch left aimed at a name the code no longer calls" trap `CLAUDE.md` names. Fixed by
++   rerouting the patch to `validate_mod._claims`, returning a one-entry `Claim` dict instead.
++
++None of these four are scored as findings against the *implementation* — they are corrections to the
++briefs' own prescribed text (a fixture syntax error, a stale doc sentence the brief's own edit made
++false, a double-discovery bug in prescribed code, and the monkeypatch fallout from fixing it) — each
++verified by reproducing the failure first, then fixing, then re-confirming green.
++
++## Concerns / residuals carried forward (as each brief already flags)
++
++- Task 8: `_check_plugin_collisions`'s `"plugin"` reporting path is unpinned by any test; `Claim.
++  provider` for core's own claimant is pinned only via the pre-existing shadow test;
++  `partial_templates`'s expression is still a proxy (`claims.values()` vs. the narrower `local.
++  values()`) until `Claim.cls` can ever be non-`None` for an installed claim — task 20's to close.
++- Task 9: `installed` unreachable at `_check_versions`/`materialize_config`, filed with owner
++  unassigned as detailed above.
++- Task 10: `materialize`'s use of `type(template).version` is not independently pinned from
++  `TEMPLATE_VERSION` (since `generic.version == TEMPLATE_VERSION`), as the brief already states.
++- Task 11: the `generate experiment` emit site's *absence* of a hint is untested (only the code
++  itself is), and the `isinstance` guard on a non-string `plugin` is pinned by nothing — both flagged
++  by the brief and left as is.
++
++**Sequencing followed:** 8 → 9 → 10 → 11, `_merged`/`_claims` re-read fresh between each rather than
++worked from a stale copy, as instructed.
+diff --git a/docs/reference.md b/docs/reference.md
+index 0e94c9e..5becefa 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -183,23 +183,23 @@ hypotheses:
+   - id: h1
+     kind: confirmatory                   # confirmatory | exploratory
+     statement: "Spearman correlation exceeds Pearson on this cohort."
+     metric: step03_analyze.r
+     compare: {condition: "method=spearman", to: baseline}
+     direction: greater
+     threshold: 0.02
+     evaluate_on: observed                # observed | ci95_lower | ci95_upper
+ ```
+ 
+-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Two declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: the `{resolver: <name>}` form of `data.units.from`, and `statistics.null_test`. A config declaring either is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `data.units.holdout` left it with H3d: `_check_holdout` now checks its declaration for real, `_resolved_holdout` realizes the split once per run, `io.units`/`io.units.train` see the two halves, and `cli.py` narrows every denominator to the test partition and writes `allocation.json`'s fourth key — so its `NOT BUILT` marker is gone from the line above too. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block `init` **materializes** as a `null` with its shape in a comment rather than expanded — `statistics.resample` is shown that way too since H4a made it built, but `init` writes no `resample` key at all — the difference that keeps the [column-resample asymmetry](#statistical-reporting) legible: a *declared* `resample` is what turns a column's interval from a *t* into a percentile, so materializing the block at its default expansion would make that the silent default for every generated project. A materialized `resample: null` would not — an explicit `null` is undeclared, exactly as an absent key is — but it would put a key in every config for a choice most runs never make, which is the ordinary reason `init` leaves a block out. `measurements` is materialized because a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout`'s slice has landed with the same treatment, closed one level in at its own five fixed keys (`method`, `frac`, `from`, `stratify_by`, `seed`), so a misspelled child inside a non-empty `holdout` block is reported the same way. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
++`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Two declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: the `{resolver: <name>}` form of `data.units.from`, and `statistics.null_test`. A config declaring either is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. A third refusal in the same family is not a declaration at all and so is marked nowhere above: an `experiment_type` naming a template an installed distribution registers is refused, because core resolves such a name from package metadata and this build does not load what the name points at. It carries `E-TEMPLATE-INSTALLED-UNSUPPORTED` and, like every `-UNSUPPORTED` code, [no row in the registry below](#errors-validate-reports). `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `data.units.holdout` left it with H3d: `_check_holdout` now checks its declaration for real, `_resolved_holdout` realizes the split once per run, `io.units`/`io.units.train` see the two halves, and `cli.py` narrows every denominator to the test partition and writes `allocation.json`'s fourth key — so its `NOT BUILT` marker is gone from the line above too. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block `init` **materializes** as a `null` with its shape in a comment rather than expanded — `statistics.resample` is shown that way too since H4a made it built, but `init` writes no `resample` key at all — the difference that keeps the [column-resample asymmetry](#statistical-reporting) legible: a *declared* `resample` is what turns a column's interval from a *t* into a percentile, so materializing the block at its default expansion would make that the silent default for every generated project. A materialized `resample: null` would not — an explicit `null` is undeclared, exactly as an absent key is — but it would put a key in every config for a choice most runs never make, which is the ordinary reason `init` leaves a block out. `measurements` is materialized because a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout`'s slice has landed with the same treatment, closed one level in at its own five fixed keys (`method`, `frac`, `from`, `stratify_by`, `seed`), so a misspelled child inside a non-empty `holdout` block is reported the same way. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
+ 
+-**The four identifying fields above `metadata` say what this config is written against, and `validate` checks each — three for a config generated against a [project-local template](#templates-where-parameters-are-defined), which `init` writes with no `template_version` at all.** `experiment_type` names the template and must resolve to one core, an installed plugin, or this project's own `templates/` registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
++**The four identifying fields above `metadata` say what this config is written against, and `validate` checks each — three for a config generated against a [project-local template](#templates-where-parameters-are-defined), which `init` writes with no `template_version` at all.** `experiment_type` names the template and must resolve to one core, an installed plugin, or this project's own `templates/` registers — an installed one is answered from package metadata, so a name no distribution declares is refused without importing anything, and a name one *does* declare is [not yet loadable in this build](#the-one-config-file); `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
+ 
+ This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
+ 
+ **The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run embeds the config it used verbatim into its own `run.yaml`, which is where parameter provenance actually lives.
+ 
+ **Whether you commit it is your call, and core takes no position.** Reproducibility doesn't depend on it either way: `run.yaml` embeds the config verbatim and fingerprints it with `parameters_hash`, so a run is fully reportable whether or not its config was ever tracked. Because of that, the scaffold's `.gitignore` says nothing about `configs/` — imposing a policy there would be the tool overriding a judgment that belongs to you.
+ 
+ Two things worth weighing when you decide:
+ 
+ - **For committing:** parameter changes get review and history like anything else in the repo, and collaborators can start from a known config rather than re-deriving one. Since `code_hash` covers only `src/**` and `templates/**`, committing configs doesn't disturb [same code, different parameters](design-principles.md#same-code-different-parameters) comparisons.
+@@ -569,24 +569,24 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+ | `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis and `sweep.ablate` is not declared — § Expansion modes' *the arms of a group axis are peers*. `_baseline_cells` reads a fixed axis as fixed, so it expands over nothing while `_axes` still emits that level as a product row: the level is rendered **twice**, once as the baseline row and once as its own axis's, and the two conditions hold the same units and the same parameters, with directories identical at every artifact — [*two identical measurements reported as two arms*](experimental-designs.md#mistakes-core-prevents). Where the axis declares two or more levels, the other levels' rows cross the single baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code — but that refusal is temporary, and at one level there is no cross-arm comparison for it to read at all. The route a control arm actually wants, once there are two of them, is a [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry naming both arms — whose delta this build refuses for the same disjoint-units reason, leaving a `summary`-step `Estimate` or two runs joined in a `study`. Where `ablate` is declared the sibling code `E-SWEEP-ABLATE-BASELINE-GROUP` reports instead, never both | `E-SWEEP-BASELINE-GROUP` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+ | A [`sweep.groups`](#expansion-modes) axis declares the same level twice (`levels: [control, treatment, control]`). The route § Mistakes core prevents' *two identical measurements reported as two arms* is not otherwise closed by: `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the `within`-versus-arms question and are satisfied here, `E-SWEEP-PATH-DUPLICATE` compares axis *names* across entries rather than values within one entry's `levels`, and `arms_of`'s set equality has nothing to disagree with because `{control} == {control}`. Unrefused, `expand` renders two conditions carrying the same label and the same `values`, each handed the same units, and the two condition directories are identical at every artifact on a green run. A **parameter** axis repeating a value (`grid: {analysis.method: [pearson, pearson]}`) has the same shape and is deliberately not refused — but **not because its consequence is milder**: crossed with a group axis it reproduces this outcome exactly. `groups: [{by: arm, levels: [control, treatment]}] × grid: {analysis.method: [pearson, pearson]}` runs to exit 0 with `00_arm=control__method=pearson` and `01_arm=control__method=pearson` identical at every artifact, and the duplicated label bodies carry the *arm* — so they are [selectors](#contrasts-claims-that-arent-condition-vs-baseline), and a contrast naming one resolves silently to the later of the pair with no ambiguity reported. Only the group axis is checked because a group level is a claim about *which units* and a parameter value is not; the parameter-axis duplicate is a known gap, recorded here rather than closed. The axis's *other* route to two identical arms — a `sweep.baseline` fixing one of its levels, which renders that level as the baseline row and as its own product row — is `E-SWEEP-BASELINE-GROUP`; neither code reaches the other's shape | `E-SWEEP-LEVEL-DUPLICATE` |
+ | Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination; or a [`sweep.groups`](#expansion-modes) axis's `by` names a path one of those three writes, which is the worse version of the same collision — a group cell is a *set of units*, so every condition marks that path a selector and no scope plants the parameter, leaving the parameter axis claiming to sweep a value every condition ran at its base. The same refusal fires when `by` names a path this template declares as a parameter at all, swept or not — an unswept collision has no other axis losing its value, but the condition's own label and directory still claim a value `resolve_condition_cfg` never plants, indistinguishable from a real swept parameter to a reader who has not opened `sweep.yaml`. A group axis's name is a label key rather than a parameter path, so renaming either side resolves it. **Also read one level shallower, entry by entry rather than through the deduping `selector_paths`**: two `sweep.groups` entries naming the same `by` — [§ Validation](#validation)'s *Axis names are distinct* — cross two same-named axes into the product, rendering two conditions under the identical label | `E-SWEEP-PATH-DUPLICATE` |
+ | A `sweep.grid`, `sweep.paired`, `sweep.baseline`, `sweep.sample.ranges`, `sweep.ablate.override` or `sweep.ablate.remove` key names a dotted path the template's `parameter_spec` does not declare — every mode that names a dotted path at all, whether it fixes a value there, declares bounds to draw one from, or plants a removal, since every one of them reaches a condition's config through a `setdefault` walk that *creates* a misspelled path rather than failing on it | `E-SWEEP-PATH-UNKNOWN` |
+ | `sweep.baseline` is declared alongside a `sweep.sample` axis, so every non-baseline cell — every combination of a draw with the other axes' levels, not every draw — becomes a `vs_baseline` comparison, while a `sample` draw is [not a comparison](#sweeps-and-repeats) and the correction family skips it, which is specified but not implemented in this build. Both sides are read for a *truthy* value, so an empty `baseline: {}` is not a declaration: it fixes nothing, produces no baseline row, and generates no comparison to correct against. A `sample` sweep with no baseline is unaffected for the same reason, a comparison being generated only against a declared one, and so is a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, whose members are named rather than generated | `E-SWEEP-SAMPLE-BASELINE` |
+ | `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` that is neither `auto` nor a pinned integer, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound — or a drawn value — that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
+ | A `sweep.grid`, `sweep.paired` or `sweep.ablate.override` value, or a [`sweep.groups`](#expansion-modes) axis's level, cannot be rendered into a condition label — every value a config *writes* that `label_for` renders, and a label is also a directory segment, so a value carrying `/` would resolve outside the condition directory. A group level joins them because a group cell renders like any other axis's (`00_arm=control`); it takes this check alone and no `Param` check, naming a set of units rather than a parameter value. A `sweep.baseline` value is exempt, since it is never rendered into one. A `sweep.sample.ranges` bound is exempt for the other reason: a label carries the *drawn* value rather than the bound, and a drawn number always renders within `[A-Za-z0-9._+-]+`, so there is nothing a bound could carry that the label could not | `E-SWEEP-VALUE-UNNAMEABLE` |
+-| A template name is claimed twice where this build can see both claimants: two [project-local `templates/*.py`](#templates-where-parameters-are-defined) registrations of one name — in two files, or twice in one file — or a local registration of a name core itself registers (`generic`). [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) states the rule and the reason: install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design. **An installed distribution claiming one of these names is the same fault and is not yet checked here: no entry point is resolved for `publishable.templates` in this build, so there is no installed claimant for this check to see** — [§ Errors core raises](#errors-core-raises)' row already states the full three-source merge this check grows into. **Read from the whole of `templates/`, not from the name the config asks for**, discovery being eager for exactly this reason — so a config naming a third template is refused just as a config naming a colliding one is, the repo having no unambiguous set of templates to resolve anything against. A file in the same directory that fails to load **preempts** this code — `E-TEMPLATE-LOAD` in this table is checked first, and says why — so a repo with both faults sees this one only once the directory loads clean. The message names **every** provider that claimed the name, each as `<path>::<ClassName>` — the class because two classes in one file would otherwise print one path twice and name no second provider at all, and core's own claimant as its dotted class path, there being no file in your repo to rename. Two decorators stacked on **one** class are the case that pair cannot tell apart, and the message says so rather than printing it twice: the name is still claimed twice and still refused, and the remedy is to delete a line rather than to rename anything. Not a finding `validate` computes but a [`ContractError` the merge raises](#errors-core-raises), reported here under the code the raise carries, since every other command that resolves a template meets the same refusal at load and prints the same identifier — an ambiguity that resolved differently per command would be worse than either answer | `E-TEMPLATE-COLLISION` |
++| A template name is claimed twice across core's own registry, the [installed distributions'](#creating-a-plugin-publishable-plugin-new) `publishable.templates` entry points, and this project's own [`templates/`](#templates-where-parameters-are-defined): two local registrations of one name — in two files, or twice in one file — a local registration of a name core registers, two installed distributions registering one name, an installed distribution registering a name core registers, or a local registration of a name an installed distribution registers. [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) states the rule and the reason: install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design — [§ Errors core raises](#errors-core-raises)' row states the full three-source merge this check reads. **Read from the whole of `templates/`, not from the name the config asks for**, discovery being eager for exactly this reason — so a config naming a third template is refused just as a config naming a colliding one is, the repo having no unambiguous set of templates to resolve anything against. A file in the same directory that fails to load **preempts** this code — `E-TEMPLATE-LOAD` in this table is checked first, and says why — so a repo with both faults sees this one only once the directory loads clean. The message names **every** provider that claimed the name, each as `<path>::<ClassName>` for a local one, `<distribution> <version>` for an installed one, and core's own claimant as its dotted class path, there being no file in your repo to rename. Two decorators stacked on **one** class are the case that pair cannot tell apart, and the message says so rather than printing it twice: the name is still claimed twice and still refused, and the remedy is to delete a line rather than to rename anything. Not a finding `validate` computes but a [`ContractError` the merge raises](#errors-core-raises), reported here under the code the raise carries, since every other command that resolves a template meets the same refusal at load and prints the same identifier — an ambiguity that resolved differently per command would be worse than either answer | `E-TEMPLATE-COLLISION` |
+ | A project-local `templates/*.py` fails to load — it raises while importing, imports cleanly but never calls `@register_template`, or registers a class that is not a `BaseTemplate` subclass — reported for the first such file in [`discover_local`](#templates-where-parameters-are-defined)'s sorted walk of the directory. **Every file is still imported before this is raised**, the same eagerness `E-TEMPLATE-COLLISION` reads from: a well-formed template elsewhere in `templates/` still resolves into this fault rather than being silently skipped. It **preempts** a collision rather than accompanying it: the claims are collected and then not used, so a directory holding both faults reports this code and no `E-TEMPLATE-COLLISION` at all. That is the same eagerness argued the other way — a collision verdict computed while a file failed to load would be computed over a partial set of claims, since the file that didn't load might have been a third claimant, so the collision is not reported until the directory loads clean. A file that registers a name and then raises has that registration drained and discarded rather than left for the next file to inherit and misattribute. Not a finding `validate` computes but a [`ContractError` the merge raises](#errors-core-raises), reported here under the code the raise carries, for the same reason `E-TEMPLATE-COLLISION` is: every other command that resolves a template meets the same refusal at load. **Every non-dunder-stemmed file under `templates/` is read as a template**; a helper a template means to import as a sibling, rather than have discovered on its own, must be named with the same `__`-prefix `__init__.py` already uses to be skipped | `E-TEMPLATE-LOAD` |
+ | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+-| `experiment_type` is missing, empty, or names a template neither core nor this project's own [`templates/`](#templates-where-parameters-are-defined) registers. An installed plugin's is not yet checked either: no entry point is resolved in this build, so there is no plugin registry for a name to be found in or missing from. Two surfaces meet this condition — `validate` reports it as a finding, never raising it, and [`generate experiment`](#creation-commands) raises it as a `ContractError` — and this row governs both, the two built from one shared message | `E-TEMPLATE-UNKNOWN` |
++| `experiment_type` is missing, empty, or names a template that neither core, nor any installed distribution's `publishable.templates` entry points, nor this project's own [`templates/`](#templates-where-parameters-are-defined) registers — the installed set read from package metadata, so a name no distribution declares is refused without importing one. When the config declares a [`plugin`](#the-one-config-file), the message names it: that field is a readable note about where the template was expected to come from, so a reader who has not installed it learns that from the diagnostic rather than from a missing-name list. Two surfaces meet this condition — `validate` reports it as a finding, never raising it, and [`generate experiment`](#creation-commands) raises it as a `ContractError` — and this row governs both, the two built from one shared message; the hint appears only at the first, `generate` being the command that writes the file the field would live in | `E-TEMPLATE-UNKNOWN` |
+ | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item. Reported for `data.units.measurements.by` too, when it names no column of the source *and* rows sharing a key were collapsed anyway: the collapse groups on the key alone, so such a `by` averages rows nothing distinguished as measurements of one unit. The source's columns, not `data.units.attributes` — `design-principles.md` § Core vs. plugin lists `measurements.by` beside `attributes` as a parallel namer of an input field, and the fence in [§ What isn't a repeat](#what-isnt-a-repeat) declares no attributes at all. Only when rows were collapsed — the same `by` over an input holding one row per unit names a measurement a [step](#what-isnt-a-repeat) supplies, which no input column carries | `E-UNITS-ATTR-MISSING` |
+ | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+ | `data.units.measurements.collapse` names a rule that is none of `mean`, `median`, `sum`, `first`, or `mode` — raised where [technical replicates](#what-isnt-a-repeat) are collapsed, which `validate` also resolves and reports under the same code, the same reuse `E-REPL-SEED-COLLISION` above illustrates | `E-UNITS-COLLAPSE-RULE` |
+ | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+ | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+ | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+ | `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+ 
+ ---
+ 
+@@ -963,21 +963,21 @@ to something other than a step — `validate` and a template's `validate(config)
+ underlying mapping — and a nested node has no such caller. A parameter named `raw` inside a block
+ is reachable exactly as any other is.
+ 
+ ### What you define, and what is core's
+ 
+ Core imports your classes before any instance exists — the [execution plan is derived at `validate`](#generators) from the declared scopes — and then constructs a fresh step per execution. Both halves of that constrain what a subclass may do:
+ 
+ | | Must define | Defaulted | Core's |
+ |---|---|---|---|
+ | `BaseStep` | `run(self, cfg, io)` | `scope = "repeat"`, `nondeterministic = False` | `__init__`, `self.condition` / `self.repeat` / `self.rng`, `derive_seed` |
+-| `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]` | The registry, materialization, and every check `parameter_spec` drives |
++| `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]`, `version` is `None` | The registry, materialization, and every check `parameter_spec` drives |
+ | `BaseExperiment` | `steps` | — | Everything the plan is derived from |
+ | `BaseReport` | `sections(self, run, io)`, a generator | — | The standard sections `super().sections` yields |
+ 
+ `BaseReport.format` is deliberately absent from the middle column: [`generate report` always writes the line](#a-report-override-renders-one-experiments-own-figures), so a base default would be a value no generated class could ever be observed to take. `BaseTemplate.aggregate` is on neither list: it has no base implementation, and a template either defines it or doesn't. That absence is readable — it's what [`validate`'s "template `generic` defines no `aggregate`"](#validation) is testing — and a base returning `{}` would make the two cases indistinguishable.
+ 
+ **`scope` is read from the class, not from an instance.** `dry-run` prints how many times each step will execute and where its artifacts will land, and it does that without constructing a step at all — so a `scope` assigned in `__init__` or computed per execution would be invisible to the plan that decides how often `run` is even called. It's a class attribute, and a step wanting two scopes is [two steps](#using-them-in-step-code).
+ 
+ **`__init__` is core's, so don't define one.** Core constructs the instance, sets the execution context on it, and calls `run` — passing nothing you could accept, and discarding the instance when the execution ends. There is nothing an `__init__` could receive and nothing it could carry forward, which is why setup belongs at the top of `run` and shared machinery belongs in a base class you import from a [plugin](#plugins-where-domain-knowledge-lives). Keeping module top level free of work matters for the same reason and is a [separate rule](#generators): `validate` imports your package.
+ 
+ A [resolver](#where-units-come-from) and a [probe](#the-apparatus-core-can-only-observe) are plain functions rather than classes — `resolve(io, cfg)` yielding `Unit`s, and `probe(cfg)` returning an `Apparatus` — because neither has state to carry or a lifecycle to hook, and a class would only be a namespace with one method in it.
+@@ -1518,20 +1518,21 @@ This is an effect check, not an inspection of your code: core doesn't ask what t
+ A template is the authoritative definition of an experiment type's parameters. Core never inspects `parameters` itself.
+ 
+ ```python
+ from publishable import BaseTemplate, register_template, Param
+ 
+ @register_template("generic")
+ class GenericTemplate(BaseTemplate):
+     naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+     field_convention = "generic"
+     default_repeats = 1
++    version = "1.0.0"
+     required_env = []
+     apparatus_probe = None            # see "The apparatus core can only observe"
+     apparatus_facts = []              # which keys the probe must supply, if one is declared
+ 
+     # One spec drives all three jobs: what `init` writes, what its comments say,
+     # and what `validate` enforces. There is no second source of truth.
+     parameter_spec = {
+         "analysis.method":      Param(str,   default="pearson",
+                                       choices=["pearson", "spearman", "kendall"]),
+         "analysis.min_samples": Param(int,   default=30, ge=2),
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index 8cfaceb..bf71512 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -3706,20 +3706,27 @@ owner unchanged.** H7a renamed the § Validation row this section names. It is *
+ not "Template is installed" — grep for the new name, not the old one. (The line number `211` is the
+ one task 11 measured and is not re-measured here; the row is located by its name.) The finding
+ survives intact: `validate_config` still reports `E-TEMPLATE-UNKNOWN` through
+ `unknown_template_message(name, known)` and still prints no `plugin` hint. So does the reasoning,
+ with one term corrected — H7a made a project-local `templates/*.py` resolvable, so `generic` is no
+ longer the only *resolvable* template, but it is still the only *installed* one, and an uninstalled
+ distribution is precisely what core still has no way to check. Two load-time refusals joined the same
+ surface (`E-TEMPLATE-LOAD`, `E-TEMPLATE-COLLISION`), reported under the code the raise carries;
+ neither bears on this row. **Owner stays H7 — specifically H7b**, which owns entry-point resolution.
+ 
++**STRUCK 2026-08-16 (H7b Part A task 11).** `unknown_template_message` takes the config's `plugin`
++field and renders it, so `validate`'s finding names where the template was expected to come from.
++The row's stated precondition — that an unresolvable `experiment_type` can name a template some
++uninstalled distribution registers — is satisfied by task 7's metadata scan and task 8's merge.
++`generate experiment` passes `None` and shows no hint, deliberately: it is writing the file that
++would hold the field.
++
+ ### Row 212 "Template version moved", first half — **Owner: H7 Plugins and the apparatus**
+ 
+ `_check_versions` compares the declared `template_version` against the module constant
+ `materialize.TEMPLATE_VERSION`, not against the installed template's own reported version. Closing
+ it means `BaseTemplate` declaring a `version` attribute, which § Templates' class-attribute example
+ does not list — a four-document change — and which is behaviourally inert while `generic` is the
+ only installed template and `materialize` is the only writer of the field. It becomes observable
+ when a plugin ships a template with a version of its own, which is H7's work.
+ 
+ The row's *second* half — "`request.timeout` is new and unset (warning)" — was implemented here
+@@ -3732,20 +3739,34 @@ installed template" no longer carries the point by itself, because H7a made a se
+ resolvable. Inertness now rests on a composed reason: `generic` is still the only *installed*
+ template and `materialize` still the only writer of the field, **and** H7a ruled that a project-local
+ template writes **no `template_version` at all** and is never version-checked — `materialize.py`
+ omits the line for a local template, and `_check_versions` skips the comparison whatever a local
+ config declares, which `reference.md` § Validation and § Three hashes both state. The gap itself is
+ untouched: `_check_versions` still compares against the module constant `materialize.TEMPLATE_VERSION`
+ rather than an installed template's own reported version, and still becomes observable only when a
+ plugin ships a template carrying one. **Owner stays H7 — specifically H7b.** Unlike its sibling, this
+ row was *not* renamed: it is still "Template version moved".
+ 
++**AMENDED 2026-08-16 (H7b Part A task 10): the comparison is fixed; the reachability is not.**
++`BaseTemplate.version` now exists, `GenericTemplate` reports it, `_check_versions` compares a
++config's `template_version` against `type(template).version`, and `materialize` writes what the
++template reports. The false guarantee this row named — a warning saying "the installed template
++reports" while comparing against core's own module constant — is gone.
++
++What remains, and it is why this row is amended rather than struck: **no installed template's class
++is ever held in this build**, so the comparison still only ever runs against core's own template and
++a project-local one is still skipped. `Claim.cls` is `None` for an installed claim by decision 3 of
++`2026-08-16-plugin-registries-design.md`. This row's own words — "It becomes observable when a
++plugin ships a template with a version of its own" — are still the condition, and it is now filed
++separately as `## OPEN — an installed template's name resolves but its class is never loaded`,
++**owner unassigned**. Strike this row when that one is closed, not before.
++
+ ### Row 284 "Correction can be applied" — **Owner: H4 Statistics**
+ 
+ `_check_sweep` raises `W-STATS-CORRECTION-INAPPLICABLE` whenever `statistics.correction` is
+ `fdr_bh` and the family holds at least one comparison. The row's condition is a three-way
+ disjunction — `statistics.null_test` is undeclared, **or** its `shuffle` reaches none of the
+ family's members, **or** a parameter-axis contrast accounts for every member. The check tests none
+ of them. It is correct by accident today, because `_check_unimplemented` refuses any declared
+ `statistics.null_test` outright (`E-STATS-NULLTEST-UNSUPPORTED`), so no config that validates can
+ carry one.
+ 
+@@ -5982,10 +6003,29 @@ inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artif
+ two module dicts, `io.write` dispatches through `_suffix_for`, which iterates `WRITERS` alone, and
+ `StepIO._read` indexes `READERS` — so a suffix registered as a writer and not as a reader gives
+ `io.read_upstream` a bare `KeyError` rather than a coded `ArtifactError`. Proved by mutation
+ (`H7b-SCOPING-2.md` § 5a): adding one key to `WRITERS` alone reproduced it, and deleting the key
+ restored the read. Filed here for the first time — `H7c` task 14 filed four entries in this family
+ and none of them was this one.
+ 
+ **Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
+ decorator `register_reader`, with `register_writer` refusing a suffix that has no reader. The code
+ is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not before.
++
++## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
++
++H7b Part A task 8 makes an installed distribution's `publishable.templates` entry point a claim in
++the merge, so its name is known, collisions against it are decided, and `template_names` lists it.
++Task 9 refuses a config naming one, as `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the `-UNSUPPORTED` build
++family, no § Errors row.
++
++The refusal exists because decision 3 of `2026-08-16-plugin-registries-design.md` states the
++entry-point invariant of **resolution** and not merely of the negative answer: "`validate` resolves a
++name *without importing a line*". Loading the one entry point a config names would answer a narrower
++reading of the same sentence and is the natural next step, but it is a decision, not an oversight,
++and it is not H7b Part B's — Part B is the resolver half and its nine tasks do not touch template
++loading.
++
++**What retiring it needs:** `Claim.cls` populated for an installed claim; `is_local_template`'s two
++class-taking callers (`validate._check_versions`, `materialize.materialize_config`) reading
++`Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
++`provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**
+diff --git a/src/publishable/generators/experiment.py b/src/publishable/generators/experiment.py
+index b529a18..070c442 100644
+--- a/src/publishable/generators/experiment.py
++++ b/src/publishable/generators/experiment.py
+@@ -47,21 +47,21 @@ def class_name(experiment: str) -> str:
+ 
+ 
+ def generate_experiment(
+     *, repo_root: Path, name: str, template_name: str, input_dir: str, output_dir: str
+ ) -> Path:
+     # One merge for both halves — the resolution and the known-name list the
+     # message prints — so a repo's `templates/` is imported once here too.
+     template, known = resolve_template(template_name, repo_root)
+     if template is None:
+         raise ContractError(
+-            unknown_template_message(template_name, known),
++            unknown_template_message(template_name, known, plugin=None),
+             code="E-TEMPLATE-UNKNOWN",
+         )
+     root = repo_root.resolve()
+     for label, raw in (("input_dir", input_dir), ("output_dir", output_dir)):
+         resolved = Path(raw).expanduser().resolve()
+         if resolves_inside_repo(resolved, root):
+             raise ContractError(
+                 f"{label} {resolved} resolves inside the git repository at {root}",
+                 code="E-DATA-IN-REPO",
+             )
+diff --git a/src/publishable/generators/template.py b/src/publishable/generators/template.py
+index 42b14fa..34696a9 100644
+--- a/src/publishable/generators/template.py
++++ b/src/publishable/generators/template.py
+@@ -1,26 +1,27 @@
+ """`generate template` — a project-local template stub. Greenfield only."""
+ 
+ from pathlib import Path
+ 
+ from publishable.errors import ContractError
+ 
+-# The stub emits five members — `parameter_spec`, `validate`, `aggregate`,
+-# `naming_pattern`, `default_repeats` — and none of `BaseTemplate`'s other
+-# four. `required_env` now has a reader (`validate` checks it), but a stub
+-# declaring `[]` would only ever satisfy that check trivially and would
+-# still teach its reader to set a field this generated file has no other use
+-# for. `field_convention`, `apparatus_probe` and `apparatus_facts` are
+-# declared on the base class and read by nothing in this build.
+-# `docs/reference.md` § Templates: where parameters are defined shows all
+-# nine, because that example is core's own `generic` rather than a file you
+-# are about to edit.
++# The stub emits `parameter_spec`, `validate`, `aggregate`, `naming_pattern` and
++# `default_repeats`, and none of the rest. `required_env` has a reader
++# (`validate` checks it), but a stub declaring `[]` would only ever satisfy that
++# check trivially and would still teach its reader to set a field this generated
++# file has no other use for. `version` is omitted for a sharper reason: a
++# project-local template is never version-checked at all, so a version in this
++# file would be a string nothing reads. `field_convention`, `apparatus_probe`
++# and `apparatus_facts` are declared on the base class and read by nothing in
++# this build. `docs/reference.md` § Templates: where parameters are defined
++# shows the whole set, because that example is core's own `generic` rather than
++# a file you are about to edit.
+ #
+ # Everything the stub imports comes from `publishable` itself — the one import
+ # root; `publishable.templates` and every other submodule are implementation
+ # detail.
+ TEMPLATE_PY = '''\
+ # templates/{name}.py — a template only this project needs, discovered by path
+ from publishable import BaseTemplate, Param, register_template
+ 
+ 
+ @register_template("{name}")
+diff --git a/src/publishable/materialize.py b/src/publishable/materialize.py
+index 6764a92..fe97acf 100644
+--- a/src/publishable/materialize.py
++++ b/src/publishable/materialize.py
+@@ -94,29 +94,30 @@ def _parameters_block(spec: dict[str, Param]) -> list[str]:
+ def materialize_config(
+     *,
+     template: BaseTemplate,
+     template_name: str,
+     name: str,
+     input_dir: str,
+     output_dir: str,
+     entrypoint: str,
+ ) -> str:
+     local = is_local_template(type(template))
+-    header_version = "" if local else f" v{TEMPLATE_VERSION}"
++    reported = None if local else type(template).version
++    header_version = "" if reported is None else f" v{reported}"
+     body = [
+         f"# configs/{name}/config.yaml",
+         f"# Generated by `publishable init` from template `{template_name}`{header_version}.",
+         "# This file is the complete parameter set. Edit it, validate it, run it.",
+         "",
+         'schema_version: "1.0"',
+         f"experiment_type: {template_name}",
+-        *([] if local else [f'template_version: "{TEMPLATE_VERSION}"']),
++        *([] if reported is None else [f'template_version: "{reported}"']),
+         "plugin: null",
+         "",
+         "metadata:",
+         f"  name: {name}",
+         '  description: ""                  # REQUIRED — one line, what this run is for',
+         "  authors: []                      # REQUIRED",
+         '  institution: ""',
+         "",
+         f'entrypoint: "{entrypoint}"',
+         "",
+diff --git a/src/publishable/templates/base.py b/src/publishable/templates/base.py
+index a3f99bf..25ec0b1 100644
+--- a/src/publishable/templates/base.py
++++ b/src/publishable/templates/base.py
+@@ -9,20 +9,26 @@ if TYPE_CHECKING:
+ 
+ 
+ class BaseTemplate:
+     naming_pattern: str = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+     field_convention: str = "generic"
+     default_repeats: int = 1
+     required_env: list[str] = []
+     apparatus_probe: str | None = None
+     apparatus_facts: list[str] = []
+     parameter_spec: dict[str, Param] = {}
++    # What this template reports as its own spec version, which a config's
++    # `template_version` is compared against. `None` for a template that tracks
++    # no version — the base's answer, and the right one for a project-local file,
++    # whose version is a string its author remembers to bump rather than a fact
++    # core can check.
++    version: str | None = None
+ 
+     def validate(self, config: Any) -> list[str]:
+         """Cross-field rules. Receives the WHOLE config; [] when OK."""
+         return []
+ 
+     def aggregate(self, units: "UnitTable", cfg: Any) -> dict[str, Any]:
+         """Derive metrics from the unit table; `{}` when there is nothing to derive.
+ 
+         Core calls this once per recording step, and a pipeline can have several,
+         so returning `{}` for a table this template does not recognize is the
+diff --git a/src/publishable/templates/builtin/generic.py b/src/publishable/templates/builtin/generic.py
+index 6e69705..25f0d94 100644
+--- a/src/publishable/templates/builtin/generic.py
++++ b/src/publishable/templates/builtin/generic.py
+@@ -1,21 +1,23 @@
++from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import Param
+ from publishable.templates.base import BaseTemplate
+ 
+ 
+ class GenericTemplate(BaseTemplate):
+     naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+     field_convention = "generic"
+     default_repeats = 1
+     required_env: list[str] = []
+     apparatus_probe = None
+     apparatus_facts: list[str] = []
++    version = TEMPLATE_VERSION
+ 
+     parameter_spec = {
+         "analysis.method": Param(
+             str, default="pearson", choices=["pearson", "spearman", "kendall"]
+         ),
+         "analysis.min_samples": Param(int, default=30, ge=2),
+         "analysis.confidence": Param(float, default=0.95, gt=0, lt=1),
+         "analysis.drop_missing": Param(
+             bool, default=True, help="Drop rows with any missing value before analysis"
+         ),
+diff --git a/src/publishable/templates/registry.py b/src/publishable/templates/registry.py
+index 18628ae..d55f8cc 100644
+--- a/src/publishable/templates/registry.py
++++ b/src/publishable/templates/registry.py
+@@ -11,79 +11,164 @@ name to fail at load, naming both providers, because "a plugin that could
+ redefine `generic` could change what a config means without changing the
+ config". This is the merge, so it is the first place that holds both sides —
+ and `discovery.py` cannot hold them, `registry` importing it. The refusal is
+ of the repo rather than of one lookup: every name resolves through `_merged`,
+ so a `templates/` core cannot merge refuses a config naming some third
+ template too, and there is no order left for a merge to express.
+ """
+ 
+ from collections.abc import Sequence
+ from pathlib import Path
++from typing import NamedTuple
+ 
++from publishable.plugins import provider_of, scan_group
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.builtin.generic import GenericTemplate
+ from publishable.templates.discovery import PartialLoadError, discover_local
+ 
+ _BUILTIN: dict[str, type[BaseTemplate]] = {"generic": GenericTemplate}
+ 
+ 
+-def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
+-    if repo_root is None:
+-        return dict(_BUILTIN)
+-    local = discover_local(repo_root)
+-    for name in sorted(local):  # name order: import order may decide nothing here
+-        if name in _BUILTIN:
+-            core = _BUILTIN[name]
++class Claim(NamedTuple):
++    """One registration of one template name, and who made it.
++
++    `cls` is `None` for an installed claim, and that is the mechanism rather than
++    a gap: an entry point is resolved from package metadata, so core knows the
++    name and the distribution without importing a line — see `plugins.py`. The
++    consequences are that an installed name is *known* and not *resolvable* in
++    this build, and that a refused installed claim carries no class whose
++    declarations could be read.
++    """
++
++    provenance: str
++    provider: str
++    cls: type[BaseTemplate] | None
++
++
++def _claims(repo_root: Path | None) -> dict[str, Claim]:
++    """Every claim on every template name, from all three sources, verdict reached.
++
++    The three sources are core's own registry, the installed distributions'
++    `publishable.templates` entry points, and — when a repo root is given — that
++    repo's `templates/`. Collected in full before any verdict, on
++    `discover_local`'s precedent and for its reason: a verdict reached while a
++    claim set was still partial is a verdict over the wrong set. Reported in name
++    order, and claimants within a name in provider order, because install order
++    and import order are properties of a machine rather than of a design.
++
++    Two local registrations of one name never reach here — `discover_local`
++    refuses that pair itself, knowing what a repo declares — so this function
++    sees at most one local claimant per name.
++    """
++    claims: dict[str, list[Claim]] = {}
++    for name, core in _BUILTIN.items():
++        claims.setdefault(name, []).append(
++            Claim(provenance="core", provider=f"{core.__module__}.{core.__qualname__}", cls=core)
++        )
++    for name, entries in scan_group("publishable.templates").items():
++        for ep in entries:
++            claims.setdefault(name, []).append(
++                Claim(provenance="installed", provider=provider_of(ep), cls=None)
++            )
++    local = discover_local(repo_root) if repo_root is not None else {}
++    for name, found in local.items():
++        claims.setdefault(name, []).append(
++            Claim(provenance="local", provider=found.provider, cls=found.cls)
++        )
++    for name in sorted(claims):
++        if len(claims[name]) > 1:
++            who = " and ".join(sorted(claim.provider for claim in claims[name]))
+             raise PartialLoadError(
+-                f"the project-local template `{local[name].provider}` claims the name "
+-                f"`{name}`, which core itself registers as "
+-                f"{core.__module__}.{core.__qualname__} — a local template that could "
+-                "redefine a core name could change what a config means without "
+-                "changing the config, which is what `parameters_hash` exists to make "
+-                "impossible. Rename yours.",
++                f"the template name `{name}` is claimed more than once: {who} — a "
++                "template that could redefine another's name could change what a "
++                "config means without changing the config, which is what "
++                "`parameters_hash` exists to make impossible. Install order and "
++                "import order are the only tie-breaks available, and both are "
++                "properties of a machine rather than of a design. Rename yours.",
+                 code="E-TEMPLATE-COLLISION",
+-                partial_templates=[found.cls for found in local.values()],
++                partial_templates=[
++                    claim.cls
++                    for these in claims.values()
++                    for claim in these
++                    if claim.cls is not None
++                ],
+             )
+-    return {name: found.cls for name, found in local.items()} | _BUILTIN
++    return {name: these[0] for name, these in claims.items()}
++
++
++def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
++    """The names this build can hand back a class for: core's and this repo's.
++
++    An installed name is in `_claims` and not here. `template_names` reads
++    `_claims`, so the name is known; `get_template` reads this, so it is not
++    resolved — see `Claim.cls`.
++    """
++    return {name: claim.cls for name, claim in _claims(repo_root).items() if claim.cls is not None}
+ 
+ 
+ def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | None:
+     cls = _merged(repo_root).get(name)
+     return cls() if cls else None
+ 
+ 
+ def resolve_template(
+     name: str, repo_root: Path | None = None
+ ) -> tuple[BaseTemplate | None, list[str]]:
+     """`get_template`, plus the known names, from **one** merge.
+ 
+     The pair exists because the two callers that report `E-TEMPLATE-UNKNOWN`
+     need both halves, and asking for them separately would run local discovery
+     twice — which means importing every `templates/*.py` twice, executing every
+     user top level twice. `reference.md` § Creating a plugin widens `validate`'s
+     import exception from one named module to a whole directory; it does not
+     widen it to that directory twice.
++
++    `_claims` is called once per call here, exactly as `_merged` was — asking
++    for the two halves separately would import every `templates/*.py` twice.
+     """
+-    merged = _merged(repo_root)
+-    cls = merged.get(name)
+-    return (cls() if cls else None), sorted(merged)
++    claims = _claims(repo_root)
++    claim = claims.get(name)
++    cls = claim.cls if claim is not None else None
++    return (cls() if cls else None), sorted(claims)
+ 
+ 
+ def template_names(repo_root: Path | None = None) -> list[str]:
+-    return sorted(_merged(repo_root))
++    return sorted(_claims(repo_root))
+ 
+ 
+-def unknown_template_message(name: str, known: Sequence[str]) -> str:
++def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
++    """Where the template `name` resolves from — `core`, `local`, `installed` — or
++    `None` if nothing claims it.
++
++    Asked at the merge, which is the one place holding all three sources, and
++    answered from which source a claim came from rather than from anything
++    observable on a class afterward. `discovery.is_local_template` answers a
++    narrower question about a class that is already in hand, and keeps its two
++    callers: nothing in this build ever holds an installed template's class, so a
++    class-taking predicate has no third value to return.
++    """
++    claim = _claims(repo_root).get(name)
++    return claim.provenance if claim is not None else None
++
++
++def unknown_template_message(name: str, known: Sequence[str], plugin: str | None = None) -> str:
+     """The one wording for a name neither `resolve_template` call site resolved —
+     `validate`'s finding and `generate_experiment`'s raise both read this
+     rather than each keeping its own copy, so the two surfaces cannot drift
+     the way two hard-coded literals eventually would.
+ 
+     Takes the already-resolved names rather than a repo root, so building the
+     message costs no second discovery: each caller has just merged, and has
+     them in hand.
++
++    `plugin` is the config's own field, when the caller has a config. It is a
++    readable note beside the authoritative pin in `uv.lock` rather than a second
++    one — core never installs from it — so the hint says where the template was
++    expected to come from and stops there. A caller with no config passes
++    `None`: `generate experiment` is writing the file that would hold it.
+     """
++    hint = f" — `plugin` says it should come from `{plugin}`" if plugin else ""
+     return (
+         f"names `{name}`, which no template — core's, an installed plugin's, "
+         f"or this project's own `templates/` — registers "
+-        f"(known: {', '.join(known)})"
++        f"(known: {', '.join(known)}){hint}"
+     )
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 9575476..e1a1779 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -9,42 +9,42 @@ from typing import Any
+ import yaml
+ 
+ from publishable.base_experiment import load_experiment
+ from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+ from publishable.correction import ALPHA
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
+ from publishable.hashes import design_digest
+ from publishable.manifest import POLICIES
+-from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
++from publishable.plugins import GROUPS, provider_of, scan_group
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+ from publishable.secrets import credential_values, load_env, missing_env
+ from publishable.stats import min_honest_draws
+ from publishable.strata import levels_for
+ from publishable.sweep import (
+     NAMEABLE_CHAR,
+     SWEEP_MODES,
+     check_swept_value,
+     expand,
+     parameter_axis_modes_present,
+     removal_value,
+     render_value,
+     sample_fault,
+     selector_paths,
+ )
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.discovery import is_local_template
+-from publishable.templates.registry import resolve_template, unknown_template_message
++from publishable.templates.registry import _claims, unknown_template_message
+ from publishable.units import (
+     COLLAPSE_RULES,
+     DRAWN_ASSIGN_METHODS,
+     NUMERIC_COLLAPSE_RULES,
+     UnitList,
+     assignment_for,
+     auto_block_size,
+     clusters_of,
+     fold_basis,
+     holdout_for,
+@@ -517,26 +517,28 @@ def validate_config(
+     # `resolve_template` imports every project-local `templates/*.py`, executing
+     # user top level, which may read anything. Loading before that is why the
+     # call sits here rather than lower; only the weaker property is pinned.
+     # `reference.md` § CLI reference promises `validate` "creates nothing and
+     # reaches nothing off the machine"; a file in the repository root is
+     # on-machine, so this is inside that promise rather than an exception to it.
+     # Never overrides an exported variable — see `secrets.load_env`.
+     load_env(repo_root)
+     try:
+         # One merge, so one local discovery: the known-name list the unknown-name
+-        # finding prints comes back from the same call that resolved the name.
+-        # Asking for it separately would import every `templates/*.py` a second
+-        # time — every user top level executed twice — and, since the message is
+-        # built after this guard closes, a `ContractError` from that second
+-        # import would escape `validate_config` and discard every other finding.
+-        template, known = resolve_template(name, repo_root)
++        # finding prints, and the claim (provenance and provider) an unresolved
++        # name's finding reads, both come back from the same call that resolved
++        # the name. Asking for any of them separately would import every
++        # `templates/*.py` a second time — every user top level executed twice —
++        # and, since a later finding is built after this guard closes, a
++        # `ContractError` from that second import would escape `validate_config`
++        # and discard every other finding.
++        claims = _claims(repo_root)
+     except ContractError as exc:
+         # The load-time refusals resolving a template can make — two codes,
+         # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Two *codes*, not two
+         # faults: `E-TEMPLATE-LOAD` covers three shapes of its own (see its
+         # § Errors row), and a `Param` whose construction raises — `default=None`
+         # without `nullable=True`, or a `requires_env` mapping that is not total
+         # over `choices` — is the first of them, "raises while importing". Adding
+         # such a fault adds no code and does not move this count. Reported under
+         # the code the raise carries rather than a code chosen here, so the two
+         # surfaces stay one fault, and reported at all because `validate` is
+@@ -557,26 +559,44 @@ def validate_config(
+         # class body, before its own `@register_template` runs, leaves no
+         # class to read; that residual is `reference.md`'s to describe rather
+         # than this call's to close.
+         partial = getattr(exc, "partial_templates", None) or []
+         names: list[str] = []
+         for cls in partial:
+             names.extend(declared_credential_names_for(doc, cls))
+         c.credentials = credential_values(names)
+         c.error(exc.code, "experiment_type", str(exc))
+         return None
++    claim = claims.get(name)
++    template = claim.cls() if claim is not None and claim.cls is not None else None
++    known = sorted(claims)
+     if template is None:
+-        c.error(
+-            "E-TEMPLATE-UNKNOWN",
+-            "experiment_type",
+-            unknown_template_message(name, known),
+-        )
++        if claim is not None and claim.provenance == "installed":
++            c.error(
++                "E-TEMPLATE-INSTALLED-UNSUPPORTED",
++                "experiment_type",
++                f"names `{name}`, which {claim.provider} registers as a "
++                "`publishable.templates` entry point — but core resolves an installed "
++                "template's name without importing its package, and loading one is not "
++                "implemented in this build; installed templates will be honored in a "
++                "later slice. Use a project-local `templates/` file or a core template "
++                "for now",
++            )
++        else:
++            plugin = doc.get("plugin")
++            c.error(
++                "E-TEMPLATE-UNKNOWN",
++                "experiment_type",
++                unknown_template_message(
++                    name, known, plugin if isinstance(plugin, str) and plugin else None
++                ),
++            )
+         return None  # every later check reads the spec
+ 
+     entrypoint = doc.get("entrypoint")
+     if experiment is None and isinstance(entrypoint, str) and entrypoint:
+         try:
+             if repo_root is not None:
+                 experiment = load_experiment(repo_root, entrypoint)
+         except SystemExit as exc:
+             # `SystemExit` is a `BaseException`, so the broad `except Exception` below
+             # does not see it. A user package calling `sys.exit()` at module scope —
+@@ -601,20 +621,21 @@ def validate_config(
+             # reader hunting for a missing module rather than a malformed config line.
+             own = isinstance(exc, ContractError) and exc.code == "E-ENTRYPOINT-IMPORT"
+             c.error(
+                 "E-ENTRYPOINT-IMPORT",
+                 "entrypoint",
+                 str(exc) if own else f"could not be imported: {type(exc).__name__}: {exc}",
+             )
+ 
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
++    _check_plugin_collisions(c)
+     _check_required_env(doc, template, c)
+     _check_requires_env(doc, template, c)
+     # Set once `template` is resolved, so `c.render()` — whenever it is finally
+     # called, by `command_validate` or `command_run` — redacts a credential value
+     # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
+     # built before this line runs. Redaction happens at render, not at
+     # construction (`Diagnostic` is a frozen record with no methods), so setting
+     # this after the fact still covers every finding already appended.
+     c.credentials = credential_values(declared_credential_names_for(doc, template))
+     _check_parameters(doc, template, c)
+@@ -763,20 +784,50 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
+         )
+     directory = config_path.parent.name
+     if name and directory and name != directory:
+         c.error(
+             "E-NAME-DIR",
+             "metadata.name",
+             f"is `{name}` under `configs/{directory}/`; the two name one experiment",
+         )
+ 
+ 
++def _check_plugin_collisions(c: Collector) -> None:
++    """One entry-point key claimed by two installed distributions, outside templates.
++
++    Templates are not here: a template name has a second home in a project's own
++    `templates/`, so its verdict is reached at the merge that holds all three
++    sources and is reported as `E-TEMPLATE-COLLISION`. These four groups have one
++    source each, so the verdict is a property of the machine's installed set
++    alone and is reported wherever it is noticed.
++
++    Reported rather than raised, and reported for every config rather than only
++    for one naming a colliding key: a registry core cannot make sense of is
++    refused however it is asked, which is the same shape `_claims` takes for a
++    `templates/` core cannot merge. Read from metadata, so no plugin is imported
++    to reach a verdict.
++    """
++    for group in GROUPS:
++        if group == "publishable.templates":
++            continue
++        for name, entries in scan_group(group).items():
++            if len(entries) > 1:
++                who = " and ".join(sorted(provider_of(ep) for ep in entries))
++                c.error(
++                    "E-PLUGIN-COLLISION",
++                    "plugin",
++                    f"key `{name}` in the `{group}` entry-point group is claimed by "
++                    f"{who} — install order is the only tie-break available and it is "
++                    "a property of a machine rather than of a design. Uninstall one",
++                )
++
++
+ def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:
+     entrypoint = doc.get("entrypoint")
+     if not entrypoint or not isinstance(entrypoint, str):
+         c.error(
+             "E-ENTRYPOINT-REQUIRED",
+             "entrypoint",
+             "is empty, and is required — `run` cannot import a step without it",
+         )
+ 
+ 
+@@ -894,23 +945,24 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
+     same set, which is what makes the redaction this feeds a fact rather than a
+     guess. Not shared as one function with `cli.declared_credential_names`: that
+     one takes the `conditions` its caller already expanded, because a second
+     `expand(doc)` there would be a second derivation of the plan actually
+     executed; this module's every other check (`_check_requires_env`,
+     `_check_sweep`, `_check_contrasts`) already re-derives `expand(doc)` locally
+     under the same guard, since `validate` collects findings rather than
+     threading one resolved plan through them, so re-deriving here matches this
+     file's own convention rather than breaking it.
+ 
+-    A `None` template — reached only when `resolve_template` already returned
+-    early — yields the empty list, since `getattr(None, ...)` on a missing
+-    template answers nothing rather than guessing.
++    A `None` template — reached only when `validate_config` already returned
++    early, since it never calls this once `template` is `None` — yields the
++    empty list, since `getattr(None, ...)` on a missing template answers
++    nothing rather than guessing.
+     """
+     raw_required = getattr(template, "required_env", None)
+     # Same guard as `_check_required_env`: nothing reports a `required_env`
+     # that is not a list, so it is ignored here alike rather than iterated as
+     # characters.
+     names: list[str] = list(raw_required) if isinstance(raw_required, list) else []
+     spec = getattr(template, "parameter_spec", None)
+     if not isinstance(spec, dict):
+         # Same guard as `_check_requires_env`: a malformed `parameter_spec`
+         # is that check's finding to make, not this collector's crash to
+@@ -980,47 +1032,49 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
+     computed from `parameter_spec` alone and named only inside this warning, so
+     it stays gated on the mismatch: a config whose `template_version` matches
+     draws nothing here, and an omitted parameter with no default is
+     `E-PARAM-MISSING`'s to report regardless of any version.
+ 
+     The message states what is observable — a parameter the installed template
+     defaults and this config does not set. Core cannot tell that apart from one
+     the author deliberately left at its default, and asserting which it is would
+     be a claim the declaration does not carry.
+ 
+-    A local template is skipped regardless of what `template_version` declares.
+-    `TEMPLATE_VERSION` is core's own constant — comparing a config's declared
+-    string against it is meaningless for a template core did not write, whether
+-    that string happens to match, differ, or was never set at all: `docs/
+-    reference.md` § Three hashes says `template_version` "isn't the answer for
+-    a local template — it's a string its author remembers to bump."
++    A local template is skipped regardless of what `template_version` declares,
++    and so is any template reporting no version of its own. What a config's
++    declared string is compared against is the template's own `version`, read
++    off the class: a module constant would be core's answer for a template core
++    did not write, which `docs/reference.md` § Three hashes rejects — a
++    `template_version` "isn't the answer for a local template — it's a string
++    its author remembers to bump."
+     """
+     if is_local_template(type(template)):
+         return
++    reported = type(template).version
+     declared = doc.get("template_version")
+-    if not declared or declared == TEMPLATE_VERSION:
++    if reported is None or not declared or declared == reported:
+         return
+     set_here = _flatten(doc.get("parameters"), "")
+     unset = [
+         path
+         for path, param in template.parameter_spec.items()
+         if path not in set_here and param.default is not MISSING
+     ]
+     detail = (
+         f"; unset here and left to the installed template's default: {', '.join(unset)}"
+         if unset
+         else ""
+     )
+     c.warn(
+         "W-TEMPLATE-VERSION",
+         "template_version",
+-        f"is {declared} but the installed template reports {TEMPLATE_VERSION}{detail}",
++        f"is {declared} but the template reports {reported}{detail}",
+     )
+ 
+ 
+ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
+     data = doc.get("data") or {}
+ 
+     # Checked first and unconditionally: `input_manifest_policy` has nothing to do
+     # with the repo, so it must not be gated behind the repo-existence check below —
+     # a repo-less config still has to be one `manifest.build_manifest` can execute.
+     policy = data.get("input_manifest_policy")
+diff --git a/tests/test_templates.py b/tests/test_templates.py
+index 47c5038..7d8f615 100644
+--- a/tests/test_templates.py
++++ b/tests/test_templates.py
+@@ -1,21 +1,22 @@
+ import sys
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import BaseTemplate, Param
+ from publishable.diagnostics import Collector
+ from publishable.errors import ContractError
++from publishable.materialize import TEMPLATE_VERSION
+ from publishable.stats import UnitTable
+ from publishable.templates.discovery import discover_local, is_local_template
+-from publishable.templates.registry import get_template, template_names
++from publishable.templates.registry import get_template, template_names, template_provenance
+ from publishable.validate import validate_config
+ 
+ 
+ def test_generic_is_registered_and_declares_its_conventions():
+     t = get_template("generic")
+     assert isinstance(t, BaseTemplate)
+     assert t.field_convention == "generic"
+     assert t.default_repeats == 1
+     assert t.required_env == []
+     assert t.apparatus_probe is None
+@@ -1004,10 +1005,170 @@ def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
+     assert "E-TEMPLATE-LOAD" not in clean.render()
+     assert "E-TEMPLATE-UNKNOWN" not in clean.render()
+ 
+     (repo / "templates" / "broken.py").write_text(RAISES_ON_IMPORT)
+     reported = Collector()
+     validate_config(config, reported)
+     rendered = reported.render()
+     assert "E-TEMPLATE-LOAD" in rendered
+     assert "E-TEMPLATE-UNKNOWN" not in rendered
+     assert str(repo / "templates" / "broken.py") in rendered
++
++
++CLAIMS_MY_ASSAY = """\
++from publishable import BaseTemplate, register_template
++
++
++@register_template("my_assay")
++class LocalAssay(BaseTemplate):
++    parameter_spec = {}
++"""
++
++
++def test_two_installed_distributions_claiming_one_template_name_are_refused(installed, tmp_path):
++    """Entry-point × entry-point — the arm one distribution cannot produce.
++
++    Both providers are named, as `<distribution> <version>`, which is what a
++    reader uninstalls. Decided from metadata: neither module exists, so a
++    verdict that reached for either class would raise `ModuleNotFoundError`
++    instead of reporting.
++    """
++    installed("dist-two", "2.0", {"publishable.templates": {"my_assay": "no_two:T"}})
++    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
++
++    with pytest.raises(ContractError) as excinfo:
++        get_template("my_assay", tmp_path)
++    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
++    message = str(excinfo.value)
++    assert "my_assay" in message
++    assert "dist-one 1.0" in message
++    assert "dist-two 2.0" in message
++
++
++def test_an_installed_distribution_may_not_shadow_a_core_name(installed, tmp_path):
++    """Entry-point × core. Core's claimant is named as its dotted class path,
++    there being no file to rename."""
++    installed("dist-one", "1.0", {"publishable.templates": {"generic": "no_one:T"}})
++
++    with pytest.raises(ContractError) as excinfo:
++        get_template("generic", tmp_path)
++    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
++    message = str(excinfo.value)
++    assert "dist-one 1.0" in message
++    assert "publishable.templates.builtin.generic.GenericTemplate" in message
++
++
++def test_a_local_template_may_not_shadow_an_installed_one(installed, tmp_path):
++    """Entry-point × local, and the case that needs both a repo and a
++    distribution. Both providers are named in their own spelling — a path and a
++    class for the local one, a distribution and a version for the installed."""
++    templates = tmp_path / "templates"
++    templates.mkdir()
++    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
++    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
++
++    with pytest.raises(ContractError) as excinfo:
++        get_template("my_assay", tmp_path)
++    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
++    message = str(excinfo.value)
++    assert f"{templates / 'mine.py'}::LocalAssay" in message
++    assert "dist-one 1.0" in message
++
++
++def test_the_colliding_template_name_reported_is_the_first_in_name_order(installed, tmp_path):
++    """Three colliding names, installed in an order that is neither sorted nor
++    reverse-sorted, so neither candidate reading of "which one is reported"
++    survives. Two names could not tell them apart.
++
++    A fourth collision is mixed in on `generic` — core's own name, always the
++    *first* key `_claims` ever inserts, from the very first source it reads.
++    Three entry-point-only collisions cannot separate "sorted by name" from
++    "whichever collision the merge inserted first": `scan_group` hands back
++    its own group already sorted by name, so an unsorted walk of an
++    entry-point-only claim set coincides with a sorted one by construction.
++    Only a claim whose *first* insertion comes from a different source —
++    core, inserted before any entry point is scanned at all — can pull the
++    two readings apart, since `generic` sorts after `a_one` but is seen
++    first regardless of sorting.
++    """
++    claims = {"m_two": "no:T", "a_one": "no:T", "z_three": "no:T"}
++    installed("dist-two", "2.0", {"publishable.templates": claims})
++    installed("dist-one", "1.0", {"publishable.templates": claims})
++    templates = tmp_path / "templates"
++    templates.mkdir()
++    (templates / "mine.py").write_text(CLAIMS_GENERIC)  # shadows core: a 4th collision
++
++    with pytest.raises(ContractError) as excinfo:
++        get_template("a_one", tmp_path)
++    assert "`a_one`" in str(excinfo.value)
++    assert "m_two" not in str(excinfo.value)
++    assert "z_three" not in str(excinfo.value)
++    assert "`generic`" not in str(excinfo.value)
++
++
++def test_a_clean_installed_claim_is_not_a_collision(installed, tmp_path):
++    """THE HONOURING, and the control that makes every refusal above about a
++    collision rather than about installing anything at all: one distribution
++    claiming a name nothing else claims raises nothing, and the name is known.
++    """
++    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
++    assert "my_assay" in template_names(tmp_path)
++    assert get_template("my_assay", tmp_path) is None  # known, and not loaded — decision 3
++
++
++def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
++    """The direct question, asked where all three sources are in hand.
++
++    All three values in one arrangement, because a fixture with two could not
++    tell a three-valued answer from a boolean one renamed.
++    """
++    templates = tmp_path / "templates"
++    templates.mkdir()
++    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
++    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
++
++    assert template_provenance("generic", tmp_path) == "core"
++    assert template_provenance("my_assay", tmp_path) == "local"
++    assert template_provenance("vendor_assay", tmp_path) == "installed"
++    assert template_provenance("nothing_claims_this", tmp_path) is None
++
++
++def test_a_template_reports_its_own_version_and_the_base_declares_none():
++    """`None` and a string are different claims: the first is "this template
++    tracks no version", which is every template that does not set one, and the
++    second is what `template_version` in a config is compared against."""
++    assert BaseTemplate.version is None
++    assert get_template("generic").version == TEMPLATE_VERSION
++
++
++def test_the_version_warning_names_what_the_template_reports_not_a_core_constant(
++    tmp_path: Path, git_repo: Path
++):
++    """The false guarantee Row 212 names, closed by comparing against the class.
++
++    A local template declaring a version of its own is still skipped — that is
++    `_check_versions`' first line and § Three hashes' rule — so the observable
++    change is that the comparison reads the class rather than a module constant,
++    and the fixture that shows it is a subclass whose `version` differs from
++    core's.
++    """
++    from publishable.diagnostics import Collector
++    from publishable.validate import _check_versions
++
++    class Versioned(BaseTemplate):
++        version = "9.9.9"
++        parameter_spec = {}
++
++    c = Collector()
++    # Declared as `2.0.0` rather than core's own `TEMPLATE_VERSION` (`1.0.0`):
++    # asserting the constant is absent from the message would be trivially true
++    # if the declared value happened to equal it, so the two must differ.
++    _check_versions({"template_version": "2.0.0"}, Versioned(), c)
++    message = next(f.message for f in c.findings if f.code == "W-TEMPLATE-VERSION")
++    assert "9.9.9" in message
++    assert TEMPLATE_VERSION not in message
++
++    # THE CONTROL, produced by the code under test: a config declaring the
++    # version the template reports draws nothing at all.
++    quiet = Collector()
++    _check_versions({"template_version": "9.9.9"}, Versioned(), quiet)
++    assert [f.code for f in quiet.findings] == []
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 32b56fa..722227a 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -4278,32 +4278,35 @@ def test_a_missing_input_manifest_policy_is_reported(write_config):
+ 
+ 
+ def test_an_unknown_input_manifest_policy_is_reported(write_config):
+     """Setting it to a value outside `manifest.POLICIES` used to reach `manifest.py`
+     and raise a bare `ValueError` that `main` does not catch."""
+     assert "E-DATA-POLICY" in codes(write_config({"data.input_manifest_policy": "bogus"}))
+ 
+ 
+ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
+     """`generic` has no cross-field rule of its own, so `E-TEMPLATE-RULE` is exercised
+-    through a stub template swapped in for the registry lookup `validate_config` makes."""
++    through a stub template swapped in for the merge `validate_config` reads."""
+     import publishable.validate as validate_mod
+     from publishable.templates.builtin.generic import GenericTemplate
++    from publishable.templates.registry import Claim
+ 
+     class RuleBreaker(GenericTemplate):
+         def validate(self, config):
+             return ["a cross-field rule was broken"]
+ 
+     monkeypatch.setattr(
+         validate_mod,
+-        "resolve_template",
+-        lambda name, repo_root=None: (RuleBreaker(), ["generic"]),
++        "_claims",
++        lambda repo_root=None: {
++            "generic": Claim(provenance="core", provider="stub", cls=RuleBreaker)
++        },
+     )
+     assert "E-TEMPLATE-RULE" in codes(write_config())
+ 
+ 
+ def test_falling_below_the_repeat_floor_warns():
+     """Exercised directly: `generic`'s floor is 1, so no legal count can breach it.
+ 
+     Routing this through `validate_config` would need a template that does not
+     exist yet, and asserting the warning against an illegal `n: 0` would be
+     testing the error path while claiming to test the floor.
+@@ -12800,10 +12803,95 @@ def test_ablate_remove_resolves_a_value_with_no_key_and_requires_nothing(
+             "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+             "sweep": {
+                 "baseline": {"llm.provider": "openai"},
+                 "ablate": {"remove": ["llm.provider"]},
+             },
+         }
+     )
+     found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+     assert len(found) == 1, [f.message for f in found]
+     assert "OPENAI_TEST_KEY" in found[0].message  # the baseline's, and only it
++
++
++def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
++    installed, write_config
++):
++    """`E-PLUGIN-COLLISION` over a non-template group, reported rather than
++    raised, and reported for a repo whose config names no resolver at all — a
++    registry core cannot make sense of is refused however it is asked.
++
++    Asserted ALONGSIDE nothing: this config declares a table source, so
++    `E-DATA-RESOLVER-UNSUPPORTED` is not in play. The resolver-adjacent
++    companion is the second half of this test.
++    """
++    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "no_two:r"}})
++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:r"}})
++
++    found = messages_by_code(write_config())
++    message = found["E-PLUGIN-COLLISION"]
++    assert "publishable.resolvers" in message
++    assert "plate_wells" in message
++    assert "dist-one 1.0" in message
++    assert "dist-two 2.0" in message
++
++    # Alongside, never instead of: a config that DOES name a resolver still
++    # carries the wholesale refusal. Part B deletes this one line.
++    both = codes(write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}}))
++    assert "E-PLUGIN-COLLISION" in both
++    assert "E-DATA-RESOLVER-UNSUPPORTED" in both
++
++
++def test_one_distribution_per_plugin_name_reports_nothing(installed, write_config):
++    """THE CONTROL. A check that reported unconditionally would pass the test
++    above; this is what makes that one about a collision."""
++    installed(
++        "dist-one",
++        "1.0",
++        {
++            "publishable.resolvers": {"plate_wells": "no_one:r"},
++            "publishable.probes": {"assay_instrument": "no_one:p"},
++        },
++    )
++    assert "E-PLUGIN-COLLISION" not in codes(write_config())
++
++
++def test_an_installed_only_template_name_is_known_and_refused(installed, write_config):
++    """Known, and not resolved: core answers the name from metadata and does not
++    import the distribution to get a class. So the finding is neither
++    `E-TEMPLATE-UNKNOWN` — which would be false — nor silence.
++    """
++    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
++
++    found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
++    assert "E-TEMPLATE-UNKNOWN" not in found
++    message = found["E-TEMPLATE-INSTALLED-UNSUPPORTED"]
++    assert "vendor_assay" in message
++    assert "dist-one 1.0" in message
++
++    # THE CONTROL: a name nothing claims is still `E-TEMPLATE-UNKNOWN`, so the
++    # refusal above is about the installed claim rather than about any
++    # unresolved name.
++    assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "nothing_claims_this"}))
++
++
++def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write_config):
++    """Row 211. The hint is the config's own `plugin` field, which is a readable
++    note beside `uv.lock` rather than an install instruction — so the message
++    says where the template was expected to come from and does not offer to
++    fetch it.
++    """
++    found = messages_by_code(
++        write_config({"experiment_type": "llm_diagnostic", "plugin": "someuser/publishable-llm"})
++    )
++    message = found["E-TEMPLATE-UNKNOWN"]
++    assert "llm_diagnostic" in message
++    assert "someuser/publishable-llm" in message
++    assert "generic" in message  # the known list is still printed
++
++    # THE CONTROL: with no `plugin` declared the message must not invent one, and
++    # must not carry the hint's connective either — a fragment that appeared
++    # under both declarations would pin nothing.
++    plain = messages_by_code(write_config({"experiment_type": "llm_diagnostic"}))[
++        "E-TEMPLATE-UNKNOWN"
++    ]
++    assert "someuser/publishable-llm" not in plain
++    assert "`plugin` says" not in plain
