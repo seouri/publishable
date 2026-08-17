@@ -1357,6 +1357,20 @@ def _check_units(
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
         return None, None, frozenset()
+    except Exception as exc:
+        # A resolver is user code, and `validate` is contracted never to raise —
+        # so anything that is not already a coded refusal becomes one here. The
+        # table and glob branches raise `ContractError` and nothing else, so this
+        # arm is a resolver's by construction rather than a catch-all over core.
+        # `SystemExit` is a `BaseException` and is `load_entry_point`'s to contain
+        # at import; a resolver body calling `sys.exit()` mid-iteration is the
+        # residual, named rather than swallowed.
+        c.error(
+            "E-RESOLVER-RAISED",
+            "data.units",
+            f"resolution raised {type(exc).__name__}: {exc}",
+        )
+        return None, None, frozenset()
 
 
 def _check_measurements(

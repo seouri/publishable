@@ -1307,6 +1307,28 @@ def command_run(config_path: Path) -> int:
     input_dir = Path(doc["data"]["input_dir"]).expanduser()
     output_dir = Path(doc["data"]["output_dir"]).expanduser()
     units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
+
+    # Moved above the roster: a resolver's own body is user code and the first
+    # thing in this command that can raise carrying a credential it read, so the
+    # values `redact` answers from must exist before that call is reached, not
+    # after. `conditions` and `run_template` travel with `credentials` because
+    # `declared_credential_names` needs both.
+    conditions = expand(doc)
+    # Resolved here rather than read off the later `get_template` call, which is
+    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
+    # because without it `registry._merged` never runs `discover_local`, and every
+    # project-local template resolves to `None` — which would empty `credentials`
+    # and silently turn the redaction below into a no-op for exactly the templates
+    # this check is for. Cannot raise: `validate_config` already made the same
+    # call and returned without error, or `command_run` returned above.
+    run_template = get_template(doc.get("experiment_type", ""), repo_root)
+    # Every credential core read for a DECLARED variable — the template's own
+    # `required_env`, plus the union its parameters' `requires_env` resolves to.
+    # Held for this command only and written nowhere; its single consumer is the
+    # redaction in `execute_plan` and — since a resolver runs below — a fresh
+    # collector wrapping the roster call.
+    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
+
     # phase 5: roster. `technical_n` — `{min, max, median}` over the measurement
     # counts rows sharing a key collapsed from — travels to every metric block as
     # `summarize_step`'s `beside_n`, which is the route for a fact `reference.md`
@@ -1315,16 +1337,31 @@ def command_run(config_path: Path) -> int:
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
     resolver_io = ResolverIO(input_dir)
-    roster, technical_n, _columns = (
-        resolve_units(
-            units_decl,
-            input_dir,
-            cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
-            resolver_io=resolver_io,
+    try:
+        roster, technical_n, _columns = (
+            resolve_units(
+                units_decl,
+                input_dir,
+                cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
+                resolver_io=resolver_io,
+            )
+            if units_decl
+            else (None, None, frozenset())
         )
-        if units_decl
-        else (None, None, frozenset())
-    )
+    except Exception as exc:
+        # `main`'s handler prints `{exc}` with no collector in scope, and a
+        # non-`PublishableError` never reaches it at all — it ends the command in
+        # a traceback. A resolver's message can carry a credential it read, so the
+        # raise is turned into a diagnostic here, through a collector holding the
+        # values `redact` answers from. A FRESH collector rather than `c`, which
+        # has already been rendered and printed above: appending to it would
+        # re-print every earlier finding and inflate the counts line.
+        roster_c = Collector()
+        roster_c.credentials = credentials
+        roster_code = exc.code if isinstance(exc, PublishableError) else "E-RESOLVER-RAISED"
+        roster_c.error(roster_code, "data.units", str(exc))
+        print(roster_c.render(), file=sys.stderr)
+        return EXIT_WRONG
     # Carried only when the input path actually merged rows. A run whose STEP does
     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
     # an ungated `technical_n` would report `{min: 1, max: 1, median: 1}` beside a
@@ -1492,20 +1529,6 @@ def command_run(config_path: Path) -> int:
         partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
-    conditions = expand(doc)
-    # Resolved here rather than read off the later `get_template` call, which is
-    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
-    # because without it `registry._merged` never runs `discover_local`, and every
-    # project-local template resolves to `None` — which would empty `credentials`
-    # and silently turn the redaction below into a no-op for exactly the templates
-    # this check is for. Cannot raise: `validate_config` already made the same
-    # call and returned without error, or `command_run` returned above.
-    run_template = get_template(doc.get("experiment_type", ""), repo_root)
-    # Every credential core read for a DECLARED variable — the template's own
-    # `required_env`, plus the union its parameters' `requires_env` resolves to.
-    # Held for this command only and written nowhere; its single consumer is the
-    # redaction in `execute_plan`.
-    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
     sweep_block = doc.get("sweep") or {}
     swept_paths = wide_swept_paths(sweep_block)
     # One frozenset of unit keys per condition that selects a group axis — `None`

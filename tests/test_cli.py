@@ -9273,3 +9273,70 @@ def test_a_hash_index_run_hashes_the_index_and_nothing_else(tmp_path, capsys):
     manifest = json.loads((doc["run_dir"] / "manifest" / "input.json").read_text())
     assert manifest["files"]["index.csv"]["sha256"] is not None
     assert manifest["files"]["unnamed.txt"]["sha256"] is None
+
+
+_TEMPLATE_REQUIRING_MY_KEY_CLI = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("keyed")
+class Keyed(BaseTemplate):
+    required_env = ["MY_KEY"]
+    parameter_spec = {}
+"""
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        ContractError("resolver failed: key=SENTINEL-sk-abc123", code="E-UNITS-SOURCE-MISSING"),
+        ValueError("resolver failed: key=SENTINEL-sk-abc123"),
+    ],
+    ids=["contract-error", "value-error"],
+)
+def test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole(
+    exception, monkeypatch, tmp_path, capsys
+):
+    """Probes C and D. C: a `ContractError` from resolution printed verbatim
+    through `main`'s bare handler. D: a `ValueError` escaping `main` entirely as a
+    traceback with the credential in it — the one output no redacting surface
+    sees. Both are asserted with the positive companion (the diagnostic IS
+    produced, with the marker in it), so a sweep finding no sentinel cannot pass
+    on a run that never raised."""
+    import publishable.cli as cli_mod
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+
+    def _boom(*_args, **_kwargs):
+        raise exception
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="keyed",
+        parameters={},
+        _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "SENTINEL-sk-abc123" not in captured  # no traceback, no raw message
+    assert "<redacted:MY_KEY>" in captured  # the positive companion
+
+
+def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, monkeypatch, capsys):
+    """THE CONTROL for the pair above: the wrap must not turn a healthy run into a
+    finding. Without it, a `try` that reported unconditionally would pass both."""
+    monkeypatch.setenv("MY_KEY", "irrelevant")
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="keyed",
+        parameters={},
+        _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-RESOLVER-RAISED" not in captured
+    assert "E-UNITS-SOURCE-MISSING" not in captured

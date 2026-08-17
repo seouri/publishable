@@ -12587,6 +12587,65 @@ def test_a_template_declaring_no_required_env_reports_nothing(write_config, monk
     assert "E-CRED-MISSING" not in codes(write_config())
 
 
+def test_a_resolvers_non_contract_raise_does_not_escape_validate(monkeypatch, write_config):
+    """Probe B. `validate` is contracted never to raise; a plugin resolver raising
+    `KeyError` is user code, and `_check_units` guarded only `ContractError`."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("resolver failed")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    found = messages_by_code(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id"}})
+    )
+    assert "E-RESOLVER-RAISED" in found
+    assert "ValueError" in found["E-RESOLVER-RAISED"]
+
+
+_TEMPLATE_REQUIRING_MY_KEY = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("keyed")
+class Keyed(BaseTemplate):
+    required_env = ["MY_KEY"]
+    parameter_spec = {}
+"""
+
+
+def test_a_resolvers_raise_is_redacted_at_validate(monkeypatch, write_config, git_repo):
+    """Probe A, kept as the CONTROL that makes the run-side tests readable: the
+    identical exception from the identical function must come back redacted here,
+    or a stderr sweep finding no sentinel proves nothing about redaction."""
+    import publishable.validate as validate_module
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "keyed.py").write_text(_TEMPLATE_REQUIRING_MY_KEY)
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "experiment_type": "keyed",
+                "template_version": _DELETE,
+                "parameters": {},
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+            }
+        ),
+        c,
+    )
+    rendered = c.render()
+    assert "SENTINEL-sk-abc123" not in rendered
+    assert "<redacted:MY_KEY>" in rendered  # the positive companion
+
+
 _CRED_IMPORT_TEMPLATE = """\
 from publishable import BaseTemplate, register_template
 
