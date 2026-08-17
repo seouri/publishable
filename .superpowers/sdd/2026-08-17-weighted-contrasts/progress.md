@@ -92,3 +92,18 @@ closure, record — and 9-10 are the corrected and general paths that build on t
 Reviewing at that seam puts a gate on the payoff *before* anything is built on top of it, which the
 spec's decision 2 argues is the half that can be built against the wrong estimator entirely.
 **Cost if wrong:** one extra review cycle.
+
+## Tasks 6-8 — the payoff path — complete, review dispatched
+
+Commits `359d641` (thread), `7099c91` (weighted closure), `12ce355` (record), report `dbc0830`.
+Suite 2133 → 2145 passed, 1 skipped, 2 xfailed; four gates clean. `E-DATA-WEIGHT-CONTRAST` alive;
+every new test calls the three comparison functions **directly**, per the plan's correction 1 — no
+weighted contrast can reach `_comparison_step_blocks` through `run` until the refusal retires.
+
+**Two brief/code disagreements the implementer found, both handed to the reviewer to adjudicate
+rather than accepted here.** (1) Task 6's own pinned regression asserted a weighted delta stays at
+6.0; the implementer amended it to 8.0 on the grounds that task 7's `delta` formula weights
+unconditionally on `resample_columns`. **A failing test edited to match the code and a genuinely
+falsified assertion look identical from the diff**, so the reviewer decides which this is. (2) Task
+8's brief omitted the `weighted_by` keyword its own assertion needs — verified empirically to return
+`None` without it.
