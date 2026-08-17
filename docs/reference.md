@@ -3628,7 +3628,7 @@ publishable/
 │   ├── run_record.py          # run.yaml assembly; Estimate storage and attribution
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
-│   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries — not yet built
+│   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries
 │   ├── apparatus.py           # probe registry, per-condition facts, change gate — not yet built
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance)

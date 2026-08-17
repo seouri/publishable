@@ -1,3 +1,4 @@
+import importlib
 import os
 import subprocess
 from pathlib import Path
@@ -76,3 +77,53 @@ def git_repo(tmp_path: Path) -> Path:
     git("add", ".", cwd=repo)
     git("-c", "commit.gpgsign=false", "commit", "-qm", "initial", cwd=repo)
     return repo
+
+
+_DIST_METADATA = """\
+Metadata-Version: 2.1
+Name: {name}
+Version: {version}
+"""
+
+
+@pytest.fixture
+def installed(tmp_path: Path, monkeypatch):
+    """Write a real installed distribution and put it where `importlib.metadata` looks.
+
+    A `<name>-<version>.dist-info/` holding `METADATA` and `entry_points.txt` is
+    exactly what `uv` and `pip` write, and `importlib.metadata` finds a
+    distribution by scanning each `sys.path` entry for one — so this exercises
+    the real discovery path rather than a patch of `entry_points`. What it does
+    not exercise is a build backend turning a `pyproject.toml` entry-points table
+    into `entry_points.txt`; core reads no `pyproject.toml`, so that translation
+    is outside anything a test here could pin.
+
+    Each call gets its own directory. `importlib.metadata`'s path cache is keyed
+    on a directory and its mtime, so adding a second `.dist-info` to a directory
+    already scanned in the same test can be served from cache; two distributions
+    therefore means two calls and two directories.
+
+    A plain fixture rather than an autouse one, and requested by name:
+    `monkeypatch.syspath_prepend` already restores `sys.path` per test, and the
+    environ fixture above is the only autouse fixture this suite has.
+    """
+    made = 0
+
+    def _install(dist_name: str, version: str, groups: dict[str, dict[str, str]]) -> Path:
+        nonlocal made
+        made += 1
+        site = tmp_path / f"site{made}"
+        info = site / f"{dist_name.replace('-', '_')}-{version}.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text(_DIST_METADATA.format(name=dist_name, version=version))
+        (info / "entry_points.txt").write_text(
+            "".join(
+                f"[{group}]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()) + "\n"
+                for group, entries in groups.items()
+            )
+        )
+        monkeypatch.syspath_prepend(str(site))
+        importlib.invalidate_caches()
+        return site
+
+    return _install
