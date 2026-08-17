@@ -262,3 +262,14 @@ the difference between the two is the whole of the rule.
 both absence assertions in task 13, having been written with them in task 11 (`982b9b8`); its name
 and docstring still claim the guarantee. The reviewer reintroduced the dangling citation and the
 test passed. `git log -S` attributes both the writing and the deletion to this slice.
+
+**Fix round 1 — all six findings closed** (`cbc5caf`, `5339f6c`), confirmed by a scoped re-review
+that verified three **by running**: the prescribed blocked rows are restored verbatim and the whole
+surrounding section now separates the table's *Would execute?* column from the prose's
+no-remaining-core-side-blocker reading, with "the executable count stays at three" standing
+unqualified; `strata=None` at both `command_run` sites fails the named test on the **full**
+suite — the withdrawn blind spot, refuted a second time; and reintroducing the dangling citation
+now fails the restored absence assertion. Both undisclosed deviations are disclosed by **appending**
+to the report rather than retro-editing it. Suite 2159 passed, 1 skipped, 2 xfailed.
+
+**All 15 tasks complete.** Whole-branch review next.
