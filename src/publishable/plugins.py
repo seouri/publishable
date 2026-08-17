@@ -22,7 +22,7 @@ project's own `templates/` — and the merge is the one place holding all three
 sources at once.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any, TypeVar
 
@@ -169,3 +169,66 @@ def register_reader(suffix: str) -> Callable[[F], F]:
         return fn
 
     return decorator
+
+
+def _registry_for(group: str) -> dict[str, Callable[..., Any]] | None:
+    """The mapping a group's decorator fills, or `None` for a group whose
+    registration is not a name-to-object mapping.
+
+    Templates are the `None` case: `register_template` records into a pending
+    buffer a discovery pass drains, so what a template class declared is known to
+    whoever drained it and not to this module.
+    """
+    registries: dict[str, dict[str, Callable[..., Any]]] = {
+        "publishable.resolvers": RESOLVERS,
+        "publishable.probes": PROBES,
+        "publishable.writers": WRITERS,
+        "publishable.readers": READERS,
+    }
+    return registries.get(group)
+
+
+def declared_names(group: str, obj: object) -> list[str]:
+    """Every name `obj` is registered under in `group`'s mapping, in name order.
+
+    A list rather than one name because one function may serve two keys — a
+    plugin keeping an old resolver name alongside a new one registers twice — and
+    that is not a disagreement.
+    """
+    registry = _registry_for(group)
+    if registry is None:
+        return []
+    return sorted(name for name, registered in registry.items() if registered is obj)
+
+
+def check_registration(ep: EntryPoint, declared: Sequence[str]) -> None:
+    """The `@register_*` argument against the entry-point key that named it.
+
+    `reference.md` § Creating a plugin: the entry point is the registration and
+    the decorator is a declaration checked against it. Two spellings of one name
+    with no rule for which is canonical is a drift nobody detects until a config
+    names the loser, so loading fails naming both rather than letting one
+    silently win.
+
+    Takes the declared names rather than computing them, so one comparison serves
+    every group: a template's registration lands in a pending buffer its
+    discovery pass drains, and a reverse lookup here would depend on whether
+    anything had drained it yet.
+
+    Reached only where an object behind a key has actually been loaded, which is
+    not `validate` — `validate` answers a name from package metadata and never
+    holds the object. That is the guarantee working rather than a check missing.
+    """
+    if ep.name in declared:
+        return
+    if declared:
+        detail = f"declares `{'`, `'.join(declared)}` instead"
+    else:
+        detail = "calls no `@register_*` naming it"
+    raise ContractError(
+        f"the entry point `{ep.name}` in `{ep.group}` points at `{ep.value}`, which "
+        f"{detail} — the entry point is the registration and the decorator is a "
+        "declaration checked against it, so two spellings of one name are refused "
+        "rather than resolved. Make them agree",
+        code="E-PLUGIN-DECORATOR",
+    )

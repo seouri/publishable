@@ -331,3 +331,80 @@ def test_a_reader_may_not_claim_a_suffix_core_reads(registries):
             return []
 
     assert excinfo.value.code == "E-PLUGIN-COLLISION"
+
+
+def test_a_decorator_argument_matching_its_key_is_accepted(registries):
+    """The honouring. Without it, a check that raised unconditionally passes
+    every refusal below."""
+    from importlib.metadata import EntryPoint
+
+    from publishable.plugins import check_registration, declared_names, register_resolver
+
+    @register_resolver("plate_wells")
+    def resolve(io, cfg):
+        return []
+
+    ep = EntryPoint(name="plate_wells", value="pkg.r:resolve", group="publishable.resolvers")
+    assert declared_names("publishable.resolvers", resolve) == ["plate_wells"]
+    check_registration(ep, declared_names("publishable.resolvers", resolve))
+
+
+def test_a_decorator_argument_disagreeing_with_its_key_is_refused(registries):
+    """Two spellings of one name with no rule for which is canonical is a drift
+    nobody detects until a config names the loser — the defaults-file argument."""
+    from importlib.metadata import EntryPoint
+
+    from publishable.errors import ContractError
+    from publishable.plugins import check_registration, declared_names, register_resolver
+
+    @register_resolver("plate_positions")
+    def resolve(io, cfg):
+        return []
+
+    ep = EntryPoint(name="plate_wells", value="pkg.r:resolve", group="publishable.resolvers")
+    with pytest.raises(ContractError) as excinfo:
+        check_registration(ep, declared_names("publishable.resolvers", resolve))
+
+    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
+    message = str(excinfo.value)
+    assert "plate_wells" in message  # the key
+    assert "plate_positions" in message  # the decorator argument
+    assert "pkg.r:resolve" in message  # where to look
+
+
+def test_an_object_registered_under_several_names_satisfies_any_of_them(registries):
+    """One function may serve two keys — a plugin registering the same resolver
+    under an old name and a new one is not a disagreement. The check is
+    membership, not equality, and a fixture with one name could not tell the two
+    readings apart."""
+    from importlib.metadata import EntryPoint
+
+    from publishable.plugins import check_registration, declared_names, register_resolver
+
+    def resolve(io, cfg):
+        return []
+
+    register_resolver("plate_wells")(resolve)
+    register_resolver("plate_positions")(resolve)
+
+    for key in ("plate_wells", "plate_positions"):
+        ep = EntryPoint(name=key, value="pkg.r:resolve", group="publishable.resolvers")
+        check_registration(ep, declared_names("publishable.resolvers", resolve))
+
+
+def test_an_object_that_registered_nothing_is_refused_and_says_so(registries):
+    """The distinguishable branch: "declared a different name" and "declared no
+    name at all" are different mistakes with different remedies, so their
+    messages must differ. Pinned separately, because both carry one code."""
+    from importlib.metadata import EntryPoint
+
+    from publishable.errors import ContractError
+    from publishable.plugins import check_registration
+
+    ep = EntryPoint(name="plate_wells", value="pkg.r:resolve", group="publishable.resolvers")
+    with pytest.raises(ContractError) as excinfo:
+        check_registration(ep, [])
+
+    message = str(excinfo.value)
+    assert "calls no `@register_" in message  # only this branch says this
+    assert "declares `" not in message  # and only the other branch says that
