@@ -2641,6 +2641,40 @@ def test_a_resolver_source_is_no_longer_refused_wholesale(
     assert "E-RESOLVER-UNKNOWN" in unknown
 
 
+def test_validate_config_refuses_a_resolver_reading_a_swept_parameter(
+    installed, registries, write_config, tmp_path
+):
+    """The `cfg` `_check_units` builds for a resolver at `validate_config`-level is
+    the same `resolve_wide_cfg(doc, wide_swept_paths(...))` substitution the step
+    path uses — pinned here rather than only through `resolve_units` directly,
+    because task 29's report attributed this half to a later task on a spec claim
+    (tasks 25/27/28/29 cannot test through `validate_config`) that had already
+    expired by this commit: `E-DATA-RESOLVER-UNSUPPORTED` left `src/` at task 26,
+    which landed first."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed("dist-two", "1.0", {RESOLVER_GROUP: {"plate_wells": "swept_r29_cfg:resolve"}})
+    (site / "swept_r29_cfg.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key=str(cfg.parameters.analysis.method))\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        found = codes(
+            write_config(
+                {
+                    "data.units": {"from": {"resolver": "plate_wells"}, "key": "well"},
+                    "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+                }
+            )
+        )
+    finally:
+        sys.modules.pop("swept_r29_cfg", None)
+    assert "E-RESOLVER-SWEPT-PARAM" in found
+
+
 def test_the_unsupported_family_is_down_to_null_test(write_config):
     """`E-DATA-RESOLVER-UNSUPPORTED` is gone from every surface, and the family it
     left is not empty — a sweep asserting only an absence would pass identically if
@@ -3196,7 +3230,14 @@ def test_a_resolver_yielding_no_measurement_field_is_refused_under_its_own_code(
     yielding `measurements.by` an obligation for a resolver, where a table's `by`
     may name an identity the step invents. Its own code rather than
     `E-UNITS-ATTR-MISSING`: the two name different declarations, and a reader
-    fixing one is not fixing the other."""
+    fixing one is not fixing the other.
+
+    `collapse: "mean"` also co-fires `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` on the
+    roster's own `operator` attribute (a string, and `"mean"` applies to every
+    column when `collapse` is not a per-column map) — harmless to the two
+    assertions below, which check membership and one negative rather than
+    exhaustiveness, but noted so a reader diffing this fixture against the two
+    `"first"` controls below does not have to rediscover why it differs."""
     c = Collector()
     _check_measurements(
         {
@@ -3227,6 +3268,29 @@ def test_a_resolver_that_does_yield_the_measurement_field_reports_nothing():
         UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
         None,
         frozenset({"operator", "read_id"}),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_resolver_measurement_field_check_is_gated_on_the_roster_resolving():
+    """`_check_units` returns `frozenset()` for `columns` on every failure path,
+    including an unregistered resolver name — so an ungated arm would report
+    `E-RESOLVER-MEASUREMENT-FIELD` about a resolver that never ran, alongside
+    whatever code `_check_units` itself reported for that failure
+    (`E-RESOLVER-UNKNOWN` here). `roster=None` is exactly what every one of
+    those failure paths hands this function; without the `roster is not None`
+    guard, this fires on the empty `columns` default rather than on anything
+    the resolver actually yielded."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "nope"},
+            "measurements": {"by": "read_id", "collapse": "first"},
+        },
+        None,
+        None,
+        frozenset(),
         c,
     )
     assert [f.code for f in c.findings] == []

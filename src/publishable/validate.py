@@ -1372,10 +1372,13 @@ def _check_measurements(
     mean` over `site`, which is a string, has no meaning — use `first` or `mode`, or a
     per-column map. The type comes from the *resolved roster's own attribute values*
     rather than from the declaration, because `attributes` declares names, not types.
-    When the roster does not resolve, the type half is skipped, but the shape half
-    still runs below it: a config can be wrong about `measurements`'s shape with no
-    `input_dir` in reach at all, and skipping both together would make the roster's
-    absence swallow an unrelated fault.
+    When the roster does not resolve, `by`'s and `collapse`'s own shape are still
+    checked below — a config can be wrong about `measurements`'s shape with no
+    `input_dir` in reach at all, and skipping that too would let the roster's absence
+    swallow an unrelated fault — but the two arms that check `by` against what the
+    source actually has (`E-RESOLVER-MEASUREMENT-FIELD`, `E-UNITS-ATTR-MISSING`) and
+    the numeric-type loop are all gated on the roster having resolved: none of them
+    has anything true to say about a source that never ran.
 
     A single rule applies to every collapsed column (a per-column map's un-named
     columns fall back to `first`, the same fallback `units.rule_for` uses), so a
@@ -1409,17 +1412,27 @@ def _check_measurements(
         )
     source = units.get("from")
     resolver = source.get("resolver") if isinstance(source, dict) else None
-    if valid_by is not None and isinstance(resolver, str) and resolver:
-        # Ungated, unlike the table arm below it. A table's `by` may name a
-        # measurement identity the STEP invents through `io.record(...,
-        # measurement=)`, which is why that arm waits until rows were actually
-        # collapsed. A resolver has no columns at all, so `reference.md` § Where
-        # units come from turns yielding `by` into an obligation — "the field a
-        # CSV would simply have carried has to be named" — and
-        # `E-RESOLVER-MEASUREMENT-FIELD`'s row states the fault without a collapse
-        # precondition. The columns here are what the resolver yielded, before the
-        # projection onto `data.units.attributes`: the projected roster carries
-        # only declared attributes, and `by` is not one of them.
+    if valid_by is not None and isinstance(resolver, str) and resolver and roster is not None:
+        # Ungated on collapse, unlike the table arm below it — but gated on the
+        # roster having resolved at all. A table's `by` may name a measurement
+        # identity the STEP invents through `io.record(..., measurement=)`,
+        # which is why that arm waits until rows were actually collapsed. A
+        # resolver has no columns at all, so `reference.md` § Where units come
+        # from turns yielding `by` into an obligation — "the field a CSV would
+        # simply have carried has to be named" — and
+        # `E-RESOLVER-MEASUREMENT-FIELD`'s row states the fault without a
+        # collapse precondition. But `_check_units` returns `frozenset()` for
+        # `columns` on every failure path — an unregistered resolver name,
+        # `E-RESOLVER-YIELD`, `E-UNITS-EMPTY`, a missing or non-absolute
+        # `input_dir` — and none of those means the resolver yielded nothing
+        # named `by`; it means the resolver never ran (or never finished
+        # running) at all. `roster is not None` is exactly `_check_units`
+        # resolved cleanly, which is when `columns` is an honest report of what
+        # the resolver yielded rather than an empty default standing in for a
+        # fault this arm has no business re-describing. The columns here are
+        # what the resolver yielded, before the projection onto
+        # `data.units.attributes`: the projected roster carries only declared
+        # attributes, and `by` is not one of them.
         if valid_by not in columns:
             c.error(
                 "E-RESOLVER-MEASUREMENT-FIELD",

@@ -175,3 +175,38 @@ Tasks 25-26: reviewed (opus), four verdicts. Task 26's PINNING axis FAILED on a 
   resolver -> roster -> run -> `run.yaml`. The spec defers it there explicitly. **TASK 29 OWES a fixture
   that reads `cfg`** — replacing either threaded `cfg` with `Config({})` goes unnoticed today.
 Tasks 25-26: fix round. Commit d5c1acb. 2079 passed, 1 skipped, 2 xfailed; gates clean.
+
+Tasks 27-29: reviewed (`task-27-29-review.md`), six verdicts across the three tasks. Closing C1, I1, I2,
+M1, M2 in a fix round.
+  C1 (critical, task 27): `_from_resolver`'s attribute loop hashed a declared attribute against a `set`
+  before checking it was a string, so `attributes: [{"operator": 1}]` under a resolver source raised a
+  bare `TypeError` out of `validate`. Fixed with an `isinstance(attribute, str)` guard before the set
+  membership check, reported as `E-UNITS-ATTR-MISSING` (the identifier the table path already uses for
+  the type-shaped version of the same question). The only unhashable shapes an attribute entry can take
+  are `dict` and `list` — both are caught by the one guard; every other wrong type (`int`, `bool`, `None`,
+  `float`) is hashable and already refused correctly as "yields no unit carrying" before this fix, so
+  there is no second sibling shape to close. Pinned by
+  `test_a_non_string_attribute_under_a_resolver_is_refused_not_a_crash` in `tests/test_units.py`.
+  I1 (important, task 28): `_check_measurements`'s resolver arm (`E-RESOLVER-MEASUREMENT-FIELD`) fired on
+  `columns == frozenset()`, which `_check_units` returns on every failure path, not only "resolver ran and
+  yielded nothing named `by`". Fixed by gating the arm on `roster is not None`, matching the reviewer's
+  fix. Corrected the two falsified prose claims in `validate.py` — the function's docstring ("the shape
+  half still runs below it") and the arm's own comment ("the columns here are what the resolver
+  yielded") — rather than deleting them, since both are true once the guard is in place. Pinned by
+  `test_a_resolver_measurement_field_check_is_gated_on_the_roster_resolving` in `tests/test_validate.py`.
+  I2 (important, task 29): the `validate.py` half of the ledger's `cfg`-fixture obligation (line 132-136,
+  above) was pinnable at task 29's own commit — task 26 landed first, so `validate_config` could already
+  resolve a real installed resolver — and task 29 deferred it to task 33 on a spec claim that had already
+  expired. Closed with `test_validate_config_refuses_a_resolver_reading_a_swept_parameter` in
+  `tests/test_validate.py`, using the `installed`/`registries`/`write_config` fixtures already in that
+  file. **The `cli.py` half is still open and remains task 33's**: mutating `cli.py`'s
+  `resolve_wide_cfg(doc, wide_swept_paths(...))` call to `resolve_wide_cfg(doc, set())` leaves the whole
+  2091-test suite green, because no test runs a resolver-sourced config through `main(["run", ...])` —
+  that is the same end-to-end milestone the tasks 25-26 review already assigned task 33.
+  M1 (minor, task 27): `E-UNITS-ATTR-MISSING`'s § Errors row said "either source" over three enumerated
+  sources. Reworded to name the set directly instead of introducing a new count.
+  M2 (minor, task 28): `test_a_resolver_yielding_no_measurement_field_is_refused_under_its_own_code`'s
+  fixture co-fires `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` (unmentioned). Documented the co-firing in the
+  docstring rather than changing the fixture, since both assertions still discriminate under it.
+  Gates after the fix round: `uv run pytest` → 2092 passed, 1 skipped, 2 xfailed (2089 before; +3 new
+  tests); `ruff check` clean; `ruff format --check` clean; `mypy` clean.

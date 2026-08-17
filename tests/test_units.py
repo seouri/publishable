@@ -3993,6 +3993,35 @@ def test_a_reserved_attribute_name_is_refused_before_a_missing_one(installed, re
     assert excinfo.value.code == "E-UNITS-ATTR-RESERVED"
 
 
+def test_a_non_string_attribute_under_a_resolver_is_refused_not_a_crash(
+    installed, registries, tmp_path
+):
+    """`resolve_units` is contracted never to escape with a bare `TypeError`.
+    An unhashable declared attribute (a `dict`) would hit `attribute not in
+    yielded`, which hashes it against a `set`, if the type guard were removed —
+    reported as `E-UNITS-ATTR-MISSING` instead, the same identifier the table
+    source's own non-string-item guard uses."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "unhashable_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": [{"operator": 1}],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("unhashable_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-MISSING"
+
+
 _READS_A_PARAM = """\
 from publishable import Unit, register_resolver
 

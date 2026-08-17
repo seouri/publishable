@@ -382,6 +382,20 @@ def _from_resolver(
         )
     attrs = list(decl.get("attributes") or [])
     for attribute in attrs:
+        if not isinstance(attribute, str):
+            # An unhashable declared attribute (a `dict` or `list` entry) can
+            # never equal a name a resolver yielded any more than it could equal
+            # a CSV column name — `validate._check_units`'s own guard for the
+            # table source (validate.py, "a non-string name can never equal a
+            # CSV column name either") makes the identical call. Checked before
+            # the set membership below, which hashes `attribute` and would raise
+            # a bare `TypeError` out of `validate` for exactly this shape.
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which resolver `{name}` yields "
+                "no unit carrying — a resolver has no columns beyond the attributes it yields, "
+                "so the field a table would simply have carried has to be yielded",
+                code="E-UNITS-ATTR-MISSING",
+            )
         if attribute in RESERVED_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {attribute!r}, which is a field of `Unit` "
