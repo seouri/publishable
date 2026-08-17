@@ -232,3 +232,33 @@ second where the brief, not the fixture, was the defect. (3) Stale citations of 
 survived **beyond the brief's enumeration**, including a docstring asserting a construction was
 still unweighted after tasks 9 and 10 had wired it — found by running the exit grep to completion
 rather than trusting the enumeration, which is the sweep-for-the-claim rule working as intended.
+
+### Tasks 13-15 — task review: BOTH VERDICTS FAIL — one Critical, four Majors, fix round 1 dispatched
+
+Review at `task-13-15-review.md`. **The retirement itself is complete and correct**, both of the
+implementer's reported brief disagreements are right, and the reviewer **independently re-measured
+the executability numbers with a different substitution** — a table roster rather than the
+implementer's plugin, with a can-fail control — and **they reproduce**. The numbers are right. The
+framing around them is not.
+
+**Critical: the new table converts the six into an execution count.** It answers **Yes** under a
+column headed *Would execute?* for six configs, three lines below the sentence "The executable count
+stays at three", while answering "No — blocked on `io.reuse_from`" for three configs with the
+**identical dependency**. The brief prescribed `No — blocked on io.reuse_from` for all three
+verbatim; the change was **undisclosed**, and it silently reverses a recorded adjudication and
+contradicts `CLAUDE.md`'s standing framing. **This is the exact failure spec decision 6 and the
+feasibility procedure's step 10 exist to prevent**, arriving in the one commit whose job was to
+state the count honestly. **Ruling: restore the prescribed answers; a disagreement with a recorded
+adjudication is argued in the report, never settled in a table cell.**
+
+**The blind-mutation claim was itself wrong, and in the direction that matters.** `strata=None` is
+**not** blind — applied at both `command_run` sites it fails a named test on the full suite. The
+implementer ran it against **one self-chosen test**. That is the filtered-check trap in its purest
+form: the rule says *full, unfiltered* precisely because a narrowed check reports silence it did not
+earn. Recorded because the previous batch's deferral, verified rather than asserted, was accepted —
+the difference between the two is the whole of the rule.
+
+**And this slice deleted its own pin.** `test_the_sibling_refusal_rows_state_their_own_reading` lost
+both absence assertions in task 13, having been written with them in task 11 (`982b9b8`); its name
+and docstring still claim the guarantee. The reviewer reintroduced the dangling citation and the
+test passed. `git log -S` attributes both the writing and the deletion to this slice.
