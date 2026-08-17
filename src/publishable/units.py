@@ -291,6 +291,9 @@ def _resolver_for(name: str) -> Callable[..., Any]:
     found = scan_group(RESOLVER_GROUP)
     claimants = found.get(name)
     if not claimants:
+        # `"none installed"` (the empty-`found` branch) is not exercised by any
+        # fixture in this build: every test installs at least one distribution
+        # under `publishable.resolvers`. Untested rather than unreachable.
         listed = ", ".join(found) if found else "none installed"
         raise ContractError(
             f"`data.units.from.resolver` names `{name}`, which no installed distribution "

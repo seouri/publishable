@@ -3720,3 +3720,33 @@ def test_a_decorator_argument_disagreeing_with_the_entry_point_key_is_refused(
     assert excinfo.value.code == "E-PLUGIN-DECORATOR"
     assert "plate_wells" in str(excinfo.value)
     assert "plate_positions" in str(excinfo.value)
+
+
+def test_a_core_suffix_claim_at_import_time_is_recoded_as_plugin_load(installed, registries):
+    """Pins `spec-defects.md`'s CLOSED entry on the `E-PLUGIN-COLLISION` ->
+    `E-PLUGIN-LOAD` substitution: `register_writer`/`register_reader` raise
+    `E-PLUGIN-COLLISION` directly, but reached from inside a module
+    `load_entry_point` is importing, its own broad `except Exception` catches
+    that `ContractError` like any other failure and re-reports it as
+    `E-PLUGIN-LOAD` — the same substitution `E-TEMPLATE-LOAD` already makes for
+    a coded error from a local template's top level. Without this test, that
+    substitution was accurate but asserted by nothing."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "collides_r24:resolve"}}
+    )
+    (site / "collides_r24.py").write_text(
+        "from publishable import register_writer\n\n\n"
+        '@register_writer(".csv")\n'
+        "def write(obj):\n    return b''\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("collides_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert ".csv" in str(excinfo.value)

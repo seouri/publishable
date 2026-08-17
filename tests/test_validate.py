@@ -157,10 +157,14 @@ def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
     group unconditionally — or loaded before deciding what shape `from` is —
     turns this red.
 
-    Its positive companion is task 24's
-    `test_a_resolver_source_loads_the_object_behind_the_name`, which asserts the
-    module IS present for a config that names one. Without that half, this test
-    would pass on a `validate` that had no resolver path at all.
+    Its positive companion does not exist yet. `_resolver_for` (task 24) has no
+    production caller today, so `validate` does not load a resolver for any
+    config — task 26 is where that wiring lands, and task 26 owes a test
+    asserting the module IS present for a config that names one (the concrete
+    form recorded in the review: `assert "retire_r26" in sys.modules`). Until
+    that lands, this test alone would also pass on a `validate` that has no
+    resolver path at all — it proves only that nothing is loaded early or
+    unconditionally, not that the right thing is loaded when it should be.
     """
     site = installed(
         "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_units:resolve"}}

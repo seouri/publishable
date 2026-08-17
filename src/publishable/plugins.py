@@ -2,14 +2,11 @@
 
 docs/reference.md § Creating a plugin. Every name a config can write for a
 plugin artifact resolves through this module, and *resolving a name* —
-`scan_group`, `names`, `check_registration`, and every lookup `validate` makes
-— answers from **package metadata** and imports nothing. That is not a
-performance choice. § Creating a plugin justifies the whole entry-point
-mechanism by `validate` being able to answer "no installed package registers
-`plate_wells`" without importing a line of that package, and `validate` is
-documented as creating nothing and reaching nothing off the machine. A check
-that reaches for the object behind a name has changed the guarantee whatever
-it returns — which is exactly what `validate` never does.
+`scan_group`, `names`, and every lookup that only needs a key — answers from
+**package metadata** and imports nothing. That is not a performance choice.
+§ Creating a plugin justifies the whole entry-point mechanism by `validate`
+being able to answer "no installed package registers `plate_wells`" without
+importing a line of that package.
 
 Loading the object behind a name is a separate, named operation —
 `load_entry_point`, the one function in this module that calls

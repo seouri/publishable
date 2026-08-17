@@ -45,3 +45,14 @@ Task 21: dispatched as part of a 21-24 batch, and **the session was closed mid-d
   `test_the_scaffold_declares_every_group_core_reads` and only it, then reverted clean at 5 passed. Cost
   if wrong: a task whose implementer wrote no report, which is why this entry is longer than usual.
   `.superpowers/sdd/.gitignore` was clobbered to a bare `*` by the interrupted run; restored.
+
+## Review findings closed (tasks 22-24, `91bdd46..8dabf2c`)
+
+Restored honest markings the review found stated one task early: `_resolver_for` (task 24) has no
+production caller yet, so `check_registration`-at-`validate` and `E-PLUGIN-DECORATOR` do not fire
+there today, and `E-RESOLVER-UNKNOWN`'s **"Not yet emitted"** clause is back. **Task 26 owes the
+reversal** — once its dispatch wiring lands and the skip is deleted, flip these back to present
+tense, the way Part A's tasks 6 and 18 did for `--plugin`. Task 26 also owes the positive
+`validate`-level companion test named in `tests/test_validate.py`'s
+`test_validate_imports_no_plugin_for_a_config_that_names_no_resolver` docstring: assert
+`"retire_r26" in sys.modules` inside its existing `try`.
