@@ -242,3 +242,40 @@ Tasks 27-29: reviewed (opus), six verdicts. **Task 27's BUILD axis FAILED on a C
   carrying a stale scoping — which this repo re-measures precisely to avoid. The `cli.py` half IS still
   open, and remains task 33's.
 Tasks 27-29: fix round. Commit 33ebe79. All five closed. 2092 passed, 1 skipped, 2 xfailed.
+
+Tasks 30-33: implemented at 352ea28 / 948771f / f9d9914 / ba57bc7, report cffee7d. 2108 passed.
+WHOLE-BRANCH REVIEW (opus), also gating tasks 30-33. **NOT READY, on a Critical.**
+  **A resolver calling `sys.exit("... key " + os.environ["MY_KEY"])` leaked the credential VERBATIM to
+  stderr at both `validate` and `run`** — because both new handlers caught `except Exception` and
+  **`SystemExit` is a `BaseException`.** Verified through the real console script as a subprocess.
+  The repo already knew this hazard: `validate.py`'s entrypoint guard and `templates/discovery.py` both
+  catch `SystemExit` explicitly for exactly this reason. The new handlers did not.
+  **And the reviewer's own recommended remedy was insufficient — the fix agent caught it and I verified
+  independently.** A plain `raise` propagates the ORIGINAL `KeyboardInterrupt`, whose `str()` carries the
+  message, so the interpreter's own uncaught-exception printer prints the credential. I probed both forms
+  directly: `raise KeyboardInterrupt from None` gives `str() == ''` and `args == ()`; the plain re-raise
+  gives `'secret sk-LEAK-4242'`. **A reviewer's remedy is a claim too.**
+  Also: `E-RESOLVER-RAISED` was reported for TABLE and GLOB faults where no resolver exists, under a
+  comment claiming "this arm is a resolver's by construction" — a new identifier was owed, not a
+  stretched row. And the `cli.py` half of the `cfg` threading was **deferred twice** and still unmet;
+  the reviewer proved it pinnable with a resolver reading a swept parameter only on its SECOND call.
+SCOPED RE-REVIEW (opus). **NOT READY again, and the finding is the one worth carrying.**
+  **N1: the fix commit added exactly one test, and the reviewer's combined mutation left the suite at
+  2109 passed — identical to HEAD.** C1's remedy, the new identifier and the message fix were ALL
+  invisible to the suite. A security fix whose behaviour is verified by a subprocess probe and pinned by
+  nothing is a fix that survives exactly as long as nobody edits the handler.
+  Ruling: this is the fifth time in three slices that a correct fix shipped unpinned, and the pattern is
+  now precise enough to name — **a probe proves the moment, a test proves tomorrow.** The final round
+  added nine tests, each with its own single-line mutation, and I re-ran the combined mutation myself:
+  narrowing both handlers to `except Exception` reddens **six** tests where it previously reddened none.
+  Reverted, both files byte-identical to HEAD, 2118 passed.
+  N2: the new § Errors row claimed a glob "escaping" `input_dir` raises. A RELATIVE escaping pattern
+  (`../*.csv`) neither raises nor is refused — it resolves units from outside `input_dir` on 3.11, 3.12
+  and 3.13 alike. Row corrected; the behaviour is pre-existing and now filed.
+  N3: the commit message asserted the false comment was "deleted rather than rewritten" and the clause
+  was **still there verbatim.** Third instance in this slice of a rewrite preserving what a deletion
+  would have removed.
+  N5: `CLAUDE.md` pinned the credential-leak closure to a commit **where the leak was still open.** A
+  build fact must be pinned to a commit where it is TRUE, which is a sharper rule than "dated".
+FINAL: 2118 passed, 1 skipped, 2 xfailed; ruff check, format (80 files) and mypy (45 source files) clean.
+  Merging and pushing under the standing authorization.
