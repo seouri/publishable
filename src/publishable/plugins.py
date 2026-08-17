@@ -26,6 +26,9 @@ from collections.abc import Callable
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any, TypeVar
 
+from publishable.artifacts import CORE_SUFFIXES, WRITERS
+from publishable.errors import ContractError
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 GROUPS = (
@@ -110,6 +113,35 @@ def register_probe(name: str) -> Callable[[F], F]:
 
     def decorator(fn: F) -> F:
         PROBES[name] = fn
+        return fn
+
+    return decorator
+
+
+def register_writer(suffix: str) -> Callable[[F], F]:
+    """Record a writer for `suffix` in the table `io.write` dispatches through.
+
+    One table rather than a registry of its own: `io.write` finds a writer with
+    `_suffix_for`, which iterates `artifacts.WRITERS`, and a second mapping would
+    be a second answer to "what suffix does core know".
+
+    A suffix core itself writes is refused here rather than resolved by import
+    order — `reference.md` § Creating a plugin — because a plugin that could
+    redefine `.csv` could change what an artifact means without changing the step
+    that wrote it. Two *plugins* claiming one suffix is the other half of the same
+    rule and is decided from entry-point metadata by `validate`, since core's own
+    table appears in nobody's metadata and an installed pair appears in no table.
+    """
+
+    def decorator(fn: F) -> F:
+        if suffix in CORE_SUFFIXES:
+            raise ContractError(
+                f"a writer claims `{suffix}`, which core itself writes — a plugin that "
+                "could redefine a core suffix could change what an artifact means "
+                "without changing the step that wrote it. Claim a suffix of your own",
+                code="E-PLUGIN-COLLISION",
+            )
+        WRITERS[suffix] = fn
         return fn
 
     return decorator

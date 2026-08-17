@@ -2,6 +2,8 @@
 import importlib
 import sys
 
+import pytest
+
 from publishable.plugins import GROUPS, names, provider_of, scan_group
 
 
@@ -156,3 +158,67 @@ def test_a_probe_is_importable_from_the_one_root():
     import publishable
 
     assert "register_probe" in publishable.__all__
+
+
+def test_a_third_party_suffix_reaches_io_write_s_dispatch(registries, tmp_path):
+    """Registration is only real if `io.write` finds it, so the assertion is over
+    the dispatch rather than over the dict — `_suffix_for` is what decides, and
+    it iterates `WRITERS`."""
+    from publishable import artifacts
+    from publishable.plugins import register_writer
+
+    @register_writer(".fastq.gz")
+    def write_fastq(rows):
+        return b"@read\n"
+
+    assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
+    assert artifacts.WRITERS[".fastq.gz"] is write_fastq
+
+    # The longest registered suffix still wins, which is what a compound
+    # extension is registered for: `.gz` alone must not claim this name.
+    @register_writer(".gz")
+    def write_gz(rows):
+        return b""
+
+    assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
+
+
+def test_a_writer_may_not_claim_a_suffix_core_writes(registries):
+    """A plugin that could redefine `.csv` could change what an artifact means
+    without changing the step that wrote it."""
+    from publishable.errors import ContractError
+    from publishable.plugins import register_writer
+
+    with pytest.raises(ContractError) as excinfo:
+
+        @register_writer(".csv")
+        def write_csv(rows):
+            return b""
+
+    assert excinfo.value.code == "E-PLUGIN-COLLISION"
+    message = str(excinfo.value)
+    assert ".csv" in message
+    assert "core" in message
+
+
+def test_a_suffix_core_does_not_write_is_accepted(registries):
+    """THE CONTROL, and the honouring: a refusal that fired for every suffix
+    would pass the test above. Paired here rather than left implicit."""
+    from publishable import artifacts
+    from publishable.plugins import register_writer
+
+    @register_writer(".fastq")
+    def write_fastq(rows):
+        return b""
+
+    assert ".fastq" in artifacts.WRITERS
+
+    # A second plugin claiming the SAME suffix is not this check's refusal — it
+    # is decided from entry-point metadata, where both claimants are visible.
+    # Registering twice in one process is what a plugin's own test suite does,
+    # and refusing it here would refuse that.
+    @register_writer(".fastq")
+    def write_fastq_again(rows):
+        return b""
+
+    assert artifacts.WRITERS[".fastq"] is write_fastq_again

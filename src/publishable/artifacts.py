@@ -158,6 +158,15 @@ READERS = {
     ".parquet": _decode_parquet,
 }
 
+CORE_SUFFIXES = frozenset(WRITERS)
+"""The suffixes core itself writes, fixed at import.
+
+Snapshotted rather than read live, because `plugins.register_writer` adds to
+`WRITERS` and a shadow check reading the live table would start refusing one
+plugin's suffix on behalf of another's. What a plugin may not claim is what
+*core* writes, which is a property of this file and not of what is installed.
+"""
+
 
 def _suffix_for(name: str) -> str | None:
     """The longest registered suffix of the name's last component, lower-cased."""

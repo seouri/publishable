@@ -941,7 +941,8 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `register_template` | decorator | built | One of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_resolver` | decorator | built | The registry a [`data.units.from.resolver`](#where-units-come-from) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_probe` | decorator | not yet built | The registry an [`apparatus_probe`](#the-apparatus-core-can-only-observe) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
-| `register_writer` · `register_reader` | decorator | not yet built | The registries an artifact suffix is claimed through, in the pair `io.write` and `io.read_upstream` require — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `register_writer` | decorator | built | The registry an artifact suffix's writer is claimed through — see [Steps and artifacts](#steps-and-artifacts) |
+| `register_reader` | decorator | not yet built | Its inverse, which `io.read_upstream` dispatches through — see [Steps and artifacts](#steps-and-artifacts) |
 | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
 
 **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
