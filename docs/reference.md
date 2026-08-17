@@ -3129,7 +3129,7 @@ These take a name plus what's needed to bring something into existence.
 |---|---|---|---|
 | `publishable demo` | NOT BUILT | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then walks you through validating and running it one command at a time. Data goes outside the created repo, as it would for real work. See [What `demo` walks you through](#what-demo-walks-you-through) |
 | `publishable new` | built | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
-| `publishable plugin new` | NOT BUILT | plugin name | Scaffolds an installable template/resolver/step package |
+| `publishable plugin new` | built | plugin name | Scaffolds an installable template/resolver/step package |
 | `publishable generate` (`g`) | built | generator, name, generator args (`experiment` accepts `--plugin`) | `experiment` \| `step` \| `template` \| `report` (NOT BUILT) |
 | `publishable init` | built | `--template`, `--name`, `--input-dir`, `--output-dir`, `[--plugin]` | Alias for `generate experiment` |
 | `publishable study new` | NOT BUILT | bundle path, `--title` | Creates an empty study bundle, outside any experiment repo |
@@ -3609,7 +3609,7 @@ publishable/
 │   ├── errors.py              # PublishableError and the three below it, each carrying its code
 │   ├── cli.py                 # dispatch
 │   ├── scaffold.py            # `new`
-│   ├── plugin_scaffold.py     # `plugin new` — not yet built
+│   ├── plugin_scaffold.py     # `plugin new`
 │   ├── generators/            # experiment | step | template | report, incl. --plugin
 │   ├── materialize.py         # renders a fully-populated, commented config from parameter_spec
 │   ├── docs.py                # `docs`: regenerates managed README regions from live specs — not yet built

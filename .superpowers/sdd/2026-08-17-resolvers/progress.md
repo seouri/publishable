@@ -31,3 +31,17 @@ Also checked per task: each task's tests are specified against the code that tas
 states once, up front, that **tasks 25, 27, 28 and 29 cannot test through `validate_config` at their own
 commits** — the resolver skip is only deleted at 26 — so each tests its own function directly and task
 33 re-asserts end to end. That is a deferral by design, not a gap, and it is why 33 exists.
+
+Task 21: dispatched as part of a 21-24 batch, and **the session was closed mid-dispatch.** On resume the
+  work was in the tree uncommitted — `plugin_scaffold.py`, `tests/test_plugin_scaffold.py`, and edits to
+  `cli.py`, `tests/test_cli.py` and `reference.md` — with the suite at 2066 passed (baseline 2060 + 6)
+  and mypy clean, but **the gates unfinished**: one `I001` import-sort error and one unformatted file.
+  Recovered rather than redone. The ledger is what made that safe: it named the baseline, so I could tell
+  6 new tests from a partial state, and the brief's Step 5 mutation was written down, so the one thing an
+  interrupted agent cannot leave behind — evidence the test discriminates — was reconstructible.
+  Ruling: finished task 21 in place rather than discarding and re-dispatching. Grounds: the deliverable
+  matches the brief, the mutation is prescribed and pre-checked, and I ran it myself — deleting
+  `publishable.readers` from `_MODULES` and skipping it in the `GROUPS` loop FAILS
+  `test_the_scaffold_declares_every_group_core_reads` and only it, then reverted clean at 5 passed. Cost
+  if wrong: a task whose implementer wrote no report, which is why this entry is longer than usual.
+  `.superpowers/sdd/.gitignore` was clobbered to a bare `*` by the interrupted run; restored.

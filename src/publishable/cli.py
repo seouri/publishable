@@ -37,6 +37,7 @@ from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
+from publishable.plugin_scaffold import scaffold_plugin
 from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import (
     cross_levels,
@@ -126,7 +127,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "dry-run": "Operation commands",
     "freeze": "Operation commands",
     "list-templates": "Operation commands",
-    "plugin new": "Creating a plugin: `publishable plugin new`",
     "report": "Operation commands",
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
@@ -2747,6 +2747,12 @@ def _dispatch(command: str, rest: list[str]) -> int:
         return EXIT_OK
     if command in ("generate", "g", "init"):
         return _dispatch_generate(command, rest)
+    if command == "plugin":
+        if len(rest) != 2 or rest[0] != "new" or rest[1].startswith("-"):
+            print("`plugin new` takes exactly one path", file=sys.stderr)
+            return EXIT_INVOCATION
+        scaffold_plugin(Path(rest[1]))
+        return EXIT_OK
     # Everything built is handled above, so what reaches here is either specified
     # and unbuilt or not specified at all. The built branches come first on
     # purpose: a name that appeared in both places would keep working, and the

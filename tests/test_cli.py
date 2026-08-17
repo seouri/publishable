@@ -6773,6 +6773,17 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert (f"`{kind}` (NOT BUILT)" in text) == (status == "NOT BUILT"), kind
 
 
+def test_plugin_new_scaffolds_a_package_rather_than_reporting_not_built(tmp_path):
+    """The built branch precedes the `NOT BUILT` lookup in `_dispatch`, so this
+    also pins that `plugin new` left `NOT_BUILT_COMMANDS` rather than being
+    shadowed by it."""
+    from publishable.cli import NOT_BUILT_COMMANDS, main
+
+    assert "plugin new" not in NOT_BUILT_COMMANDS
+    assert main(["plugin", "new", str(tmp_path / "publishable-my-assay")]) == 0
+    assert (tmp_path / "publishable-my-assay" / "pyproject.toml").is_file()
+
+
 @pytest.mark.parametrize("column", ["Command", "Generator"])
 def test_reference_cli_tables_match_what_the_cli_does(column, capsys):
     """Both directions, observed through `main` rather than read off a constant.
