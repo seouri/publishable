@@ -5056,14 +5056,14 @@ def _check_sweep(
     # intersecting that with either side's `selectors` — the group axes a
     # condition actually carries a value for — is what tells a cross-arm
     # comparison from a within-arm one. Imported at module scope, the same as
-    # its two siblings' helpers, rather than gated on `allocation`: the axis
+    # its sibling's helpers, rather than gated on `allocation`: the axis
     # being a declared `groups` axis is what makes the two sides disjoint,
     # whatever `allocation` itself is declared as (or left undeclared, the
     # `within` default) — a config missing that declaration entirely still
     # co-reports `E-DATA-ALLOCATION-WITHIN-ARMS`.
     #
     # Temporary, and narrowly so: H4 Statistics owns the unpaired estimator
-    # family and lifts this the moment it exists. Like its two siblings it
+    # family and lifts this the moment it exists. Like its sibling it
     # refuses a *combination* rather than a declaration, so it carries a row in
     # § Validation's registry and is not one of the `NOT BUILT` declarations §
     # The one config file counts.

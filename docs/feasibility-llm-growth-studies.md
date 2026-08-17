@@ -512,7 +512,7 @@ data:
 
 `weight_by` records `weighted_by` beside every affected value and adds `effective` to the three-part `n` from Kish's size. `resample.stratify_by: [consensus_label, count_stratum]` reproduces the source's "patient-level stratified bootstrap" exactly: `weight_by` says how much each unit stands for; `resample.stratify_by` says what an independent draw is.
 
-**That is the declaration read on its own, and C1, C2 and C3 never read it on its own.** Each pairs `weight_by` with a `baseline` or a declared contrast, which this build now computes rather than refuses: the weighted paired *t* and the weighted closure in `paired_percentile_of_derived` weight the delta and its interval the same way `weight_by` weights each condition's own value, the record carries `weighted_by` and an `n_paired_effective` from Kish's size over the paired intersection, and `resample.stratify_by` is honoured on the draw. What is not yet honoured is `statistics.report_by` under a declared `resample` — a level's own recorded-column interval stays unresampled — which is the one gap these three runs still carry ([§ Executability on this build](#executability-on-this-build) has the dated measurement and count).
+**That is the declaration read on its own, and C1, C2 and C3 never read it on its own.** Each pairs `weight_by` with a `baseline` or a declared contrast, which this build now computes rather than refuses — but not identically for all three, because C1's headline metric and C2/C3's are two different shapes. All three declare `statistics.resample`, so `resample_columns` is `True` for each and the raw and corrected *t* branch (`paired_t_over_units`/`weighted_paired_t_over_units`) is never entered for any of them; the payoff path runs through `paired_percentile_of_derived` throughout. **C2 and C3** contrast `step03_screen.prob`, a recorded column, so that path takes the weighted closure — `weighted_paired_percentile_over_units` — and their record carries a weighted `delta`, a weighted `cohens_d`, and an `n_paired_effective` from Kish's size over the paired intersection. **C1** contrasts `step03_screen.auroc`, which `aggregate` derives, and core does not weight a derived metric's contrast: the weight reaches `aggregate` as a unit attribute instead, `method` stays the unweighted `paired_percentile_over_units`, and `cohens_d` stays `null` — `weighted_by` and the effective size still travel beside the record regardless, since the declaration is true of the run either way. `resample.stratify_by` is honoured on the draw for all three. What is not yet honoured, for any of them, is `statistics.report_by` under a declared `resample` — a level's own recorded-column interval stays unresampled — which is the one gap these three runs still carry ([§ Executability on this build](#executability-on-this-build) has the dated measurement and count).
 
 The development set (120) and confirmation set (330) are **two runs against two indexes**, not one holdout — because clean-label fine-tuning fits on the development patients and is evaluated on the confirmation patients, which is a cross-run dependency. The confirmation run reads the fitted artifact with `io.reuse_from`, and core records the upstream run's ID and both its hashes in `provenance.upstream`.
 
@@ -1143,9 +1143,13 @@ steps do not exist.
 **What H4b-1 changed for these three beyond the refusal.** `statistics.resample.stratify_by` is now
 honoured on a contrast's draw, not only per condition — all three declare
 `stratify_by: [consensus_label, count_stratum]`, and before this slice that declaration was silently
-dropped on every delta. Their weighted contrasts record `weighted_by`, an `n_paired_effective` from
-Kish over the paired intersection, a weighted `cohens_d`, and a corrected bound built from the same
-weighted evidence as the raw one.
+dropped on every delta. Their weighted contrasts record `weighted_by` and an `n_paired_effective` from
+Kish over the paired intersection either way, and a corrected bound built from the same weighted
+evidence as the raw one — but not identically for all three: C2 and C3 contrast a recorded column
+(`step03_screen.prob`) and get a weighted `cohens_d` alongside; C1 contrasts a *derived* metric
+(`step03_screen.auroc`), which core does not weight, so its `cohens_d` stays `null` and its `method`
+stays the unweighted `paired_percentile_over_units`, exactly as `reference.md` § Weighted samples
+specifies for a derived contrast under a weight.
 
 **One declaration all three carry is still not honoured**: a `report_by` level's recorded-column
 interval stays `t_over_units` under a declared `resample`, which `docs/superpowers/spec-defects.md`
@@ -1172,9 +1176,9 @@ demo template's own `analysis.method` axis rather than the real one, exactly as 
 | E4 | *(none)* | No — blocked on `io.reuse_from` |
 | E5 | *(none)* | **Yes** — no remaining core-side blocker |
 | E6 | *(none)* | No — blocked on `io.reuse_from` |
-| C1 | *(none)* | **Yes** — no remaining core-side blocker |
-| C2 | *(none)* | **Yes** — no remaining core-side blocker |
-| C3 | *(none)* | **Yes** — no remaining core-side blocker |
+| C1 | *(none)* | No — blocked on `io.reuse_from` |
+| C2 | *(none)* | No — blocked on `io.reuse_from` |
+| C3 | *(none)* | No — blocked on `io.reuse_from` |
 
 Every one of the nine also reports `W-DATA-CLUSTER-UNDECLARED`, left out of the table for the same
 reason the 2026-08-17 (Part B) entry excluded its own warning: it is an artifact of the synthetic
@@ -1186,15 +1190,17 @@ discriminating again at this build: setting `data.units.holdout.frac` to `0` on 
 block immediately produces `E-DATA-HOLDOUT-FRAC`, and reverting the field restores the zero-error
 result. A block that could not fail this way would not be a measurement.
 
-**What this measurement does not settle**, unchanged from Part B's own qualification: whether E3, E4
-and E6's `data`/`statistics` blocks are the *only* thing standing between them and `run` is not
-answered here — `io.reuse_from` is a step-level call invisible to any config, so a clean `validate`
-result is necessary and not sufficient for those three. The same limit cuts the other way for the six
-now marked "Yes": a clean `validate` is not sufficient to establish "no remaining core-side blocker"
-for them either, and the "Yes" rests on reading each design's prose for other unbuilt dependencies —
-for C1, C2 and C3 specifically, that reading is the `report_by`-under-`resample` gap two paragraphs
-above, which `validate` cannot see because it is a property of what `cli.command_run` threads, not of
-the declaration. Nothing about the apparatus probe's execution is exercised either, for the same
+**What this measurement does not settle**, unchanged from Part B's own qualification: whether E3, E4,
+E6, C1, C2 and C3's `data`/`statistics` blocks are the *only* thing standing between them and `run` is
+not answered here — `io.reuse_from` is a step-level call invisible to any config, so a clean `validate`
+result is necessary and not sufficient for any of the six blocked rows, C1–C3 included: their own
+"no remaining core-side blocker" reading (the prose above the table, not the table's own "Would
+execute?" column) rests on the same `report_by`-under-`resample` gap two paragraphs above, which
+`validate` cannot see because it is a property of what `cli.command_run` threads, not of the
+declaration. The same limit cuts the other way for the three marked "Yes": a clean `validate` is not
+sufficient to establish "no remaining core-side blocker" for them either, and the "Yes" rests on
+reading each design's prose for other unbuilt dependencies. Nothing about the apparatus probe's
+execution is exercised either, for the same
 reason Part B's entry gives.
 
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2159 passed + 1 skipped + 2 xfailed, ruff and

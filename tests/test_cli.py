@@ -10027,9 +10027,10 @@ def test_a_resampled_column_contrasts_member_carries_no_weights():
 
 
 def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, monkeypatch):
-    """The first weighted contrast to reach `run.yaml`. Until this task
-    `command_run` returned before running on `E-DATA-WEIGHT-CONTRAST`, so every
-    weighted-contrast test called `_comparison_step_blocks` directly — this is the
+    """The first weighted contrast to reach `run.yaml`. Until this task's
+    retirement of the weighted-contrast refusal, `command_run` returned before
+    ever running on a weighted comparison, so every weighted-contrast test
+    called `_comparison_step_blocks` directly — this is the
     pin that the whole path is wired, including the three things `command_run`
     threads and no direct call can see: `weights`, `weighted_by` and
     `resample_strata`.
@@ -10100,6 +10101,8 @@ def test_the_sibling_refusal_rows_state_their_own_reading():
     cluster = _row("E-DATA-CLUSTER-CONTRAST")
     assert "per comparison" in allocation  # the control
     assert "cluster_by" in cluster  # the control
+    assert "E-DATA-WEIGHT-CONTRAST" not in allocation
+    assert "E-DATA-WEIGHT-CONTRAST" not in cluster
 
 
 def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
