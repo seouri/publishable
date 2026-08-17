@@ -32,3 +32,32 @@ Also checked, per task: each task s tests are specified against the code that ta
 task touches a file a later task creates. Task 3 precedes task 7 because decision 2 s fifth group must
 be settled before the scan enumerates groups — a reordering against the scoping s numbering that the
 plan already carries.
+
+Tasks 1-6: BATCHED (all document-only, all `reference.md`). Committed separately; b94029d..67d7219,
+  plus bbfe9d7, a correction the implementer caught itself — task 1's four rows had split the
+  `E-TEMPLATE-*` family.
+Tasks 1-6: reviewed (opus), twelve verdicts. **Tasks 2 and 3 FAILED spec compliance**; the rest passed
+  with reservations. One Critical, seven Important, five Minor.
+  C1: task 3 wrote that a writer registered without its reader is refused **at load**, "the same breath"
+  as a suffix collision. Task 15 builds it at the **READ**, under `E-ARTIFACT-UNREADABLE`, and its own
+  step 8 says a registration-time check is something "nothing closes and nothing should". Wrong time,
+  wrong code, and two distinct mechanisms glossed as one. That gloss is the shape that carried a real
+  difference past its own check last slice.
+  I1/I2/I4: three § Errors rows asserted things their tasks will not do — a message shape false of the
+  arm the row explicitly covers, a code reported by `validate` with no row in the table whose preamble
+  defines it as what commands report, and two codes asserting call sites **no task in Part A or Part B
+  gives them**.
+  Ruling on I2: a second row was added, matching how `E-DATA-HOLDOUT-VARIES` was handled in H3d — every
+  other dual-surface code carries a row in both tables, and § Errors' one-row-per-code rule is about
+  codes, not tables.
+  Ruling on the marker asymmetry the implementer flagged: the reviewer falsified its PREMISE by counting
+  (`grep -c "Not yet emitted"` is 3, and `E-PROBE-UNKNOWN` carries none), which makes the real line
+  coherent — codes this slice emits go unmarked, codes only Part B emits are marked. The exception was
+  I4's two, which are further from emission than the marked rows and asserted their call sites flatly.
+  A report's framing of an inconsistency is a claim too.
+  I3: three more stale count phrases, replaced by naming the set rather than by writing the new number —
+  the fourth such replacement across three slices.
+  Disclosure gap (a) closed here: `CLAUDE.md` said "keep the registered artifacts to the **four**
+  registries" and task 3 minted a fifth. **`CLAUDE.md` names itself in the consistency sweep regardless
+  of a brief's file list**, which is why this was task 3's rather than a later sweep's.
+Tasks 1-6: fix round. Commit 24a56ff. All thirteen closed. 2000 passed + 2 xfailed; gates clean.
