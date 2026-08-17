@@ -104,3 +104,39 @@ hand-written package already works.
 blocked. This slice files it with an owner rather than closing it. The apparatus and its probe —
 **H7d**, which also owns the false `"apparatus": None` record. Weighted contrasts — **H4b**, and the
 reason C1–C3 stay blocked.
+
+---
+
+## Corrections from planning — appended 2026-08-17, replacing nothing above but qualifying it
+
+The plan author found nine disagreements with this spec or the scoping. Four change what gets built.
+
+1. **Decision 2's "route through `command_run`'s existing collector" cannot be taken literally.**
+   `command_run` already does `if c.findings: print(c.render())` before the roster resolves, so
+   appending to `c` and rendering again would re-print every warning and inflate the counts line. The
+   file's own convention for a post-validate finding is a **fresh `Collector()` with `.credentials`
+   assigned** — `dirty_c`, `warn_c` and `drift_c` all do exactly that. The ruling stands; its
+   mechanism is a fresh collector, and the task says why.
+2. **Three codes this spec does not name are minted**, each with an emit site and a test:
+   `E-RESOLVER-YIELD` (a resolver yielding a non-`Unit`, which would otherwise escape `validate` as an
+   `AttributeError`), `E-RESOLVER-RAISED` (decision 3's containment needs an identifier), and
+   `E-RUN-RESOLVER-UNCONFIGURED` (decision 6's named price for the defaulted `cfg`, joining an existing
+   § Errors row rather than taking one of its own).
+3. **`hash_index` is broken for the *glob* case too**, not only the table and resolver cases decision 5
+   names — `_from_glob` sets `paths=(rel,)` and `_from_table` sets `paths=()`. Task 31 writes
+   `index_names` as one expression covering every source, so none is left silently at `sha256: None`.
+4. **`E-RESOLVER-MEASUREMENT-FIELD` is emitted ungated**, where the obvious move would inherit the
+   table arm's `technical_n["max"] > 1` gate. That gate would make the code narrower than its own
+   normative row: a table's `by` may name a step-invented identity, while a resolver has no columns,
+   so § Where units come from makes yielding it an obligation. The difference is deliberate and stated
+   in the task.
+
+**Also recorded, not changing the build:** `E-UNITS-SOURCE-MISSING`'s row becomes false at task 25 and
+appears in neither scoping section, so task 25 owns it; `_wide_swept_paths` must move to `sweep.py`
+because `validate` needs it and `validate → cli` is a cycle; the filed `E-PLUGIN-COLLISION` →
+`E-PLUGIN-LOAD` re-code is decided in task 24 by letting it stand, since the alternative would let any
+coded `ContractError` from a plugin's top level escape containment; and **tasks 25, 27, 28 and 29
+cannot test through `validate_config` at their own commits**, because the resolver skip is only deleted
+at 26 — each tests its own function directly and task 33 re-asserts end to end.
+
+**Task count is 13.**
