@@ -56,3 +56,29 @@ tense, the way Part A's tasks 6 and 18 did for `--plugin`. Task 26 also owes the
 `validate`-level companion test named in `tests/test_validate.py`'s
 `test_validate_imports_no_plugin_for_a_config_that_names_no_resolver` docstring: assert
 `"retire_r26" in sys.modules` inside its existing `try`.
+
+Tasks 22-24: implemented at 645a4fd / b6d4422 / 6023364, report 8dabf2c. 2074 passed.
+Tasks 22-24: reviewed (opus), six verdicts. Task 22's narrowing FAILED on a **Critical**, task 24
+  FAILED as documented.
+  Critical: `plugins.py`'s module docstring paragraph 1 still ended "which is exactly what `validate`
+  never does" — **contradicted by paragraph 2 of the same docstring** — and listed `check_registration`
+  among the things that import nothing. **A sixth prose site, in the file task 22 itself edited, and
+  invisible to its four-spelling sweep.** Closed by DELETING the clause and re-sweeping by READING the
+  whole 297-line file, which is the only instrument that would have found it.
+  Ruling on task 24: `_resolver_for` has **zero production callers**, so `check_registration` does not
+  run at `validate` yet and `E-PLUGIN-DECORATOR` cannot fire — while `reference.md` asserted both in the
+  present tense and `E-RESOLVER-UNKNOWN`'s "Not yet emitted" clause had been struck a task early. Part A
+  shipped a Critical of this shape in the other direction. **Restore the honest markings now and let task
+  26 flip them** — the pattern Part A's tasks 6 and 18 used for `--plugin`, which worked. **TASK 26 OWES
+  the reversal**, and the ledger carries it.
+  On the slice's central claim: the narrowed no-import invariant is pinned **half**. The negative half is
+  proven able to fail (an unconditional load at the validate level reddens it). The positive half is not —
+  nothing asserts a plugin module IS in `sys.modules` after validating a resolver config, so today the
+  negative test would also pass on a `validate` with no resolver path at all. **Task 26 owes
+  `assert "retire_r26" in sys.modules`.** The docstring now says this limit plainly rather than naming a
+  companion test that does not exist, which is what it did.
+  Task 23's `ResolverIO` passed on a probe rather than a read: `__slots__` blocks adding `run_dir` and no
+  write machinery is reachable, so it is read-only **structurally, not by omission**.
+Tasks 22-24: fix round. Commit 54a994f. All closed. A closed `spec-defects.md` entry was resting on an
+  unpinned behaviour — the `E-PLUGIN-COLLISION` -> `E-PLUGIN-LOAD` substitution — now pinned, because a
+  closure resting on nothing is how a closure goes stale. 2075 passed, 1 skipped, 2 xfailed.
