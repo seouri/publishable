@@ -197,54 +197,17 @@ def test_the_generated_config_declares_a_unit_roster():
 
 
 def test_the_generated_units_block_carries_its_comments():
-    """The `from` enum lists every value § The one config file defines, and marks
-    the one this build refuses.
+    """The `from` enum lists every value § The one config file defines.
 
-    Two values where the document defines three was live and green until this
-    test: nothing else in the suite reads this line. The `(NOT BUILT)` marking is
-    asserted *with* a refusal below rather than alone, because a marking core does
-    not honour is exactly as misleading as a missing one.
+    All three values, unmarked: none is refused wholesale any more, so nothing
+    here reads `(NOT BUILT)`. `_the_from_enum_s_not_built_marking_is_honoured_by_core`,
+    which checked that marking against behaviour, is gone along with the marking —
+    `tests/test_materialize.py`'s `_MARKED_LATER_SLICE` sweep is what would catch it
+    resurfacing.
     """
     text = rendered()
-    assert '# index.csv | {glob: "*.dcm"} | {resolver: <name>} (NOT BUILT)' in text
+    assert '# index.csv | {glob: "*.dcm"} | {resolver: <name>}' in text
     assert "# within | between" in text
-
-
-def test_the_from_enum_s_not_built_marking_is_honoured_by_core(git_repo, tmp_path):
-    """The marking is a claim about behaviour, so it is checked against behaviour.
-
-    `_MARKED_FIELD_PATHS`'s `(x: later slice)` convention cannot carry this one —
-    its regex reads a single unqualified value and `{resolver: <name>}` holds a
-    colon — so the `(NOT BUILT)` spelling § The one config file already uses is
-    what `init` writes, and this is its honesty check. Asserted *alongside* the
-    wholesale refusal rather than on the whole code set, so retiring
-    `E-DATA-RESOLVER-UNSUPPORTED` is a one-line deletion here.
-    """
-    input_dir = tmp_path / "input"
-    input_dir.mkdir()
-    (input_dir / "index.csv").write_text("patient_id\np1\n")
-
-    text = materialize_config(
-        template=get_template("generic"),
-        template_name="generic",
-        name="cohort-pilot",
-        input_dir=str(input_dir),
-        output_dir=str(tmp_path / "output"),
-        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
-    )
-    doc = yaml.safe_load(text)
-    doc["metadata"]["description"] = "a pilot"
-    doc["metadata"]["authors"] = ["A"]
-
-    config_path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-
-    # The value `init` actually writes validates clean — the positive companion,
-    # without which the refusal below could pass on an unrelated fault.
-    assert _refusal_codes("from", doc, config_path) == []
-
-    doc["data"]["units"]["from"] = {"resolver": "plate_wells"}
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in _refusal_codes("from", doc, config_path)
 
 
 _MARKED_LATER_SLICE = re.compile(

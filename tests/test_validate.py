@@ -2594,15 +2594,9 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
 
 
-def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
-    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))
-
-
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}},
         {"statistics": {"null_test": {"method": "permutation", "n": 5000}}},
     ],
 )
@@ -2610,16 +2604,55 @@ def test_every_unsupported_message_defers_rather_than_scolds(write_config, overr
     """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
     'your config is wrong'. Every message in this family must say so explicitly, or a
     user has no way to tell a refusal from a validation error. `allocation: between` and
-    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals, and
-    `data.units.holdout` left with task 18 — each now draws a real, behavior-specific
-    finding instead (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, and so on, or
-    validates clean), not a deferral. `E-DATA-RESOLVER-UNSUPPORTED` and
-    `E-STATS-NULLTEST-UNSUPPORTED` are what remains of the family."""
+    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals,
+    `data.units.holdout` left with task 18, and `data.units.from.resolver` left with
+    H7b Part B — each now draws a real, behavior-specific finding instead
+    (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, and so
+    on, or validates clean), not a deferral. `E-STATS-NULLTEST-UNSUPPORTED` is what
+    remains of the family."""
     found = messages_by_code(write_config(overrides))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
     assert unsupported, f"expected an -UNSUPPORTED finding for {overrides}"
     for code, message in unsupported.items():
         assert "later slice" in message, f"{code} message does not defer: {message!r}"
+
+
+def test_a_resolver_source_is_no_longer_refused_wholesale(
+    installed, registries, write_config, tmp_path
+):
+    """The retirement, asserted against behaviour rather than against a grep. The
+    control is the second half: an UNREGISTERED name still earns
+    `E-RESOLVER-UNKNOWN`, so this is not a check that stopped reporting anything."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed("dist-one", "1.0", {RESOLVER_GROUP: {"plate_wells": "retire_r26:resolve"}})
+    (site / "retire_r26.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='p1')\n"
+    )
+    importlib.invalidate_caches()
+    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
+    try:
+        found = codes(write_config({"data.units": units}))
+        unknown = codes(write_config({"data.units": {**units, "from": {"resolver": "nope"}}}))
+    finally:
+        sys.modules.pop("retire_r26", None)
+
+    assert found == set()
+    assert "E-RESOLVER-UNKNOWN" in unknown
+
+
+def test_the_unsupported_family_is_down_to_null_test(write_config):
+    """`E-DATA-RESOLVER-UNSUPPORTED` is gone from every surface, and the family it
+    left is not empty — a sweep asserting only an absence would pass identically if
+    the whole family had been deleted."""
+    found = messages_by_code(
+        write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
+    )
+    unsupported = {code for code in found if code.endswith("-UNSUPPORTED")}
+    assert unsupported == {"E-STATS-NULLTEST-UNSUPPORTED"}
 
 
 def test_a_null_subfield_is_not_a_declaration(write_config):
@@ -4102,12 +4135,11 @@ def test_no_units_block_still_validates_clean(write_config):
 
 
 def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
-    """`data.units.from.resolver` is already refused as `E-DATA-RESOLVER-UNSUPPORTED`;
+    """An unresolvable `data.units.from.resolver` name is `E-RESOLVER-UNKNOWN`;
     resolution must not also fire `E-UNITS-SOURCE-MISSING` for the same declaration —
-    that would describe a resolver as a missing file rather than an unbuilt feature."""
+    that would describe a resolver as a missing file rather than an unregistered name."""
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     found = codes(write_config({"data.units": units}))
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
     assert "E-UNITS-SOURCE-MISSING" not in found
 
 
@@ -4163,18 +4195,6 @@ def test_a_malformed_units_block_is_reported_exactly_once(write_config):
     validate_config(path, c)
     shape_findings = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
     assert len(shape_findings) == 1
-
-
-def test_check_unimplemented_alone_does_not_raise_on_a_malformed_units_block():
-    """Exercised directly, the way `_check_unimplemented`'s other rules are —
-    a non-mapping `data.units` reaching this function on its own (bypassing
-    `_check_shape`, which normally would have stopped `validate_config` first) must
-    still produce a diagnostic rather than an `AttributeError`."""
-    from publishable.validate import _check_unimplemented
-
-    c = Collector()
-    _check_unimplemented({"data": {"units": "index.csv"}}, c)
-    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
 @pytest.mark.parametrize(
@@ -12859,9 +12879,9 @@ def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
     raised, and reported for a repo whose config names no resolver at all — a
     registry core cannot make sense of is refused however it is asked.
 
-    Asserted ALONGSIDE nothing: this config declares a table source, so
-    `E-DATA-RESOLVER-UNSUPPORTED` is not in play. The resolver-adjacent
-    companion is the second half of this test.
+    Asserted ALONGSIDE nothing: this config declares a table source, so no
+    resolver dispatch is in play. The resolver-adjacent companion is the
+    second half of this test.
     """
     installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "no_two:r"}})
     installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:r"}})
@@ -12874,10 +12894,10 @@ def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
     assert "dist-two 2.0" in message
 
     # Alongside, never instead of: a config that DOES name a resolver still
-    # carries the wholesale refusal. Part B deletes this one line.
+    # carries the collision — the registry's own verdict does not depend on
+    # what a config declares.
     both = codes(write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}}))
     assert "E-PLUGIN-COLLISION" in both
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in both
 
 
 def test_one_distribution_per_plugin_name_reports_nothing(installed, write_config):
@@ -13009,14 +13029,9 @@ def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_dr
 
 
 def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
-    """Two answers to one declaration: `validate` reads it as a resolver
-    (`_check_unimplemented` tests `resolver in source`) and `resolve_units` would
-    read it as a glob (it tests `glob` first). Unreachable while the wholesale
-    refusal stands and reachable the moment dispatch lands, so the refusal is
-    minted in the slice that closes the envelope.
-
-    Asserted ALONGSIDE the wholesale refusal, never instead of it, and never on
-    the whole code set — Part B deletes one line here.
+    """`units.resolve_units` tests `glob` first, so a mapping carrying both keys
+    would silently resolve as a glob — this refusal is what stops that instead
+    of letting a declared intent be overruled without a word.
     """
     found = messages_by_code(
         write_config(
@@ -13031,7 +13046,6 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
     message = found["E-UNITS-SOURCE-AMBIGUOUS"]
     assert "glob" in message
     assert "resolver" in message
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
 
     # THE CONTROLS, both produced by the code under test: either key alone is not
     # ambiguous. Without these, a check that fired for any mapping would pass.
@@ -13042,7 +13056,6 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
         write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "patient_id"}})
     )
     assert "E-UNITS-SOURCE-AMBIGUOUS" not in resolver_only
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in resolver_only
 
 
 # Decision 3's own test was written and then deleted: a `Shadower` template

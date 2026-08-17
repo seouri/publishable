@@ -1188,15 +1188,15 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
 def _check_units_source(doc: dict[str, Any], c: Collector) -> None:
     """A `data.units.from` mapping may declare `glob` or `resolver`, not both.
 
-    Two answers to one declaration: this module reads such a mapping as a
-    resolver — `_check_unimplemented` and `_check_units` both test for the
-    `resolver` key — while `units.resolve_units` tests for `glob` first and would
-    resolve it as a glob. Whichever is right, they cannot both be, and a run that
-    executed one while `validate` had checked the other is the fault this refuses.
+    `units.resolve_units` tests for `glob` first, so a mapping carrying both
+    keys resolves as a glob and the `resolver` key is never read — silently,
+    since neither key is malformed on its own. Refusing the combination
+    outright is what stops a config from declaring an intent that dispatch
+    would quietly overrule.
 
-    Its own function rather than a branch beside the resolver refusal, because
-    that refusal retires and this one does not: a `from` naming two sources is
-    ambiguous whether or not resolvers are honoured.
+    Its own function rather than a branch beside another check, since neither
+    the glob-first order it guards against nor the ambiguity itself belongs
+    to any one refusal's lifecycle.
     """
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
@@ -1214,10 +1214,11 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
     """`data.units`, or `None` if there is no declaration or its shape is wrong.
 
     In the normal pipeline this shape is already guaranteed by `_check_shape`, which
-    runs first in `validate_config` and stops the whole check before `_check_units` /
-    `_check_unimplemented` are ever called. This guard exists for the two of them
-    being exercised directly (as several `_check_*` functions already are in tests),
-    so neither crashes on a non-mapping `data.units` reached on its own. Reported —
+    runs first in `validate_config` and stops the whole check before any of this
+    module's readers of `data.units` are ever called. This guard exists for those
+    readers being exercised directly (as several `_check_*` functions already are
+    in tests), so none crashes on a non-mapping `data.units` reached on its own.
+    Reported —
     under the same `E-CONFIG-SHAPE` identifier `_check_shape` uses, so a bad shape is
     never two different codes — only if that exact diagnostic is not already in
     `c.findings`, which is what keeps a direct call from double-reporting one
@@ -1250,18 +1251,13 @@ def _check_units(
     identifier, so a user sees one code for one problem whether it surfaced here
     or during a run.
 
-    Two things skip resolution outright rather than piling a second error onto a
-    config `_check_data`/`_check_unimplemented` has already flagged:
+    One thing skips resolution outright rather than piling a second error onto a
+    config `_check_data` has already flagged: `input_dir` missing, not absolute,
+    or unreadable — `_check_data` already reported the real problem, and
+    resolving would only add a confusing "file not found" on top of a directory
+    that does not exist.
 
-    - `input_dir` missing, not absolute, or unreadable — `_check_data` already
-      reported the real problem, and resolving would only add a confusing
-      "file not found" on top of a directory that does not exist.
-    - `data.units.from.resolver` — resolvers are plugin artifacts and already
-      refused as `E-DATA-RESOLVER-UNSUPPORTED`; `resolve_units` cannot execute a
-      resolver either, and without this skip it raises `E-UNITS-SOURCE-MISSING`
-      for the same declaration, describing a resolver as a missing file.
-
-    No other `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
+    No `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
     method are not read by `resolve_units` at all, and the three that ARE read
     — `cluster_by`, `weight_by`, and (under `by_attribute`) `holdout.from` —
     are read only where a `data.units.measurements` collapse could file a unit
@@ -1302,9 +1298,6 @@ def _check_units(
         # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
         return None, None, frozenset()
     source = units_decl.get("from")
-    if isinstance(source, dict) and "resolver" in source:
-        # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
-        return None, None, frozenset()
     key = units_decl.get("key")
     if key is not None and not isinstance(key, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
@@ -3808,9 +3801,8 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     `allocation` and `assign` against each other and against `sweep.groups` for
     real, `units.arm_members` narrows a condition's roster to its own arm, and
     `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
-    declaration changes the record, which is the test this family applies. It
-    resolves a unit roster, but one `data.units` sub-field — a `resolver`
-    source — is still read by nothing. `data.units.holdout` is no longer among
+    declaration changes the record, which is the test this family applies.
+    `data.units.holdout` is no longer among
     them either: `_check_holdout` checks the declaration for real,
     `_resolved_holdout` realizes the partition once per run over the run's own
     digest, `io.units`/`io.units.train` see the test and training halves,
@@ -3908,19 +3900,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "combination will be honored once the family excludes drawn conditions",
         )
 
-    units = _units_declaration(doc.get("data") or {}, c) or {}
-    source = units.get("from")
-    if isinstance(source, dict) and "resolver" in source:
-        c.error(
-            "E-DATA-RESOLVER-UNSUPPORTED",
-            "data.units.from.resolver",
-            f"names `{source['resolver']}`, but a resolver cannot be dispatched in this "
-            "build; resolvers will be honored in a later slice. Use a table or a glob "
-            "for now",
-        )
-    # No `data.units` *block* is refused wholesale any more — a `resolver`
-    # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
-    # inside `from`, not one of these blocks, and stays refused. Each block
+    # No `data.units` block is refused wholesale any more. Each block
     # this function used to hold — `allocation`/`assign`, `cluster_by`,
     # `weight_by`, `measurements`, and now `holdout` — is checked for real by
     # its own function instead, and each changes the run's record rather than
@@ -3964,13 +3944,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # partition once per run, `io.units`/`io.units.train` see the two halves,
     # `cli.py` narrows the denominator to the test partition and writes
     # `allocation.json` and `provenance.allocation_hash`.
-    #
-    # One `data.units` sub-field remains read by nothing: a `resolver` source
-    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since a resolver
-    # cannot be dispatched in this build — the registry that decides a name
-    # collision among resolver distributions is built; loading the resolver
-    # an accepted name points at is not). `holdout` left this family with
-    # this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`

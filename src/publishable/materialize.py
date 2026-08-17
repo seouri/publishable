@@ -127,8 +127,7 @@ def materialize_config(
         f"  output_dir: {output_dir}",
         "  input_manifest_policy: hash_all  # hash_all | hash_index | none",
         "  units:",
-        '    from: index.csv                # index.csv | {glob: "*.dcm"} '
-        "| {resolver: <name>} (NOT BUILT)",
+        '    from: index.csv                # index.csv | {glob: "*.dcm"} | {resolver: <name>}',
         "    key: patient_id                # stable, unique identity",
         "    attributes: []                 # available for stratification and reporting",
         "    allocation: within             # within | between",
