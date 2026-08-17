@@ -445,3 +445,43 @@ Task 12: fix round. Commit cd72c3a. 1994 passed + 2 xfailed; all gates clean.
   guarded and cannot corrupt messages. Short values over-redact, which fails CLOSED and has no
   security consequence; the claim was corrected rather than the behaviour.
 Task 12: complete. BASE for task 13 is below.
+
+Tasks 13 and 14: BATCHED. Committed separately (24e3a57, dd08bb6). All five routed items filed.
+WHOLE-BRANCH REVIEW (opus), also gating tasks 13 and 14, which had had no per-task review.
+  **Verdict: NOT READY, on three blocking Importants — and the review earned it.**
+  I told the reviewer that task 13 finding exactly the two sites its own brief named was SUSPICIOUS,
+  because a sweep that finds only what it was told to find has not obviously swept. That suspicion was
+  right: sweeping by claim SHAPE rather than spelling found four more of the same family. **Task 13
+  FAILED its gate.** Task 14 passed, with two filings carrying a false reason.
+  The blocker that mattered: **a declared credential reached stdout** through `validate_config`'s
+  `E-TEMPLATE-LOAD` early return, which appends the finding and returns BEFORE `c.credentials` is set.
+  Reproduced in the discriminating single-file shape — the sole template declaring `required_env` was
+  the one that leaked — so the documented limit was over-broad rather than merely imprecise.
+  Fixed with a real mechanism rather than a sentence: a `PartialLoadError` carries the partially-loaded
+  template classes, so the credential NAMES are knowable even though registration was discarded. The
+  re-reviewer attacked that mechanism specifically — it round-trips `str`/`code`, no `except
+  ContractError` reconstructs and drops the payload, `BaseTemplate` has no metaclass so reading a
+  partial class executes nothing, and both sibling orderings redact.
+FINAL FIX ROUND 2, after the scoped re-review returned NOT READY again on two more.
+  **N1 was a regression the previous round introduced, and it is the sharpest lesson of the slice.**
+  Fixing the `PYTHON_DOTENV_DISABLED` invariant by swapping `load_dotenv(override=False)` for
+  `dotenv_values` broke "a shell value wins" — because `dotenv_values` hardcodes `override=True`, and
+  that flag is exactly what decides whether a `${VAR}` reference resolves from the shell or the file.
+  Probed: `ACCOUNT=staging` exported with a `.env` holding `ACCOUNT=prod` resolved `prod`. **And the
+  new docstring claimed "`setdefault` is exactly `override=False`", justified by "a stale `.env` cannot
+  silently redirect a run to the wrong account" — the precise property the change had just broken.**
+  Ruling: a fix that carries its own justification is not thereby verified. The justification was
+  written from the intent, not from the behaviour, and the behaviour had moved. Closed with
+  `DotEnv(..., interpolate=True, override=False).dict()`, which preserves the invariant fix too.
+  Second blocker: the previous round closed a false-claim finding **by propagating the false claim to
+  two more sites** — two new comments asserting an owner that a third comment in the SAME COMMIT says
+  does not exist. Closed by DELETING the claim rather than rewriting it, which is the rule this slice
+  arrived at the hard way: prefer deleting a claim to inventing a better-sounding one.
+  Also closed: `validate` had begun RAISING `AttributeError` on a partial class with a malformed
+  `parameter_spec`, against its never-raise contract; both readers are guarded and it is tested.
+  I verified all four `load_env` properties myself after the fix — shell interpolation wins, the env
+  var is not honoured, a direct assignment wins, a bare `KEY` is missing not empty.
+FINAL: 1999 passed + 2 xfailed; ruff check, format (76 files) and mypy (43 files) clean. 41 commits.
+  The re-reviewer's independent end-to-end leak probe: both declared credentials appear only in `.env`,
+  the undeclared control appears in `run.yaml` and `executions.jsonl` exactly as the documented limit
+  says, stdout and stderr carry zero hits, and the sweep was proven able to fail.

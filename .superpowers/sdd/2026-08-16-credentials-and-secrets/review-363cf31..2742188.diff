@@ -1,0 +1,109 @@
+# Review package: 363cf31..HEAD
+
+## Commits
+2742188 docs: tasks 5 and 6 report
+f298aca docs: the importable surface does not move — a subclass attribute and a Param keyword are not exports
+8e3a911 docs: requires_env stays out of the closed constraint table, and § Templates' present-tense claim is reconciled
+
+## Files changed
+ .../task-5-6-report.md                                  | 17 +++++++++++++++++
+ docs/reference.md                                       |  6 ++++--
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-5-6-report.md b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-5-6-report.md
+new file mode 100644
+index 0000000..c0aabfa
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-5-6-report.md
+@@ -0,0 +1,17 @@
++# Tasks 5 & 6 — report
++
++**Status:** both complete, both committed separately.
++
++**Commits:**
++- Task 5: `8e3a911` — `docs: requires_env stays out of the closed constraint table, and § Templates' present-tense claim is reconciled`
++- Task 6: `f298aca` — `docs: the importable surface does not move — a subclass attribute and a Param keyword are not exports`
++
++**Tests:** `uv run pytest` — 1964 passed, 2 xfailed (unchanged), `uv run ruff check .` clean, `uv run ruff format --check .` — 74 files already formatted, `uv run mypy` — no issues, all re-run after each commit.
++
++## Disagreements found between the briefs/spec and the documents as they stand
++
++- **Task 5 step 3's positional claim was correct as a diagnosis but the fix needed care.** The brief was right that "above" in "isn't in the closed vocabulary above" (§ A credential can belong to a parameter value) no longer points at the constraint table by position: a second table (the "Three states" `Declaration | Means | init writes` table, § Templates) sits between the constraint table and this sentence, so the nearest preceding table is the wrong one. Fixed per the brief's own instruction — named what the table *does* rather than where it sits, via an explicit link: `isn't in [the constraint table](#templates-where-parameters-are-defined)`.
++- **Task 6's step 5 obligation is carried forward as instructed** — `git diff 478c1f3 -- src/publishable/__init__.py` was run now as a sanity check and is empty, consistent with decision 8, but the brief's own instruction is that task 14 is the authoritative place to record this, so I noted the obligation in the commit message rather than declaring it settled here.
++- No other disagreement found: task 5's step 4 byte-identical claim was verified directly (`Param(...).comment()` run via `uv run python -c`, output matches the document's line character for character), and task 6's step 1 paragraph text and step 3's Status-column check both matched the document/code as read — no rewrite of the brief's prescribed language was needed beyond what the brief itself specified.
++
++**No changes made to code, tests, or `secrets.py`'s `— not yet built` marker** (correctly deferred to task 7 per the ordering note).
+diff --git a/docs/reference.md b/docs/reference.md
+index a504024..48edbcc 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -937,20 +937,22 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
+ | `register_resolver` · `register_probe` · `register_writer` | decorator | not yet built | The other three of the four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+ | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
+ 
+ **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
+ 
+ **A row marked `not yet built` is a promise, not an export.** Importing one raises `ImportError`
+ today. The rows stay because this table is the enumerated surface every plugin is written against,
+ and a contract that appears only once its implementation lands is a contract nobody could have
+ designed to.
+ 
++**Not everything core adds is a name on this table, and the credential mechanism is the example.** `required_env` is an attribute of a class you already subclass and [`requires_env`](#a-credential-can-belong-to-a-parameter-value) is a keyword of a construct you already import, so declaring either adds no import line to your template. A mechanism reaching you through a class you subclass and a keyword you pass is the shape to expect: this table enumerates what you *import*, and it moves only when there is a new name to import.
++
+ **`cfg` and `io` are not on it, and that's the shape of the API rather than an omission.** Both are constructed by core and handed to your `run`, already scoped — there is nothing to import and nothing to construct, which is what lets core decide what backs them. Every other name above is one you subclass, instantiate, decorate with, or catch.
+ 
+ **The root config node carries exactly one accessor, `raw`; every nested node carries none.** That
+ is a real exception to "no methods at all" and it costs one name: a top-level key named `raw` is
+ unreachable through dot-access. It is at the root only, because the root is the one node core hands
+ to something other than a step — `validate` and a template's `validate(config)` both need the
+ underlying mapping — and a nested node has no such caller. A parameter named `raw` inside a block
+ is reachable exactly as any other is.
+ 
+ ### What you define, and what is core's
+@@ -1572,21 +1574,21 @@ def aggregate(self, units, cfg) -> dict:
+ ```
+ 
+ `aggregate` returning `{}` is the right answer for a table it doesn't recognize — core calls it once per recording step, and a pipeline can have several. What it may return otherwise is [what a step may return](#steps-and-artifacts): a flat mapping of scalars, with the same coercion of a NumPy scalar and the same `ContractError` on anything structural. There is no `Estimate` exception here, since a derived metric is one core computes and resamples itself.
+ 
+ **It receives the condition's resolved `cfg`, and it has to.** In the worked example `analysis.method` is swept, so `r` is a different function in each of the three conditions — an `aggregate` that saw only the table could hard-code one coefficient and would then report the same statistic under all three labels. Core passes the same `cfg` when it recomputes the metric on a resampled table, so the value and its interval are always the same statistic. This is the one place a template sees a condition; step code still doesn't, because `cfg` arrives already resolved (see [Using them in step code](#using-them-in-step-code)).
+ 
+ **A key `aggregate` returns that the step also recorded is rejected as it happens**, since `aggregated` has one place for that name and a column mean and a derived value are different numbers. Rename one, or drop the column once the template derives it — the worked example's `r` is safe because the step *returns* it rather than recording it, which lands it in [`per_repeat`](#the-unit-table-is-the-inference-base) where the two are deliberately visible side by side.
+ 
+ **One call per recording step, attributed to that step.** A pipeline can have several steps that call `io.record`, so there is no single unit table to hand over. Core calls `aggregate` once per step that recorded one, over that step's collapsed table, and files the result under that step — which is why the worked example's derived `r` appears at `aggregated.step03_analyze.r` rather than at the top of the condition. A template that only knows how to derive metrics from some tables returns `{}` for the rest.
+ 
+-`Param` carries type, default, constraints, help text, and any [credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value) — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
++`Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once. It carries one thing that is **not** a constraint and so is not in the table below: [the credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value), which constrains the environment a value may be used in rather than the value.
+ 
+ **The constraint vocabulary is closed**, because `parameter_spec` is the schema `validate` enforces and a spec whose vocabulary is open-ended can't be checked or rendered into a comment:
+ 
+ | Constraint | Applies to | Renders as |
+ |---|---|---|
+ | `choices=[...]` | any | `# choices: a \| b \| c` |
+ | `ge` · `gt` · `le` · `lt` | `int`, `float` | `# integer >= 2`, `# float in (0, 1)` |
+ | `pattern=r"..."` | `str` | `# matches ^[a-z0-9-]+$` |
+ | `item_type` · `min_items` · `max_items` | `list` | `# list of float, 2 to 5 items` |
+ | `nullable=True` | any | permits `null` beside the declared type |
+@@ -1631,21 +1633,21 @@ Required parameters get the same treatment `metadata.description` does — mater
+ 
+ **`init` renders the requirement into the `choices` comment, against every value rather than the one it wrote**, because [nothing ever writes back into a config](#the-one-config-file) and a comment describing the *current* value would be wrong the first time you edited it. Attaching each variable to its own choice keeps the comment true whatever the file holds, which is the property every other inline comment already has:
+ 
+ ```yaml
+   llm:
+     provider: azure_openai          # choices: azure_openai (needs AZURE_OPENAI_API_KEY) | openai (needs OPENAI_API_KEY) | ollama
+ ```
+ 
+ **`requires_env` needs `choices`, and the mapping must be total over them.** A credential requirement is only checkable if the set of values is closed, which is exactly what `choices` declares; and a partial mapping would leave "this value needs nothing" and "nobody wrote this value down" spelled identically, which is the [defaults-file problem](#there-is-no-separate-defaults-file) inside one dict. `validate` rejects a mapping with a missing or unknown key when the template loads, naming both sets — as [`E-TEMPLATE-LOAD`](#errors-validate-reports), which is that code's "raises while importing" shape and mints no identifier of its own, exactly as a `Param` declaring `default=None` without `nullable=True` already does. The consequence to plan for is real and is the point: **adding a choice breaks every template that declared `requires_env` until the new value states its requirement.** A new provider whose credentials nobody wrote down is a bug, and finding it at load beats finding it four hours into a sweep.
+ 
+-This is not a constraint, so it isn't in the closed vocabulary above — it constrains the *environment* a value may be used in, not the value. It's the same boundary [`apparatus_facts`](#the-apparatus-core-can-only-observe) sits on, read from the other side: the provider is something you decide, so it's a `Param`, and what that decision requires travels with it rather than with the template that happens to offer the choice.
++This is not a constraint, so it isn't in [the constraint table](#templates-where-parameters-are-defined) — it constrains the *environment* a value may be used in, not the value. It's the same boundary [`apparatus_facts`](#the-apparatus-core-can-only-observe) sits on, read from the other side: the provider is something you decide, so it's a `Param`, and what that decision requires travels with it rather than with the template that happens to offer the choice.
+ 
+ ---
+ 
+ ## Sweeps and repeats
+ 
+ Varying a parameter across a grid, and repeating each condition for statistical reporting, are what experiments *are*. They belong in core, not in a plugin — every field does both, and neither has anything to do with any particular domain.
+ 
+ ### Declaring them
+ 
+ `parameters` holds base values. `sweep` says what varies. `replication` says how each condition repeats.
