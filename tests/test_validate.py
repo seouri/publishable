@@ -12988,5 +12988,43 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
 # never appeared in the unredacted `E-TEMPLATE-COLLISION` message. The message
 # names providers (a path::ClassName, a dotted module path), never a
 # declaration, so nothing there is ever a candidate for `credential_values` to
-# match against. No test in this slice reaches `partial_templates`' payload at
-# all — see docs/superpowers/spec-defects.md's entry on the residual.
+# match against — see docs/superpowers/spec-defects.md's entry on the residual.
+
+_SHADOWS_GENERIC_WITH_CREDENTIAL = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("generic")
+class Shadower(BaseTemplate):
+    required_env = ["SHADOW_KEY"]
+    parameter_spec = {}
+"""
+
+
+def test_a_local_claimants_credentials_reach_the_collector_despite_the_collision(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The *local* half of the residual, pinned rather than left to a mutation's
+    silence: `_claims` raises `PartialLoadError` on the shadow of `generic`, but
+    still carries `Shadower` on `exc.partial_templates`, so `validate_config`
+    can read its `required_env` even though the collision refuses the name.
+
+    Review C2 (H7b Part A tasks 16-20): emptying `partial_templates` in
+    `registry._claims` left the whole suite green, because nothing asserted on
+    `partial_templates`' contents or on `c.credentials` — the public,
+    inspectable chain that carries a declared credential's value. This is that
+    assertion. It does not reach the *installed*-claim half of the residual
+    (`## OPEN` in spec-defects.md): an installed claim's `cls` is `None`
+    structurally, so it can never appear here regardless of this test.
+    """
+    monkeypatch.setenv("SHADOW_KEY", "sk-c2-sentinel-9911")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(_SHADOWS_GENERIC_WITH_CREDENTIAL)
+
+    path = write_config({"experiment_type": "generic", "parameters": {}})
+    c = Collector()
+    validate_config(path, c)
+
+    assert "E-TEMPLATE-COLLISION" in {f.code for f in c.findings}
+    assert c.credentials.get("SHADOW_KEY") == "sk-c2-sentinel-9911"

@@ -472,3 +472,20 @@ def test_the_plugin_field_carries_what_generate_was_told(tmp_path: Path):
         entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
     )
     assert yaml.safe_load(plain)["plugin"] is None
+
+
+def test_the_plugin_field_stays_a_string_even_when_it_looks_like_a_mapping(tmp_path: Path):
+    """Review M3: an un-quoted `plugin: {a: b}` re-parses as a YAML mapping
+    rather than the string it was written to record verbatim. A `--plugin`
+    value is a creation-time flag the author types, so it must round-trip as
+    text — not be reinterpreted by the format it happens to land in."""
+    text = materialize_config(
+        template=get_template("generic"),
+        template_name="generic",
+        name="cohort-pilot",
+        input_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+        plugin="{a: b}",
+    )
+    assert yaml.safe_load(text)["plugin"] == "{a: b}"

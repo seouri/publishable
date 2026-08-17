@@ -1,14 +1,21 @@
 """Entry-point discovery for the registries a plugin declares.
 
 docs/reference.md § Creating a plugin. Every name a config can write for a
-plugin artifact resolves through this module, and it resolves from **package
-metadata**: nothing here calls `EntryPoint.load()`, and nothing that calls this
-module may either. That is not a performance choice. § Creating a plugin
-justifies the whole entry-point mechanism by `validate` being able to answer
-"no installed package registers `plate_wells`" without importing a line of that
-package, and `validate` is documented as creating nothing and reaching nothing
-off the machine. A check that reaches for the object behind a name has changed
-the guarantee whatever it returns.
+plugin artifact resolves through this module, and *resolving a name* —
+`scan_group`, `names`, `check_registration`, and every lookup `validate` makes
+— answers from **package metadata** and imports nothing. That is not a
+performance choice. § Creating a plugin justifies the whole entry-point
+mechanism by `validate` being able to answer "no installed package registers
+`plate_wells`" without importing a line of that package, and `validate` is
+documented as creating nothing and reaching nothing off the machine. A check
+that reaches for the object behind a name has changed the guarantee whatever
+it returns — which is exactly what `validate` never does.
+
+Loading the object behind a name is a separate, named operation —
+`load_entry_point`, the one function in this module that calls
+`EntryPoint.load()` — performed deliberately by a caller that has already
+resolved a name and now needs the object: `run`/`dry-run`, once a command is
+past validation. `validate` is not such a caller.
 
 The cost of that, stated rather than discovered: a claim read from metadata is a
 name and a provider and nothing else. A refusal computed from it therefore has
@@ -256,11 +263,21 @@ def load_entry_point(ep: EntryPoint) -> Any:
     drained rather than kept for the next load either way: a registration this
     import made is not the next one's to inherit.
 
+    Drained before the import too, on `discover_local`'s precedent and for its
+    exact reason: a module-scope `@register_template` queued by something else
+    entirely — `cli` imports the experiment package before `validate_config`
+    runs — is not this call's to inherit and misattribute onto its own refusal.
+    Drained again on the success return, for the same reason in the other
+    direction: what this import just registered is not the *next* load's to
+    inherit either, and the object `ep.load()` handed back is already this
+    call's own answer.
+
     The distribution is named rather than the module, because a distribution is
     what a reader uninstalls or pins.
     """
+    drain_pending()  # discard anything queued before this call — not ours to attribute
     try:
-        return ep.load()
+        result = ep.load()
     except SystemExit as exc:
         raise PartialLoadError(
             f"the entry point `{ep.name}` in `{ep.group}`, from {provider_of(ep)}, called "
@@ -275,3 +292,5 @@ def load_entry_point(ep: EntryPoint) -> Any:
             code="E-PLUGIN-LOAD",
             partial_templates=[cls for _, cls in drain_pending()],
         ) from exc
+    drain_pending()  # discard whatever this import registered — not the next load's to inherit
+    return result

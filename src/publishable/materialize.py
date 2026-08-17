@@ -112,7 +112,7 @@ def materialize_config(
         'schema_version: "1.0"',
         f"experiment_type: {template_name}",
         *([] if reported is None else [f'template_version: "{reported}"']),
-        f"plugin: {plugin if plugin else 'null'}",
+        f"plugin: {_scalar(plugin) if plugin else 'null'}",
         "",
         "metadata:",
         f"  name: {name}",

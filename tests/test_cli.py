@@ -9024,6 +9024,99 @@ def test_generate_experiment_installs_the_plugin_before_it_scaffolds(
     assert plain["plugin"] is None
 
 
+def test_plugin_requirement_carries_a_ref_suffix_into_the_argv_uv_add_receives():
+    """M2 (H7b Part A tasks 16-20 review): brief step 9 asked whether a
+    `--plugin user/repo@ref` value's `@ref` suffix reaches the argv `uv_add`
+    passes to `uv add`, and the report did not answer. It does: `uv_add`'s own
+    body is exercised by no test (both CLI tests replace it wholesale — see the
+    module-level note below), but `plugin_requirement` is the pure function
+    that builds the string `uv_add` is handed, and it is directly testable."""
+    from publishable.generators.experiment import plugin_requirement
+
+    assert (
+        plugin_requirement("someuser/publishable-llm@v1.2.0")
+        == "git+https://github.com/someuser/publishable-llm@v1.2.0"
+    )
+
+
+# M2's residual, stated on the record rather than left for the next reader to
+# rediscover (H7b Part A tasks 16-20 review): no test in this suite executes
+# `uv_add`'s body — the argv `["uv", "add", requirement]`, `cwd=repo_root`, or
+# the `returncode != 0` -> `E-UV-ADD` branch — because both CLI tests below
+# replace `publishable.generators.experiment.uv_add` wholesale, and
+# `test_uv_add_really_installs` is an unconditional `pytest.skip` (no
+# offline-installable `git+https://` dependency exists to install against).
+# Closed by probe rather than by test: `uv add` demonstrably runs, in the
+# project directory, with the constructed requirement, and fails clean
+# (`E-UV-ADD`, empty `src/`/`configs/`) against a nonexistent repository.
+
+
+_PLUGIN_PROVIDED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("plugin_provided")
+class PluginProvided(BaseTemplate):
+    parameter_spec = {}
+"""
+
+
+def test_the_install_runs_before_the_template_name_is_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """I2 (H7b Part A tasks 16-20 review): the ordering guarantee named by the
+    code comment in `generate_experiment` ("resolving first would refuse a name
+    the install is about to provide") and by
+    `test_generate_experiment_installs_the_plugin_before_it_scaffolds`'s own
+    docstring is pinned by neither existing test — both use `--template
+    generic`, a name core already registers, so resolving before or after the
+    install makes no difference to either.
+
+    Here `--template` names something only the (faked) install provides: the
+    fake `uv_add` writes `templates/plugin_provided.py` as its side effect,
+    the same way a real install would leave an importable package behind.
+    Resolving the name before installing would refuse it with
+    `E-TEMPLATE-UNKNOWN`; resolving after succeeds. This is the test the brief's
+    mutation (a) — moving the `if plugin:` block below where `_claims`/
+    `resolve_template` reads the name — must fail.
+    """
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        templates = repo_root / "templates"
+        templates.mkdir(exist_ok=True)
+        (templates / "plugin_provided.py").write_text(_PLUGIN_PROVIDED_TEMPLATE)
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "plugin_provided",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_OK
+    )
+    config = yaml.safe_load((root / "configs" / "pilot" / "config.yaml").read_text())
+    assert config["experiment_type"] == "plugin_provided"
+
+
 def test_a_failed_plugin_install_scaffolds_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
@@ -9066,16 +9159,20 @@ def test_a_failed_plugin_install_scaffolds_nothing(
     assert not (root / "configs" / "pilot").exists()
 
 
-@pytest.mark.slow
+@pytest.mark.skip(
+    reason="no git+https dependency this project already carries to install offline; "
+    "would need real network access to a real repository"
+)
 def test_uv_add_really_installs(tmp_path: Path):
-    """`markers = ["slow: exercises real uv or network"]`. The patched tests
-    above prove the wiring; this proves the command line.
+    """The patched tests above prove the wiring; this would prove the command
+    line, if it could run anywhere.
 
-    Skipped rather than run: this project depends on no `git+https://...`
-    requirement it could reuse offline, and inventing a throwaway repository
-    to install from would need network access this suite does not assume.
+    Decorated rather than skipping in its own body: a `slow`-marked test whose
+    body is an unconditional `pytest.skip` never runs under any invocation,
+    `-m slow` included, so it is a test that does not exist wearing a marker —
+    worse than the truth, which is that this project depends on no
+    `git+https://...` requirement it could reuse offline, and inventing a
+    throwaway repository to install from would need network access this suite
+    does not assume. A decorator-level skip reports `skipped` for a stated
+    reason instead, and does not pretend an opt-in flag would ever run it.
     """
-    pytest.skip(
-        "no git+https dependency this project already carries to install offline; "
-        "would need real network access to a real repository"
-    )

@@ -433,6 +433,43 @@ def test_a_plugin_module_that_raises_is_a_coded_refusal_naming_the_distribution(
     assert "RuntimeError" in message
 
 
+def test_a_stale_pending_registration_is_not_inherited_onto_this_load(installed):
+    """`load_entry_point`'s docstring claims "a registration this import made is
+    not the next one's to inherit" — which also means the reverse: a
+    registration queued by something *earlier*, and never drained, is not this
+    import's to inherit either.
+
+    `cli` imports the experiment package before `validate_config` runs, so a
+    stray module-scope `@register_template` elsewhere in the process is exactly
+    the kind of entry that can sit in the pending buffer when `load_entry_point`
+    is called. Without a pre-drain, `boom_module`'s refusal would carry a class
+    it never touched.
+    """
+    from publishable import BaseTemplate
+    from publishable.errors import ContractError
+    from publishable.plugins import load_entry_point, scan_group
+    from publishable.templates.discovery import _pending
+
+    class Stale(BaseTemplate):
+        required_env = ["STALE_KEY"]
+
+    _pending.append(("stale", Stale))
+    try:
+        site = installed(
+            "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "boom_module:resolve"}}
+        )
+        (site / "boom_module.py").write_text("raise RuntimeError('kaboom')\n")
+
+        ep = scan_group("publishable.resolvers")["plate_wells"][0]
+        with pytest.raises(ContractError) as excinfo:
+            load_entry_point(ep)
+    finally:
+        _pending.clear()
+
+    carried = getattr(excinfo.value, "partial_templates", None)
+    assert carried == []
+
+
 def test_a_plugin_module_calling_sys_exit_is_contained_too(installed):
     """`SystemExit` is a `BaseException`, so the broad arm does not see it — the
     mutation for this is deleting the `except SystemExit` and watching pytest
