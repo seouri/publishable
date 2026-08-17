@@ -1142,6 +1142,7 @@ def paired_percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
 ) -> PairedResample:
     """Percentiles of the resampled difference, one draw applied to both sides.
 
@@ -1166,14 +1167,62 @@ def paired_percentile_of_derived(
     nothing to raise. A caller that genuinely wants the same statistic on both
     sides passes the same callable twice; that's a normal call, not a special
     case this function has to detect.
+
+    `strata`, when given, resamples within each stratum rather than over the
+    whole `keys` list — the same `resample.stratify_by` honoured per condition
+    by `percentile_over_units` and `percentile_of_derived`, honoured here for
+    the first time. **The pairing survives the stratification**: one drawn key
+    list still feeds both sides, so stratifying changes which keys are drawn
+    and never that the two sides see the same ones — drawing each side's strata
+    independently would resample the two conditions apart, the same failure the
+    unstratified draw's docstring above already argues about. `strata` is
+    indexed, not `.get`-ed, the discipline `percentile_of_derived`'s own
+    `strata` branch already keeps: a caller whose roster and mapping have come
+    to disagree about which units exist is a core defect, not a silent extra
+    stratum. Pools are ordered by their own sorted contents rather than by
+    label, so renaming a stratum draws the identical sequence of tables — the
+    same relabelling invariance `percentile_over_units` and
+    `percentile_of_derived` keep.
+
+    **Not built here:** its siblings' content-based degenerate refusal — if
+    every key in every stratum carries the identical recorded row, the draw is
+    a constant and the interval has zero width. `paired_percentile_of_derived`
+    has none of those refusals to begin with (a deferred finding
+    `docs/superpowers/spec-defects.md` already records), and a stratified
+    contrast is where it first becomes reachable through a near-unique
+    `stratify_by`; that sweep is filed rather than built, with a named owner.
     """
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
     n = len(keys)
+    # One pool per stratum, built by walking `keys` — which `paired_keys` returns
+    # sorted — so each pool's own contents come out sorted, and the pools are then
+    # ordered by those contents rather than by label. That is the same
+    # relabelling-invariance `percentile_over_units` and `percentile_of_derived`
+    # keep for the same reason: a renamed stratum must draw the identical sequence
+    # of tables. `strata` is indexed, not `.get`-ed, the discipline `weights` and
+    # `clusters` follow elsewhere here — a caller whose roster and mapping have
+    # come to disagree about which units exist is a core defect, not a silent
+    # extra stratum. It need not be exactly `keys`' set: a caller passing a
+    # roster-wide mapping simply never has the extra entries looked up.
+    pools: list[list[str]] | None = None
+    if strata is not None:
+        grouped: dict[str, list[str]] = {}
+        for key in keys:
+            grouped.setdefault(strata[key], []).append(key)
+        pools = sorted(sorted(group) for group in grouped.values())
     values: list[float] = []
     for _ in range(draws):
-        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        # ONE drawn key list, feeding BOTH sides — under strata exactly as
+        # without. Stratifying changes which keys are drawn and never that the two
+        # sides see the same ones; drawing each side's strata independently would
+        # resample the two conditions apart and destroy the pairing, which is the
+        # failure this function's docstring argues about the unstratified draw.
+        if pools is None:
+            drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        else:
+            drawn = [group[rng.randrange(len(group))] for group in pools for _ in range(len(group))]
         table_a = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
         table_b = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:

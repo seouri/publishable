@@ -6288,3 +6288,31 @@ and a normative § Errors row that both promised three constructions would take 
 narrowed by deletion in this task; both are deleted outright in H4b-1 task 13.
 
 **Found by:** H4b-SCOPING § 2.1. **Closed by:** H4b-1, task 1.
+
+## OPEN — a stratified paired draw can publish a zero-width contrast interval — **Owner: H4b-2**
+
+H4b-1 task 5 gave `stats.paired_percentile_of_derived` a `strata` parameter, so
+`statistics.resample.stratify_by` is honoured on a contrast for the first time. Its three sibling
+percentile constructions each carry a **content-based degenerate refusal** —
+`percentile_over_units`'s strata branch, `percentile_over_units_clustered`'s cluster-content branch,
+and `percentile_of_derived`'s identical-row branch, which refuses before drawing when every key in
+every stratum carries the same recorded row. `paired_percentile_of_derived` carries none of them,
+which `docs/superpowers/spec-defects.md`'s entry on the contrast path's disclosure gaps already
+records as deferred.
+
+**What task 5 changed is the reachability.** A near-unique `stratify_by` now makes every stratified
+contrast draw pick from an identical multiset of rows, so `compute_of`/`compute_against` return the
+same difference every time and the entry publishes `ci95: [x, x]` — a zero-width 95 % interval, which
+§ Statistical reporting refuses in those terms — indistinguishable from a genuine interval. Before
+task 5 the same config's contrast draw was unstratified and could not reach it.
+
+Not built in H4b-1: it is a third construction's worth of work (the paired form has two collapsed
+tables to compare rows across, not one) and the slice's task budget does not hold it.
+
+**Owner: H4b-2 — clusters through contrasts**, by name and not "whichever slice ships next": H4b-2 is
+the half that adds the remaining paired percentile construction, so it is where the degenerate sweep
+belongs for all of them at once. It should be built together with the zero-width sweep the contrast
+disclosure entry already defers to H4b.
+
+**Found by:** H4b-1, task 5. **Severity:** Minor — reachable only from a `stratify_by` whose strata
+are near-unique, which `validate` does not refuse.

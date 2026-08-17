@@ -3827,3 +3827,140 @@ def test_percentile_of_derived_is_invariant_to_stratum_labels():
     a = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata)
     b = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata_renamed)
     assert a == b
+
+
+_PAIRED_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 9.0},
+    "u4": {"m": 10.0},
+    "u5": {"m": 11.0},
+}
+_PAIRED_AGAINST = {k: {"m": 0.0} for k in _PAIRED_OF}
+_PAIRED_KEYS = ["u0", "u1", "u2", "u3", "u4", "u5"]
+_PAIRED_STRATA = {"u0": "A", "u1": "A", "u2": "A", "u3": "B", "u4": "B", "u5": "B"}
+
+
+def _mean_of_m(table):
+    column = table.m
+    return float(sum(column) / len(column))
+
+
+def test_a_stratified_paired_draw_preserves_each_stratums_key_count():
+    """`reference.md` § Weighted samples: `resample.stratify_by` says what an
+    independent draw is, "resampling within each stratum so a bootstrap can't
+    return a replicate whose stratum composition the design ruled out".
+
+    The assertion is a FORCED BOUND, not an observation. A stratified draw is
+    always three `A` keys and three `B` keys, so the smallest mean it can produce
+    is three copies of `u0` (1.0) and three of `u3` (9.0) — exactly 5.0. An
+    unstratified draw can go to 4.33 with five `A` keys and one `B`, and does at
+    this seed and draw count. Neither the RNG nor the draw count can move the
+    bound, which is what makes this test discriminating rather than lucky."""
+    from publishable.stats import paired_percentile_of_derived
+
+    stratified = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=_PAIRED_STRATA,
+    )
+    plain = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+    )
+    assert min(stratified.pool) >= 5.0 - 1e-9
+    # The control that must report: the same seed and draw count without strata
+    # reaches below the forced floor, so the bound above is the stratification and
+    # not a pool that happens to start high.
+    assert min(plain.pool) < 5.0
+    assert stratified.draws_used == 200
+    assert plain.draws_used == 200
+
+
+def test_a_stratified_paired_draw_still_draws_once_for_both_sides():
+    """The property stratification must not cost. One drawn key list feeds both
+    tables, so what is resampled is the difference — drawing each side's strata
+    independently would resample the two conditions apart, the failure this
+    construction's docstring argues about the unstratified draw.
+
+    Pinned by an oracle rather than by inspection: with `against` holding the same
+    column as `of`, a single shared draw cancels to exactly zero on every draw, so
+    a zero-width pool at zero is proof the two tables saw the same keys. Two
+    independent draws could not produce it."""
+    from publishable.stats import paired_percentile_of_derived
+
+    got = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_OF,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=_PAIRED_STRATA,
+    )
+    assert set(got.pool) == {0.0}
+
+
+def test_a_stratum_mapping_missing_a_drawn_key_is_a_core_defect():
+    """Indexed, not `.get`-ed — the discipline `percentile_of_derived`'s own
+    `strata` branch states: a caller whose roster and mapping have come to
+    disagree about which units exist is a core defect, not a silent extra
+    stratum."""
+    from publishable.stats import paired_percentile_of_derived
+
+    with pytest.raises(KeyError):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            _PAIRED_KEYS,
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata={"u0": "A"},
+        )
+
+
+def test_a_relabelled_stratum_draws_the_identical_sequence():
+    """The invariance `percentile_over_units` and `percentile_of_derived` both
+    keep, and for the identical reason: pools are ordered by their own sorted
+    contents rather than by label, so renaming a stratum cannot change the
+    interval. Two labels is enough here because the two orderings this must rule
+    out are exactly two — insertion order and label order — and swapping the two
+    labels reverses one and not the other."""
+    from publishable.stats import paired_percentile_of_derived
+
+    swapped = {k: ("B" if v == "A" else "A") for k, v in _PAIRED_STRATA.items()}
+    first = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=_PAIRED_STRATA,
+    )
+    second = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=swapped,
+    )
+    assert first.pool == second.pool
