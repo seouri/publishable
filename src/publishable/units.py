@@ -349,16 +349,32 @@ def _from_resolver(
     io = resolver_io if resolver_io is not None else ResolverIO(input_dir)
     units: list[Unit] = []
     yielded: set[str] = set()
-    for item in resolve(io, cfg):
-        if not isinstance(item, Unit):
-            raise ContractError(
-                f"resolver `{name}` yielded a {type(item).__name__} — a resolver yields "
-                "`Unit`s, which is what makes its roster a unit table with the columns a "
-                "CSV would have supplied",
-                code="E-RESOLVER-YIELD",
-            )
-        units.append(item)
-        yielded.update(item.attributes)
+    try:
+        for item in resolve(io, cfg):
+            if not isinstance(item, Unit):
+                raise ContractError(
+                    f"resolver `{name}` yielded a {type(item).__name__} — a resolver yields "
+                    "`Unit`s, which is what makes its roster a unit table with the columns a "
+                    "CSV would have supplied",
+                    code="E-RESOLVER-YIELD",
+                )
+            units.append(item)
+            yielded.update(item.attributes)
+    except ContractError as exc:
+        if exc.code != "E-STEP-SWEPT-PARAM":
+            raise
+        # The mechanism is shared and the fault is not. `config.Node` raises the
+        # step's identifier because that is what it raises for every reader of a
+        # `SweptAway` marker; a reader holding it here would be sent to § Step
+        # scope, which describes a different fault at a different time. Re-coded
+        # rather than re-raised, on `discover_local`'s precedent for a coded
+        # `ContractError` out of user code.
+        raise ContractError(
+            f"resolver `{name}` reads {exc}. The unit table is one table for the whole run, "
+            "so conditions that resolved different units could not be paired and `n` would "
+            "mean something different in each. Read a parameter the sweep leaves alone",
+            code="E-RESOLVER-SWEPT-PARAM",
+        ) from exc
     if not units:
         raise ContractError(
             f"resolver `{name}` yielded no units; a run measuring zero units has nothing to report",

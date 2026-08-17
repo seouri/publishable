@@ -3991,3 +3991,94 @@ def test_a_reserved_attribute_name_is_refused_before_a_missing_one(installed, re
     finally:
         sys.modules.pop("reserved_r27", None)
     assert excinfo.value.code == "E-UNITS-ATTR-RESERVED"
+
+
+_READS_A_PARAM = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key=str(cfg.parameters.analysis.method))
+"""
+
+
+def test_a_resolver_reading_a_swept_parameter_is_refused_under_its_own_code(
+    installed, registries, tmp_path
+):
+    """`E-RESOLVER-SWEPT-PARAM`, not `E-STEP-SWEPT-PARAM`: the mechanism is shared
+    and the fault is not — a reader holding the step's identifier is sent to a
+    section describing a different fault at a different time."""
+    from publishable.errors import ContractError
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "swept_r29", _READS_A_PARAM)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg)
+    finally:
+        sys.modules.pop("swept_r29", None)
+    assert excinfo.value.code == "E-RESOLVER-SWEPT-PARAM"
+    assert "plate_wells" in str(excinfo.value)
+    assert "analysis.method" in str(excinfo.value)
+
+
+def test_a_resolver_reading_a_parameter_the_sweep_leaves_alone_resolves(
+    installed, registries, tmp_path
+):
+    """THE CONTROL, and § Where units come from's own sentence: "Parameters the
+    sweep leaves alone are fair game, which is how a resolver is told which assay,
+    panel, or shard to include." Without it, a refusal that fired for every `cfg`
+    read would pass the test above."""
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.min_samples": [10, 20]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "unswept_r29", _READS_A_PARAM)
+    try:
+        roster, _n, _columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg
+        )
+    finally:
+        sys.modules.pop("unswept_r29", None)
+    assert [u.key for u in roster] == ["pearson"]
+
+
+def test_a_resolvers_own_coded_refusal_keeps_its_own_identifier(installed, registries, tmp_path):
+    """Only the sentinel read is re-coded. A resolver reading a file that is not
+    there gets `E-UNITS-SOURCE-MISSING`'s cousin from `io`, and re-coding
+    everything would tell a reader their sweep was at fault."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "coded_r29",
+        "from publishable import ContractError, Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    raise ContractError('nope', code='E-UNITS-EMPTY')\n"
+        "    yield Unit(key='a1')\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=Config({})
+            )
+    finally:
+        sys.modules.pop("coded_r29", None)
+    assert excinfo.value.code == "E-UNITS-EMPTY"
