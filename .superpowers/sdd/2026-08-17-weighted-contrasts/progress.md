@@ -57,3 +57,25 @@ declared — the failure decision 5 exists to prevent.
 two contiguous key blocks, so swapping labels does not change which content-block is inserted
 first. Verified empirically by the implementer rather than carried from the brief. Handed to the
 task reviewer as its own attack line: whether the implementation is pinned by anything at all.
+
+### Tasks 1-5 — task review, fix round 1 dispatched
+
+Review at `task-1-5-review.md`. Both verdicts **conditional pass**; three Majors block.
+Two are the same shape — a quantifier left standing over a table whose row count changed, in
+`docs/reference.md` and again in a § Errors row, one of them contradicting a paragraph the same
+commit added ten lines above it. The third is `test_a_relabelled_stratum_draws_the_identical_sequence`
+pinning nothing: the reviewer verified by running that a **label-order** mutation — the ordering the
+docstring claims to rule out — passes on the shipped fixture, and built the discriminating
+replacement (unequal-sized strata). It blocks task 7.
+
+**Ruling on the implementer's own Minor 4 — the prescribed mutation was the defect, not the fixture.**
+The report proposed an interleaved fixture to separate content order from insertion order. The
+reviewer proved exhaustively that under the sorted-`keys` contract **the two branches cannot differ**
+for any label assignment; only an unsorted `keys` list separates them, which no call site produces.
+So: **do not build it.** The remedy is to enforce or document the sorted-`keys` contract at the
+function — which is what makes the mutation blind — and to record in the report that the mutation is
+unbuildable rather than unbuilt. **Cost if wrong:** a real ordering defect could enter through a
+future caller that passes unsorted keys, which is precisely what the enforced contract now catches.
+
+This is `CLAUDE.md`'s "a mutation whose two branches cannot differ" firing on a mutation **I**
+prescribed — the fourth blind mutation this slice's briefs have shipped.
