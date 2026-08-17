@@ -5860,6 +5860,18 @@ implements it.
 contradiction between a built check and its documentation — filed so it is not silently assumed
 closed by a later slice's scoping.
 
+**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
+experiments, and an owner request rather than a second filing.** With `E-DATA-RESOLVER-UNSUPPORTED`
+retired, [the feasibility analysis](../feasibility-llm-growth-studies.md) § Executability on this
+build's 2026-08-17 entry finds E1, E2 and E5's `data`/`statistics` blocks validate with no core-side
+error at all — `io.reuse_from` is the one thing standing between E3, E4 and E6 and the same result,
+since each reads a frozen artifact through it and `grep -rn "reuse_from" src/publishable/` still
+returns nothing. Still no H7 sub-slice claims it. Amending this entry rather than opening a second
+one, per `CLAUDE.md`'s own rule that a duplicate filing is the same failure as an unfiled gap in the
+other direction — this is the same gap, now with three concrete configs waiting on it. **Owner
+request:** the next slice to touch step-level artifact consumption should claim it, or the spine
+design should assign it explicitly rather than leaving it to be rediscovered a third time.
+
 ## `python-dotenv` honoured an undocumented behavior-changing environment variable — CLOSED by H7c
 
 ~~`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
@@ -6205,3 +6217,27 @@ it verbatim, but `build_manifest`'s `files` dict is keyed by paths `rglob`'d fro
 so a name that resolves outside it never matches an entry either. Neither needs a containment check
 to make `hash_index` correct; one would be a change to what a resolver may read, which is a decision
 this task was not asked to make.
+
+## OPEN — a run whose template declares an installed probe records a false `apparatus: null` — **Owner: H7d**
+
+`cli.command_run`'s provenance document writes `"apparatus": None` unconditionally — there is no
+branch reading a template's `apparatus_probe` at all. `reference.md` § The apparatus core can only
+observe defines `apparatus: null` as *"no probe declared"*, which was accurate for every run this
+build could produce until H7b Part B gave a template's `apparatus_probe` a second, real declaration
+path: `validate._check_probe` already checked the name against the installed `publishable.probes`
+group (H7b Part A), but nothing before Part B could make that declaration true end to end, since no
+resolver could dispatch and no plugin naming both a resolver and a probe could be exercised. Now that
+one can, a run whose template declares an installed, resolvable probe still writes `apparatus: null`
+in its own `run.yaml` — a false record of "no probe declared" for a run that declared one.
+
+**Filed rather than fixed, because a reader is out of scope for the slice that surfaced it.** Reading
+`apparatus_probe`, executing it, building the per-condition facts, the ledger, and the change gate the
+document describes are all `Apparatus`'s job — `docs/superpowers/specs/2026-08-16-plugin-registries-design.md`
+§ Out of scope and the entry above (`## OPEN — "PROBES" and "RESOLVERS" are written by their decorators
+and read by nothing`) already assign that machinery to H7d. This entry is narrower and newly true: not
+"the registry is unread" but "the record is actively false" for the one config shape H7b Part B makes
+reachable for the first time.
+
+**Owner:** H7d. **Found by:** H7b Part B task 33, while re-measuring the feasibility analysis's
+executability — no config in that analysis declares an `apparatus_probe` today, so this is a defect
+about the shape now reachable rather than one any of the nine configs currently hits.

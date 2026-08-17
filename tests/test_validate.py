@@ -1,5 +1,6 @@
 # tests/test_validate.py
 import importlib
+import shutil
 import sys
 from pathlib import Path
 
@@ -12644,6 +12645,143 @@ def test_a_resolvers_raise_is_redacted_at_validate(monkeypatch, write_config, gi
     rendered = c.render()
     assert "SENTINEL-sk-abc123" not in rendered
     assert "<redacted:MY_KEY>" in rendered  # the positive companion
+
+
+_ROSTER_FAULTS = {
+    "duplicate keys": (
+        "yield Unit(key='a1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='a1', attributes={'site': 'A'})\n",
+        "E-UNITS-KEY-DUPLICATE",
+    ),
+    "no units at all": ("return\n    yield\n", "E-UNITS-EMPTY"),
+    "swept parameter": (
+        "yield Unit(key=cfg.parameters.analysis.method)\n",
+        "E-RESOLVER-SWEPT-PARAM",
+    ),
+    "undeclared attribute": ("yield Unit(key='a1')\n", "E-UNITS-ATTR-MISSING"),
+}
+_ROSTER_FAULTS_CLEAN_BODY = "yield Unit(key='a1', attributes={'site': 'A'})\n"
+
+
+def _install_roster_fault_resolver(installed, module: str, body: str):
+    """One installed distribution whose `publishable.resolvers` entry point points
+    at a module this writes — the same shape `test_units.py`'s `_install_resolver`
+    uses. Every caller pops `module` from `sys.modules` in its own `finally`."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed(
+        f"dist-{module}", "1.0", {RESOLVER_GROUP: {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        f"    {body}"
+    )
+    importlib.invalidate_caches()
+
+
+def _roster_fault_config() -> dict:
+    """One config, shared by every row of the kept/lost matrix below and by the
+    clean-body control: `data.units.attributes` declares `site` so the
+    "undeclared attribute" row has something to be undeclared, and
+    `sweep.grid` varies `analysis.method` so the "swept parameter" row has
+    something for the resolver to read. Neither field changes shape between
+    rows — only the resolver's own yield does, per the trap this task is
+    named against."""
+    return {
+        "data.units": {
+            "from": {"resolver": "plate_wells"},
+            "key": "well",
+            "attributes": ["site"],
+        },
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+
+
+@pytest.mark.parametrize("body,expected", list(_ROSTER_FAULTS.values()), ids=list(_ROSTER_FAULTS))
+def test_the_roster_checks_are_real_against_a_resolver_produced_roster(
+    installed, registries, write_config, body, expected
+):
+    """The kept/lost matrix, closed. Every one of these was UNREACHABLE under a
+    resolver until this slice — the config's shape is identical across all four
+    rows and only the resolver's YIELD varies, so no refusal here can be
+    config-incidental. The control is the clean body, in the test below: the
+    same config with a well-formed resolver validates with no findings at all."""
+    module = "roster_fault_r33"
+    _install_roster_fault_resolver(installed, module, body)
+    try:
+        found = codes(write_config(_roster_fault_config()))
+    finally:
+        sys.modules.pop(module, None)
+    assert expected in found
+
+
+def test_the_roster_fault_configs_clean_body_control_validates_clean(
+    installed, registries, write_config
+):
+    """THE CONTROL the parametrized test above needs: every row above asserts a
+    FAILURE, which proves nothing about the success path on its own — a
+    parametrization asserting a refusal for every arm proves nothing about
+    either arm's honouring. The identical config, resolved by a well-formed
+    body, must validate with no findings at all."""
+    module = "roster_fault_clean_r33"
+    _install_roster_fault_resolver(installed, module, _ROSTER_FAULTS_CLEAN_BODY)
+    try:
+        found = codes(write_config(_roster_fault_config()))
+    finally:
+        sys.modules.pop(module, None)
+    assert found == set()
+
+
+def test_a_resolvers_units_hash_is_stable_across_runs_and_sensitive_to_order(
+    installed, registries, tmp_path
+):
+    """`provenance.units_hash` pins yield order — two `resolve_units` calls
+    through the identical resolver body must agree, and a resolver yielding
+    the same units in a different order must not. One installed module,
+    overwritten between calls rather than a second distribution claiming the
+    same key, which would be an `E-PLUGIN-COLLISION` `validate` refuses."""
+    from publishable.config import Config
+    from publishable.units import RESOLVER_GROUP, resolve_units, units_hash
+
+    module = "roster_order_r33"
+    site = installed("dist-order", "1.0", {RESOLVER_GROUP: {"plate_wells": f"{module}:resolve"}})
+    units_decl = {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["site"]}
+
+    def _resolve_with(body: str):
+        (site / f"{module}.py").write_text(
+            "from publishable import Unit, register_resolver\n\n\n"
+            '@register_resolver("plate_wells")\n'
+            "def resolve(io, cfg):\n"
+            f"    {body}"
+        )
+        # A stale `.pyc` keyed on a coarse filesystem mtime can survive a rewrite
+        # that lands within the same clock tick, serving the PREVIOUS body back —
+        # this loop is the only thing standing between "the resolver's own yield"
+        # and "whatever bytecode cache happened to be sitting there".
+        pycache = site / "__pycache__"
+        if pycache.is_dir():
+            shutil.rmtree(pycache)
+        importlib.invalidate_caches()
+        sys.modules.pop(module, None)
+        try:
+            return resolve_units(units_decl, tmp_path, cfg=Config({}))
+        finally:
+            sys.modules.pop(module, None)
+
+    forward = (
+        "yield Unit(key='b1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='a1', attributes={'site': 'A'})\n"
+    )
+    roster_1, _n1, _c1 = _resolve_with(forward)
+    roster_2, _n2, _c2 = _resolve_with(forward)
+    reordered_roster, _n3, _c3 = _resolve_with(
+        "yield Unit(key='a1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='b1', attributes={'site': 'A'})\n"
+    )
+    assert units_hash(roster_1) == units_hash(roster_2)
+    assert units_hash(roster_1) != units_hash(reordered_roster)
 
 
 _CRED_IMPORT_TEMPLATE = """\
