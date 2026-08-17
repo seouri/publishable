@@ -6746,6 +6746,51 @@ def _cited_sections() -> set[str]:
     }
 
 
+def _interval_method_names() -> set[str]:
+    """Every `method` string § Statistical reporting's construction tables define.
+
+    Both `| The interval | Is |` tables, as one set: keying them apart would need a
+    positional locator, and what the code-agreement pins below need is whether an
+    emitted string is one the document defines at all. The name is the first
+    backticked token of the first cell, the same shape `_status_tables` reads.
+    """
+    names: set[str] = set()
+    lines = REFERENCE_MD.read_text().split("\n")
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells[:2] != ["The interval", "Is"] or not lines[i + 1].startswith("|---"):
+            continue
+        for row in lines[i + 2 :]:
+            if not row.startswith("|"):
+                break
+            match = re.match(r"`([^`]+)`", row.strip().strip("|").split("|")[0].strip())
+            assert match, row
+            names.add(match.group(1))
+    return names
+
+
+def test_the_interval_construction_tables_are_parsed_at_all():
+    """The control for every agreement pin that reads this set: a parser finding
+    nothing makes all of them pass vacuously, which is the shape of the bug they
+    exist to catch. Both tables must be found — one per-condition name and one
+    contrast name that predate this slice."""
+    names = _interval_method_names()
+    assert "t_over_units" in names
+    assert "weighted_t_over_units" in names
+    assert "paired_t_over_units" in names
+    assert "paired_percentile_over_units" in names
+
+
+def test_a_weighted_contrast_has_a_documented_method_string():
+    """Decision 3: the four documents gave a weighted contrast no `method` string
+    at all. Both weighted paired forms are defined before any code emits one — a
+    record key code writes and no document names is the pair `CLAUDE.md` says to
+    grep for."""
+    names = _interval_method_names()
+    assert "weighted_paired_t_over_units" in names
+    assert "weighted_paired_percentile_over_units" in names
+
+
 def test_the_weight_refusals_errors_row_names_no_estimator():
     """The row and the message are one claim seen from two ends, and the row is
     where the three functions were actually enumerated. Parsed from the document

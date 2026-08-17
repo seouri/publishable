@@ -2429,6 +2429,18 @@ Those last two rows differ, and `data.units` is the whole discriminator. With no
 | `paired_percentile_over_units` | The percentiles of the resampled difference, with **one draw over the [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) intersection applied to both sides** — the same units are drawn for each, so what's resampled is the difference rather than two independent estimates. Drawing from each side's own completed set instead would leave a unit present on one side and absent from the other with no defined contribution, which is the case `n_paired` exists because it happens. Every derived metric, and a column metric under `resample` |
 | `welch_t_over_units` | Welch's *t* on two independent condition means, df from Welch-Satterthwaite. The unpaired counterpart of the first: unequal variances are assumed rather than pooled, because two arms need be neither the same size nor the same spread |
 | `unpaired_percentile_over_units` | The percentiles of the difference, resampling within each side independently. The unpaired counterpart of the second |
+| `weighted_paired_t_over_units` | Student's *t* on the [weighted](#weighted-samples) per-unit differences over the [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) intersection: the weighted mean of the differences, the weighted variance, and df from Kish's effective size over that intersection rather than `n_paired` − 1. A column metric under `weight_by`, when no `resample` is declared |
+| `weighted_paired_percentile_over_units` | The same single joint draw as `paired_percentile_over_units`, with the [weighted](#weighted-samples) column mean recomputed on each draw, so the weights are in the estimate rather than in the drawing. A column metric under `weight_by` and a declared `resample` |
+
+**A weighted contrast weights a recorded column and not a derived metric.** A column has a per-unit
+value to weight, so `weight_by` moves its delta, its interval and its `cohens_d` onto the two
+weighted forms above. A derived metric has none — [`aggregate`](#templates-where-parameters-are-defined)
+returned one number for the whole table — so core hands it the weight column as a unit attribute and
+the template weights whatever its own metric needs weighting by, exactly as it does per condition.
+Its `method` therefore stays `paired_percentile_over_units`, because core did not do the weighting,
+while `weighted_by` and the effective size travel beside it regardless: the declaration is true of
+the run either way. The `_clustered` suffix does not compose with either weighted form in this build
+— [`E-DATA-CLUSTER-CONTRAST`](#errors-validate-reports) refuses a clustered contrast outright.
 
 When [`cluster_by`](#clustered-units) is declared each takes a `_clustered` suffix and reads the cluster as the draw: the *t* forms are cluster-robust (CR1) with df = clusters − 1, over the differenced values when paired and over the arm-level ones when not, and the percentile forms resample whole clusters — jointly across both sides when paired. Same rule and same reason as `t_over_units_clustered` above. Every delta in `vs_baseline` and in [`results.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) records its `method`, exactly as every value in `aggregated` does — a [hypothesis](#pre-registration) quoting one under `observed` is quoting that record rather than restating it.
 
@@ -2444,7 +2456,7 @@ A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the interval
 |---|---|
 | `bootstrap` | Units drawn with replacement to the original count, or whole [clusters](#clustered-units) when `cluster_by` is declared, or within each [stratum](#weighted-samples) when `stratify_by` is — the statistic recomputed on each draw |
 
-One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name — [`E-STATS-RESAMPLE-METHOD`](#errors-validate-reports) — rather than a value silently ignored. The method strings in the two construction tables above — `percentile_over_units`, `paired_percentile_over_units` and their `_clustered` forms — are what core **emits** into `run.yaml`, not values a config may name here.
+One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name — [`E-STATS-RESAMPLE-METHOD`](#errors-validate-reports) — rather than a value silently ignored. The method strings in the two construction tables above are what core **emits** into `run.yaml`, not values a config may name here.
 
 **`resample_draws` says how many draws the interval actually rests on**, recorded beside every derived metric in `aggregated`. Resampling a derived metric means [recomputing it](#templates-where-parameters-are-defined), and a draw can legitimately have no answer: a resampled table with no variance makes a correlation `nan`, makes a hand-rolled ratio raise, and makes a careful `aggregate` return `None`. Which library the template happened to call is not a fact about whether the draw was degenerate, so all three are dropped alike and the percentiles are read off what survived. The field is `null` when resampling was never attempted, `0` when it was attempted and every draw was degenerate, and otherwise the surviving count — three different facts that `ci95: null` alone cannot tell apart.
 
