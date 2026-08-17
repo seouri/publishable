@@ -5860,6 +5860,18 @@ implements it.
 contradiction between a built check and its documentation — filed so it is not silently assumed
 closed by a later slice's scoping.
 
+**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
+experiments, and an owner request rather than a second filing.** With `E-DATA-RESOLVER-UNSUPPORTED`
+retired, [the feasibility analysis](../feasibility-llm-growth-studies.md) § Executability on this
+build's 2026-08-17 entry finds E1, E2 and E5's `data`/`statistics` blocks validate with no core-side
+error at all — `io.reuse_from` is the one thing standing between E3, E4 and E6 and the same result,
+since each reads a frozen artifact through it and `grep -rn "reuse_from" src/publishable/` still
+returns nothing. Still no H7 sub-slice claims it. Amending this entry rather than opening a second
+one, per `CLAUDE.md`'s own rule that a duplicate filing is the same failure as an unfiled gap in the
+other direction — this is the same gap, now with three concrete configs waiting on it. **Owner
+request:** the next slice to touch step-level artifact consumption should claim it, or the spine
+design should assign it explicitly rather than leaving it to be rediscovered a third time.
+
 ## `python-dotenv` honoured an undocumented behavior-changing environment variable — CLOSED by H7c
 
 ~~`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
@@ -6046,6 +6058,13 @@ class-taking callers (`validate._check_versions`, `materialize.materialize_confi
 `Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
 `provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**
 
+**AMENDED 2026-08-17 (H7b Part B task 30):** one of the three preconditions above is now built —
+`provenance.plugin_versions` records the distribution and version a resolver-sourced run resolved
+through (`plugins.versions_for`, threaded in `cli.command_run`). It records only what a resolver
+declaration named, never an installed template's class, so it does nothing for this gap's own
+case — a config naming an installed *template* still resolves no class. Amended, not closed; owner
+stays unassigned.
+
 ## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
 
 H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
@@ -6098,6 +6117,20 @@ resolver-dispatch task. `template_provenance` → unassigned, with
 **Severity:** Minor. All six surfaces are populated or computed correctly and read by nothing yet —
 inert rather than misleading, since no config field depends on any of them being read today.
 
+**AMENDED 2026-08-17 (H7b Part B task 30): four of the six now have a production caller.**
+`RESOLVERS`, `load_entry_point`, `check_registration` and `declared_names` are read from
+`units.py`'s resolver dispatch (tasks 24-25) — `RESOLVERS` via `_resolve_resolver`'s scan-then-load,
+`load_entry_point` and `check_registration`/`declared_names` at the same site, checking the
+`@register_resolver` argument against the entry-point key that loaded it. `PROBES` stays with H7d,
+unread by anything Part B built. `registry.template_provenance` stays with the unassigned installed-
+template entry above — Part B's four tasks were the resolver half and never touched template
+loading.
+
+**CORRECTION 2026-08-17 (whole-branch review), replacing this entry's function name only:** the
+scan-then-load function is `_resolver_for`, not `_resolve_resolver` — `_resolve_resolver` appears
+nowhere in `src/`. The substance stands: `RESOLVERS` is read there, verified by tracing
+`declared_names` → `_registry_for` → `RESOLVERS` rather than assumed.
+
 ## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
 
 H7c's `PartialLoadError` carries the classes a discovery pass constructed, so a credential a refused
@@ -6123,7 +6156,7 @@ message core built from an installed claimant's own data, and no such message ex
 `## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
 The two close together or not at all.
 
-## OPEN — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired — **Owner: H7b Part B**
+## CLOSED — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired
 
 A writer or reader claiming an extension core itself writes or reads is refused at decoration time
 as `ContractError` · `E-PLUGIN-COLLISION` — `register_writer`/`register_reader` raise it directly,
@@ -6146,3 +6179,92 @@ re-code stand and add one sentence to `E-PLUGIN-COLLISION`'s row noting the prec
 `ContractError` before the broad `except` so the writer/reader arm keeps its own code through a load.
 
 **Found by:** H7b whole-branch review, finding M4.
+
+**Closed by H7b Part B, task 24, taking the first resolution named above: let the re-code stand.**
+Catching `ContractError` ahead of `load_entry_point`'s broad arm would let *any* coded
+`ContractError` a plugin's top level raises escape the containment under whatever code it happened
+to carry — a fail-open of exactly the shape `CLAUDE.md` § Answering a question with a proxy names,
+and one that would defeat the reason `load_entry_point` is broad. Narrowing the catch to the single
+code `E-PLUGIN-COLLISION` would instead make `load_entry_point` — a group-generic function — know
+about a code only two of the five groups can raise. The precedent already exists and is documented:
+§ Errors accepts `E-TEMPLATE-LOAD` swallowing a coded error from a local template's top level, for
+the same reason. `docs/reference.md` § Errors core raises' `E-PLUGIN-COLLISION` row now carries one
+sentence recording this precedent.
+
+## CLOSED — `hash_index` hashed nothing for any source, and was unfiled
+
+**Measured 2026-08-17 against `352ea28` (H7b Part B task 30):** `build_manifest`'s `index_names`
+parameter had zero callers in `src/` and `hash_index` appeared in no test. Under `hash_index` every
+`sha256` came back `None` — for a table source and a glob source exactly as much as for a resolver's,
+since nothing supplied the set the policy needs. Three `reference.md` passages promised otherwise —
+§ Three hashes ("Content hashes for the files `data.units.from` resolves — the index and whatever it
+names"), § What `run.yaml` records ("Under `hash_index` the `sha256` key is present for the files
+`data.units.from` resolves and absent for the rest"), and § Where units come from — and the gap had
+no entry here.
+
+**Closed by H7b Part B task 31.** `units.index_names(units_decl, roster, reads=())` covers all three
+sources in one expression: the source's own file where it names one (a table), plus every path its
+resolved units name (a glob's per-unit path, a resolver's `Unit.paths`), plus whatever the resolver
+itself read (`ResolverIO.read_paths`, threaded through `resolver_io` at the one `build_manifest` call
+site in `cli.command_run`). A roster that failed to resolve still yields the source's own file, since
+the index is named by the declaration rather than by the roster.
+
+**Found by:** the same task that needed it closed to build the resolver half — `hash_index`'s
+resolver case cannot be tested against a policy broken for every source.
+
+**The two `ResolverIO` questions task 23's docstring left as task 31's, decided.** Both are benign.
+Append-before-read means a read that raises still lands in `read_paths`, and `index_names` therefore
+still names it — but `build_manifest` only ever hashes a path it found by walking `input_dir`, so a
+name that corresponds to no file on disk (the ordinary shape of a failed read) simply never gets a
+`files` entry to attach a hash to; nothing crashes and nothing hashes a file that was not there. A
+`relpath` containing `../` behaves the same way in the other direction: `index_names` would include
+it verbatim, but `build_manifest`'s `files` dict is keyed by paths `rglob`'d from inside `input_dir`,
+so a name that resolves outside it never matches an entry either. Neither needs a containment check
+to make `hash_index` correct; one would be a change to what a resolver may read, which is a decision
+this task was not asked to make.
+
+## OPEN — a run whose template declares an installed probe records a false `apparatus: null` — **Owner: H7d**
+
+`cli.command_run`'s provenance document writes `"apparatus": None` unconditionally — there is no
+branch reading a template's `apparatus_probe` at all. `reference.md` § The apparatus core can only
+observe defines `apparatus: null` as *"no probe declared"*, which was accurate for every run this
+build could produce until H7b Part B gave a template's `apparatus_probe` a second, real declaration
+path: `validate._check_probe` already checked the name against the installed `publishable.probes`
+group (H7b Part A), but nothing before Part B could make that declaration true end to end, since no
+resolver could dispatch and no plugin naming both a resolver and a probe could be exercised. Now that
+one can, a run whose template declares an installed, resolvable probe still writes `apparatus: null`
+in its own `run.yaml` — a false record of "no probe declared" for a run that declared one.
+
+**Filed rather than fixed, because a reader is out of scope for the slice that surfaced it.** Reading
+`apparatus_probe`, executing it, building the per-condition facts, the ledger, and the change gate the
+document describes are all `Apparatus`'s job — `docs/superpowers/specs/2026-08-16-plugin-registries-design.md`
+§ Out of scope and the entry above (`## OPEN — "PROBES" and "RESOLVERS" are written by their decorators
+and read by nothing`) already assign that machinery to H7d. This entry is narrower and newly true: not
+"the registry is unread" but "the record is actively false" for the one config shape H7b Part B makes
+reachable for the first time.
+
+**Owner:** H7d. **Found by:** H7b Part B task 33, while re-measuring the feasibility analysis's
+executability — no config in that analysis declares an `apparatus_probe` today, so this is a defect
+about the shape now reachable rather than one any of the nine configs currently hits.
+
+## OPEN — a relative `glob` pattern escaping `input_dir` resolves units from outside it — **Owner: unassigned**
+
+`units._from_glob` builds the roster from `input_dir.glob(pattern)` with no containment check on the
+matches. An **absolute** pattern (`/etc/*.conf`) or one that is absolute after normalization
+(`/../*.csv`) hits `Path.glob`'s own `NotImplementedError` and is recoded to
+`E-UNITS-SOURCE-UNREADABLE` — that much `reference.md`'s row for the code describes correctly. A
+**relative** pattern that still escapes `input_dir` (`../*.csv`, `../outside.csv`, `**/../*.csv`) does
+not: `Path.glob` returns the outside match, so the roster silently includes a unit whose `paths` entry
+is `../outside.csv`, read from outside the declared `input_dir` — on 3.11, 3.12 and 3.13 alike, so this
+is not one interpreter's behavior.
+
+The same asymmetry task 31 already recorded for `ResolverIO` (a resolver's own reads are unchecked
+against `input_dir` too, decided benign there because `build_manifest`'s `files` dict is keyed by paths
+walked from *inside* `input_dir`, so an escaping name simply never gets a `files` entry). It applies
+identically here: `hash_index` cannot hash such a unit's path either.
+
+**Found by:** H7b Part B's whole-branch re-review, while checking a normative § Errors row against the
+code rather than reading it — the row had claimed this exact pattern raises, which it does not for the
+relative case. Filed rather than fixed: closing it is a containment-check decision (what a `glob` or a
+resolver may read) that no task in this slice was asked to make, the same reasoning task 31's entry
+already gives for `ResolverIO`.

@@ -1,4 +1,7 @@
 # tests/test_validate.py
+import importlib
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,6 +143,40 @@ def messages_by_code(path: Path) -> dict[str, str]:
     c = Collector()
     validate_config(path, c)
     return {f.code: f.message for f in c.findings}
+
+
+def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
+    installed, registries, write_config
+):
+    """The narrowed invariant, pinned where it can actually die.
+
+    The two tests that pinned the old, wider claim sit at `scan_group` and
+    `get_template`; neither breaks if `validate` loads a resolver at the wrong
+    moment. This one does: the distribution is installed and its target genuinely
+    imports, and the config's `data.units.from` is a table, so nothing about this
+    config needs the object behind `plate_wells`. A `validate` that loaded the
+    group unconditionally — or loaded before deciding what shape `from` is —
+    turns this red.
+
+    Its positive companion is `test_a_resolver_source_is_no_longer_refused_wholesale`,
+    which asserts `"retire_r26" in sys.modules` for a config that does name a
+    resolver. Together the two pin both directions: nothing loads for a config
+    that doesn't need it, and the right module loads for one that does.
+    """
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_units:resolve"}}
+    )
+    (site / "loadable_units.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    return []\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        assert codes(write_config()) == set()
+        assert "loadable_units" not in sys.modules
+    finally:
+        sys.modules.pop("loadable_units", None)
 
 
 def _validate_with(tmp_path: Path, overrides: dict) -> list:
@@ -2554,15 +2591,9 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
 
 
-def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
-    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))
-
-
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}},
         {"statistics": {"null_test": {"method": "permutation", "n": 5000}}},
     ],
 )
@@ -2570,16 +2601,90 @@ def test_every_unsupported_message_defers_rather_than_scolds(write_config, overr
     """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
     'your config is wrong'. Every message in this family must say so explicitly, or a
     user has no way to tell a refusal from a validation error. `allocation: between` and
-    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals, and
-    `data.units.holdout` left with task 18 — each now draws a real, behavior-specific
-    finding instead (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, and so on, or
-    validates clean), not a deferral. `E-DATA-RESOLVER-UNSUPPORTED` and
-    `E-STATS-NULLTEST-UNSUPPORTED` are what remains of the family."""
+    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals,
+    `data.units.holdout` left with task 18, and `data.units.from.resolver` left with
+    H7b Part B — each now draws a real, behavior-specific finding instead
+    (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, and so
+    on, or validates clean), not a deferral. `E-STATS-NULLTEST-UNSUPPORTED` is what
+    remains of the family."""
     found = messages_by_code(write_config(overrides))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
     assert unsupported, f"expected an -UNSUPPORTED finding for {overrides}"
     for code, message in unsupported.items():
         assert "later slice" in message, f"{code} message does not defer: {message!r}"
+
+
+def test_a_resolver_source_is_no_longer_refused_wholesale(
+    installed, registries, write_config, tmp_path
+):
+    """The retirement, asserted against behaviour rather than against a grep. The
+    control is the second half: an UNREGISTERED name still earns
+    `E-RESOLVER-UNKNOWN`, so this is not a check that stopped reporting anything."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed("dist-one", "1.0", {RESOLVER_GROUP: {"plate_wells": "retire_r26:resolve"}})
+    (site / "retire_r26.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='p1')\n"
+    )
+    importlib.invalidate_caches()
+    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
+    try:
+        found = codes(write_config({"data.units": units}))
+        assert "retire_r26" in sys.modules
+        unknown = codes(write_config({"data.units": {**units, "from": {"resolver": "nope"}}}))
+    finally:
+        sys.modules.pop("retire_r26", None)
+
+    assert found == set()
+    assert "E-RESOLVER-UNKNOWN" in unknown
+
+
+def test_validate_config_refuses_a_resolver_reading_a_swept_parameter(
+    installed, registries, write_config, tmp_path
+):
+    """The `cfg` `_check_units` builds for a resolver at `validate_config`-level is
+    the same `resolve_wide_cfg(doc, wide_swept_paths(...))` substitution the step
+    path uses — pinned here rather than only through `resolve_units` directly,
+    because task 29's report attributed this half to a later task on a spec claim
+    (tasks 25/27/28/29 cannot test through `validate_config`) that had already
+    expired by this commit: `E-DATA-RESOLVER-UNSUPPORTED` left `src/` at task 26,
+    which landed first."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed("dist-two", "1.0", {RESOLVER_GROUP: {"plate_wells": "swept_r29_cfg:resolve"}})
+    (site / "swept_r29_cfg.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key=str(cfg.parameters.analysis.method))\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        found = codes(
+            write_config(
+                {
+                    "data.units": {"from": {"resolver": "plate_wells"}, "key": "well"},
+                    "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+                }
+            )
+        )
+    finally:
+        sys.modules.pop("swept_r29_cfg", None)
+    assert "E-RESOLVER-SWEPT-PARAM" in found
+
+
+def test_the_unsupported_family_is_down_to_null_test(write_config):
+    """`E-DATA-RESOLVER-UNSUPPORTED` is gone from every surface, and the family it
+    left is not empty — a sweep asserting only an absence would pass identically if
+    the whole family had been deleted."""
+    found = messages_by_code(
+        write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
+    )
+    unsupported = {code for code in found if code.endswith("-UNSUPPORTED")}
+    assert unsupported == {"E-STATS-NULLTEST-UNSUPPORTED"}
 
 
 def test_a_null_subfield_is_not_a_declaration(write_config):
@@ -3119,6 +3224,93 @@ def test_check_measurements_called_directly_with_no_roster_still_finds_shape_fau
     _check_measurements({"measurements": {"collapse": "mean"}}, None, None, frozenset(), c)
     assert "E-DATA-MEASUREMENTS-INVALID" in {f.code for f in c.findings}
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in {f.code for f in c.findings}
+
+
+def test_a_resolver_yielding_no_measurement_field_is_refused_under_its_own_code():
+    """`E-RESOLVER-MEASUREMENT-FIELD`, ungated: § Where units come from makes
+    yielding `measurements.by` an obligation for a resolver, where a table's `by`
+    may name an identity the step invents. Its own code rather than
+    `E-UNITS-ATTR-MISSING`: the two name different declarations, and a reader
+    fixing one is not fixing the other.
+
+    `collapse: "mean"` also co-fires `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` on the
+    roster's own `operator` attribute (a string, and `"mean"` applies to every
+    column when `collapse` is not a per-column map) — harmless to the two
+    assertions below, which check membership and one negative rather than
+    exhaustiveness, but noted so a reader diffing this fixture against the two
+    `"first"` controls below does not have to rediscover why it differs."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "plate_wells"},
+            "measurements": {"by": "read_id", "collapse": "mean"},
+        },
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        None,
+        frozenset({"operator"}),
+        c,
+    )
+    found = {f.code: f.message for f in c.findings}
+    assert "E-RESOLVER-MEASUREMENT-FIELD" in found
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert "read_id" in found["E-RESOLVER-MEASUREMENT-FIELD"]
+    assert "plate_wells" in found["E-RESOLVER-MEASUREMENT-FIELD"]
+
+
+def test_a_resolver_that_does_yield_the_measurement_field_reports_nothing():
+    """THE CONTROL. Without it, a branch that reported unconditionally would pass
+    the test above."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "plate_wells"},
+            "measurements": {"by": "read_id", "collapse": "first"},
+        },
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        None,
+        frozenset({"operator", "read_id"}),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_resolver_measurement_field_check_is_gated_on_the_roster_resolving():
+    """`_check_units` returns `frozenset()` for `columns` on every failure path,
+    including an unregistered resolver name — so an ungated arm would report
+    `E-RESOLVER-MEASUREMENT-FIELD` about a resolver that never ran, alongside
+    whatever code `_check_units` itself reported for that failure
+    (`E-RESOLVER-UNKNOWN` here). `roster=None` is exactly what every one of
+    those failure paths hands this function; without the `roster is not None`
+    guard, this fires on the empty `columns` default rather than on anything
+    the resolver actually yielded."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "nope"},
+            "measurements": {"by": "read_id", "collapse": "first"},
+        },
+        None,
+        None,
+        frozenset(),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_table_source_keeps_its_collapse_gated_reading_of_the_same_field():
+    """The two paths stay different, deliberately. A table's `by` naming no column
+    is only a fault once rows were actually collapsed, because the same
+    declaration serves the step path. Asserting this here is what stops a future
+    tidy-up from unifying the two branches on the resolver's stricter rule."""
+    c = Collector()
+    _check_measurements(
+        {"from": "index.csv", "measurements": {"by": "read_id", "collapse": "first"}},
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        {"min": 1, "max": 1, "median": 1},
+        frozenset({"operator"}),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
 
 
 def test_a_declared_contrast_is_no_longer_refused(write_config):
@@ -4062,12 +4254,11 @@ def test_no_units_block_still_validates_clean(write_config):
 
 
 def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
-    """`data.units.from.resolver` is already refused as `E-DATA-RESOLVER-UNSUPPORTED`;
+    """An unresolvable `data.units.from.resolver` name is `E-RESOLVER-UNKNOWN`;
     resolution must not also fire `E-UNITS-SOURCE-MISSING` for the same declaration —
-    that would describe a resolver as a missing file rather than an unbuilt feature."""
+    that would describe a resolver as a missing file rather than an unregistered name."""
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     found = codes(write_config({"data.units": units}))
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
     assert "E-UNITS-SOURCE-MISSING" not in found
 
 
@@ -4125,15 +4316,16 @@ def test_a_malformed_units_block_is_reported_exactly_once(write_config):
     assert len(shape_findings) == 1
 
 
-def test_check_unimplemented_alone_does_not_raise_on_a_malformed_units_block():
-    """Exercised directly, the way `_check_unimplemented`'s other rules are —
-    a non-mapping `data.units` reaching this function on its own (bypassing
-    `_check_shape`, which normally would have stopped `validate_config` first) must
-    still produce a diagnostic rather than an `AttributeError`."""
-    from publishable.validate import _check_unimplemented
+def test_check_units_source_alone_reports_a_malformed_units_block():
+    """Exercised directly, bypassing `_check_shape` (which normally would have
+    stopped `validate_config` first): a non-mapping `data.units` reaching
+    `_check_units_source` — and, through it, `_units_declaration` — on its own
+    must still produce `E-CONFIG-SHAPE` rather than an `AttributeError` from
+    calling `.get` on a string."""
+    from publishable.validate import _check_units_source
 
     c = Collector()
-    _check_unimplemented({"data": {"units": "index.csv"}}, c)
+    _check_units_source({"data": {"units": "index.csv"}}, c)
     assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
@@ -12396,6 +12588,261 @@ def test_a_template_declaring_no_required_env_reports_nothing(write_config, monk
     assert "E-CRED-MISSING" not in codes(write_config())
 
 
+def test_a_resolvers_non_contract_raise_does_not_escape_validate(monkeypatch, write_config):
+    """Probe B. `validate` is contracted never to raise; a plugin resolver raising
+    `KeyError` is user code, and `_check_units` guarded only `ContractError`."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("resolver failed")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    found = messages_by_code(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id"}})
+    )
+    assert "E-RESOLVER-RAISED" in found
+    assert "ValueError" in found["E-RESOLVER-RAISED"]
+
+
+class _BareBaseExceptionValidate(BaseException):
+    """A `BaseException` that is not `Exception`, `SystemExit`, or
+    `KeyboardInterrupt` — the shape `except BaseException` (rather than
+    `except Exception`) at `_check_units` exists to still catch."""
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [SystemExit("resolver failed"), _BareBaseExceptionValidate("resolver failed")],
+    ids=["system-exit", "bare-base-exception"],
+)
+def test_a_resolvers_wider_base_exception_does_not_escape_validate(
+    exception, monkeypatch, write_config
+):
+    """Pins the widening from `except Exception` to `except BaseException` at
+    `validate.py`'s own arm: a resolver calling `sys.exit(...)`, or raising a
+    `BaseException` that is neither `Exception` nor `SystemExit` nor
+    `KeyboardInterrupt`, must still be contained under `E-RESOLVER-RAISED`
+    rather than escaping `validate`, which is contracted never to raise.
+    Narrowing the `except` back to `Exception` lets either escape uncaught —
+    this test would then see `messages_by_code` itself raise instead of
+    returning."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise exception
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    found = messages_by_code(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id"}})
+    )
+    assert "E-RESOLVER-RAISED" in found
+
+
+def test_a_resolvers_keyboard_interrupt_at_validate_propagates_with_no_message(
+    monkeypatch, write_config
+):
+    """`_check_units`'s `except BaseException` arm carries the identical
+    carve-out `cli.py`'s does: `isinstance(exc, KeyboardInterrupt)` re-raises a
+    FRESH, argument-less `KeyboardInterrupt` `from None` rather than
+    containing it under `E-RESOLVER-RAISED`, so Ctrl-C still stops `validate`
+    instead of being swallowed into a diagnostic. A mutation deleting that
+    `if` would report a finding and return normally instead of propagating —
+    this test would then see no `KeyboardInterrupt` raised at all."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        messages_by_code(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+    # The re-raised object carries no message — it is a fresh instance, not
+    # the resolver's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()
+    assert str(excinfo.value) == ""
+
+
+_TEMPLATE_REQUIRING_MY_KEY = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("keyed")
+class Keyed(BaseTemplate):
+    required_env = ["MY_KEY"]
+    parameter_spec = {}
+"""
+
+
+def test_a_resolvers_raise_is_redacted_at_validate(monkeypatch, write_config, git_repo):
+    """Probe A, kept as the CONTROL that makes the run-side tests readable: the
+    identical exception from the identical function must come back redacted here,
+    or a stderr sweep finding no sentinel proves nothing about redaction."""
+    import publishable.validate as validate_module
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "keyed.py").write_text(_TEMPLATE_REQUIRING_MY_KEY)
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "experiment_type": "keyed",
+                "template_version": _DELETE,
+                "parameters": {},
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+            }
+        ),
+        c,
+    )
+    rendered = c.render()
+    assert "SENTINEL-sk-abc123" not in rendered
+    assert "<redacted:MY_KEY>" in rendered  # the positive companion
+
+
+_ROSTER_FAULTS = {
+    "duplicate keys": (
+        "yield Unit(key='a1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='a1', attributes={'site': 'A'})\n",
+        "E-UNITS-KEY-DUPLICATE",
+    ),
+    "no units at all": ("return\n    yield\n", "E-UNITS-EMPTY"),
+    "swept parameter": (
+        "yield Unit(key=cfg.parameters.analysis.method)\n",
+        "E-RESOLVER-SWEPT-PARAM",
+    ),
+    "undeclared attribute": ("yield Unit(key='a1')\n", "E-UNITS-ATTR-MISSING"),
+}
+_ROSTER_FAULTS_CLEAN_BODY = "yield Unit(key='a1', attributes={'site': 'A'})\n"
+
+
+def _install_roster_fault_resolver(installed, module: str, body: str):
+    """One installed distribution whose `publishable.resolvers` entry point points
+    at a module this writes — the same shape `test_units.py`'s `_install_resolver`
+    uses. Every caller pops `module` from `sys.modules` in its own `finally`."""
+    from publishable.units import RESOLVER_GROUP
+
+    site = installed(
+        f"dist-{module}", "1.0", {RESOLVER_GROUP: {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        f"    {body}"
+    )
+    importlib.invalidate_caches()
+
+
+def _roster_fault_config() -> dict:
+    """One config, shared by every row of the kept/lost matrix below and by the
+    clean-body control: `data.units.attributes` declares `site` so the
+    "undeclared attribute" row has something to be undeclared, and
+    `sweep.grid` varies `analysis.method` so the "swept parameter" row has
+    something for the resolver to read. Neither field changes shape between
+    rows — only the resolver's own yield does, per the trap this task is
+    named against."""
+    return {
+        "data.units": {
+            "from": {"resolver": "plate_wells"},
+            "key": "well",
+            "attributes": ["site"],
+        },
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+
+
+@pytest.mark.parametrize("body,expected", list(_ROSTER_FAULTS.values()), ids=list(_ROSTER_FAULTS))
+def test_the_roster_checks_are_real_against_a_resolver_produced_roster(
+    installed, registries, write_config, body, expected
+):
+    """The kept/lost matrix, closed. Every one of these was UNREACHABLE under a
+    resolver until this slice — the config's shape is identical across all four
+    rows and only the resolver's YIELD varies, so no refusal here can be
+    config-incidental. The control is the clean body, in the test below: the
+    same config with a well-formed resolver validates with no findings at all."""
+    module = "roster_fault_r33"
+    _install_roster_fault_resolver(installed, module, body)
+    try:
+        found = codes(write_config(_roster_fault_config()))
+    finally:
+        sys.modules.pop(module, None)
+    assert expected in found
+
+
+def test_the_roster_fault_configs_clean_body_control_validates_clean(
+    installed, registries, write_config
+):
+    """THE CONTROL the parametrized test above needs: every row above asserts a
+    FAILURE, which proves nothing about the success path on its own — a
+    parametrization asserting a refusal for every arm proves nothing about
+    either arm's honouring. The identical config, resolved by a well-formed
+    body, must validate with no findings at all."""
+    module = "roster_fault_clean_r33"
+    _install_roster_fault_resolver(installed, module, _ROSTER_FAULTS_CLEAN_BODY)
+    try:
+        found = codes(write_config(_roster_fault_config()))
+    finally:
+        sys.modules.pop(module, None)
+    assert found == set()
+
+
+def test_a_resolvers_units_hash_is_stable_across_runs_and_sensitive_to_order(
+    installed, registries, tmp_path
+):
+    """`provenance.units_hash` pins yield order — two `resolve_units` calls
+    through the identical resolver body must agree, and a resolver yielding
+    the same units in a different order must not. One installed module,
+    overwritten between calls rather than a second distribution claiming the
+    same key, which would be an `E-PLUGIN-COLLISION` `validate` refuses."""
+    from publishable.config import Config
+    from publishable.units import RESOLVER_GROUP, resolve_units, units_hash
+
+    module = "roster_order_r33"
+    site = installed("dist-order", "1.0", {RESOLVER_GROUP: {"plate_wells": f"{module}:resolve"}})
+    units_decl = {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["site"]}
+
+    def _resolve_with(body: str):
+        (site / f"{module}.py").write_text(
+            "from publishable import Unit, register_resolver\n\n\n"
+            '@register_resolver("plate_wells")\n'
+            "def resolve(io, cfg):\n"
+            f"    {body}"
+        )
+        # A stale `.pyc` keyed on a coarse filesystem mtime can survive a rewrite
+        # that lands within the same clock tick, serving the PREVIOUS body back —
+        # this loop is the only thing standing between "the resolver's own yield"
+        # and "whatever bytecode cache happened to be sitting there".
+        pycache = site / "__pycache__"
+        if pycache.is_dir():
+            shutil.rmtree(pycache)
+        importlib.invalidate_caches()
+        sys.modules.pop(module, None)
+        try:
+            return resolve_units(units_decl, tmp_path, cfg=Config({}))
+        finally:
+            sys.modules.pop(module, None)
+
+    forward = (
+        "yield Unit(key='b1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='a1', attributes={'site': 'A'})\n"
+    )
+    roster_1, _n1, _c1 = _resolve_with(forward)
+    roster_2, _n2, _c2 = _resolve_with(forward)
+    reordered_roster, _n3, _c3 = _resolve_with(
+        "yield Unit(key='a1', attributes={'site': 'A'})\n"
+        "    yield Unit(key='b1', attributes={'site': 'A'})\n"
+    )
+    assert units_hash(roster_1) == units_hash(roster_2)
+    assert units_hash(roster_1) != units_hash(reordered_roster)
+
+
 _CRED_IMPORT_TEMPLATE = """\
 from publishable import BaseTemplate, register_template
 
@@ -12819,9 +13266,9 @@ def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
     raised, and reported for a repo whose config names no resolver at all — a
     registry core cannot make sense of is refused however it is asked.
 
-    Asserted ALONGSIDE nothing: this config declares a table source, so
-    `E-DATA-RESOLVER-UNSUPPORTED` is not in play. The resolver-adjacent
-    companion is the second half of this test.
+    Asserted ALONGSIDE nothing: this config declares a table source, so no
+    resolver dispatch is in play. The resolver-adjacent companion is the
+    second half of this test.
     """
     installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "no_two:r"}})
     installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:r"}})
@@ -12834,10 +13281,10 @@ def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
     assert "dist-two 2.0" in message
 
     # Alongside, never instead of: a config that DOES name a resolver still
-    # carries the wholesale refusal. Part B deletes this one line.
+    # carries the collision — the registry's own verdict does not depend on
+    # what a config declares.
     both = codes(write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}}))
     assert "E-PLUGIN-COLLISION" in both
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in both
 
 
 def test_one_distribution_per_plugin_name_reports_nothing(installed, write_config):
@@ -12969,14 +13416,9 @@ def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_dr
 
 
 def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
-    """Two answers to one declaration: `validate` reads it as a resolver
-    (`_check_unimplemented` tests `resolver in source`) and `resolve_units` would
-    read it as a glob (it tests `glob` first). Unreachable while the wholesale
-    refusal stands and reachable the moment dispatch lands, so the refusal is
-    minted in the slice that closes the envelope.
-
-    Asserted ALONGSIDE the wholesale refusal, never instead of it, and never on
-    the whole code set — Part B deletes one line here.
+    """`units.resolve_units` tests `glob` first, so a mapping carrying both keys
+    would silently resolve as a glob — this refusal is what stops that instead
+    of letting a declared intent be overruled without a word.
     """
     found = messages_by_code(
         write_config(
@@ -12991,7 +13433,6 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
     message = found["E-UNITS-SOURCE-AMBIGUOUS"]
     assert "glob" in message
     assert "resolver" in message
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
 
     # THE CONTROLS, both produced by the code under test: either key alone is not
     # ambiguous. Without these, a check that fired for any mapping would pass.
@@ -13002,7 +13443,6 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
         write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "patient_id"}})
     )
     assert "E-UNITS-SOURCE-AMBIGUOUS" not in resolver_only
-    assert "E-DATA-RESOLVER-UNSUPPORTED" in resolver_only
 
 
 # Decision 3's own test was written and then deleted: a `Shadower` template

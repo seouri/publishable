@@ -1,0 +1,813 @@
+# Review package: 91bdd46..8dabf2c
+
+## Commits
+8dabf2c docs: task 22-24 report — resolvers, ResolverIO, and resolver load
+6023364 units: resolve a resolver name from metadata, then load the object behind it
+b6d4422 artifacts: a read-only ResolverIO — read_input, and the paths it read
+645a4fd docs: validate imports a plugin to run a resolver — narrow the five sentences that said otherwise
+
+## Files changed
+ .../sdd/2026-08-17-resolvers/task-22-24-report.md  | 38 ++++++++++
+ docs/reference.md                                  | 15 ++--
+ docs/superpowers/spec-defects.md                   | 13 +++-
+ src/publishable/artifacts.py                       | 38 ++++++++++
+ src/publishable/plugins.py                         | 19 +++--
+ src/publishable/units.py                           | 47 +++++++++++-
+ tests/test_artifacts.py                            | 62 ++++++++++++++++
+ tests/test_plugins.py                              | 44 +++++++++---
+ tests/test_templates.py                            | 13 ++++
+ tests/test_units.py                                | 83 ++++++++++++++++++++++
+ tests/test_validate.py                             | 36 ++++++++++
+ 11 files changed, 378 insertions(+), 30 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-17-resolvers/task-22-24-report.md b/.superpowers/sdd/2026-08-17-resolvers/task-22-24-report.md
+new file mode 100644
+index 0000000..410e20e
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-17-resolvers/task-22-24-report.md
+@@ -0,0 +1,38 @@
++## Task 22-24 report
++
++**Status:** Complete. All three tasks implemented, tested, mutated, and committed separately.
++
++**Commits:**
++- Task 22: `645a4fd` — docs: validate imports a plugin to run a resolver — narrow the five sentences that said otherwise
++- Task 23: `b6d4422` — artifacts: a read-only ResolverIO — read_input, and the paths it read
++- Task 24: `6023364` — units: resolve a resolver name from metadata, then load the object behind it
++
++**Test summary:** `uv run pytest` → 2074 passed, 1 skipped, 2 xfailed (2066 baseline + 8 new: task 22 adds 1 new test file-level — the two scan/get_template tests were extended in place, not added — plus 3 for task 23, 4 for task 24). `ruff check`, `ruff format --check` (80 files formatted), and `mypy` all clean after every task.
++
++**Green on arrival:** `tests/test_validate.py::test_validate_imports_no_plugin_for_a_config_that_names_no_resolver` (task 22) passed the moment it was written, before any resolver-loading code existed — exactly as the brief predicted. Its can-fail proof is task 22's mutation (a) below.
++
++**The two pre-existing no-import tests still discriminate after extension**, confirmed by mutation:
++- `test_the_scan_imports_nothing` (extended): mutating `scan_group` to call `ep.load()` inside its loop → FAIL (assertion right after `scan_group` call fires, `AssertionError: 'loadable_probe' in sys.modules`). Reverted and re-confirmed green.
++- `test_get_template_imports_nothing_for_an_installed_claim` (extended): not separately re-mutated beyond the added positive-control block, since its production surface (`get_template`) is unchanged by this slice — the appended block only adds the "loading is separate" control using `load_entry_point` directly, which the task-24 mutations below already exercise for that function.
++
++**Mutations run (all reverted by editing back, none via `git checkout --`):**
++
++Task 22:
++- (a) Inserted a `scan_group`/`load_entry_point` load at the top of `_check_units` in `validate.py` → `test_validate_imports_no_plugin_for_a_config_that_names_no_resolver` FAILED on `"loadable_units" not in sys.modules`. Reverted; suite green again.
++- (b) Added `ep.load()` as the first statement of `scan_group`'s loop in `plugins.py` → `test_the_scan_imports_nothing` FAILED on the assertion immediately after the `scan_group` call. Reverted; suite green again.
++
++Task 23:
++- Deleted `self._read_paths.append(relpath)` from `ResolverIO.read_input` → `test_a_resolver_io_records_every_path_it_read_in_order` FAILED (`() != (...)`). Reverted.
++- Changed the read dispatch to `(self.input_dir / relpath).read_bytes()` → both `test_a_resolver_io_reads_the_input_and_nothing_else` and `test_a_resolver_io_reads_through_the_same_table_a_step_does` FAILED. Reverted.
++
++Task 24:
++- Deleted the `check_registration(...)` line from `_resolver_for` → `test_a_decorator_argument_disagreeing_with_the_entry_point_key_is_refused` FAILED with "DID NOT RAISE ContractError". Reverted.
++- Replaced `claimants = found.get(name)` with `claimants = next(iter(found.values()), None)` → `test_an_unregistered_resolver_name_is_refused_from_metadata_alone` FAILED (raised `E-PLUGIN-LOAD` instead of `E-RESOLVER-UNKNOWN`, i.e. resolved to the wrong installed claimant). Reverted.
++
++**Places the brief or spec disagreed with the code:**
++
++1. **Task 24's prescribed `_resolver_for` body fails `mypy` as written.** `return fn` at the end (where `fn = load_entry_point(ep)`, itself typed `Any`) trips `no-any-return` against the declared `Callable[..., Any]` return type — mypy flags returning a bare `Any` even when the declared return type itself contains `Any`. Fixed with `from typing import cast` and `return cast("Callable[..., Any]", fn)`; behavior is identical, `uv run mypy` is clean, and all four task-24 tests still pass under this change. Not called out in the brief or the design spec.
++
++2. **Task 22 Step 6's sweep is not literally empty**, but the one surviving hit is a false positive of the grep pattern, not a missed prose site. `grep -rn "never imports a plugin\|never at \`validate\`\|not such a caller\|cannot see this disagreement" ...` still matches `docs/reference.md`'s § The apparatus core can only observe: *"It runs at `dry-run`, at run start, and before every execution — never at `validate`."* This sentence is about the apparatus probe (H7d's territory), not about plugin importing, and it predates this slice (present in the pre-task grep taken before any edit in this session). None of the five sites task 22 names includes it, and rewriting it would be out of scope and false to CLAUDE.md's "prefer deleting to rewriting" only where the claim is actually wrong — this claim is correct as written. Recorded here rather than silently left, per the sweep-discipline rule in CLAUDE.md ("never filter the output of a sweep whose job is to find a string").
++
++No other disagreements found; task 23 and the rest of task 24 matched their briefs exactly, including the exact test bodies and exact mutation prescriptions.
+diff --git a/docs/reference.md b/docs/reference.md
+index e3a6b99..c787917 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -431,22 +431,25 @@ The codes that return `validate_config` early, in this order: a config that does
+ (`E-CONFIG-PARSE`), a container-shaped `E-CONFIG-SHAPE` fault, a `templates/*.py` that fails
+ to load (`E-TEMPLATE-LOAD`), a `templates/` core cannot merge (`E-TEMPLATE-COLLISION`), an
+ unresolvable `experiment_type` (`E-TEMPLATE-UNKNOWN`), and a name that resolves to an installed
+ template this build cannot load (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — the last two decided by
+ the same branch and returning at the same site. A plugin-side collision returns early under a
+ code already in that set: an installed distribution's template claim is decided in the same
+ merge a local one is, so it arrives here as `E-TEMPLATE-COLLISION` rather than minting its own.
+ The identifiers a plugin registry mints for its other groups reach this list not at all, for two
+ different reasons: [`E-PLUGIN-COLLISION`](#errors-core-raises) is reported by a check that does
+ not return early, the way `E-TEMPLATE-COLLISION`'s is; `E-PLUGIN-DECORATOR` and `E-PLUGIN-LOAD`
+-are not reported by `validate` at all, early-return or not — `validate` never imports a plugin,
+-so neither check runs there. `E-TEMPLATE-LOAD`
++are reported by `validate` only where it actually loads a plugin, which is a
++[resolver source](#where-units-come-from) and nothing else — resolving a *name* is answered from
++package metadata and imports nothing, so a config that names no resolver reaches neither check.
++Both are findings rather than early returns: `_check_units` reports what resolution raised and
++the pass continues. `E-TEMPLATE-LOAD`
+ covers three shapes — a file that raises while importing, one that imports cleanly and registers
+ nothing, one that registers a non-`BaseTemplate` — and a `Param` whose construction raises is the
+ first of them, so a bad `default=None` or a
+ [`requires_env`](#a-credential-can-belong-to-a-parameter-value) mapping that is not total over
+ `choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to [the table this section carries](#errors-validate-reports)
+ or a code to this set. Each returns because every check after it reads what it just found wrong, and each is
+ what triggers its own return rather than sitting behind it. Every other row in this table fires only once every code above has passed — except
+ `E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
+ loads, before any of the later returns is possible, and except the one non-container
+ `E-CONFIG-SHAPE` fault — a `sweep.groups` axis name that renders blank — which `_check_shape`
+@@ -550,21 +553,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `fold` level's `stratify_by` names a value `data.units.attributes` does not declare, or is not the name of an attribute at all — a non-string, an empty string, or an empty list. `data.units.attributes`, not the source's columns, for the reason `E-DATA-CLUSTER-UNKNOWN` above reads that set: a stratum is read per unit when the partition is drawn, so it has to survive resolution as an attribute. **A name `data.units.measurements.by` also holds fails that same test and is reported here too**: the measurement axis is consumed where a unit's rows collapse — it distinguished them and has no value once they are one unit — so a stratum naming it is declared as an attribute and carried by no resolved unit, leaving the partition nothing to balance on. Deliberately unlike `data.units.cluster_by` under the same declaration, which reaches `E-DATA-CLUSTER-VARIES` at run time instead: a cluster naming the measurement axis varies within every unit by construction, and the collapse is the one place holding the rows that prove it, where a stratum's fault needs no rows at all and the two declarations settle it between them. Checked from the declaration alone, so it reports whether or not a roster resolved. A non-string is reported *here* rather than left to `E-CONFIG-TYPE`, deliberately unlike `data.units.cluster_by`: `check_envelope` types `replication.repeats` a `list` and nothing inside a level, so a `stratify_by: [label]` — the list form [`holdout`](#a-fixed-holdout-split), [`assign`](#allocation-within-subjects-or-between-subjects) and [`resample`](#weighted-samples) each take — would otherwise be reported by no check at all. **A `fold` level's only**; [§ Validation](#validation)'s *Stratification attribute exists* also covers `holdout.stratify_by`, reported by its own code, `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`. `assign.<axis>.stratify_by` is a different row, *Allocation strata exist*, and its own code, `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, since an axis name is also a legal target there and neither `fold`'s nor `holdout`'s admits one | `E-REPL-FOLD-STRATIFY-UNKNOWN` |
+ | A `fold` level's `stratify_by` names a declared attribute whose value is not the same across every unit of one cluster, under a declared [`data.units.cluster_by`](#clustered-units) — reported for the first such cluster in roster order, naming the values it carries. A cluster is indivisible, so a stratum it carries two of cannot be balanced across the split, and core refuses the pair rather than silently prioritizing one of the two constraints. Checked against the resolved roster, and skipped when it did not resolve, when no `cluster_by` is declared (nothing is then indivisible), or when the name check above already reported — a unit carrying no value for the stratum counts as a variation from siblings that carry one, having nothing to be balanced on. `units.stratum_varies_within_cluster` reads membership from `units.clusters_of`, the [single authority](#clustered-units), so a unit carrying no cluster value raises `E-DATA-CLUSTER-UNKNOWN` there rather than being grouped alone and made trivially constant | `E-REPL-FOLD-STRATIFY-VARIES` |
+ | A repeat level's `kind` is one of the rejected legacy names (`bootstrap`, `permutation`, `technical`, `biological`, `holdout`), or is not one of the supported kinds (`seed`, `batch`, `fold`) | `E-REPL-KIND` |
+ | A `batch` level is declared anywhere but the outermost position in `replication.repeats` | `E-REPL-LEVEL-BATCH-INNER` |
+ | `replication.repeats` declares more than two levels | `E-REPL-LEVEL-DEPTH` |
+ | Two levels of `replication.repeats` declare the same `kind` | `E-REPL-LEVEL-DUPLICATE` |
+ | A level declares the count field belonging to the other kind — `n` on a `fold` level, or `k` on a `seed`/`batch` level — or a `batch` level declares any key besides `kind` and `n`, checked after the count-field clause so `{kind: batch, k: 3}` still reports its count rather than an unrecognized key. Applied to `batch` alone; no other kind's keys are closed | `E-REPL-LEVEL-FIELD` |
+ | A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
+ | `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
+ | Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+-| [`data.units.from.resolver`](#where-units-come-from) names a resolver that no installed distribution registers under the `publishable.resolvers` entry-point group. Answered from package **metadata**, so a name that is absent costs no import at all — [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) makes that the whole argument for entry points, and a check that reached for the object behind the name would have changed the guarantee whatever it returned. The message names every group member it did find, the way an unresolved template names the templates it knows, because the ordinary cause is a spelling and the ordinary remedy is reading the list. **Not yet emitted:** the resolver source is refused wholesale in this build, and this code replaces that refusal when the dispatch lands | `E-RESOLVER-UNKNOWN` |
++| [`data.units.from.resolver`](#where-units-come-from) names a resolver that no installed distribution registers under the `publishable.resolvers` entry-point group. Answered from package **metadata**, so a name that is absent costs no import at all — [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) makes that the whole argument for entry points, and a check that reached for the object behind the name would have changed the guarantee whatever it returned. The message names every group member it did find, the way an unresolved template names the templates it knows, because the ordinary cause is a spelling and the ordinary remedy is reading the list | `E-RESOLVER-UNKNOWN` |
+ | [`data.units.measurements.by`](#what-isnt-a-repeat) names a field, and the resolver the roster came from yields no attribute of that name to collapse on. A table source reports the same fault against its columns; a resolver has no columns beyond the attributes it declares, so the field a CSV would simply have carried has to be yielded, and this is where that obligation is checked. Separate from [`E-UNITS-ATTR-MISSING`](#errors-validate-reports), which reports the same field missing from a **table** source's columns: the two name different declarations, and a reader fixing one is not fixing the other. **Not yet emitted:** a resolver-produced roster does not exist in this build | `E-RESOLVER-MEASUREMENT-FIELD` |
+ | A resolver reads a parameter the [sweep](#expansion-modes) varies. The unit table is one table for the whole run, so conditions that resolved different units could not be paired and `n` would mean something different in each — [§ Where units come from](#where-units-come-from) states the rule. Its own code rather than the [`E-STEP-SWEPT-PARAM`](#errors-core-raises) the read itself raises: that identifier is a step's, reached at run time from `"run"` or `"summary"` scope, and a reader holding it is sent to a section describing a different fault at a different time. Sharing the mechanism — a sentinel substituted for a swept path, raising on the read — is not sharing the fault, the same way a coded `ContractError` from a local template's top level is reported as `E-TEMPLATE-LOAD` rather than under the code it carried. An [apparatus probe](#the-apparatus-core-can-only-observe) carries no such restriction and usually does read a swept parameter. **Not yet emitted:** no resolver is executed in this build | `E-RESOLVER-SWEPT-PARAM` |
+ | A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+ | A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+ | `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | `statistics.resample.method` names a value other than `bootstrap` — the whole enum, [§ Statistical reporting](#statistical-reporting)'s *Resample methods*. Unset (`null`) is accepted and takes the documented default | `E-STATS-RESAMPLE-METHOD` |
+@@ -1030,23 +1033,23 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | Under `method: random`, a realized holdout draw leaves the train or the test side empty — the same fault [`validate` reports](#errors-validate-reports) for the unstratified, unclustered case, raised here for what `validate` does not check: a stratified draw, whose per-stratum sizes only the run's own draw produces; a clustered draw, whose empty side depends on the seed the same way a clustered arm assignment's does; and the **train** side of any draw, since `validate` tests the test side alone. `units.holdout_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-HOLDOUT-EMPTY` |
+ | Resampling a metric a template's [`aggregate`](#templates-where-parameters-are-defined) derived, under a declared [`data.units.cluster_by`](#clustered-units). `percentile_of_derived` draws units; the clustered draw for a *recomputed* metric is a different construction — each replicate drawing whole clusters and rebuilding a unit table from their pooled units, so its row count varies per draw — and it does not exist, so the interval would be narrower than the design supports beside recorded columns that are cluster-robust. **Not a fault `validate` can report**, and the one row here whose absence from that table is the point: `aggregate` is user code core never inspects, and a template overriding it may still return `{}` for a given config, so "derives a metric" has no validate-time meaning and this is the first place core holds the answer as a fact. Contained the way a derived key collision is — the whole `derived` mapping is dropped, the code disclosed through [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), and the run keeps its record and its recorded columns — and dropped rather than published with `ci95: null`, that state already meaning "no resample callable, or no seed". Temporary, alongside `E-DATA-CLUSTER-CONTRAST`, which is the same missing construction one level over | `ContractError` · `E-DATA-CLUSTER-DERIVED` |
+ | Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
+ | **A stratum must be constant within a cluster, and a resample's draw is a cluster drawn within its stratum** — [§ Clustered units](#clustered-units)'s composition, taken again for `resample` rather than invented a second time. `stats.percentile_over_units_clustered` given both `strata` and `membership`, where a cluster's units disagree about the stratum they carry, raised because a public function handed both vectors directly cannot silently pick one. **Dual-listed, but not by one shared authority the way `E-DATA-WEIGHT-INVALID` above is**: `validate` reports the declaration form of this from the roster, through `units.stratum_varies_within_cluster`; `stats.py` cannot import `units.py` to call that same function, so this is a second, independent implementation of its equality over plain sequences — normalized the identical way (`"no value"` for `None`, `str()` otherwise) so the two cannot disagree over a stratum read back as `1` in one place and `"1"` in the other — **again, for a single uncomposed name read straight off the roster**; a composed, multi-name `stratify_by`'s cross-label and `<absent>` sentinel (`cli.py`'s `resample_strata`, H4a task 15) are outside what this equality was built to compare, and a real value colliding with either sentinel string is an acknowledged, unaddressed gap rather than a case this dual listing rules out | `ContractError` · `E-STATS-RESAMPLE-STRATIFY-VARIES` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | A template name claimed twice as core's own registry, an [installed distribution's](#creating-a-plugin-publishable-plugin-new) `publishable.templates` entry points, and a repo's [`templates/`](#templates-where-parameters-are-defined) are merged — two local registrations of one name, a local registration of a name core itself registers, two installed distributions registering one name, an installed distribution registering a name core itself registers, or a local registration of a name an installed distribution registers. Decided over the complete claim set from all three sources and reported in name order. An installed claimant is named as `<distribution> <version>`, a local one as `<path>::<ClassName>`, and core's own as its dotted class path — each being what a reader changes to resolve it. **An installed claimant is a name, never a class:** the claim is read from package metadata, so no plugin is imported to decide a collision, which is the guarantee [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) states and the reason a refused installed claim carries no credential to redact. One of the load-time raises — the refusals a command meets before any step exists — beside `E-STEP-NAME-COLLISION`/`E-STEP-SCOPE-UNKNOWN`, `E-TEMPLATE-LOAD`, `E-PLUGIN-COLLISION`, `E-PLUGIN-DECORATOR` and `E-PLUGIN-LOAD`, and dual-surface: every command that resolves a template meets it at load and prints this code, and `validate` [reports it as a finding](#errors-validate-reports) under the same code rather than raising, that table being where its conditions are stated in full. Never raised inside an execution — which template a name means is settled before the first step runs — so it stops the command rather than failing one step | `ContractError` · `E-TEMPLATE-COLLISION` |
+ | A project-local `templates/*.py` fails to load, in any of three shapes: it raises while importing, it imports cleanly but registers nothing, or it registers a class that is not a `BaseTemplate` subclass — [reported for the first such file](#errors-validate-reports) in `discover_local`'s sorted walk, once every file in the directory has been imported. One of the load-time raises, beside `E-STEP-NAME-COLLISION`/`E-STEP-SCOPE-UNKNOWN`, `E-TEMPLATE-COLLISION`, `E-PLUGIN-COLLISION`, `E-PLUGIN-DECORATOR` and `E-PLUGIN-LOAD`, and dual-surface for the same reason `E-TEMPLATE-COLLISION` is: every command resolving a template meets `discover_local` at load. Checked *ahead* of a collision — a collision computed while a file failed to load would be computed over a partial set of claims. Never raised inside an execution, for the same reason `E-TEMPLATE-COLLISION` is not | `ContractError` · `E-TEMPLATE-LOAD` |
+ | `uv add` failing for a [`--plugin`](#plugins-where-domain-knowledge-lives) argument on `generate experiment`. Raised before anything reaches disk, so a retry finds a clean tree: `generate experiment` refuses an existing `src/<pkg>/`, which would make a half-scaffolded failure permanent. The message carries `uv`'s own output, since what went wrong is `uv`'s to say — a bad repository name, a ref that does not exist, no network | `ContractError` · `E-UV-ADD` |
+-| Two shapes, both against [`publishable.resolvers`, `publishable.probes`, `publishable.writers` or `publishable.readers`](#creating-a-plugin-publishable-plugin-new). **One entry-point key claimed by two installed distributions**: decided over the **complete** claim set for the group and reported in **name order**, not in the order the metadata scan happened to walk one — install order is a property of a machine rather than of a design, so it may not decide which fault is reported either. The message names every distribution that claimed the key, as `<distribution> <version>`, which is what a reader uninstalls. **A writer or reader claiming a suffix core itself writes or reads**: decided at registration, when the `@register_writer`/`@register_reader` decorator runs, over no claim set at all — the message names the suffix and core rather than a distribution, and the remedy is renaming the plugin's own claim rather than uninstalling anything. The template groups' equivalent is `E-TEMPLATE-COLLISION` rather than this code, since a template name has a second home — [the project's own `templates/`](#templates-where-parameters-are-defined) — and one row cannot state both sets of providers | `ContractError` · `E-PLUGIN-COLLISION` |
+-| A [`@register_*` argument](#creating-a-plugin-publishable-plugin-new) disagreeing with the entry-point key that named it. The entry point is the registration and the decorator is a declaration checked against it, so two spellings of one name with no rule for which is canonical is refused rather than resolved — the [defaults-file argument](#there-is-no-separate-defaults-file) again. The comparison itself exists as a function; the object behind a key is loaded only at `run` and `dry-run`, so that is where this would be reached once something calls it — `validate` answers a name from metadata and never holds the decorated object, so **`validate` cannot see this disagreement** either way, a property of the guarantee rather than a gap in the check. As measured on 2026-08-17 against commit `deaed2b`, no task has yet given it a production caller — perishable, since the next slice to import a plugin closes that gap | `ContractError` · `E-PLUGIN-DECORATOR` |
+-| An entry point whose module raises while importing, or calls `sys.exit()` at module scope. `SystemExit` is a `BaseException` and so needs its own `except` — a plugin building an `argparse` parser at import would otherwise end the command with the plugin's own exit code and no diagnostic at all. The same containment `E-PLUGIN-DECORATOR` describes — reached, once something imports a plugin, at `run` and `dry-run` and never at `validate`. As measured on 2026-08-17 against commit `deaed2b`, no task has yet given it a production caller either — the same perishable state, for the same reason. The fault names the entry point and the distribution rather than the module, since a distribution is what a reader uninstalls or pins | `ContractError` · `E-PLUGIN-LOAD` |
++| Two shapes, both against [`publishable.resolvers`, `publishable.probes`, `publishable.writers` or `publishable.readers`](#creating-a-plugin-publishable-plugin-new). **One entry-point key claimed by two installed distributions**: decided over the **complete** claim set for the group and reported in **name order**, not in the order the metadata scan happened to walk one — install order is a property of a machine rather than of a design, so it may not decide which fault is reported either. The message names every distribution that claimed the key, as `<distribution> <version>`, which is what a reader uninstalls. **A writer or reader claiming a suffix core itself writes or reads**: decided at registration, when the `@register_writer`/`@register_reader` decorator runs, over no claim set at all — the message names the suffix and core rather than a distribution, and the remedy is renaming the plugin's own claim rather than uninstalling anything. The template groups' equivalent is `E-TEMPLATE-COLLISION` rather than this code, since a template name has a second home — [the project's own `templates/`](#templates-where-parameters-are-defined) — and one row cannot state both sets of providers. A writer or reader claiming a core suffix from inside a plugin's top level raises this at decoration time, which is inside the import [`E-PLUGIN-LOAD`](#errors-core-raises) contains — so a load reports the containing code, the same substitution `E-TEMPLATE-LOAD` already makes for a coded error from a local template's top level | `ContractError` · `E-PLUGIN-COLLISION` |
++| A [`@register_*` argument](#creating-a-plugin-publishable-plugin-new) disagreeing with the entry-point key that named it. The entry point is the registration and the decorator is a declaration checked against it, so two spellings of one name with no rule for which is canonical is refused rather than resolved — the [defaults-file argument](#there-is-no-separate-defaults-file) again. The comparison itself exists as a function, checked wherever a plugin is loaded, so a resolver's disagreement is `validate`'s finding as much as `run`'s | `ContractError` · `E-PLUGIN-DECORATOR` |
++| An entry point whose module raises while importing, or calls `sys.exit()` at module scope. `SystemExit` is a `BaseException` and so needs its own `except` — a plugin building an `argparse` parser at import would otherwise end the command with the plugin's own exit code and no diagnostic at all. The same containment `E-PLUGIN-DECORATOR` describes — reached wherever a plugin is imported, which is a [resolver source](#where-units-come-from)'s dispatch — at `validate`, `dry-run` and `run` alike, since the resolver runs at all three. The fault names the entry point and the distribution rather than the module, since a distribution is what a reader uninstalls or pins | `ContractError` · `E-PLUGIN-LOAD` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped — a unit measured with `measurement=` counts as settled for both, in either order, since it arrives by one path or the other and never both, while a second measurement of it is what the argument is for | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | [`io.record`](#the-importable-surface) given `measurement=` while `data.units.measurements` is undeclared, so there is no rule to collapse the rows under | `ContractError` · `E-STEP-MEASUREMENT-UNDECLARED` |
+ | An [`io` accessor](#step-scope) reached from a scope that does not have it | `ContractError` · `E-STEP-SCOPE-ONLY` |
+ | Indexing [`io.units`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) with anything but a plain integer — a slice, a string, a bool | `ContractError` · `E-STEP-UNITS-CONTRACT` |
+ | [`io.read_condition`](#steps-that-need-every-condition) naming a condition index this run did not resolve, or naming a repeat-scoped step with no `repeat=` to say which copy | `ContractError` · `E-STEP-READ-CONDITION-UNKNOWN`, `E-STEP-READ-REPEAT-REQUIRED` |
+ | Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold, a declared fold core can't pair with the units it partitions — a repeat label carrying no fold component, a fold with no resolved roster, drawn partitions with no fold level to label them — or a condition on a [group axis](#expansion-modes) core can't pair with its arm, the same disagreement one level over: a condition index missing from the resolved arms | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED`, `E-RUN-FOLD-UNRESOLVED`, `E-RUN-ARM-UNRESOLVED` |
+ 
+ **The `E-RUN-`/`E-REPL-ORDER-UNRESOLVED` row — core's plan disagreeing with the state core resolved beside it — is the one you can't cause, and it's in the table anyway.** Every other entry is something your declarations or your step code asked for; those six are core checking its own work, because the plan and the resolved conditions, repeats, seeds, folds, arms, and order are all derived from one config and must agree. If they ever don't, the run would execute something other than what it recorded, and no result from it is worth reading. They carry a type and a code for the same reason everything above does rather than being an `assert`: `assert` disappears under `python -O`, which is precisely the wrong property for the only guard on a condition nothing else detects. One of them reaching you is a bug to report, not a config to fix — and, like the load-time rows (`E-STEP-NAME-COLLISION`/`E-STEP-SCOPE-UNKNOWN`, `E-TEMPLATE-COLLISION`, `E-TEMPLATE-LOAD`, `E-PLUGIN-COLLISION`, `E-PLUGIN-DECORATOR`, `E-PLUGIN-LOAD`) and unlike every other row, none of the six is raised inside an execution, so it stops the run instead of failing one step and continuing. A plan core can't trust is not a plan to keep walking.
+ 
+ **An exception exists where your code could act on the distinction; everything a *command* reports is a [diagnostic](#exit-codes-and-diagnostics), not an exception you catch.** `validate` collecting eleven errors over a config is not eleven raises — it's a report, and modelling it as an exception per finding would force it to stop at the first. So the hierarchy above covers the run-time surface, where there is a step to raise into, plus the load-time refusals a command turns straight into a diagnostic of its own — which is why a code can sit in both registries and why each of those rows says which surface a reader is on.
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index d82e258..9f3c7d0 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -6116,21 +6116,21 @@ credentials."
+ 
+ **Bound on the exposure.** A collision message names providers — a distribution and a version, a
+ path and a class name — and interpolates no declaration, so the text at risk is an exception's
+ rather than a credential's by construction. What is unmatched is a credential value appearing in a
+ message core built from an installed claimant's own data, and no such message exists today.
+ 
+ **Struck when** an installed template's class is held at the merge, which is
+ `## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
+ The two close together or not at all.
+ 
+-## OPEN — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired — **Owner: H7b Part B**
++## CLOSED — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired
+ 
+ A writer or reader claiming an extension core itself writes or reads is refused at decoration time
+ as `ContractError` · `E-PLUGIN-COLLISION` — `register_writer`/`register_reader` raise it directly,
+ with no plugin loaded yet. `docs/reference.md` § Errors core raises promises `E-PLUGIN-COLLISION` its
+ own code for that arm, distinct from the code a plugin's top-level import failure carries
+ (`E-PLUGIN-LOAD`).
+ 
+ That promise holds only because nothing loads a plugin today. The moment `load_entry_point` gets a
+ production caller — Part B's, by construction, per the amendment above — the same raise is reached
+ *inside* the module import it decorates, where `load_entry_point`'s broad `except Exception` catches
+@@ -6139,10 +6139,21 @@ it and re-reports it as `E-PLUGIN-LOAD` instead. That is the identical substitut
+ template's top level — the precedent exists — but `E-PLUGIN-COLLISION`'s own row does not yet say
+ its code can be re-coded this way for the writer/reader groups.
+ 
+ **Filed as a hazard for Part B to resolve when it wires loading, not fixed here**: there is no
+ production caller yet, so the substitution cannot happen today and there is nothing to reproduce.
+ Part B's task that gives `load_entry_point` its first caller should either let the `E-PLUGIN-LOAD`
+ re-code stand and add one sentence to `E-PLUGIN-COLLISION`'s row noting the precedent, or catch
+ `ContractError` before the broad `except` so the writer/reader arm keeps its own code through a load.
+ 
+ **Found by:** H7b whole-branch review, finding M4.
++
++**Closed by H7b Part B, task 24, taking the first resolution named above: let the re-code stand.**
++Catching `ContractError` ahead of `load_entry_point`'s broad arm would let *any* coded
++`ContractError` a plugin's top level raises escape the containment under whatever code it happened
++to carry — a fail-open of exactly the shape `CLAUDE.md` § Answering a question with a proxy names,
++and one that would defeat the reason `load_entry_point` is broad. Narrowing the catch to the single
++code `E-PLUGIN-COLLISION` would instead make `load_entry_point` — a group-generic function — know
++about a code only two of the five groups can raise. The precedent already exists and is documented:
++§ Errors accepts `E-TEMPLATE-LOAD` swallowing a coded error from a local template's top level, for
++the same reason. `docs/reference.md` § Errors core raises' `E-PLUGIN-COLLISION` row now carries one
++sentence recording this precedent.
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index 8774427..7d744e5 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -890,10 +890,48 @@ class StepIO:
+             return path.read_bytes()
+         reader = READERS.get(suffix)
+         if reader is None:
+             raise ArtifactError(
+                 f"`{path.name}` claims the suffix `{suffix}`, which has a registered "
+                 "writer and no reader — a writer and its reader are registered as a "
+                 "pair, and core cannot invert one it was never given",
+                 code="E-ARTIFACT-UNREADABLE",
+             )
+         return reader(path.read_bytes())
++
++
++class ResolverIO:
++    """What a resolver receives: `read_input` and nothing else.
++
++    `reference.md` § Where units come from — "The `io` a resolver receives is
++    read-only: `io.read_input` and nothing else. There is no run directory yet at
++    validate time and no step yet at run time, so there is nothing for it to write
++    into." A `StepIO` with its directories defaulted would carry every write and
++    every cross-scope read into a place where each either has no directory to act
++    on or would let a resolver write into a run that has not started. Core cannot
++    inspect the body of user Python, so the refusal is that the method does not
++    exist rather than that it raises.
++
++    Reads through `StepIO._read`, the one dispatch, so a plugin's registered
++    reader serves a resolver exactly as it serves a step — two dispatches would be
++    two answers to "what does this suffix mean".
++
++    Records each relative path it was asked for, in the order it was asked, so
++    `input_manifest_policy: hash_index` can name "the paths the resolver read"
++    without a second walk that could disagree with what was actually opened.
++    Duplicates are kept: this is a log of reads, and its one consumer builds a set
++    from it.
++    """
++
++    __slots__ = ("input_dir", "_read_paths")
++
++    def __init__(self, input_dir: Path) -> None:
++        self.input_dir = input_dir
++        self._read_paths: list[str] = []
++
++    def read_input(self, relpath: str) -> Any:
++        self._read_paths.append(relpath)
++        return StepIO._read(self.input_dir / relpath)
++
++    @property
++    def read_paths(self) -> tuple[str, ...]:
++        return tuple(self._read_paths)
+diff --git a/src/publishable/plugins.py b/src/publishable/plugins.py
+index 5b056c3..ebd9dfa 100644
+--- a/src/publishable/plugins.py
++++ b/src/publishable/plugins.py
+@@ -6,25 +6,27 @@ plugin artifact resolves through this module, and *resolving a name* —
+ — answers from **package metadata** and imports nothing. That is not a
+ performance choice. § Creating a plugin justifies the whole entry-point
+ mechanism by `validate` being able to answer "no installed package registers
+ `plate_wells`" without importing a line of that package, and `validate` is
+ documented as creating nothing and reaching nothing off the machine. A check
+ that reaches for the object behind a name has changed the guarantee whatever
+ it returns — which is exactly what `validate` never does.
+ 
+ Loading the object behind a name is a separate, named operation —
+ `load_entry_point`, the one function in this module that calls
+-`EntryPoint.load()` — meant for a caller that has already resolved a name and
+-now needs the object, once a command is past validation. `validate` is not
+-such a caller. As measured on 2026-08-17 against commit `deaed2b`, no command
+-has yet been wired to call it; `docs/reference.md`'s `E-PLUGIN-DECORATOR` and
+-`E-PLUGIN-LOAD` rows carry the same dated note.
++`EntryPoint.load()` — reached only once a name has resolved and the object is
++actually needed. That is what keeps the guarantee above intact where it is
++claimed: a *negative* answer costs nothing, because deciding that no installed
++package registers `plate_wells` never reaches the package. A caller that does
++need the object pays the import, and `validate` is such a caller for exactly one
++declaration, `data.units.from.resolver`, whose resolver `reference.md` § Where
++units come from puts at `validate` and `dry-run` rather than only at `run`.
+ 
+ The cost of that, stated rather than discovered: a claim read from metadata is a
+ name and a provider and nothing else. A refusal computed from it therefore has
+ no class to interrogate — no `parameter_spec`, no `required_env` — which is why
+ a plugin-side collision cannot redact a credential the way a project-local one
+ can. See `templates/registry.py` and § Creating a plugin for that residual.
+ 
+ Templates are scanned through here like everything else, but they are *merged*
+ in `templates/registry.py`, because a template name has a second home — a
+ project's own `templates/` — and the merge is the one place holding all three
+@@ -218,25 +220,22 @@ def check_registration(ep: EntryPoint, declared: Sequence[str]) -> None:
+     the decorator is a declaration checked against it. Two spellings of one name
+     with no rule for which is canonical is a drift nobody detects until a config
+     names the loser, so loading fails naming both rather than letting one
+     silently win.
+ 
+     Takes the declared names rather than computing them, so one comparison serves
+     every group: a template's registration lands in a pending buffer its
+     discovery pass drains, and a reverse lookup here would depend on whether
+     anything had drained it yet.
+ 
+-    Meant to run only once an object behind a key has actually been loaded —
+-    not `validate`, which answers a name from package metadata and never holds
+-    the object. As measured on 2026-08-17 against commit `deaed2b`, no command
+-    yet loads a plugin, so this function has no production caller either;
+-    `docs/reference.md`'s `E-PLUGIN-DECORATOR` row carries the same dated note.
++    Meant to run once an object behind a key has actually been loaded, wherever
++    that happens — including `validate`, which loads a resolver.
+     """
+     if ep.name in declared:
+         return
+     if declared:
+         detail = f"declares `{'`, `'.join(declared)}` instead"
+     else:
+         detail = "calls no `@register_*` naming it"
+     raise ContractError(
+         f"the entry point `{ep.name}` in `{ep.group}` points at `{ep.value}`, which "
+         f"{detail} — the entry point is the registration and the decorator is a "
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index 872cccb..ab5a6b4 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -6,26 +6,27 @@ Resolution runs at `validate` as well as at `run`, so this module reads
+ directory and no step for an `io` to belong to.
+ """
+ 
+ import csv
+ import hashlib
+ import json
+ import math
+ import random
+ import statistics
+ from collections import Counter
+-from collections.abc import Iterable, Iterator, Mapping, Sequence
++from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+ from dataclasses import dataclass, field
+ from pathlib import Path
+-from typing import Any
++from typing import Any, cast
+ 
+ from publishable.errors import ContractError
++from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
+ 
+ RESERVED_FIELDS = ("key", "paths", "attributes")
+ 
+ 
+ class _FrozenAttributes(Mapping[str, Any]):
+     """A read-only mapping that refuses a write with the documented code.
+ 
+     `MappingProxyType` refuses too, but with a bare `TypeError` that carries no
+     `.code` and is not a `PublishableError` — so `main` does not catch it and the
+     user gets a traceback where every other refusal is a diagnostic. The document
+@@ -253,20 +254,62 @@ def _from_glob(
+         raise ContractError(
+             f"`data.units.from.glob` {pattern!r} matched no files under {input_dir}; "
+             "a run measuring zero units has nothing to report",
+             code="E-UNITS-EMPTY",
+         )
+     # An empty column set, not a missing one: a glob yields a key and a path and
+     # nothing else, so there is no name `measurements.by` could correctly hold.
+     return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels], frozenset()
+ 
+ 
++RESOLVER_GROUP = "publishable.resolvers"
++
++
++def _resolver_for(name: str) -> Callable[..., Any]:
++    """The callable `data.units.from.resolver` names, or the refusal that answers instead.
++
++    Three steps, three codes, in the order the information arrives:
++
++    - **The name**, answered from package metadata alone (`scan_group`), so a name
++      no installed distribution registers costs no import at all —
++      `reference.md` § Creating a plugin makes that the whole argument for entry
++      points. `E-RESOLVER-UNKNOWN`, naming every member of the group it did find,
++      because the ordinary cause is a spelling.
++    - **The object**, through `load_entry_point`, the one function in core that
++      calls `EntryPoint.load()`. Every way a plugin's top level can fail arrives
++      as `E-PLUGIN-LOAD`, including `SystemExit`.
++    - **The declaration against the key** (`check_registration` over
++      `declared_names`), `E-PLUGIN-DECORATOR`. Checked here rather than deferred
++      to `run`: the object is already in hand, and reporting at `run` a fault
++      `validate` had the evidence for is the shape this repo refuses.
++
++    A collision between two distributions claiming this key is **not** decided
++    here. `validate._check_plugin_collisions` reports it as `E-PLUGIN-COLLISION`
++    for every config, from metadata, over the complete claim set in name order —
++    the first claimant is used here rather than re-deciding the tie, since a
++    verdict computed twice is a verdict that can disagree with itself.
++    """
++    found = scan_group(RESOLVER_GROUP)
++    claimants = found.get(name)
++    if not claimants:
++        listed = ", ".join(found) if found else "none installed"
++        raise ContractError(
++            f"`data.units.from.resolver` names `{name}`, which no installed distribution "
++            f"registers in the `{RESOLVER_GROUP}` entry-point group (registered: {listed})",
++            code="E-RESOLVER-UNKNOWN",
++        )
++    ep = claimants[0]
++    fn = load_entry_point(ep)
++    check_registration(ep, declared_names(RESOLVER_GROUP, fn))
++    return cast("Callable[..., Any]", fn)
++
++
+ def resolve_units(
+     units_decl: dict[str, Any], input_dir: Path
+ ) -> tuple[UnitList, dict[str, float] | None, frozenset[str]]:
+     """Resolve the roster, preserving the order it was resolved in.
+ 
+     Returns the roster, `technical_n` — `None` unless `data.units.measurements` is
+     declared — and the source's own column names, empty under a `{glob: ...}`
+     source. Both travel *beside* the roster rather than on it because `io.units`
+     **is** a `UnitList` handed to steps, and `reference.md` § The unit list is
+     three operations promises exactly iteration, `len`, and integer indexing, plus
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 63377d6..1ea2874 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -1554,10 +1554,72 @@ def test_a_reader_with_no_writer_is_never_dispatched_to(registries, tmp_path):
+     from publishable import artifacts
+ 
+     read_calls = []
+     artifacts.READERS[".fastq"] = lambda data: read_calls.append(data) or {"read": data}
+ 
+     target = tmp_path / "a.fastq"
+     target.write_bytes(b"raw")
+ 
+     assert artifacts.StepIO._read(target) == b"raw"
+     assert read_calls == []
++
++
++def test_a_resolver_io_reads_the_input_and_nothing_else(tmp_path):
++    """`reference.md` § Where units come from: read-only, `read_input` and
++    nothing else. Structural rather than a raise per method — core cannot inspect
++    the body of a resolver, so the method must not exist to be called."""
++    from publishable.artifacts import ResolverIO
++
++    (tmp_path / "layout.csv").write_text("barcode,well\nA1,h3\n")
++    io = ResolverIO(tmp_path)
++
++    assert io.read_input("layout.csv") == [{"barcode": "A1", "well": "h3"}]
++    for forbidden in (
++        "write",
++        "append",
++        "record",
++        "skip",
++        "read_upstream",
++        "read_condition",
++        "exists",
++        "resumed",
++        "units",
++        "run_dir",
++        "step_dir",
++    ):
++        assert not hasattr(io, forbidden), f"a resolver io must not expose {forbidden}"
++
++
++def test_a_resolver_io_records_every_path_it_read_in_order(tmp_path):
++    """`hash_index` names "the paths the resolver read"; this object is the only
++    one that sees a read. Order and duplicate handling are asserted because the
++    set task 31 builds is derived from this tuple."""
++    from publishable.artifacts import ResolverIO
++
++    (tmp_path / "layout.csv").write_text("barcode\nA1\n")
++    (tmp_path / "extra.json").write_text('{"n": 1}')
++    io = ResolverIO(tmp_path)
++
++    assert io.read_paths == ()  # the control: nothing read, nothing recorded
++    io.read_input("layout.csv")
++    io.read_input("extra.json")
++    io.read_input("layout.csv")
++    assert io.read_paths == ("layout.csv", "extra.json", "layout.csv")
++
++
++def test_a_resolver_io_reads_through_the_same_table_a_step_does(tmp_path, registries):
++    """A plugin's registered reader serves a resolver too — one dispatch, not two.
++    Without this, a resolver reading a plugin suffix would get raw bytes while a
++    step reading the same file got the parsed object."""
++    from publishable.artifacts import ResolverIO
++    from publishable.plugins import register_reader, register_writer
++
++    @register_writer(".fq")
++    def _write(obj) -> bytes:
++        return str(obj).encode()
++
++    @register_reader(".fq")
++    def _read(payload: bytes):
++        return {"parsed": payload.decode()}
++
++    (tmp_path / "reads.fq").write_bytes(b"ACGT")
++    assert ResolverIO(tmp_path).read_input("reads.fq") == {"parsed": "ACGT"}
+diff --git a/tests/test_plugins.py b/tests/test_plugins.py
+index 8579f90..ec5cbf0 100644
+--- a/tests/test_plugins.py
++++ b/tests/test_plugins.py
+@@ -1,17 +1,24 @@
+ # tests/test_plugins.py
+ import importlib
+ import sys
+ 
+ import pytest
+ 
+-from publishable.plugins import GROUPS, names, provider_of, scan_group
++from publishable.plugins import (
++    GROUPS,
++    declared_names,
++    load_entry_point,
++    names,
++    provider_of,
++    scan_group,
++)
+ 
+ 
+ def test_the_groups_core_reads_are_the_five_the_document_declares():
+     """Named rather than counted: `reference.md` § Creating a plugin shows one
+     `[project.entry-points."publishable.*"]` block per registry."""
+     assert set(GROUPS) == {
+         "publishable.templates",
+         "publishable.resolvers",
+         "publishable.probes",
+         "publishable.writers",
+@@ -80,46 +87,61 @@ def test_names_are_sorted_and_the_sort_is_not_the_install_order(installed):
+             "publishable.resolvers": {
+                 "zz_first": "pkg.r:a",
+                 "aa_second": "pkg.r:b",
+                 "mm_third": "pkg.r:c",
+             }
+         },
+     )
+     assert names("publishable.resolvers") == ["aa_second", "mm_third", "zz_first"]
+ 
+ 
+-def test_the_scan_imports_nothing(installed):
+-    """The whole argument for entry points, asserted rather than described.
++def test_the_scan_imports_nothing(installed, registries):
++    """The whole argument for entry points, asserted rather than described, and
++    narrowed to the claim that is actually true.
++
++    **A NAME resolves from package metadata without importing** — that is
++    § Creating a plugin's guarantee and the whole of it. `validate` does import a
++    plugin once it needs the object behind a name: a resolver runs at `validate`,
++    which is § Where units come from's design.
+ 
+     The target is a module that **does** import, and the assertion is that it is
+-    absent from `sys.modules` after the scan. That is the only shape that
+-    catches a load: against a target that cannot import, a scan calling
++    absent from `sys.modules` after every name-answering call. That is the only
++    shape that catches a load: against a target that cannot import, a scan calling
+     `.load()` inside a bare `except` returns normally and every assertion still
+-    holds — verified by mutation, which is how this test was rewritten. The
+-    trailing `.load()` is the positive control: the same object does resolve,
+-    and resolving it is exactly what puts the module in `sys.modules`, so the
+-    absence above is a fact about the scan rather than about the fixture.
++    holds. `load_entry_point` is the positive control and is the production import
++    path rather than a bare `.load()`, so this test states the boundary in the
++    terms the code uses: everything that answers a name imports nothing;
++    `load_entry_point` imports, by name.
+     """
+     site = installed(
+         "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_probe:resolve"}}
+     )
+-    (site / "loadable_probe.py").write_text("def resolve():\n    return []\n")
++    (site / "loadable_probe.py").write_text(
++        "from publishable import register_resolver\n\n\n"
++        '@register_resolver("plate_wells")\n'
++        "def resolve(io, cfg):\n    return []\n"
++    )
+     importlib.invalidate_caches()
+     assert "loadable_probe" not in sys.modules
+ 
+     found = scan_group("publishable.resolvers")
+     assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
+     assert "loadable_probe" not in sys.modules
+ 
++    assert names("publishable.resolvers") == ["plate_wells"]
++    assert "loadable_probe" not in sys.modules
++
+     try:
+-        assert found["plate_wells"][0].load()() == []
++        loaded = load_entry_point(found["plate_wells"][0])
++        assert loaded(None, None) == []
+         assert "loadable_probe" in sys.modules
++        assert declared_names("publishable.resolvers", loaded) == ["plate_wells"]
+     finally:
+         sys.modules.pop("loadable_probe", None)
+ 
+ 
+ def test_register_resolver_records_the_name_and_returns_the_function(registries):
+     """The decorator's two obligations. Returning the object unchanged is the
+     half a decorator gets wrong silently: a `None` return leaves the plugin's own
+     module holding `None` under the name it just defined, and its own test suite
+     is where that surfaces."""
+     from publishable.plugins import RESOLVERS, register_resolver
+diff --git a/tests/test_templates.py b/tests/test_templates.py
+index 9d5a67b..88ab965 100644
+--- a/tests/test_templates.py
++++ b/tests/test_templates.py
+@@ -1148,20 +1148,33 @@ def test_get_template_imports_nothing_for_an_installed_claim(installed, tmp_path
+ 
+     assert "vendor_assay" in template_names(tmp_path)
+     assert "loadable_tpl" not in sys.modules
+ 
+     assert template_provenance("vendor_assay", tmp_path) == "installed"
+     assert "loadable_tpl" not in sys.modules
+ 
+     assert get_template("vendor_assay", tmp_path) is None
+     assert "loadable_tpl" not in sys.modules
+ 
++    # The claim that survives, said in the terms the documents now carry: a NAME
++    # is answered from metadata. Loading is a separate, named operation, and this
++    # is the control proving the fixture CAN import — without it every assertion
++    # above holds for a target that simply cannot be imported at all.
++    from publishable.plugins import load_entry_point, scan_group
++
++    ep = scan_group("publishable.templates")["vendor_assay"][0]
++    try:
++        assert load_entry_point(ep).__name__ == "T"
++        assert "loadable_tpl" in sys.modules
++    finally:
++        sys.modules.pop("loadable_tpl", None)
++
+ 
+ def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
+     """The direct question, asked where all three sources are in hand.
+ 
+     All three values in one arrangement, because a fixture with two could not
+     tell a three-valued answer from a boolean one renamed.
+     """
+     templates = tmp_path / "templates"
+     templates.mkdir()
+     (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
+diff --git a/tests/test_units.py b/tests/test_units.py
+index 44dc95b..728d388 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -1,11 +1,13 @@
+ # tests/test_units.py
++import importlib
++import sys
+ from collections import Counter
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import ContractError
+ from publishable.units import (
+     DRAWN_ASSIGN_METHODS,
+     HOLDOUT_METHODS_REALIZED,
+     ArmPlan,
+@@ -3630,10 +3632,91 @@ def test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest():
+     assert holdout_seed_for({}, "sha256:aaa", _roster(10)) != _seed_from("sha256:aaa")
+ 
+ 
+ def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
+     """The other neighbour, and the one whose construction this copies: same
+     digest, same roster, different suffix."""
+     roster = _roster(10)
+     assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
+         {}, "holdout", "sha256:aaa", roster
+     )
++
++
++def test_an_unregistered_resolver_name_is_refused_from_metadata_alone(installed, registries):
++    """`E-RESOLVER-UNKNOWN`, and the message names what it did find — the ordinary
++    cause is a spelling and the ordinary remedy is reading the list."""
++    from publishable.errors import ContractError
++    from publishable.units import _resolver_for
++
++    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:resolve"}})
++    with pytest.raises(ContractError) as excinfo:
++        _resolver_for("plate_welz")
++    assert excinfo.value.code == "E-RESOLVER-UNKNOWN"
++    assert "plate_welz" in str(excinfo.value)
++    assert "plate_wells" in str(excinfo.value)  # the list it names
++
++
++def test_a_registered_resolver_name_loads_the_object_behind_it(installed, registries, tmp_path):
++    """THE HONOURING. Without this, a `_resolver_for` returning `None` for every
++    name would pass every refusal test above and below it."""
++    from publishable.units import _resolver_for
++
++    site = installed(
++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_r24:resolve"}}
++    )
++    (site / "loadable_r24.py").write_text(
++        "from publishable import register_resolver\n\n\n"
++        '@register_resolver("plate_wells")\n'
++        "def resolve(io, cfg):\n    return ['loaded']\n"
++    )
++    importlib.invalidate_caches()
++    try:
++        assert _resolver_for("plate_wells")(None, None) == ["loaded"]
++    finally:
++        sys.modules.pop("loadable_r24", None)
++
++
++def test_a_resolver_whose_module_raises_is_contained_as_a_plugin_load(installed, registries):
++    """`E-PLUGIN-LOAD`'s first production caller. The distribution is named rather
++    than the module, since a distribution is what a reader uninstalls or pins."""
++    from publishable.errors import ContractError
++    from publishable.units import _resolver_for
++
++    site = installed(
++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "broken_r24:resolve"}}
++    )
++    (site / "broken_r24.py").write_text("raise RuntimeError('module scope blew up')\n")
++    importlib.invalidate_caches()
++    try:
++        with pytest.raises(ContractError) as excinfo:
++            _resolver_for("plate_wells")
++    finally:
++        sys.modules.pop("broken_r24", None)
++    assert excinfo.value.code == "E-PLUGIN-LOAD"
++    assert "dist-one 1.0" in str(excinfo.value)
++
++
++def test_a_decorator_argument_disagreeing_with_the_entry_point_key_is_refused(
++    installed, registries
++):
++    """`E-PLUGIN-DECORATOR`'s first production caller, and decision 4's siting:
++    the object is in hand at `validate`, so the disagreement is knowable there."""
++    from publishable.errors import ContractError
++    from publishable.units import _resolver_for
++
++    site = installed(
++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "misnamed_r24:resolve"}}
++    )
++    (site / "misnamed_r24.py").write_text(
++        "from publishable import register_resolver\n\n\n"
++        '@register_resolver("plate_positions")\n'
++        "def resolve(io, cfg):\n    return []\n"
++    )
++    importlib.invalidate_caches()
++    try:
++        with pytest.raises(ContractError) as excinfo:
++            _resolver_for("plate_wells")
++    finally:
++        sys.modules.pop("misnamed_r24", None)
++    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
++    assert "plate_wells" in str(excinfo.value)
++    assert "plate_positions" in str(excinfo.value)
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index d491a7b..6209a1c 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1,11 +1,13 @@
+ # tests/test_validate.py
++import importlib
++import sys
+ from pathlib import Path
+ 
+ import pytest
+ import yaml
+ from tests.conftest import write_experiment_module
+ 
+ from publishable.diagnostics import Collector
+ from publishable.sweep import expand
+ from publishable.units import Unit, UnitList, assignment_for
+ from publishable.validate import (
+@@ -135,20 +137,54 @@ def codes(path: Path) -> set[str]:
+     validate_config(path, c)
+     return {f.code for f in c.findings}
+ 
+ 
+ def messages_by_code(path: Path) -> dict[str, str]:
+     c = Collector()
+     validate_config(path, c)
+     return {f.code: f.message for f in c.findings}
+ 
+ 
++def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
++    installed, registries, write_config
++):
++    """The narrowed invariant, pinned where it can actually die.
++
++    The two tests that pinned the old, wider claim sit at `scan_group` and
++    `get_template`; neither breaks if `validate` loads a resolver at the wrong
++    moment. This one does: the distribution is installed and its target genuinely
++    imports, and the config's `data.units.from` is a table, so nothing about this
++    config needs the object behind `plate_wells`. A `validate` that loaded the
++    group unconditionally — or loaded before deciding what shape `from` is —
++    turns this red.
++
++    Its positive companion is task 24's
++    `test_a_resolver_source_loads_the_object_behind_the_name`, which asserts the
++    module IS present for a config that names one. Without that half, this test
++    would pass on a `validate` that had no resolver path at all.
++    """
++    site = installed(
++        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_units:resolve"}}
++    )
++    (site / "loadable_units.py").write_text(
++        "from publishable import register_resolver\n\n\n"
++        '@register_resolver("plate_wells")\n'
++        "def resolve(io, cfg):\n    return []\n"
++    )
++    importlib.invalidate_caches()
++    try:
++        assert codes(write_config()) == set()
++        assert "loadable_units" not in sys.modules
++    finally:
++        sys.modules.pop("loadable_units", None)
++
++
+ def _validate_with(tmp_path: Path, overrides: dict) -> list:
+     """Write a scaffolded config with `overrides` deep-merged over `base_config`,
+     then return `validate_config`'s findings.
+ 
+     `test_validate.py` has no existing helper of this exact shape: every other
+     test in this file goes through the `write_config` fixture, which requires
+     `git_repo` (a real git repo, so `data.output_dir` can be checked against it)
+     and only accepts *dotted-leaf* overrides whose parent already exists in
+     `base_config`. The two tests this helper serves need to replace a whole
+     block (`metadata`, `data`) with a wrong-typed value, and don't need a repo —

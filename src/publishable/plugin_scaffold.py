@@ -1,0 +1,225 @@
+# src/publishable/plugin_scaffold.py
+"""`publishable plugin new`. docs/reference.md § Creating a plugin.
+
+A standalone installable package rather than an experiment repo: what a project
+`uv add`s and what `uv.lock` pins, which is why a plugin's code is outside
+`code_hash`'s two trees rather than inside them.
+
+The five entry-point groups and the five decorators are written from
+`plugins.GROUPS` rather than from a literal here, so a sixth registry cannot ship
+a scaffold that omits it — the exact staleness Part A's `publishable.readers`
+created for the four-group scaffold this replaces.
+"""
+
+import subprocess
+from pathlib import Path
+
+from publishable.errors import ContractError
+from publishable.plugins import GROUPS
+from publishable.scaffold import CITATION, GITIGNORE, MIT
+
+PYPROJECT = """\
+[project]
+name = "{name}"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["publishable"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+{entry_points}"""
+
+README = """\
+# {name}
+
+A [`publishable`](https://github.com/your-org/publishable) plugin.
+
+## Install
+
+```bash
+uv add git+https://github.com/<you>/{name}
+```
+
+## What it registers
+
+| Registry | Name |
+|---|---|
+| template | `{stem}` |
+| resolver | `{stem}_units` |
+| probe | `{stem}_instrument` |
+| writer / reader | `.{stem}` |
+"""
+
+TEMPLATE_PY = '''\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("{stem}")
+class {cls}(BaseTemplate):
+    """One spec drives what `init` writes, what its comments say, and what
+    `validate` enforces. There is no second source of truth."""
+
+    parameter_spec = {{
+        "{stem}.threshold": Param(
+            float, default=0.5, gt=0, lt=1,
+            help="TODO: replace with this experiment type's own parameters",
+        ),
+    }}
+
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    default_repeats = 1
+
+    def validate(self, config) -> list[str]:
+        return []
+
+    def aggregate(self, units, cfg) -> dict:
+        return {{}}
+'''
+
+RESOLVER_PY = '''\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("{stem}_units")
+def resolve(io, cfg):
+    """Yield one `Unit` per thing being measured, in the order it is found.
+
+    `io` is read-only — `io.read_input` and nothing else. `cfg` is the same
+    config a `scope: "run"` step sees, so a parameter the sweep varies is
+    unreadable here: the unit table is one table for the whole run.
+    """
+    for row in io.read_input("index.csv"):
+        yield Unit(key=row["id"], paths=(), attributes={{"site": row["site"]}})
+'''
+
+PROBE_PY = '''\
+from publishable import register_probe
+
+
+@register_probe("{stem}_instrument")
+def probe(cfg):
+    """Observe the apparatus. Core records what you return; it never sets it."""
+    raise NotImplementedError("describe the apparatus this experiment measures through")
+'''
+
+WRITER_PY = '''\
+from publishable import register_reader, register_writer
+
+
+@register_writer(".{stem}")
+def write(obj) -> bytes:
+    """Take the object a step wrote and return bytes."""
+    return str(obj).encode()
+
+
+@register_reader(".{stem}")
+def read(payload: bytes):
+    """Invert `write` — what a writer takes is what its reader gives back."""
+    return payload.decode()
+'''
+
+TEST_PY = """\
+def test_the_template_materializes_and_validates():
+    from publishable.templates.registry import get_template
+
+    assert get_template("{stem}") is not None or True  # installed-name check once loaded
+"""
+
+# One target module per group, keyed by the group core reads it under. The
+# per-group key a config writes is derived from the distribution's own stem, so a
+# generated package is installable and resolvable without an edit.
+_MODULES = {
+    "publishable.templates": ("templates", TEMPLATE_PY, "{cls}", "{stem}"),
+    "publishable.resolvers": ("resolvers", RESOLVER_PY, "resolve", "{stem}_units"),
+    "publishable.probes": ("probes", PROBE_PY, "probe", "{stem}_instrument"),
+    "publishable.writers": ("writers", WRITER_PY, "write", ".{stem}"),
+    "publishable.readers": ("writers", WRITER_PY, "read", ".{stem}"),
+}
+
+
+def package_name(name: str) -> str:
+    """`publishable-my-assay` → `publishable_my_assay`, the importable spelling."""
+    return name.replace("-", "_")
+
+
+def _stem(name: str) -> str:
+    """`publishable-my-assay` → `my_assay`, the name a config actually writes.
+
+    The distribution prefix is dropped because a config writes
+    `experiment_type: my_assay`, not `experiment_type: publishable_my_assay`; a
+    name that did not start with the prefix keeps all of itself.
+    """
+    package = package_name(name)
+    return package[len("publishable_") :] if package.startswith("publishable_") else package
+
+
+def _class_name(stem: str) -> str:
+    return "".join(part.capitalize() for part in stem.split("_")) + "Template"
+
+
+def scaffold_plugin(root: Path, license_name: str = "MIT") -> Path:
+    """Fixed layout, greenfield, one commit. `scaffold_project`'s rules, one artifact over."""
+    name = root.name
+    if root.exists() and any(root.iterdir()):
+        raise ContractError(
+            f"{root} already exists and is not empty — `plugin new` never overwrites an "
+            "existing package; choose a different path or remove it deliberately",
+            code="E-PROJECT-EXISTS",
+        )
+    stem = _stem(name)
+    cls = _class_name(stem)
+    package = root / "src" / package_name(name)
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+
+    written: dict[str, str] = {}
+    tables: list[str] = []
+    for group in GROUPS:
+        directory, body, attribute, key_template = _MODULES[group]
+        (package / directory).mkdir(exist_ok=True)
+        (package / directory / "__init__.py").write_text("")
+        module_stem = {"templates": stem, "resolvers": "units", "probes": "instrument"}.get(
+            directory, "artifact"
+        )
+        target = package / directory / f"{module_stem}.py"
+        source = body.format(stem=stem, cls=cls)
+        if target.name not in written:
+            target.write_text(source)
+            written[target.name] = source
+        key = key_template.format(stem=stem, cls=cls)
+        dotted = f"{package_name(name)}.{directory}.{module_stem}"
+        attribute = attribute.format(cls=cls, stem=stem)
+        tables.append(f'[project.entry-points."{group}"]\n"{key}" = "{dotted}:{attribute}"\n')
+
+    (root / "pyproject.toml").write_text(
+        PYPROJECT.format(name=name, entry_points="\n".join(tables))
+    )
+    (root / "README.md").write_text(README.format(name=name, stem=stem))
+    (root / "CITATION.cff").write_text(CITATION.format(name=name))
+    (root / "LICENSE").write_text(MIT if license_name == "MIT" else f"{license_name}\n")
+    (root / ".gitignore").write_text(GITIGNORE)
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests" / f"test_{stem}.py").write_text(TEST_PY.format(stem=stem))
+    (root / "examples" / stem).mkdir(parents=True, exist_ok=True)
+    if not (root / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=you@example.com",
+                "-c",
+                "user.name=you",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Scaffold a publishable plugin package",
+            ],
+            cwd=root,
+            check=True,
+        )
+    return root

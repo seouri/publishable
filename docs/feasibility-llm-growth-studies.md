@@ -1060,6 +1060,73 @@ point and none can until a plugin is installed. The claims above are about the b
 verified against the merged tree rather than carried from the plan.
 
 
+### Measured on 2026-08-17 against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2` — after H7b Part B
+
+H7b **Part B** is complete on its branch at the commit above and retires `E-DATA-RESOLVER-UNSUPPORTED`. This is the
+first re-measurement in this section to actually **run** every one of the nine configs' `data`/
+`statistics` blocks through `validate_config`, rather than re-deriving from emit sites or extending a
+prior grep — the same discipline the 2026-08-16 (H3d) entry set and the one this entry's own
+qualifications below narrow in the same direction the others have.
+
+**H7b Part B retires one refusal that 9 of 9 configs hit** (`E-DATA-RESOLVER-UNSUPPORTED`), **and
+three experiments — E1, E2 and E5 — have no remaining core-side blocker.** That is the first
+non-zero executable count this project has produced. It is conditional on the plugin being written
+and installed (`plugin new` scaffolds it; a hand-written package works, and this measurement uses
+one), and on accepting that a declared apparatus probe is neither executed nor recorded — the
+false `apparatus: null` record filed separately below. Six stay blocked, on two causes neither of
+which is H7b's: `io.reuse_from` (unbuilt, **unowned**) for E3, E4 and E6, and `E-DATA-WEIGHT-CONTRAST`
+(H4b) for C1, C2 and C3.
+
+**Scope, narrowed the same way the 2026-08-16 entry narrowed it, and for the same reason.**
+`entrypoint`/`experiment_type` point at this repo's own scaffolded `generic` demo — no
+`growth_screen`/`growth_shortcut` plugin exists to install — but `data.units.from` is the **real**
+`{resolver: patient_trajectory}` declaration this time, resolved by a hand-written resolver plugin
+installed for this measurement (60 synthetic units carrying every attribute any of the nine configs
+name). `data.units` and `statistics` were carried over from the YAML shown above verbatim for the six
+screening runs and the three shortcut runs. `sweep`, `parameters`, `replication` and `hypotheses`
+were **not** carried over, for the identical reason the earlier entry gives: the demo entrypoint
+declares neither the real parameter names nor the real steps a real hypothesis names. E2's baseline
+and C1's baseline, and C2/C3's one stand-in `statistics.contrasts` entry each, are declared over the
+demo template's own `analysis.method` axis rather than the real one — the same substitution the
+2026-08-16 entry made for the identical reason, checking whether the *combination* (`weight_by`
+beside a resolved comparison) is refused, not the real design's own labels.
+
+| Config | `validate` reports on the transplanted `data`/`statistics` blocks | Would execute? |
+|---|---|---|
+| E1 | *(none)* | **Yes** — no remaining core-side blocker |
+| E2 | *(none)* | **Yes** — no remaining core-side blocker |
+| E3 | *(none)* | No — blocked on `io.reuse_from` (invisible to `validate`; a step-level call) |
+| E4 | *(none)* | No — blocked on `io.reuse_from` |
+| E5 | *(none)* | **Yes** — no remaining core-side blocker |
+| E6 | *(none)* | No — blocked on `io.reuse_from` |
+| C1 | `E-DATA-WEIGHT-CONTRAST` | No — H4b's |
+| C2 | `E-DATA-WEIGHT-CONTRAST` | No — H4b's |
+| C3 | `E-DATA-WEIGHT-CONTRAST` | No — H4b's |
+
+Every one of the nine also reports `W-DATA-CLUSTER-UNDECLARED`, left out of the table for the same
+reason the 2026-08-16 entry excluded its own warning: it is an artifact of the synthetic resolver's
+three-band `age_band`/`count_stratum` shape, not of a real roster, and it bears on none of the codes
+this table answers for.
+
+**The mutation this table rests on, re-run rather than carried.** E1's clean validation was proven
+discriminating again at this build: setting `data.units.holdout.frac` to `0` on the otherwise-clean
+block immediately produces `E-DATA-HOLDOUT-FRAC`, and reverting the field restores the zero-error
+result. A block that could not fail this way would not be a measurement.
+
+**What this measurement does not settle.** Whether E3, E4 and E6's `data`/`statistics` blocks are
+the *only* thing standing between them and `run` is not answered here — `io.reuse_from` is a step-level
+call invisible to any config, so a clean `validate` result is necessary and not sufficient for those
+three, exactly as the 2026-08-16 entry found for the identical reason. The same limit cuts the other
+way for E1, E2 and E5: a clean `validate` is not sufficient to establish "no remaining core-side
+blocker" for them either, and their "Yes" rests on reading each design's prose for other unbuilt
+dependencies — the same check the three "No" rows needed and got, not on `validate`'s silence. Nothing
+about the apparatus probe's execution is exercised either: none of the nine configs used here declares
+one, since the demo entrypoint carries no `apparatus_probe`.
+
+Full local `pytest`/`ruff`/`mypy` gates at this commit: 2102 passed + 1 skipped + 2 xfailed, ruff and
+mypy both clean.
+
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.

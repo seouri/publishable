@@ -4,7 +4,24 @@ import sys
 
 import pytest
 
-from publishable.plugins import GROUPS, names, provider_of, scan_group
+from publishable.plugins import (
+    GROUPS,
+    declared_names,
+    load_entry_point,
+    names,
+    provider_of,
+    scan_group,
+)
+
+
+def test_versions_for_names_the_distribution_a_reader_would_pin(installed):
+    """A distribution and its version, because that is what `uv.lock` pins and
+    what a reader uninstalls — not a module path, which pins nothing."""
+    from publishable.plugins import versions_for
+
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:resolve"}})
+    assert versions_for("publishable.resolvers", "plate_wells") == {"dist-one": "1.0"}
+    assert versions_for("publishable.resolvers", "not_registered") == {}
 
 
 def test_the_groups_core_reads_are_the_five_the_document_declares():
@@ -87,22 +104,32 @@ def test_names_are_sorted_and_the_sort_is_not_the_install_order(installed):
     assert names("publishable.resolvers") == ["aa_second", "mm_third", "zz_first"]
 
 
-def test_the_scan_imports_nothing(installed):
-    """The whole argument for entry points, asserted rather than described.
+def test_the_scan_imports_nothing(installed, registries):
+    """The whole argument for entry points, asserted rather than described, and
+    narrowed to the claim that is actually true.
+
+    **A NAME resolves from package metadata without importing** — that is
+    § Creating a plugin's guarantee and the whole of it. `validate` does import a
+    plugin once it needs the object behind a name: a resolver runs at `validate`,
+    which is § Where units come from's design.
 
     The target is a module that **does** import, and the assertion is that it is
-    absent from `sys.modules` after the scan. That is the only shape that
-    catches a load: against a target that cannot import, a scan calling
+    absent from `sys.modules` after every name-answering call. That is the only
+    shape that catches a load: against a target that cannot import, a scan calling
     `.load()` inside a bare `except` returns normally and every assertion still
-    holds — verified by mutation, which is how this test was rewritten. The
-    trailing `.load()` is the positive control: the same object does resolve,
-    and resolving it is exactly what puts the module in `sys.modules`, so the
-    absence above is a fact about the scan rather than about the fixture.
+    holds. `load_entry_point` is the positive control and is the production import
+    path rather than a bare `.load()`, so this test states the boundary in the
+    terms the code uses: everything that answers a name imports nothing;
+    `load_entry_point` imports, by name.
     """
     site = installed(
         "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_probe:resolve"}}
     )
-    (site / "loadable_probe.py").write_text("def resolve():\n    return []\n")
+    (site / "loadable_probe.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    return []\n"
+    )
     importlib.invalidate_caches()
     assert "loadable_probe" not in sys.modules
 
@@ -110,9 +137,14 @@ def test_the_scan_imports_nothing(installed):
     assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
     assert "loadable_probe" not in sys.modules
 
+    assert names("publishable.resolvers") == ["plate_wells"]
+    assert "loadable_probe" not in sys.modules
+
     try:
-        assert found["plate_wells"][0].load()() == []
+        loaded = load_entry_point(found["plate_wells"][0])
+        assert loaded(None, None) == []
         assert "loadable_probe" in sys.modules
+        assert declared_names("publishable.resolvers", loaded) == ["plate_wells"]
     finally:
         sys.modules.pop("loadable_probe", None)
 

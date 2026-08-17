@@ -1,4 +1,6 @@
 # tests/test_units.py
+import importlib
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -130,6 +132,20 @@ def test_a_missing_table_is_refused(input_dir: Path):
     with pytest.raises(ContractError) as e:
         resolve_units({"from": "absent.csv", "key": "patient_id"}, input_dir)
     assert e.value.code == "E-UNITS-SOURCE-MISSING"
+
+
+def test_a_wrong_typed_source_names_both_alternatives_without_doubled_braces(input_dir: Path):
+    """`data.units.from` that is neither a string nor a `glob`/`resolver` mapping
+    must render both alternatives as single braces — the continuation is an
+    f-string specifically so `{{resolver: ...}}` unescapes to `{resolver: ...}`,
+    matching `{glob: ...}` in the same sentence rather than rendering literal
+    doubled braces."""
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": 42, "key": "patient_id"}, input_dir)
+    assert e.value.code == "E-UNITS-SOURCE-MISSING"
+    assert str(e.value) == (
+        "`data.units.from` is 42; expected a table name, {glob: ...}, or {resolver: ...}"
+    )
 
 
 def test_duplicate_keys_are_refused_naming_the_offender(input_dir: Path):
@@ -3637,3 +3653,545 @@ def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
     assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
         {}, "holdout", "sha256:aaa", roster
     )
+
+
+def test_an_unregistered_resolver_name_is_refused_from_metadata_alone(installed, registries):
+    """`E-RESOLVER-UNKNOWN`, and the message names what it did find — the ordinary
+    cause is a spelling and the ordinary remedy is reading the list."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:resolve"}})
+    with pytest.raises(ContractError) as excinfo:
+        _resolver_for("plate_welz")
+    assert excinfo.value.code == "E-RESOLVER-UNKNOWN"
+    assert "plate_welz" in str(excinfo.value)
+    assert "plate_wells" in str(excinfo.value)  # the list it names
+
+
+def test_a_registered_resolver_name_loads_the_object_behind_it(installed, registries, tmp_path):
+    """THE HONOURING. Without this, a `_resolver_for` returning `None` for every
+    name would pass every refusal test above and below it."""
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_r24:resolve"}}
+    )
+    (site / "loadable_r24.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    return ['loaded']\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        assert _resolver_for("plate_wells")(None, None) == ["loaded"]
+    finally:
+        sys.modules.pop("loadable_r24", None)
+
+
+def test_a_resolver_whose_module_raises_is_contained_as_a_plugin_load(installed, registries):
+    """`E-PLUGIN-LOAD`'s first production caller. The distribution is named rather
+    than the module, since a distribution is what a reader uninstalls or pins."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "broken_r24:resolve"}}
+    )
+    (site / "broken_r24.py").write_text("raise RuntimeError('module scope blew up')\n")
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("broken_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert "dist-one 1.0" in str(excinfo.value)
+
+
+def test_a_decorator_argument_disagreeing_with_the_entry_point_key_is_refused(
+    installed, registries
+):
+    """`E-PLUGIN-DECORATOR`'s first production caller, and decision 4's siting:
+    the object is in hand at `validate`, so the disagreement is knowable there."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "misnamed_r24:resolve"}}
+    )
+    (site / "misnamed_r24.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_positions")\n'
+        "def resolve(io, cfg):\n    return []\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("misnamed_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
+    assert "plate_wells" in str(excinfo.value)
+    assert "plate_positions" in str(excinfo.value)
+
+
+def test_a_core_suffix_claim_at_import_time_is_recoded_as_plugin_load(installed, registries):
+    """Pins `spec-defects.md`'s CLOSED entry on the `E-PLUGIN-COLLISION` ->
+    `E-PLUGIN-LOAD` substitution: `register_writer`/`register_reader` raise
+    `E-PLUGIN-COLLISION` directly, but reached from inside a module
+    `load_entry_point` is importing, its own broad `except Exception` catches
+    that `ContractError` like any other failure and re-reports it as
+    `E-PLUGIN-LOAD` — the same substitution `E-TEMPLATE-LOAD` already makes for
+    a coded error from a local template's top level. Without this test, that
+    substitution was accurate but asserted by nothing."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "collides_r24:resolve"}}
+    )
+    (site / "collides_r24.py").write_text(
+        "from publishable import register_writer\n\n\n"
+        '@register_writer(".csv")\n'
+        "def write(obj):\n    return b''\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("collides_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert ".csv" in str(excinfo.value)
+
+
+def _install_resolver(installed, tmp_path, module: str, body: str):
+    """One installed distribution whose `publishable.resolvers` entry point points
+    at a module this writes. Returns nothing: every caller pops `module` from
+    `sys.modules` in its own `finally`, because a real import leaks and Part A's
+    fixtures deliberately could not import at all."""
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(body)
+    importlib.invalidate_caches()
+
+
+_YIELDS_TWO = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    for row in io.read_input("layout.csv"):
+        yield Unit(
+            key=row["barcode"] + ":" + row["well"],
+            paths=(row["read"],),
+            attributes={"operator": row["operator"]},
+        )
+"""
+
+
+def test_a_resolver_source_yields_the_roster_in_yield_order(installed, registries, tmp_path):
+    """THE HONOURING, and the property `units_hash` and `assign.method: blocked`
+    both rest on: yield order is the resolved order. The fixture's rows are
+    deliberately NOT in sorted key order, so a dispatch that sorted — the way
+    `_from_glob` must — comes out different rather than identical."""
+    from publishable.artifacts import ResolverIO
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    (tmp_path / "layout.csv").write_text(
+        "barcode,well,read,operator\nB9,h3,reads/b9.fq,mo\nA1,c2,reads/a1.fq,kj\n"
+    )
+    _install_resolver(installed, tmp_path, "yielding_r25", _YIELDS_TWO)
+    try:
+        roster, technical_n, columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["operator"]},
+            tmp_path,
+            cfg=Config({}),
+            resolver_io=ResolverIO(tmp_path),
+        )
+    finally:
+        sys.modules.pop("yielding_r25", None)
+
+    assert [u.key for u in roster] == ["B9:h3", "A1:c2"]
+    assert [u.paths for u in roster] == [("reads/b9.fq",), ("reads/a1.fq",)]
+    assert technical_n is None
+    assert columns == frozenset({"operator"})
+
+
+def test_a_resolver_yielding_something_that_is_not_a_unit_is_refused(
+    installed, registries, tmp_path
+):
+    """`E-RESOLVER-YIELD`. A resolver is the second place user code runs inside
+    resolution, and `validate` is contracted never to raise — without this a
+    yielded mapping reaches `u.key` as an `AttributeError` escaping `validate`."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "wrongyield_r25",
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    yield {'key': 'a1'}\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=Config({})
+            )
+    finally:
+        sys.modules.pop("wrongyield_r25", None)
+    assert excinfo.value.code == "E-RESOLVER-YIELD"
+    assert "dict" in str(excinfo.value)
+
+
+def test_a_resolver_source_reached_with_no_cfg_refuses_rather_than_crashing(
+    installed, registries, tmp_path
+):
+    """Decision 6's named price. `cfg` is a defaulted keyword so ~60 existing call
+    sites keep compiling, which makes `cfg=None` a reachable state rather than a
+    hypothetical — core's resolved state disagreeing with itself, reported under
+    the row that family already has."""
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "nocfg_r25", _YIELDS_TWO)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path)
+    finally:
+        sys.modules.pop("nocfg_r25", None)
+    assert excinfo.value.code == "E-RUN-RESOLVER-UNCONFIGURED"
+
+
+def test_a_table_source_still_resolves_with_no_cfg(tmp_path):
+    """THE CONTROL for the refusal above: the defaulted keyword must not have
+    turned every existing caller into a refusal. Without this, a `cfg is None`
+    guard placed one branch too high would pass every test in this file that
+    passes a `cfg` and break every one that does not."""
+    from publishable.units import resolve_units
+
+    (tmp_path / "index.csv").write_text("patient_id\np1\np2\n")
+    roster, _technical_n, columns = resolve_units(
+        {"from": "index.csv", "key": "patient_id"}, tmp_path
+    )
+    assert [u.key for u in roster] == ["p1", "p2"]
+    assert columns == frozenset({"patient_id"})
+
+
+def test_a_mis_encoded_table_is_recoded_to_source_unreadable(tmp_path):
+    """`_from_table` opens a file this repo does not control the contents of —
+    a CSV that is not valid UTF-8 raises `UnicodeDecodeError` out of
+    `csv.DictReader`, not a `ContractError`. `resolve_units` recodes it to
+    `E-UNITS-SOURCE-UNREADABLE` rather than letting it escape as the raw
+    stdlib exception. Pinned here because the fix round that introduced this
+    code shipped it with no test — a mutation reverting the recode to
+    `E-RESOLVER-RAISED`, or removing the `except Exception` arm entirely and
+    letting `UnicodeDecodeError` escape, both must fail this test."""
+    from publishable.units import resolve_units
+
+    (tmp_path / "index.csv").write_bytes(b"patient_id\n\xff\xfe\n")
+    with pytest.raises(ContractError) as excinfo:
+        resolve_units({"from": "index.csv", "key": "patient_id"}, tmp_path)
+    assert excinfo.value.code == "E-UNITS-SOURCE-UNREADABLE"
+    assert "index.csv" in str(excinfo.value)
+
+
+def test_an_absolute_glob_is_recoded_to_source_unreadable(tmp_path):
+    """`Path.glob` raises `NotImplementedError` for an absolute pattern rather
+    than a `ContractError` — `resolve_units` recodes it, at the glob branch,
+    into the same identifier the table branch above uses. Pinned for the
+    identical reason: the fix round shipped this recode with no test."""
+    from publishable.units import resolve_units
+
+    with pytest.raises(ContractError) as excinfo:
+        resolve_units({"from": {"glob": "/etc/*.conf"}, "key": "path"}, tmp_path)
+    assert excinfo.value.code == "E-UNITS-SOURCE-UNREADABLE"
+    assert "/etc/*.conf" in str(excinfo.value)
+
+
+_YIELDS_PARTIAL = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="a1", attributes={"operator": "kj", "plate": "P1", "scratch": "x"})
+    yield Unit(key="b9", attributes={"operator": "mo", "plate": "P1"})
+"""
+
+
+def test_a_resolver_roster_is_projected_onto_the_declared_attributes(
+    installed, registries, tmp_path
+):
+    """Everything downstream is indifferent to which form `from` took, and this is
+    what makes it so: an undeclared attribute is dropped exactly as an undeclared
+    CSV column is. `scratch` is yielded and not declared; asserting only that
+    `operator` survives would pass on a pass-through implementation."""
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "project_r27", _YIELDS_PARTIAL)
+    try:
+        roster, _n, columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["operator"]},
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("project_r27", None)
+
+    assert [dict(u.attributes) for u in roster] == [{"operator": "kj"}, {"operator": "mo"}]
+    assert columns == frozenset({"operator", "plate", "scratch"})  # pre-projection, for task 28
+
+
+def test_a_declared_attribute_no_unit_yields_is_refused_naming_the_resolver(
+    installed, registries, tmp_path
+):
+    """`E-UNITS-ATTR-MISSING`, generalized past "which index.csv does not have".
+    The message must name the resolver, or a reader is sent looking for a column
+    in a file that has nothing to do with the fault."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "missing_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["operator", "site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("missing_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-MISSING"
+    assert "'site'" in str(excinfo.value)
+    assert "plate_wells" in str(excinfo.value)
+    assert "index.csv" not in str(excinfo.value)
+
+
+def test_a_name_only_some_units_yield_is_not_missing(installed, registries, tmp_path):
+    """THE DISCRIMINATOR between the union and the intersection. `scratch` is
+    carried by one of the two units; declaring it must resolve, with the unit that
+    lacks it simply carrying no value — a table column that some rows leave blank
+    behaves the same way. Without this fixture, union and intersection are the
+    same answer and the choice is untested."""
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "sparse_r27", _YIELDS_PARTIAL)
+    try:
+        roster, _n, _columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["scratch"]},
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("sparse_r27", None)
+    assert [dict(u.attributes) for u in roster] == [{"scratch": "x"}, {}]
+
+
+def test_a_reserved_attribute_name_is_refused_before_a_missing_one(installed, registries, tmp_path):
+    """One declaration, one code, whichever source it sits under: `_from_table` and
+    `_from_glob` both check reserved before unsourced, and a resolver must not
+    invert that. `paths` is reserved AND unyielded, so a wrong order gives
+    `E-UNITS-ATTR-MISSING` instead."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "reserved_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["paths"]},
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("reserved_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-RESERVED"
+
+
+def test_a_non_string_attribute_under_a_resolver_is_refused_not_a_crash(
+    installed, registries, tmp_path
+):
+    """`resolve_units` is contracted never to escape with a bare `TypeError`.
+    An unhashable declared attribute (a `dict`) would hit `attribute not in
+    yielded`, which hashes it against a `set`, if the type guard were removed —
+    reported as `E-UNITS-ATTR-MISSING` instead, the same identifier the table
+    source's own non-string-item guard uses."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "unhashable_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": [{"operator": 1}],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("unhashable_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-MISSING"
+
+
+_READS_A_PARAM = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key=str(cfg.parameters.analysis.method))
+"""
+
+
+def test_a_resolver_reading_a_swept_parameter_is_refused_under_its_own_code(
+    installed, registries, tmp_path
+):
+    """`E-RESOLVER-SWEPT-PARAM`, not `E-STEP-SWEPT-PARAM`: the mechanism is shared
+    and the fault is not — a reader holding the step's identifier is sent to a
+    section describing a different fault at a different time."""
+    from publishable.errors import ContractError
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "swept_r29", _READS_A_PARAM)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg)
+    finally:
+        sys.modules.pop("swept_r29", None)
+    assert excinfo.value.code == "E-RESOLVER-SWEPT-PARAM"
+    assert "plate_wells" in str(excinfo.value)
+    assert "analysis.method" in str(excinfo.value)
+
+
+def test_a_resolver_reading_a_swept_parameter_gets_no_impossible_remedy(
+    installed, registries, tmp_path
+):
+    """M1: `E-STEP-SWEPT-PARAM`'s own message ends in a remedy written for a
+    step ("read it from a `condition`- or `repeat`-scoped step") — a resolver
+    has no scope to move to, so that remedy must not survive into
+    `E-RESOLVER-SWEPT-PARAM`'s message. Pinned because the fix round that
+    dropped it shipped with no test: reverting `_from_resolver`'s
+    `str(exc).split(";", 1)[0]` back to `str(exc)` would let the whole
+    original message — remedy included — through unchanged, and nothing
+    before this test would catch that."""
+    from publishable.errors import ContractError
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "swept_r29b", _READS_A_PARAM)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg)
+    finally:
+        sys.modules.pop("swept_r29b", None)
+    message = str(excinfo.value)
+    assert "scoped step" not in message  # the step-only remedy `E-STEP-SWEPT-PARAM` carries
+    assert "Read a parameter the sweep leaves alone" in message
+
+
+def test_a_resolver_reading_a_parameter_the_sweep_leaves_alone_resolves(
+    installed, registries, tmp_path
+):
+    """THE CONTROL, and § Where units come from's own sentence: "Parameters the
+    sweep leaves alone are fair game, which is how a resolver is told which assay,
+    panel, or shard to include." Without it, a refusal that fired for every `cfg`
+    read would pass the test above."""
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.min_samples": [10, 20]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "unswept_r29", _READS_A_PARAM)
+    try:
+        roster, _n, _columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg
+        )
+    finally:
+        sys.modules.pop("unswept_r29", None)
+    assert [u.key for u in roster] == ["pearson"]
+
+
+def test_a_resolvers_own_coded_refusal_keeps_its_own_identifier(installed, registries, tmp_path):
+    """Only the sentinel read is re-coded. A resolver reading a file that is not
+    there gets `E-UNITS-SOURCE-MISSING`'s cousin from `io`, and re-coding
+    everything would tell a reader their sweep was at fault."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "coded_r29",
+        "from publishable import ContractError, Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    raise ContractError('nope', code='E-UNITS-EMPTY')\n"
+        "    yield Unit(key='a1')\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=Config({})
+            )
+    finally:
+        sys.modules.pop("coded_r29", None)
+    assert excinfo.value.code == "E-UNITS-EMPTY"
+
+
+def test_index_names_covers_every_source_shape(tmp_path):
+    """One expression, three sources: the source's own file where it names one,
+    plus every path its units name. A table names its index and no paths; a glob
+    names no index and one path per unit; a resolver names what it read and
+    whatever its units carry. Asserted together, because shipping two of the three
+    is how the glob case would be left at `sha256: None` silently."""
+    from publishable.units import Unit, UnitList, index_names
+
+    table = UnitList([Unit(key="p1"), Unit(key="p2")])
+    globbed = UnitList([Unit(key="a.dcm", paths=("a.dcm",)), Unit(key="b.dcm", paths=("b.dcm",))])
+    resolved = UnitList([Unit(key="a1", paths=("reads/a1.fq",))])
+
+    assert index_names({"from": "index.csv"}, table) == {"index.csv"}
+    assert index_names({"from": {"glob": "*.dcm"}}, globbed) == {"a.dcm", "b.dcm"}
+    assert index_names({"from": {"resolver": "plate_wells"}}, resolved, ("layout.csv",)) == {
+        "layout.csv",
+        "reads/a1.fq",
+    }
+    assert index_names({"from": "index.csv"}, None) == {"index.csv"}  # no roster, still the index

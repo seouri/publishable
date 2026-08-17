@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from publishable.artifacts import allocation_hash, build_allocation_document
+from publishable.artifacts import ResolverIO, allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
@@ -37,6 +37,8 @@ from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
+from publishable.plugin_scaffold import scaffold_plugin
+from publishable.plugins import versions_for
 from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import (
     cross_levels,
@@ -74,17 +76,17 @@ from publishable.stats import (
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
-    _swept_paths,
-    ablated_paths,
     condition_dir_name,
     expand,
     sample_seed_for,
     selector_paths,
     sweep_document,
+    wide_swept_paths,
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import (
+    RESOLVER_GROUP,
     ArmPlan,
     HoldoutPlan,
     Unit,
@@ -95,6 +97,7 @@ from publishable.units import (
     fold_basis,
     holdout_for,
     holdout_seed_for,
+    index_names,
     partition_units,
     resolve_units,
     stratum_names,
@@ -126,7 +129,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "dry-run": "Operation commands",
     "freeze": "Operation commands",
     "list-templates": "Operation commands",
-    "plugin new": "Creating a plugin: `publishable plugin new`",
     "report": "Operation commands",
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
@@ -258,55 +260,6 @@ def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") ->
     correctly.
     """
     return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
-
-
-def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
-    """Every `parameters` path a condition fixes, for `resolve_wide_cfg` to mark unreadable.
-
-    Every path any condition fixes, not just the grid's axes. A path
-    `sweep.baseline` fixes varies across conditions by definition — condition
-    `00` uses the baseline's value and every other condition uses the base
-    config's — so it is exactly as unreadable at `run`/`summary` scope as a
-    grid axis is. Reading the grid alone left a baseline-only path resolving
-    to the base value, which is a value no condition in the run used.
-
-    `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
-    across conditions, and `paired`'s and `sample`'s did not reach here when each
-    became a real axis — a sampled path stayed readable at `run`/`summary` scope
-    and resolved to the base config's value, which is exactly the "a value no
-    condition in the run used" failure the baseline half of this union exists to
-    prevent, reached through a mode added after it was written.
-    `ablated_paths` is unioned in for the same reason and by the same rule,
-    from the other side of the axis/non-axis split: an ablated path varies
-    across conditions too. Most are already covered by the `baseline` term —
-    a removed path is one the baseline fixes — but an `override` path the
-    baseline leaves alone is not, and it is exactly the residue this union has
-    now been widened for three times.
-
-    **`selector_paths` is subtracted**, and it is the one term that narrows
-    rather than widens. Every `groups` axis's path arrives through the
-    `_swept_paths` term above, in every design that declares one, and a group
-    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
-    would invent the same
-    phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
-    over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
-    get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
-    parameter that does not exist in any scope. Subtracting leaves the honest
-    refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
-
-    A function rather than the inline union it was, so the subtraction is
-    testable directly: `tests/test_cli.py`'s
-    `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
-    hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
-    reaches this line for real through `command_run`, now that `validate` no
-    longer refuses a declared `groups` axis outright.
-    """
-    selectors = set(selector_paths(sweep_block))
-    return (
-        set(_swept_paths(sweep_block))
-        | set(ablated_paths(sweep_block))
-        | set(sweep_block.get("baseline") or {})
-    ) - selectors
 
 
 def _flatten_parameters(node: Any, prefix: str = "") -> dict[str, Any]:
@@ -462,7 +415,7 @@ def _resolved_group_axes(
     `test_a_group_axis_actually_narrows_end_to_end` and
     `test_allocation_json_is_written_with_exact_arm_keys_when_declared` reach
     this line for real, through a passing `command_run`, the same way
-    `_wide_swept_paths` above is now reachable for the selector-path
+    `wide_swept_paths` (in `sweep.py`) is now reachable for the selector-path
     subtraction it depends on.
     """
     if roster is None:
@@ -1354,6 +1307,28 @@ def command_run(config_path: Path) -> int:
     input_dir = Path(doc["data"]["input_dir"]).expanduser()
     output_dir = Path(doc["data"]["output_dir"]).expanduser()
     units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
+
+    # Moved above the roster: a resolver's own body is user code and the first
+    # thing in this command that can raise carrying a credential it read, so the
+    # values `redact` answers from must exist before that call is reached, not
+    # after. `conditions` and `run_template` travel with `credentials` because
+    # `declared_credential_names` needs both.
+    conditions = expand(doc)
+    # Resolved here rather than read off the later `get_template` call, which is
+    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
+    # because without it `registry._merged` never runs `discover_local`, and every
+    # project-local template resolves to `None` — which would empty `credentials`
+    # and silently turn the redaction below into a no-op for exactly the templates
+    # this check is for. Cannot raise: `validate_config` already made the same
+    # call and returned without error, or `command_run` returned above.
+    run_template = get_template(doc.get("experiment_type", ""), repo_root)
+    # Every credential core read for a DECLARED variable — the template's own
+    # `required_env`, plus the union its parameters' `requires_env` resolves to.
+    # Held for this command only and written nowhere; its single consumer is the
+    # redaction in `execute_plan` and — since a resolver runs below — a fresh
+    # collector wrapping the roster call.
+    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
+
     # phase 5: roster. `technical_n` — `{min, max, median}` over the measurement
     # counts rows sharing a key collapsed from — travels to every metric block as
     # `summarize_step`'s `beside_n`, which is the route for a fact `reference.md`
@@ -1361,9 +1336,47 @@ def command_run(config_path: Path) -> int:
     # two-route rule and which document sentence decides each). `provenance.units`
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
-    roster, technical_n, _columns = (
-        resolve_units(units_decl, input_dir) if units_decl else (None, None, frozenset())
-    )
+    resolver_io = ResolverIO(input_dir)
+    try:
+        roster, technical_n, _columns = (
+            resolve_units(
+                units_decl,
+                input_dir,
+                cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
+                resolver_io=resolver_io,
+            )
+            if units_decl
+            else (None, None, frozenset())
+        )
+    except BaseException as exc:
+        # `main`'s handler prints `{exc}` with no collector in scope, and a
+        # non-`PublishableError` never reaches it at all — it ends the command in
+        # a traceback. A resolver's message can carry a credential it read, so the
+        # raise is turned into a diagnostic here, through a collector holding the
+        # values `redact` answers from. A FRESH collector rather than `c`, which
+        # has already been rendered and printed above: appending to it would
+        # re-print every earlier finding and inflate the counts line.
+        #
+        # `except BaseException`, not `Exception`: a resolver body calling
+        # `sys.exit()` — or raising `KeyboardInterrupt`/another `BaseException`
+        # directly — must still have its message redacted before it reaches
+        # stderr. `KeyboardInterrupt` is re-raised rather than turned into a
+        # diagnostic, so Ctrl-C still stops the command the ordinary way — but
+        # as a FRESH, argument-less `KeyboardInterrupt`, `from None`: a real
+        # Ctrl-C already carries no message, and this is what stops a resolver
+        # body that constructed one carrying a credential (`KeyboardInterrupt(
+        # "...secret...")`) from reaching Python's own uncaught-exception
+        # printer, which prints an exception's `str()` same as any other.
+        # `from None` suppresses the chain — plain `raise` re-raises the
+        # ORIGINAL object, message and all.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        roster_c = Collector()
+        roster_c.credentials = credentials
+        roster_code = exc.code if isinstance(exc, PublishableError) else "E-RESOLVER-RAISED"
+        roster_c.error(roster_code, "data.units", str(exc))
+        print(roster_c.render(), file=sys.stderr)
+        return EXIT_WRONG
     # Carried only when the input path actually merged rows. A run whose STEP does
     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
     # an ungated `technical_n` would report `{min: 1, max: 1, median: 1}` beside a
@@ -1531,22 +1544,8 @@ def command_run(config_path: Path) -> int:
         partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
-    conditions = expand(doc)
-    # Resolved here rather than read off the later `get_template` call, which is
-    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
-    # because without it `registry._merged` never runs `discover_local`, and every
-    # project-local template resolves to `None` — which would empty `credentials`
-    # and silently turn the redaction below into a no-op for exactly the templates
-    # this check is for. Cannot raise: `validate_config` already made the same
-    # call and returned without error, or `command_run` returned above.
-    run_template = get_template(doc.get("experiment_type", ""), repo_root)
-    # Every credential core read for a DECLARED variable — the template's own
-    # `required_env`, plus the union its parameters' `requires_env` resolves to.
-    # Held for this command only and written nowhere; its single consumer is the
-    # redaction in `execute_plan`.
-    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
     sweep_block = doc.get("sweep") or {}
-    swept_paths = _wide_swept_paths(sweep_block)
+    swept_paths = wide_swept_paths(sweep_block)
     # One frozenset of unit keys per condition that selects a group axis — `None`
     # for a design declaring none. Reachable now that task 17 retired
     # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
@@ -1610,7 +1609,11 @@ def command_run(config_path: Path) -> int:
 
     ch = code_hash(repo_root)
     ph = parameters_hash(doc)
-    manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
+    manifest = build_manifest(
+        input_dir,
+        doc["data"]["input_manifest_policy"],
+        index_names(units_decl or {}, roster, resolver_io.read_paths),
+    )
     lock_path, lock_hash = uv_lock_info(repo_root)
     if lock_path is None:
         # A warning, not an error: it must not change the exit code. There are
@@ -2660,6 +2663,14 @@ def command_run(config_path: Path) -> int:
             )
             print(drift_c.render())
 
+        # Populated from the declaration this run actually resolved through, not
+        # from the machine's installed set: a run's provenance is what it used.
+        # Empty stays the honest record for a run with no plugin artifact.
+        plugin_versions: dict[str, str] = {}
+        _source = (units_decl or {}).get("from")
+        if isinstance(_source, dict) and isinstance(_source.get("resolver"), str):
+            plugin_versions = versions_for(RESOLVER_GROUP, _source["resolver"])
+
         provenance: dict[str, Any] = {
             "git": {
                 "repo_root": str(git.repo_root),
@@ -2680,7 +2691,7 @@ def command_run(config_path: Path) -> int:
             "input_manifest_hash": manifest_hash(manifest),
             "input_manifest_changed": changed_inputs,
             "publishable_version": importlib.metadata.version("publishable"),
-            "plugin_versions": {},
+            "plugin_versions": plugin_versions,
             # A run over a roster whose identity is not pinned is a run whose `n`
             # means nothing later: `units` and `units_hash` are `None` together
             # exactly when there is no `data.units` declaration to pin.
@@ -2747,6 +2758,12 @@ def _dispatch(command: str, rest: list[str]) -> int:
         return EXIT_OK
     if command in ("generate", "g", "init"):
         return _dispatch_generate(command, rest)
+    if command == "plugin":
+        if len(rest) != 2 or rest[0] != "new" or rest[1].startswith("-"):
+            print("`plugin new` takes exactly one path", file=sys.stderr)
+            return EXIT_INVOCATION
+        scaffold_plugin(Path(rest[1]))
+        return EXIT_OK
     # Everything built is handled above, so what reaches here is either specified
     # and unbuilt or not specified at all. The built branches come first on
     # purpose: a name that appeared in both places would keep working, and the

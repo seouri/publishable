@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H7b Part B → H4b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -55,6 +55,23 @@ and **Part B** owns the resolver's dispatch, its read-only `io`, attribute proje
 a resolver runs user code an exception can carry a credential to `main`'s un-redacted printer. The
 measurement is [`H7b-SCOPING-2.md`](docs/superpowers/H7b-SCOPING-2.md), which re-measured its own
 predecessor a day later and found **seven of its conclusions did not survive**.
+
+**H7b Part B (resolver dispatch) is complete on its branch, against commit `4f0415e7024e99ca94771afb7c3eb6269a6dbc44`.**
+`E-DATA-RESOLVER-UNSUPPORTED` is retired. A resolver dispatches at `validate` and `run`, projects onto
+declared attributes, must yield the field a declared `measurements.by` names, and may not read a swept
+parameter. This is the project's **first non-zero executable count**: **three of nine — E1, E2, E5 —
+have no remaining core-side blocker**, measured by running each config's `data`/`statistics` blocks
+through `validate_config` rather than re-derived from emit sites, in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. Both
+qualifications stay attached to that number: the plugin must exist and be installed, and a declared
+apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
+regardless of what a template declares — filed, owned by H7d). Six stay blocked on two causes neither
+of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
+(H4b) for C1–C3. Also closed: `hash_index` was broken for every source, table and glob included, not
+only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
+Part A left open — a resolver's raise now becomes a redacted diagnostic at both `validate` and `run`,
+except a `KeyboardInterrupt`, which is deliberately re-raised as a traceback carrying no message so
+Ctrl-C still stops the command.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
@@ -151,7 +168,7 @@ every session.
 | Scoping a diagnostic by the helper it calls | `E-TEMPLATE-UNKNOWN` had **two** emit sites; a task scoped by `template_names()`'s single call site missed the second, which went on claiming "no installed template registers" under a § Errors row just rewritten to say otherwise. **§ Errors carries one row per code, not per emit site**, so a diagnostic's unit of work is every site that raises *or* reports it |
 | Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
-| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` and `apparatus_facts` are the other two, and each is owned — H7b and H7d respectively — where `field_convention` is not) |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe, which stays H7d's; `apparatus_facts` is now the sole remaining example, owned by H7d, where `field_convention` is not) |
 
 ### Writing checks that can fail
 

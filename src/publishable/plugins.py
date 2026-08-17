@@ -2,22 +2,21 @@
 
 docs/reference.md § Creating a plugin. Every name a config can write for a
 plugin artifact resolves through this module, and *resolving a name* —
-`scan_group`, `names`, `check_registration`, and every lookup `validate` makes
-— answers from **package metadata** and imports nothing. That is not a
-performance choice. § Creating a plugin justifies the whole entry-point
-mechanism by `validate` being able to answer "no installed package registers
-`plate_wells`" without importing a line of that package, and `validate` is
-documented as creating nothing and reaching nothing off the machine. A check
-that reaches for the object behind a name has changed the guarantee whatever
-it returns — which is exactly what `validate` never does.
+`scan_group`, `names`, and every lookup that only needs a key — answers from
+**package metadata** and imports nothing. That is not a performance choice.
+§ Creating a plugin justifies the whole entry-point mechanism by `validate`
+being able to answer "no installed package registers `plate_wells`" without
+importing a line of that package.
 
 Loading the object behind a name is a separate, named operation —
 `load_entry_point`, the one function in this module that calls
-`EntryPoint.load()` — meant for a caller that has already resolved a name and
-now needs the object, once a command is past validation. `validate` is not
-such a caller. As measured on 2026-08-17 against commit `deaed2b`, no command
-has yet been wired to call it; `docs/reference.md`'s `E-PLUGIN-DECORATOR` and
-`E-PLUGIN-LOAD` rows carry the same dated note.
+`EntryPoint.load()` — reached only once a name has resolved and the object is
+actually needed. That is what keeps the guarantee above intact where it is
+claimed: a *negative* answer costs nothing, because deciding that no installed
+package registers `plate_wells` never reaches the package. A caller that does
+need the object pays the import, and `validate` is such a caller for exactly one
+declaration, `data.units.from.resolver`, whose resolver `reference.md` § Where
+units come from puts at `validate` and `dry-run` rather than only at `run`.
 
 The cost of that, stated rather than discovered: a claim read from metadata is a
 name and a provider and nothing else. A refusal computed from it therefore has
@@ -82,6 +81,26 @@ def scan_group(group: str) -> dict[str, list[EntryPoint]]:
 def names(group: str) -> list[str]:
     """The keys `group` registers, in name order."""
     return list(scan_group(group))
+
+
+def versions_for(group: str, name: str) -> dict[str, str]:
+    """The distributions providing `name` in `group`, as `{name: version}`.
+
+    A distribution rather than a module, for `provider_of`'s reason: a
+    distribution is what a reader uninstalls or pins, and `provenance` exists to
+    be reproduced from. Empty for a name nothing registers, which is the same
+    answer a run using no plugin artifact records — an absence, not a guess.
+
+    Every claimant, not the first: `validate._check_plugin_collisions` refuses a
+    name two distributions claim, so more than one entry here means the record is
+    describing a machine `validate` already refused. Recording both is what makes
+    that visible in the artifact rather than only in the terminal.
+    """
+    return {
+        ep.dist.name: ep.dist.version
+        for ep in scan_group(group).get(name, [])
+        if ep.dist is not None
+    }
 
 
 RESOLVERS: dict[str, Callable[..., Any]] = {}
@@ -225,11 +244,8 @@ def check_registration(ep: EntryPoint, declared: Sequence[str]) -> None:
     discovery pass drains, and a reverse lookup here would depend on whether
     anything had drained it yet.
 
-    Meant to run only once an object behind a key has actually been loaded —
-    not `validate`, which answers a name from package metadata and never holds
-    the object. As measured on 2026-08-17 against commit `deaed2b`, no command
-    yet loads a plugin, so this function has no production caller either;
-    `docs/reference.md`'s `E-PLUGIN-DECORATOR` row carries the same dated note.
+    Meant to run once an object behind a key has actually been loaded, wherever
+    that happens — including `validate`, which loads a resolver.
     """
     if ep.name in declared:
         return

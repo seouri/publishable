@@ -13,12 +13,15 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from publishable.artifacts import ResolverIO
+from publishable.config import Config
 from publishable.errors import ContractError
+from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
 RESERVED_FIELDS = ("key", "paths", "attributes")
 
@@ -260,32 +263,261 @@ def _from_glob(
     return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels], frozenset()
 
 
+RESOLVER_GROUP = "publishable.resolvers"
+
+
+def _resolver_for(name: str) -> Callable[..., Any]:
+    """The callable `data.units.from.resolver` names, or the refusal that answers instead.
+
+    Three steps, three codes, in the order the information arrives:
+
+    - **The name**, answered from package metadata alone (`scan_group`), so a name
+      no installed distribution registers costs no import at all —
+      `reference.md` § Creating a plugin makes that the whole argument for entry
+      points. `E-RESOLVER-UNKNOWN`, naming every member of the group it did find,
+      because the ordinary cause is a spelling.
+    - **The object**, through `load_entry_point`, the one function in core that
+      calls `EntryPoint.load()`. Every way a plugin's top level can fail arrives
+      as `E-PLUGIN-LOAD`, including `SystemExit`.
+    - **The declaration against the key** (`check_registration` over
+      `declared_names`), `E-PLUGIN-DECORATOR`. Checked here rather than deferred
+      to `run`: the object is already in hand, and reporting at `run` a fault
+      `validate` had the evidence for is the shape this repo refuses.
+
+    A collision between two distributions claiming this key is **not** decided
+    here. `validate._check_plugin_collisions` reports it as `E-PLUGIN-COLLISION`
+    for every config, from metadata, over the complete claim set in name order —
+    the first claimant is used here rather than re-deciding the tie, since a
+    verdict computed twice is a verdict that can disagree with itself.
+    """
+    found = scan_group(RESOLVER_GROUP)
+    claimants = found.get(name)
+    if not claimants:
+        # `"none installed"` (the empty-`found` branch) is not exercised by any
+        # fixture in this build: every test installs at least one distribution
+        # under `publishable.resolvers`. Untested rather than unreachable.
+        listed = ", ".join(found) if found else "none installed"
+        raise ContractError(
+            f"`data.units.from.resolver` names `{name}`, which no installed distribution "
+            f"registers in the `{RESOLVER_GROUP}` entry-point group (registered: {listed})",
+            code="E-RESOLVER-UNKNOWN",
+        )
+    ep = claimants[0]
+    fn = load_entry_point(ep)
+    check_registration(ep, declared_names(RESOLVER_GROUP, fn))
+    return cast("Callable[..., Any]", fn)
+
+
+def _from_resolver(
+    decl: dict[str, Any],
+    name: str,
+    input_dir: Path,
+    cfg: "Config | None",
+    resolver_io: ResolverIO | None,
+) -> tuple[list[Unit], frozenset[str]]:
+    """The units a plugin's resolver yields, and the attribute names it yielded.
+
+    The columns come back beside the roster for the reason `_from_table`'s do: they
+    are the only honest reference set for `data.units.measurements.by` —
+    `validate._check_measurements` checks `by` against them — and a resolver has
+    no columns beyond the attributes it yields. The union over yielded units
+    rather than the intersection, matching a table header's "this column exists"
+    rather than "every row filled it in" — the same reading `collapse_measurements`
+    takes when it treats a name only some rows carry as no disagreement.
+
+    `Unit.attributes` on the returned roster carries only the declared
+    `data.units.attributes` — projected exactly as `_from_table` projects a CSV
+    row, which is what makes `cluster_by`, `weight_by`, `assign.<axis>.from`,
+    `holdout.from` and a `fold`'s `stratify_by` indifferent to which form `from`
+    took. An attribute a resolver yields and the config does not declare is
+    dropped, exactly as an undeclared CSV column is.
+
+    Yield order is preserved and nothing re-sorts it: `reference.md` § Where units
+    come from makes resolver yield order the resolved order, `assign.method:
+    blocked` reads that order as data, and `provenance.units_hash` covers the list
+    in it.
+    """
+    if cfg is None:
+        raise ContractError(
+            f"`data.units.from.resolver` names `{name}`, and resolution was reached with no "
+            'config to hand it — a resolver sees the same `cfg` a `scope: "run"` step does, '
+            "so core's resolved state disagrees with itself here rather than the config being "
+            "wrong",
+            code="E-RUN-RESOLVER-UNCONFIGURED",
+        )
+    resolve = _resolver_for(name)
+    io = resolver_io if resolver_io is not None else ResolverIO(input_dir)
+    units: list[Unit] = []
+    yielded: set[str] = set()
+    try:
+        for item in resolve(io, cfg):
+            if not isinstance(item, Unit):
+                raise ContractError(
+                    f"resolver `{name}` yielded a {type(item).__name__} — a resolver yields "
+                    "`Unit`s, which is what makes its roster a unit table with the columns a "
+                    "CSV would have supplied",
+                    code="E-RESOLVER-YIELD",
+                )
+            units.append(item)
+            yielded.update(item.attributes)
+    except ContractError as exc:
+        if exc.code != "E-STEP-SWEPT-PARAM":
+            raise
+        # The mechanism is shared and the fault is not. `config.Node` raises the
+        # step's identifier because that is what it raises for every reader of a
+        # `SweptAway` marker; a reader holding it here would be sent to § Step
+        # scope, which describes a different fault at a different time. Re-coded
+        # rather than re-raised, on `discover_local`'s precedent for a coded
+        # `ContractError` out of user code.
+        # `exc`'s own message is one independent clause (path and predicate
+        # together — "`{path}` is varied by `sweep`, so it has no single value
+        # at this scope"), a semicolon, then a remedy written for a step ("read
+        # it from a `condition`- or `repeat`-scoped step") — a resolver has no
+        # such scope to move to. The split below keeps everything before that
+        # semicolon and discards the remedy; it does not isolate the path
+        # alone, so the sentence below is built to take the WHOLE clause after
+        # a colon rather than as a direct object, which is what makes it read
+        # grammatically either way. This couples to `E-STEP-SWEPT-PARAM`'s
+        # message keeping a semicolon before its own remedy — if that message
+        # drops it, this split returns the whole message including the
+        # step-only remedy, unpinned by any test but the ones beside this
+        # raise.
+        subject = str(exc).split(";", 1)[0]
+        raise ContractError(
+            f"resolver `{name}`'s read failed: {subject}. The unit table is one table for "
+            "the whole run, so conditions that resolved different units could not be paired "
+            "and `n` would mean something different in each. Read a parameter the sweep "
+            "leaves alone",
+            code="E-RESOLVER-SWEPT-PARAM",
+        ) from exc
+    if not units:
+        raise ContractError(
+            f"resolver `{name}` yielded no units; a run measuring zero units has nothing to report",
+            code="E-UNITS-EMPTY",
+        )
+    attrs = list(decl.get("attributes") or [])
+    for attribute in attrs:
+        if not isinstance(attribute, str):
+            # An unhashable declared attribute (a `dict` or `list` entry) can
+            # never equal a name a resolver yielded any more than it could equal
+            # a CSV column name — `validate._check_units`'s own guard for the
+            # table source (validate.py, "a non-string name can never equal a
+            # CSV column name either") makes the identical call. Checked before
+            # the set membership below, which hashes `attribute` and would raise
+            # a bare `TypeError` out of `validate` for exactly this shape.
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which resolver `{name}` yields "
+                "no unit carrying — a resolver has no columns beyond the attributes it yields, "
+                "so the field a table would simply have carried has to be yielded",
+                code="E-UNITS-ATTR-MISSING",
+            )
+        if attribute in RESERVED_FIELDS:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which is a field of `Unit` "
+                f"itself; {', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                code="E-UNITS-ATTR-RESERVED",
+            )
+        if attribute not in yielded:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which resolver `{name}` yields "
+                "no unit carrying — a resolver has no columns beyond the attributes it yields, "
+                "so the field a table would simply have carried has to be yielded",
+                code="E-UNITS-ATTR-MISSING",
+            )
+    # Projected onto the declared list exactly as `_from_table` projects a CSV
+    # row, which is what makes everything downstream indifferent to which form
+    # `from` took: `cluster_by`, `weight_by`, `assign.<axis>.from`, `holdout.from`
+    # and a `fold`'s `stratify_by` all read `Unit.attributes` and were approved by
+    # `validate` against `data.units.attributes` alone. An attribute the resolver
+    # yields and the config does not declare is dropped, the way an undeclared
+    # column is.
+    units = [
+        Unit(
+            key=unit.key,
+            paths=unit.paths,
+            attributes={a: unit.attributes[a] for a in attrs if a in unit.attributes},
+        )
+        for unit in units
+    ]
+    return units, frozenset(yielded)
+
+
 def resolve_units(
-    units_decl: dict[str, Any], input_dir: Path
+    units_decl: dict[str, Any],
+    input_dir: Path,
+    *,
+    cfg: "Config | None" = None,
+    resolver_io: ResolverIO | None = None,
 ) -> tuple[UnitList, dict[str, float] | None, frozenset[str]]:
     """Resolve the roster, preserving the order it was resolved in.
 
     Returns the roster, `technical_n` — `None` unless `data.units.measurements` is
-    declared — and the source's own column names, empty under a `{glob: ...}`
-    source. Both travel *beside* the roster rather than on it because `io.units`
-    **is** a `UnitList` handed to steps, and `reference.md` § The unit list is
-    three operations promises exactly iteration, `len`, and integer indexing, plus
-    `.train`. A fourth operation would be a fourth thing every future backing has
-    to provide.
+    declared — and the source's own column names: a table's header, a glob's
+    empty set, or a resolver's yielded attribute names. Both travel *beside* the
+    roster rather than on it because `io.units` **is** a `UnitList` handed to
+    steps, and `reference.md` § The unit list is three operations promises
+    exactly iteration, `len`, and integer indexing, plus `.train`. A fourth
+    operation would be a fourth thing every future backing has to provide.
 
     The columns are for `validate._check_measurements`, which checks
     `measurements.by` against the columns the source actually has. They are
     threaded from the one read `_from_table` already does rather than re-read
     there, so the two cannot come to disagree about what the table holds.
+
+    `cfg` and `resolver_io` are defaulted keywords rather than required
+    parameters — decision 6, ~60 existing call sites in `tests/` with no
+    behavioural content to give them. `cfg` is what a `{resolver: ...}` source
+    needs and every other source ignores; reaching a resolver source with
+    `cfg=None` refuses under `E-RUN-RESOLVER-UNCONFIGURED` rather than crashing.
+    `resolver_io` defaults to a fresh `ResolverIO(input_dir)`; only
+    `cli.command_run` needs the object back afterwards, to read `read_paths`.
     """
     source = units_decl.get("from")
     if isinstance(source, str):
-        units, columns = _from_table(units_decl, input_dir, source)
+        try:
+            units, columns = _from_table(units_decl, input_dir, source)
+        except ContractError:
+            raise
+        except Exception as exc:
+            # `_from_table` opens and parses a file this repo does not control
+            # the contents of — a CSV that is not valid UTF-8 raises
+            # `UnicodeDecodeError` out of `csv.DictReader`, not a `ContractError`.
+            # Recoded here, at the one call site, into the identifier that
+            # names a table/glob source specifically, so the fault is never
+            # mistaken for a resolver's (`E-RESOLVER-RAISED`'s own row is about
+            # a `{resolver: ...}` source only).
+            raise ContractError(
+                f"`data.units.from` names {source}, and reading it raised "
+                f"{type(exc).__name__}: {exc}",
+                code="E-UNITS-SOURCE-UNREADABLE",
+            ) from exc
     elif isinstance(source, dict) and "glob" in source:
-        units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
+        try:
+            units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
+        except ContractError:
+            raise
+        except Exception as exc:
+            # `Path.glob` raises `NotImplementedError` for an absolute pattern
+            # rather than a `ContractError` — recoded for the same reason as
+            # the table branch above.
+            raise ContractError(
+                f"`data.units.from.glob` {source['glob']!r} could not be read: "
+                f"{type(exc).__name__}: {exc}",
+                code="E-UNITS-SOURCE-UNREADABLE",
+            ) from exc
+    elif isinstance(source, dict) and "resolver" in source:
+        # `glob` is tested first, deliberately: `data.units.from` declaring both
+        # keys is refused by `validate._check_from_source_exclusivity` as
+        # `E-UNITS-SOURCE-AMBIGUOUS`, and keeping this order means the two
+        # modules cannot come to read one declaration two ways in the window
+        # before that check runs.
+        units, columns = _from_resolver(
+            units_decl, str(source["resolver"]), input_dir, cfg, resolver_io
+        )
     else:
         raise ContractError(
-            f"`data.units.from` is {source!r}; expected a table name or {{glob: ...}}",
+            f"`data.units.from` is {source!r}; expected a table name, {{glob: ...}}, or "
+            f"{{resolver: ...}}",
             code="E-UNITS-SOURCE-MISSING",
         )
     # Before the uniqueness loop, not after: under a `measurements` declaration a
@@ -2630,3 +2862,32 @@ def units_hash(units: UnitList) -> str:
         ensure_ascii=False,
     ).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def index_names(
+    units_decl: dict[str, Any], roster: "UnitList | None", reads: tuple[str, ...] = ()
+) -> set[str]:
+    """The relative paths `input_manifest_policy: hash_index` hashes.
+
+    `reference.md` § Three hashes: "the index and whatever it names". One
+    expression over all three sources, because a per-source branch is how one of
+    them comes to be left silently unhashed:
+
+    - a **table** names one file and its units name no paths;
+    - a **glob** names no file and each unit names the path it was built from;
+    - a **resolver** names whatever it read (`ResolverIO.read_paths`) and its
+      units name their own payloads — § Where units come from: "the paths the
+      resolver read plus the paths its units name, so a unit whose payload the
+      resolver never opened still gets that payload hashed".
+
+    A roster that did not resolve still yields the source's own file: the index is
+    named by the declaration, not by the roster, and a manifest built beside a
+    failed resolution should not silently stop hashing it.
+    """
+    source = units_decl.get("from")
+    named: set[str] = set(reads)
+    if isinstance(source, str) and source:
+        named.add(source)
+    for unit in roster or ():
+        named.update(unit.paths)
+    return named

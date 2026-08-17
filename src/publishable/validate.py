@@ -20,6 +20,7 @@ from publishable.param import MISSING
 from publishable.plugins import GROUPS, names, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
+from publishable.runner import resolve_wide_cfg
 from publishable.scope import step_name as _step_name
 from publishable.secrets import credential_values, load_env, missing_env
 from publishable.stats import min_honest_draws
@@ -34,6 +35,7 @@ from publishable.sweep import (
     render_value,
     sample_fault,
     selector_paths,
+    wide_swept_paths,
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
@@ -1186,15 +1188,15 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
 def _check_units_source(doc: dict[str, Any], c: Collector) -> None:
     """A `data.units.from` mapping may declare `glob` or `resolver`, not both.
 
-    Two answers to one declaration: this module reads such a mapping as a
-    resolver — `_check_unimplemented` and `_check_units` both test for the
-    `resolver` key — while `units.resolve_units` tests for `glob` first and would
-    resolve it as a glob. Whichever is right, they cannot both be, and a run that
-    executed one while `validate` had checked the other is the fault this refuses.
+    `units.resolve_units` tests for `glob` first, so a mapping carrying both
+    keys resolves as a glob and the `resolver` key is never read — silently,
+    since neither key is malformed on its own. Refusing the combination
+    outright is what stops a config from declaring an intent that dispatch
+    would quietly overrule.
 
-    Its own function rather than a branch beside the resolver refusal, because
-    that refusal retires and this one does not: a `from` naming two sources is
-    ambiguous whether or not resolvers are honoured.
+    Its own function rather than a branch beside another check, since neither
+    the glob-first order it guards against nor the ambiguity itself belongs
+    to any one refusal's lifecycle.
     """
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
@@ -1212,10 +1214,12 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
     """`data.units`, or `None` if there is no declaration or its shape is wrong.
 
     In the normal pipeline this shape is already guaranteed by `_check_shape`, which
-    runs first in `validate_config` and stops the whole check before `_check_units` /
-    `_check_unimplemented` are ever called. This guard exists for the two of them
-    being exercised directly (as several `_check_*` functions already are in tests),
-    so neither crashes on a non-mapping `data.units` reached on its own. Reported —
+    runs first in `validate_config` and stops the whole check before any of this
+    module's readers of `data.units` are ever called. This guard exists so a
+    caller of this function — `_check_units_source`, `_check_units`, and any
+    other reader of `data.units` — does not crash on a non-mapping `data.units`
+    reached on its own, whether through `_check_shape` or a direct call.
+    Reported —
     under the same `E-CONFIG-SHAPE` identifier `_check_shape` uses, so a bad shape is
     never two different codes — only if that exact diagnostic is not already in
     `c.findings`, which is what keeps a direct call from double-reporting one
@@ -1248,18 +1252,13 @@ def _check_units(
     identifier, so a user sees one code for one problem whether it surfaced here
     or during a run.
 
-    Two things skip resolution outright rather than piling a second error onto a
-    config `_check_data`/`_check_unimplemented` has already flagged:
+    One thing skips resolution outright rather than piling a second error onto a
+    config `_check_data` has already flagged: `input_dir` missing, not absolute,
+    or unreadable — `_check_data` already reported the real problem, and
+    resolving would only add a confusing "file not found" on top of a directory
+    that does not exist.
 
-    - `input_dir` missing, not absolute, or unreadable — `_check_data` already
-      reported the real problem, and resolving would only add a confusing
-      "file not found" on top of a directory that does not exist.
-    - `data.units.from.resolver` — resolvers are plugin artifacts and already
-      refused as `E-DATA-RESOLVER-UNSUPPORTED`; `resolve_units` cannot execute a
-      resolver either, and without this skip it raises `E-UNITS-SOURCE-MISSING`
-      for the same declaration, describing a resolver as a missing file.
-
-    No other `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
+    No `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
     method are not read by `resolve_units` at all, and the three that ARE read
     — `cluster_by`, `weight_by`, and (under `by_attribute`) `holdout.from` —
     are read only where a `data.units.measurements` collapse could file a unit
@@ -1300,9 +1299,6 @@ def _check_units(
         # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
         return None, None, frozenset()
     source = units_decl.get("from")
-    if isinstance(source, dict) and "resolver" in source:
-        # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
-        return None, None, frozenset()
     key = units_decl.get("key")
     if key is not None and not isinstance(key, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
@@ -1347,10 +1343,44 @@ def _check_units(
         # discarded: `run` reports the first, and `_check_measurements` reads its
         # `max` to know whether the input path merged any rows at all and the
         # second to know what `measurements.by` could name.
-        roster, technical_n, columns = resolve_units(units_decl, path)
+        #
+        # The same `cfg` a `scope: "run"` step sees, so a resolver reading a swept
+        # parameter meets a `SweptAway` marker rather than a value no condition
+        # used. Built here rather than threaded from `validate_config` because
+        # every other check in this module re-derives from `doc` locally.
+        roster, technical_n, columns = resolve_units(
+            units_decl,
+            path,
+            cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
+        )
         return roster, technical_n, columns
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
+        return None, None, frozenset()
+    except BaseException as exc:
+        # `validate` is contracted never to raise, and a resolver body is user
+        # code that can fail through `BaseException`, not just `Exception` —
+        # a bare `sys.exit()` or a raised `KeyboardInterrupt`/`BaseException`
+        # would otherwise escape this function entirely. `KeyboardInterrupt`
+        # is re-raised rather than turned into a diagnostic, so Ctrl-C still
+        # stops the command — but as a FRESH, argument-less
+        # `KeyboardInterrupt`, `from None`: a real Ctrl-C already carries no
+        # message, and this is what stops a resolver body that constructed
+        # one carrying a credential from reaching Python's own
+        # uncaught-exception printer, which prints an exception's `str()`
+        # same as any other. `from None` suppresses the chain — plain `raise`
+        # re-raises the ORIGINAL object, message and all. A table or glob
+        # source's own non-`ContractError` faults (a mis-encoded CSV, an
+        # absolute glob pattern) are recoded to `E-UNITS-SOURCE-UNREADABLE`
+        # inside `resolve_units` itself and so are already `ContractError`s
+        # by the time they reach here.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        c.error(
+            "E-RESOLVER-RAISED",
+            "data.units",
+            f"resolution raised {type(exc).__name__}: {exc}",
+        )
         return None, None, frozenset()
 
 
@@ -1367,10 +1397,13 @@ def _check_measurements(
     mean` over `site`, which is a string, has no meaning — use `first` or `mode`, or a
     per-column map. The type comes from the *resolved roster's own attribute values*
     rather than from the declaration, because `attributes` declares names, not types.
-    When the roster does not resolve, the type half is skipped, but the shape half
-    still runs below it: a config can be wrong about `measurements`'s shape with no
-    `input_dir` in reach at all, and skipping both together would make the roster's
-    absence swallow an unrelated fault.
+    When the roster does not resolve, `by`'s and `collapse`'s own shape are still
+    checked below — a config can be wrong about `measurements`'s shape with no
+    `input_dir` in reach at all, and skipping that too would let the roster's absence
+    swallow an unrelated fault — but the two arms that check `by` against what the
+    source actually has (`E-RESOLVER-MEASUREMENT-FIELD`, `E-UNITS-ATTR-MISSING`) and
+    the numeric-type loop are all gated on the roster having resolved: none of them
+    has anything true to say about a source that never ran.
 
     A single rule applies to every collapsed column (a per-column map's un-named
     columns fall back to `first`, the same fallback `units.rule_for` uses), so a
@@ -1402,7 +1435,44 @@ def _check_measurements(
             "a second measurement of one unit from a resumed retry of the same one, "
             "and the two collapse in opposite directions",
         )
-    elif technical_n is not None and technical_n["max"] > 1:
+    source = units.get("from")
+    resolver = source.get("resolver") if isinstance(source, dict) else None
+    if valid_by is not None and isinstance(resolver, str) and resolver and roster is not None:
+        # Ungated on collapse, unlike the table arm below it — but gated on the
+        # roster having resolved at all. A table's `by` may name a measurement
+        # identity the STEP invents through `io.record(..., measurement=)`,
+        # which is why that arm waits until rows were actually collapsed. A
+        # resolver has no columns at all, so `reference.md` § Where units come
+        # from turns yielding `by` into an obligation — "the field a CSV would
+        # simply have carried has to be named" — and
+        # `E-RESOLVER-MEASUREMENT-FIELD`'s row states the fault without a
+        # collapse precondition. But `_check_units` returns `frozenset()` for
+        # `columns` on every failure path — an unregistered resolver name,
+        # `E-RESOLVER-YIELD`, `E-UNITS-EMPTY`, a missing or non-absolute
+        # `input_dir` — and none of those means the resolver yielded nothing
+        # named `by`; it means the resolver never ran (or never finished
+        # running) at all. `roster is not None` is exactly `_check_units`
+        # resolved cleanly, which is when `columns` is an honest report of what
+        # the resolver yielded rather than an empty default standing in for a
+        # fault this arm has no business re-describing. The columns here are
+        # what the resolver yielded, before the projection onto
+        # `data.units.attributes`: the projected roster carries only declared
+        # attributes, and `by` is not one of them.
+        if valid_by not in columns:
+            c.error(
+                "E-RESOLVER-MEASUREMENT-FIELD",
+                "data.units.measurements.by",
+                f"names {valid_by!r}, and resolver `{resolver}` yields no unit carrying an "
+                "attribute of that name to collapse on. A resolver has no columns beyond the "
+                "attributes it yields, so yield one `Unit` per measurement, sharing a `key`, "
+                f"and emit {valid_by!r} as an attribute",
+            )
+    elif (
+        valid_by is not None
+        and resolver is None
+        and technical_n is not None
+        and technical_n["max"] > 1
+    ):
         # The input table actually merged rows, so `by` had to name one of ITS
         # columns — and `units.collapse_measurements` groups on the unit `key`
         # alone, reading `by` only to drop that name from the merged attributes.
@@ -3797,9 +3867,8 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     `allocation` and `assign` against each other and against `sweep.groups` for
     real, `units.arm_members` narrows a condition's roster to its own arm, and
     `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
-    declaration changes the record, which is the test this family applies. It
-    resolves a unit roster, but one `data.units` sub-field — a `resolver`
-    source — is still read by nothing. `data.units.holdout` is no longer among
+    declaration changes the record, which is the test this family applies.
+    `data.units.holdout` is no longer among
     them either: `_check_holdout` checks the declaration for real,
     `_resolved_holdout` realizes the partition once per run over the run's own
     digest, `io.units`/`io.units.train` see the test and training halves,
@@ -3897,19 +3966,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "combination will be honored once the family excludes drawn conditions",
         )
 
-    units = _units_declaration(doc.get("data") or {}, c) or {}
-    source = units.get("from")
-    if isinstance(source, dict) and "resolver" in source:
-        c.error(
-            "E-DATA-RESOLVER-UNSUPPORTED",
-            "data.units.from.resolver",
-            f"names `{source['resolver']}`, but a resolver cannot be dispatched in this "
-            "build; resolvers will be honored in a later slice. Use a table or a glob "
-            "for now",
-        )
-    # No `data.units` *block* is refused wholesale any more — a `resolver`
-    # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
-    # inside `from`, not one of these blocks, and stays refused. Each block
+    # No `data.units` block is refused wholesale any more. Each block
     # this function used to hold — `allocation`/`assign`, `cluster_by`,
     # `weight_by`, `measurements`, and now `holdout` — is checked for real by
     # its own function instead, and each changes the run's record rather than
@@ -3953,13 +4010,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # partition once per run, `io.units`/`io.units.train` see the two halves,
     # `cli.py` narrows the denominator to the test partition and writes
     # `allocation.json` and `provenance.allocation_hash`.
-    #
-    # One `data.units` sub-field remains read by nothing: a `resolver` source
-    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since a resolver
-    # cannot be dispatched in this build — the registry that decides a name
-    # collision among resolver distributions is built; loading the resolver
-    # an accepted name points at is not). `holdout` left this family with
-    # this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`

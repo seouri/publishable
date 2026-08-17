@@ -1155,6 +1155,19 @@ def test_get_template_imports_nothing_for_an_installed_claim(installed, tmp_path
     assert get_template("vendor_assay", tmp_path) is None
     assert "loadable_tpl" not in sys.modules
 
+    # The claim that survives, said in the terms the documents now carry: a NAME
+    # is answered from metadata. Loading is a separate, named operation, and this
+    # is the control proving the fixture CAN import — without it every assertion
+    # above holds for a target that simply cannot be imported at all.
+    from publishable.plugins import load_entry_point, scan_group
+
+    ep = scan_group("publishable.templates")["vendor_assay"][0]
+    try:
+        assert load_entry_point(ep).__name__ == "T"
+        assert "loadable_tpl" in sys.modules
+    finally:
+        sys.modules.pop("loadable_tpl", None)
+
 
 def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
     """The direct question, asked where all three sources are in hand.

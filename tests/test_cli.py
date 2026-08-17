@@ -1,7 +1,9 @@
 import hashlib
+import importlib
 import json
 import re
 import subprocess
+import sys
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,6 @@ from publishable.cli import (
     _evaluation_roster,
     _resolved_group_axes,
     _resolved_holdout,
-    _wide_swept_paths,
     main,
 )
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
@@ -29,6 +30,7 @@ from publishable.hashes import design_digest
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.sweep import wide_swept_paths
 from publishable.units import HoldoutPlan, holdout_seed_for, resolve_units
 from publishable.validate import validate_config
 
@@ -948,7 +950,7 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
 
 
 def test_a_group_path_gets_no_swept_away_marker():
-    """`_wide_swept_paths` marks parameters, and a group cell is not one.
+    """`wide_swept_paths` marks parameters, and a group cell is not one.
 
     A group axis's path reaches the union through `_swept_paths` in every design
     that declares one — and a `SweptAway` marker at
@@ -958,13 +960,13 @@ def test_a_group_path_gets_no_swept_away_marker():
 
     A focused unit test on the function itself, kept beside the end-to-end
     coverage `test_a_group_axis_actually_narrows_end_to_end` provides: this one
-    pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
+    pins the exact set `wide_swept_paths` returns for a hand-built `sweep`
     block, which discriminates the subtraction rule directly rather than
     through a whole `run`'s aggregated output.
 
     The block below also fixes the group level in its `baseline`, a declaration
     `validate` refuses (`E-SWEEP-BASELINE-GROUP`) and `command_run` therefore
-    never resolves. It is kept because `_wide_swept_paths` is a pure function
+    never resolves. It is kept because `wide_swept_paths` is a pure function
     over whatever block it is handed, and the property under test is that the
     subtraction does not depend on which term of the union a group path arrived
     by — asserting it from two terms at once is what pins that.
@@ -977,10 +979,10 @@ def test_a_group_path_gets_no_swept_away_marker():
     # `analysis.min_samples` is the control that must report: a baseline-only
     # parameter path, on the same term of the union the group path arrives by,
     # so a subtraction that took the whole `baseline` would fail here.
-    assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+    assert wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
     # And with no `groups` declared, a baseline path named `arm` is an ordinary
     # parameter the wide config must still mark.
-    assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+    assert wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
 
 
 def _levels_roster():
@@ -6773,6 +6775,17 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert (f"`{kind}` (NOT BUILT)" in text) == (status == "NOT BUILT"), kind
 
 
+def test_plugin_new_scaffolds_a_package_rather_than_reporting_not_built(tmp_path):
+    """The built branch precedes the `NOT BUILT` lookup in `_dispatch`, so this
+    also pins that `plugin new` left `NOT_BUILT_COMMANDS` rather than being
+    shadowed by it."""
+    from publishable.cli import NOT_BUILT_COMMANDS, main
+
+    assert "plugin new" not in NOT_BUILT_COMMANDS
+    assert main(["plugin", "new", str(tmp_path / "publishable-my-assay")]) == 0
+    assert (tmp_path / "publishable-my-assay" / "pyproject.toml").is_file()
+
+
 @pytest.mark.parametrize("column", ["Command", "Generator"])
 def test_reference_cli_tables_match_what_the_cli_does(column, capsys):
     """Both directions, observed through `main` rather than read off a constant.
@@ -9176,3 +9189,264 @@ def test_uv_add_really_installs(tmp_path: Path):
     does not assume. A decorator-level skip reports `skipped` for a stated
     reason instead, and does not pretend an opt-in flag would ever run it.
     """
+
+
+_PLUGIN_VERSIONS_RESOLVER = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="p1")
+    yield Unit(key="p2")
+"""
+
+
+def _install_plate_wells_resolver(installed, tmp_path, module: str) -> None:
+    """One installed distribution whose `publishable.resolvers` entry point
+    points at a real module this writes — the same shape `test_units.py`'s
+    `_install_resolver` uses, duplicated here rather than imported because
+    that helper is private to `test_units.py` and takes a `tmp_path` this
+    module already has its own fixture instance of."""
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(_PLUGIN_VERSIONS_RESOLVER)
+    importlib.invalidate_caches()
+
+
+def test_a_resolver_run_records_the_plugin_version_it_resolved_through(
+    installed, registries, tmp_path, capsys
+):
+    """`provenance.plugin_versions` — compatibility notes, never conflated with
+    `code_hash`, which covers `src/**` and `templates/**` and not a wheel. The
+    control is a table-sourced run in the same test: an empty mapping stays the
+    honest record where no plugin artifact was used, so a version dict populated
+    unconditionally would pass the first half alone."""
+    _install_plate_wells_resolver(installed, tmp_path, "plugin_versions_r30")
+    try:
+        resolver_doc = run_a_project(
+            tmp_path / "resolver-case",
+            capsys=capsys,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+        )
+    finally:
+        sys.modules.pop("plugin_versions_r30", None)
+    table_doc = run_a_project(tmp_path / "table-case", capsys=capsys)
+
+    resolver_run = yaml.safe_load((resolver_doc["run_dir"] / "run.yaml").read_text())
+    table_run = yaml.safe_load((table_doc["run_dir"] / "run.yaml").read_text())
+    assert resolver_run["provenance"]["plugin_versions"] == {"dist-one": "1.0"}
+    assert table_run["provenance"]["plugin_versions"] == {}
+
+
+def test_a_hash_index_run_hashes_the_index_and_nothing_else(tmp_path, capsys):
+    """End to end: `hash_index` names `index.csv` (the table `data.units.from`
+    resolves), so the manifest's `sha256` for it must be a real digest — never
+    the `None` every source got before task 31 wired `units.index_names` into
+    the one `build_manifest` call site. An unnamed file beside it is the
+    control: `hash_index` behaving like `hash_all` would pass on `index.csv`
+    alone."""
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "index.csv").write_text("patient_id\np1\n")
+    (payload / "unnamed.txt").write_text("not named by anything\n")
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        data={
+            "input_dir": str(payload),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_index",
+            "units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": [],
+                "allocation": "within",
+                "cluster_by": None,
+                "weight_by": None,
+                "measurements": None,
+                "holdout": None,
+            },
+        },
+    )
+    manifest = json.loads((doc["run_dir"] / "manifest" / "input.json").read_text())
+    assert manifest["files"]["index.csv"]["sha256"] is not None
+    assert manifest["files"]["unnamed.txt"]["sha256"] is None
+
+
+_TEMPLATE_REQUIRING_MY_KEY_CLI = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("keyed")
+class Keyed(BaseTemplate):
+    required_env = ["MY_KEY"]
+    parameter_spec = {}
+"""
+
+
+class _BareBaseExceptionCLI(BaseException):
+    """A `BaseException` that is not `Exception`, `SystemExit`, or
+    `KeyboardInterrupt` — the shape `except BaseException` (rather than
+    `except Exception`) exists to still catch. Module-scoped so a
+    `parametrize` list can hold an instance of it."""
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        ContractError("resolver failed: key=SENTINEL-sk-abc123", code="E-UNITS-SOURCE-MISSING"),
+        ValueError("resolver failed: key=SENTINEL-sk-abc123"),
+        SystemExit("resolver failed: key=SENTINEL-sk-abc123"),
+        _BareBaseExceptionCLI("resolver failed: key=SENTINEL-sk-abc123"),
+    ],
+    ids=["contract-error", "value-error", "system-exit", "bare-base-exception"],
+)
+def test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole(
+    exception, monkeypatch, tmp_path, capsys
+):
+    """Probes C and D. C: a `ContractError` from resolution printed verbatim
+    through `main`'s bare handler. D: a `ValueError` escaping `main` entirely as a
+    traceback with the credential in it — the one output no redacting surface
+    sees. `system-exit` and `bare-base-exception` pin the widening from `except
+    Exception` to `except BaseException` at `cli.py`'s own arm — a resolver
+    calling `sys.exit(...)`, or raising a `BaseException` that is neither
+    `Exception` nor `SystemExit` nor `KeyboardInterrupt`, must be redacted the
+    same way; narrowing the `except` back to `Exception` lets either escape as
+    an un-redacted traceback, past every `except ContractError`/`except
+    Exception` arm, with the sentinel intact. Both are asserted with the
+    positive companion (the diagnostic IS produced, with the marker in it), so
+    a sweep finding no sentinel cannot pass on a run that never raised."""
+    import publishable.cli as cli_mod
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+
+    def _boom(*_args, **_kwargs):
+        raise exception
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="keyed",
+        parameters={},
+        _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "SENTINEL-sk-abc123" not in captured  # no traceback, no raw message
+    assert "<redacted:MY_KEY>" in captured  # the positive companion
+
+
+def test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message(
+    monkeypatch, tmp_path, capsys
+):
+    """`command_run`'s wide `except BaseException` arm carries an explicit
+    carve-out: `isinstance(exc, KeyboardInterrupt)` re-raises a FRESH,
+    argument-less `KeyboardInterrupt` `from None` rather than routing it
+    through the redacting diagnostic path, so Ctrl-C still stops the command
+    instead of being swallowed into `E-RESOLVER-RAISED`. A mutation deleting
+    that `if` (falling through to the diagnostic below it) would report a
+    finding and return `EXIT_WRONG` instead of propagating — this test would
+    then see no `KeyboardInterrupt` raised at all and fail on the
+    `pytest.raises` itself."""
+    import publishable.cli as cli_mod
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        run_a_project(
+            tmp_path,
+            units=4,
+            experiment_type="keyed",
+            parameters={},
+            _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+            expect_exit=EXIT_WRONG,
+            capsys=capsys,
+        )
+    # The re-raised object carries no message — it is a fresh instance, not
+    # the resolver's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()
+    assert str(excinfo.value) == ""
+
+
+def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, monkeypatch, capsys):
+    """THE CONTROL for the pair above: the wrap must not turn a healthy run into a
+    finding. Without it, a `try` that reported unconditionally would pass both."""
+    monkeypatch.setenv("MY_KEY", "irrelevant")
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="keyed",
+        parameters={},
+        _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-RESOLVER-RAISED" not in captured
+    assert "E-UNITS-SOURCE-MISSING" not in captured
+
+
+_LATE_SWEEP_READ_RESOLVER = """\
+from publishable import Unit, register_resolver
+
+_calls = {"n": 0}
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    _calls["n"] += 1
+    if _calls["n"] >= 2:
+        _ = cfg.parameters.analysis.method
+    yield Unit(key="p1")
+    yield Unit(key="p2")
+"""
+
+
+def test_command_run_threads_the_real_wide_cfg_to_its_own_resolver_call_too(
+    installed, registries, tmp_path, capsys
+):
+    """The `cli.py` half of the `cfg`-threading obligation the tasks 27-29 review
+    assigned in writing to task 33 — *"The `cli.py` half is still open and
+    remains task 33's"* — and task 33 left unmet (whole-branch review finding
+    I2). Mutating `cli.py`'s own `resolve_wide_cfg(doc, wide_swept_paths(...))`
+    call to `resolve_wide_cfg(doc, set())` left the full suite green before
+    this test existed.
+
+    `command_run` calls `validate_config` first, which resolves the roster once
+    through its OWN `resolve_wide_cfg` call — this resolver does not read the
+    swept parameter on that first call, so `validate` passes clean. Only on a
+    SECOND call — `command_run`'s own, separate roster resolution, right
+    before the run proceeds — does the resolver read `cfg.parameters.analysis
+    .method`, which `sweep.grid` varies here. Under the real cfg, that second
+    call meets the identical `SweptAway` marker the first one did and refuses
+    under `E-RESOLVER-SWEPT-PARAM`. Under the mutation, no marker was ever
+    planted for `cli.py`'s own call, so the resolver reads a real, arbitrary
+    value instead and the run completes — one condition's roster built from a
+    value no condition actually held, in silent violation of `data.units`
+    being one roster for the whole run."""
+    module = "late_sweep_r33"
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(_LATE_SWEEP_READ_RESOLVER)
+    importlib.invalidate_caches()
+    try:
+        doc = run_a_project(
+            tmp_path,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+            sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+            capsys=capsys,
+            expect_exit=EXIT_WRONG,
+        )
+    finally:
+        sys.modules.pop(module, None)
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-RESOLVER-SWEPT-PARAM" in captured

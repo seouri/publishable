@@ -897,3 +897,51 @@ class StepIO:
                 code="E-ARTIFACT-UNREADABLE",
             )
         return reader(path.read_bytes())
+
+
+class ResolverIO:
+    """What a resolver receives: `read_input` and nothing else.
+
+    `reference.md` § Where units come from — "The `io` a resolver receives is
+    read-only: `io.read_input` and nothing else. There is no run directory yet at
+    validate time and no step yet at run time, so there is nothing for it to write
+    into." A `StepIO` with its directories defaulted would carry every write and
+    every cross-scope read into a place where each either has no directory to act
+    on or would let a resolver write into a run that has not started. Core cannot
+    inspect the body of user Python, so the refusal is that the method does not
+    exist rather than that it raises.
+
+    Reads through `StepIO._read`, the one dispatch, so a plugin's registered
+    reader serves a resolver exactly as it serves a step — two dispatches would be
+    two answers to "what does this suffix mean".
+
+    Records each relative path it was asked for, in the order it was asked, so
+    `input_manifest_policy: hash_index` can name "the paths the resolver read"
+    without a second walk that could disagree with what was actually opened.
+    Duplicates are kept: this is a log of reads, and its one consumer builds a set
+    from it.
+
+    Two properties are left exactly as `StepIO.read_input` already has them, on
+    purpose, rather than narrowed here: the path is appended to `read_paths`
+    *before* `StepIO._read` runs, so a read that raises is still logged, and a
+    `relpath` containing `../` is not rejected, so it can name a file outside
+    `input_dir` — no containment check exists for either `IO` class. Both are
+    benign, decided in `docs/superpowers/spec-defects.md`: a raising read still
+    lands in `read_paths`, but `build_manifest`'s `files` dict is keyed by paths
+    walked from inside `input_dir`, so a name with no file on disk, or one that
+    resolves outside `input_dir`, never gets a hash attached either way.
+    """
+
+    __slots__ = ("input_dir", "_read_paths")
+
+    def __init__(self, input_dir: Path) -> None:
+        self.input_dir = input_dir
+        self._read_paths: list[str] = []
+
+    def read_input(self, relpath: str) -> Any:
+        self._read_paths.append(relpath)
+        return StepIO._read(self.input_dir / relpath)
+
+    @property
+    def read_paths(self) -> tuple[str, ...]:
+        return tuple(self._read_paths)
