@@ -10034,3 +10034,38 @@ def test_a_resampled_column_contrasts_member_carries_no_weights():
     assert members[0].diffs is None
     assert members[0].weights is None
 
+
+def test_the_sibling_refusal_rows_state_their_own_reading():
+    """Two § Errors rows contrasted their own family-reading against
+    `E-DATA-WEIGHT-CONTRAST`'s. That row is deleted in the task after next, so a
+    citation of it becomes a dangling reference — and this repo's rule is to delete
+    a claim rather than rewrite it into a second one. Each row now states the
+    property itself.
+
+    Located by each row's own final cell, which is what tells a row from a
+    citation, and asserted with a presence beside each absence so a mislocated row
+    cannot pass by matching nothing."""
+    lines = REFERENCE_MD.read_text().split("\n")
+
+    def _row(code: str) -> str:
+        return next(line for line in lines if line.rstrip().endswith(f"| `{code}` |"))
+
+    allocation = _row("E-DATA-ALLOCATION-CONTRAST")
+    cluster = _row("E-DATA-CLUSTER-CONTRAST")
+    assert "per comparison" in allocation  # the control
+    assert "cluster_by" in cluster  # the control
+    assert "E-DATA-WEIGHT-CONTRAST" not in allocation
+    assert "E-DATA-WEIGHT-CONTRAST" not in cluster
+
+
+def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
+    """§ Weighted samples' only sentence about a weighted contrast named no
+    construction, no `method` string and no check, and its "worth checking when it
+    isn't" described a case core cannot produce: one roster-wide weight mapping
+    reaches both sides of every comparison, so the same-weights property holds by
+    construction under `between` too."""
+    section = _section_text("### Weighted samples")
+    assert "weight_by" in section  # the control
+    assert "worth checking when it isn't" not in section
+    assert "the same weights reach both sides" in section
+
