@@ -151,3 +151,19 @@ paths, 11 is the § Validation rows, 12 exercises the three C configs by direct 
 refusal and carries the `validate`-clean and `run`-through halves; 14 sweeps; 15 dates the count.
 **Cost if wrong:** the last batch is the one that changes what the tool refuses, so it gets its own
 gate — which is the point of the seam.
+
+## Tasks 9-12 — corrected path, general path, § Validation rows, the three C configs — complete, review dispatched
+
+Commits `854f0ef` (corrected bound), `753fb19` (weighted paired t on the general path), `982b9b8`
+(§ Validation and the sibling refusal rows), `95723dc` (the three shortcut shapes end to end),
+report `f716e22`. Suite 2147 → 2159 passed, 1 skipped, 2 xfailed; four gates clean, every gate and
+every mutation run in the foreground against the full unfiltered suite. `E-DATA-WEIGHT-CONTRAST`
+alive; task 12 routes by **direct call**, per plan correction 1.
+
+**No brief/code disagreements this batch** — the first of the three to report none. Two mutation
+results handed to the reviewer rather than accepted here: task 12's `weighted_by=None` came back
+**silent**, deferred by the implementer to task 13's `run`-through path — the same excuse the
+previous batch made wrongly, so the reviewer decides whether a discriminating test is available
+today by direct call; and task 10's pool-guard mutation failed as a `Member.__post_init__`
+`ValueError` rather than an assertion, which pins the invariant rather than the behaviour the test
+is named for.
