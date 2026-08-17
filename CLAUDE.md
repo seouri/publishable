@@ -56,7 +56,7 @@ a resolver runs user code an exception can carry a credential to `main`'s un-red
 measurement is [`H7b-SCOPING-2.md`](docs/superpowers/H7b-SCOPING-2.md), which re-measured its own
 predecessor a day later and found **seven of its conclusions did not survive**.
 
-**H7b Part B (resolver dispatch) is complete on its branch, against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2`.**
+**H7b Part B (resolver dispatch) is complete on its branch, against commit `4f0415e7024e99ca94771afb7c3eb6269a6dbc44`.**
 `E-DATA-RESOLVER-UNSUPPORTED` is retired. A resolver dispatches at `validate` and `run`, projects onto
 declared attributes, must yield the field a declared `measurements.by` names, and may not read a swept
 parameter. This is the project's **first non-zero executable count**: **three of nine — E1, E2, E5 —
@@ -70,7 +70,8 @@ of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DAT
 (H4b) for C1–C3. Also closed: `hash_index` was broken for every source, table and glob included, not
 only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
 Part A left open — a resolver's raise now becomes a redacted diagnostic at both `validate` and `run`,
-never a traceback.
+except a `KeyboardInterrupt`, which is deliberately re-raised as a traceback carrying no message so
+Ctrl-C still stops the command.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the

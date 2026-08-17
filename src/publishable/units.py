@@ -369,15 +369,25 @@ def _from_resolver(
         # scope, which describes a different fault at a different time. Re-coded
         # rather than re-raised, on `discover_local`'s precedent for a coded
         # `ContractError` out of user code.
-        # `exc`'s own message ends in a remedy written for a step ("read it from
-        # a `condition`- or `repeat`-scoped step") — a resolver has no such
-        # scope to move to, so only the subject clause (which path is swept) is
-        # reused; the remedy below is the one a resolver can actually follow.
+        # `exc`'s own message is one independent clause (path and predicate
+        # together — "`{path}` is varied by `sweep`, so it has no single value
+        # at this scope"), a semicolon, then a remedy written for a step ("read
+        # it from a `condition`- or `repeat`-scoped step") — a resolver has no
+        # such scope to move to. The split below keeps everything before that
+        # semicolon and discards the remedy; it does not isolate the path
+        # alone, so the sentence below is built to take the WHOLE clause after
+        # a colon rather than as a direct object, which is what makes it read
+        # grammatically either way. This couples to `E-STEP-SWEPT-PARAM`'s
+        # message keeping a semicolon before its own remedy — if that message
+        # drops it, this split returns the whole message including the
+        # step-only remedy, unpinned by any test but the ones beside this
+        # raise.
         subject = str(exc).split(";", 1)[0]
         raise ContractError(
-            f"resolver `{name}` reads {subject}. The unit table is one table for the whole "
-            "run, so conditions that resolved different units could not be paired and `n` "
-            "would mean something different in each. Read a parameter the sweep leaves alone",
+            f"resolver `{name}`'s read failed: {subject}. The unit table is one table for "
+            "the whole run, so conditions that resolved different units could not be paired "
+            "and `n` would mean something different in each. Read a parameter the sweep "
+            "leaves alone",
             code="E-RESOLVER-SWEPT-PARAM",
         ) from exc
     if not units:

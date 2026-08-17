@@ -12604,6 +12604,65 @@ def test_a_resolvers_non_contract_raise_does_not_escape_validate(monkeypatch, wr
     assert "ValueError" in found["E-RESOLVER-RAISED"]
 
 
+class _BareBaseExceptionValidate(BaseException):
+    """A `BaseException` that is not `Exception`, `SystemExit`, or
+    `KeyboardInterrupt` — the shape `except BaseException` (rather than
+    `except Exception`) at `_check_units` exists to still catch."""
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [SystemExit("resolver failed"), _BareBaseExceptionValidate("resolver failed")],
+    ids=["system-exit", "bare-base-exception"],
+)
+def test_a_resolvers_wider_base_exception_does_not_escape_validate(
+    exception, monkeypatch, write_config
+):
+    """Pins the widening from `except Exception` to `except BaseException` at
+    `validate.py`'s own arm: a resolver calling `sys.exit(...)`, or raising a
+    `BaseException` that is neither `Exception` nor `SystemExit` nor
+    `KeyboardInterrupt`, must still be contained under `E-RESOLVER-RAISED`
+    rather than escaping `validate`, which is contracted never to raise.
+    Narrowing the `except` back to `Exception` lets either escape uncaught —
+    this test would then see `messages_by_code` itself raise instead of
+    returning."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise exception
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    found = messages_by_code(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id"}})
+    )
+    assert "E-RESOLVER-RAISED" in found
+
+
+def test_a_resolvers_keyboard_interrupt_at_validate_propagates_with_no_message(
+    monkeypatch, write_config
+):
+    """`_check_units`'s `except BaseException` arm carries the identical
+    carve-out `cli.py`'s does: `isinstance(exc, KeyboardInterrupt)` re-raises a
+    FRESH, argument-less `KeyboardInterrupt` `from None` rather than
+    containing it under `E-RESOLVER-RAISED`, so Ctrl-C still stops `validate`
+    instead of being swallowed into a diagnostic. A mutation deleting that
+    `if` would report a finding and return normally instead of propagating —
+    this test would then see no `KeyboardInterrupt` raised at all."""
+    import publishable.validate as validate_module
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(validate_module, "resolve_units", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        messages_by_code(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+    # The re-raised object carries no message — it is a fresh instance, not
+    # the resolver's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()
+    assert str(excinfo.value) == ""
+
+
 _TEMPLATE_REQUIRING_MY_KEY = """\
 from publishable import BaseTemplate, register_template
 

@@ -6246,3 +6246,25 @@ reachable for the first time.
 **Owner:** H7d. **Found by:** H7b Part B task 33, while re-measuring the feasibility analysis's
 executability — no config in that analysis declares an `apparatus_probe` today, so this is a defect
 about the shape now reachable rather than one any of the nine configs currently hits.
+
+## OPEN — a relative `glob` pattern escaping `input_dir` resolves units from outside it — **Owner: unassigned**
+
+`units._from_glob` builds the roster from `input_dir.glob(pattern)` with no containment check on the
+matches. An **absolute** pattern (`/etc/*.conf`) or one that is absolute after normalization
+(`/../*.csv`) hits `Path.glob`'s own `NotImplementedError` and is recoded to
+`E-UNITS-SOURCE-UNREADABLE` — that much `reference.md`'s row for the code describes correctly. A
+**relative** pattern that still escapes `input_dir` (`../*.csv`, `../outside.csv`, `**/../*.csv`) does
+not: `Path.glob` returns the outside match, so the roster silently includes a unit whose `paths` entry
+is `../outside.csv`, read from outside the declared `input_dir` — on 3.11, 3.12 and 3.13 alike, so this
+is not one interpreter's behavior.
+
+The same asymmetry task 31 already recorded for `ResolverIO` (a resolver's own reads are unchecked
+against `input_dir` too, decided benign there because `build_manifest`'s `files` dict is keyed by paths
+walked from *inside* `input_dir`, so an escaping name simply never gets a `files` entry). It applies
+identically here: `hash_index` cannot hash such a unit's path either.
+
+**Found by:** H7b Part B's whole-branch re-review, while checking a normative § Errors row against the
+code rather than reading it — the row had claimed this exact pattern raises, which it does not for the
+relative case. Filed rather than fixed: closing it is a containment-check decision (what a `glob` or a
+resolver may read) that no task in this slice was asked to make, the same reasoning task 31's entry
+already gives for `ResolverIO`.

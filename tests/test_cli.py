@@ -9286,13 +9286,22 @@ class Keyed(BaseTemplate):
 """
 
 
+class _BareBaseExceptionCLI(BaseException):
+    """A `BaseException` that is not `Exception`, `SystemExit`, or
+    `KeyboardInterrupt` — the shape `except BaseException` (rather than
+    `except Exception`) exists to still catch. Module-scoped so a
+    `parametrize` list can hold an instance of it."""
+
+
 @pytest.mark.parametrize(
     "exception",
     [
         ContractError("resolver failed: key=SENTINEL-sk-abc123", code="E-UNITS-SOURCE-MISSING"),
         ValueError("resolver failed: key=SENTINEL-sk-abc123"),
+        SystemExit("resolver failed: key=SENTINEL-sk-abc123"),
+        _BareBaseExceptionCLI("resolver failed: key=SENTINEL-sk-abc123"),
     ],
-    ids=["contract-error", "value-error"],
+    ids=["contract-error", "value-error", "system-exit", "bare-base-exception"],
 )
 def test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole(
     exception, monkeypatch, tmp_path, capsys
@@ -9300,9 +9309,15 @@ def test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole(
     """Probes C and D. C: a `ContractError` from resolution printed verbatim
     through `main`'s bare handler. D: a `ValueError` escaping `main` entirely as a
     traceback with the credential in it — the one output no redacting surface
-    sees. Both are asserted with the positive companion (the diagnostic IS
-    produced, with the marker in it), so a sweep finding no sentinel cannot pass
-    on a run that never raised."""
+    sees. `system-exit` and `bare-base-exception` pin the widening from `except
+    Exception` to `except BaseException` at `cli.py`'s own arm — a resolver
+    calling `sys.exit(...)`, or raising a `BaseException` that is neither
+    `Exception` nor `SystemExit` nor `KeyboardInterrupt`, must be redacted the
+    same way; narrowing the `except` back to `Exception` lets either escape as
+    an un-redacted traceback, past every `except ContractError`/`except
+    Exception` arm, with the sentinel intact. Both are asserted with the
+    positive companion (the diagnostic IS produced, with the marker in it), so
+    a sweep finding no sentinel cannot pass on a run that never raised."""
     import publishable.cli as cli_mod
 
     monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
@@ -9323,6 +9338,43 @@ def test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole(
     captured = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "SENTINEL-sk-abc123" not in captured  # no traceback, no raw message
     assert "<redacted:MY_KEY>" in captured  # the positive companion
+
+
+def test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message(
+    monkeypatch, tmp_path, capsys
+):
+    """`command_run`'s wide `except BaseException` arm carries an explicit
+    carve-out: `isinstance(exc, KeyboardInterrupt)` re-raises a FRESH,
+    argument-less `KeyboardInterrupt` `from None` rather than routing it
+    through the redacting diagnostic path, so Ctrl-C still stops the command
+    instead of being swallowed into `E-RESOLVER-RAISED`. A mutation deleting
+    that `if` (falling through to the diagnostic below it) would report a
+    finding and return `EXIT_WRONG` instead of propagating — this test would
+    then see no `KeyboardInterrupt` raised at all and fail on the
+    `pytest.raises` itself."""
+    import publishable.cli as cli_mod
+
+    monkeypatch.setenv("MY_KEY", "SENTINEL-sk-abc123")
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("resolver failed: key=SENTINEL-sk-abc123")
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        run_a_project(
+            tmp_path,
+            units=4,
+            experiment_type="keyed",
+            parameters={},
+            _local_template=_TEMPLATE_REQUIRING_MY_KEY_CLI,
+            expect_exit=EXIT_WRONG,
+            capsys=capsys,
+        )
+    # The re-raised object carries no message — it is a fresh instance, not
+    # the resolver's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()
+    assert str(excinfo.value) == ""
 
 
 def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, monkeypatch, capsys):

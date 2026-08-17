@@ -1373,8 +1373,7 @@ def _check_units(
         # source's own non-`ContractError` faults (a mis-encoded CSV, an
         # absolute glob pattern) are recoded to `E-UNITS-SOURCE-UNREADABLE`
         # inside `resolve_units` itself and so are already `ContractError`s
-        # by the time they reach here — this arm is a resolver's by
-        # construction.
+        # by the time they reach here.
         if isinstance(exc, KeyboardInterrupt):
             raise KeyboardInterrupt from None
         c.error(

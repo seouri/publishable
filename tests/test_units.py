@@ -3885,6 +3885,37 @@ def test_a_table_source_still_resolves_with_no_cfg(tmp_path):
     assert columns == frozenset({"patient_id"})
 
 
+def test_a_mis_encoded_table_is_recoded_to_source_unreadable(tmp_path):
+    """`_from_table` opens a file this repo does not control the contents of —
+    a CSV that is not valid UTF-8 raises `UnicodeDecodeError` out of
+    `csv.DictReader`, not a `ContractError`. `resolve_units` recodes it to
+    `E-UNITS-SOURCE-UNREADABLE` rather than letting it escape as the raw
+    stdlib exception. Pinned here because the fix round that introduced this
+    code shipped it with no test — a mutation reverting the recode to
+    `E-RESOLVER-RAISED`, or removing the `except Exception` arm entirely and
+    letting `UnicodeDecodeError` escape, both must fail this test."""
+    from publishable.units import resolve_units
+
+    (tmp_path / "index.csv").write_bytes(b"patient_id\n\xff\xfe\n")
+    with pytest.raises(ContractError) as excinfo:
+        resolve_units({"from": "index.csv", "key": "patient_id"}, tmp_path)
+    assert excinfo.value.code == "E-UNITS-SOURCE-UNREADABLE"
+    assert "index.csv" in str(excinfo.value)
+
+
+def test_an_absolute_glob_is_recoded_to_source_unreadable(tmp_path):
+    """`Path.glob` raises `NotImplementedError` for an absolute pattern rather
+    than a `ContractError` — `resolve_units` recodes it, at the glob branch,
+    into the same identifier the table branch above uses. Pinned for the
+    identical reason: the fix round shipped this recode with no test."""
+    from publishable.units import resolve_units
+
+    with pytest.raises(ContractError) as excinfo:
+        resolve_units({"from": {"glob": "/etc/*.conf"}, "key": "path"}, tmp_path)
+    assert excinfo.value.code == "E-UNITS-SOURCE-UNREADABLE"
+    assert "/etc/*.conf" in str(excinfo.value)
+
+
 _YIELDS_PARTIAL = """\
 from publishable import Unit, register_resolver
 
@@ -4057,6 +4088,38 @@ def test_a_resolver_reading_a_swept_parameter_is_refused_under_its_own_code(
     assert excinfo.value.code == "E-RESOLVER-SWEPT-PARAM"
     assert "plate_wells" in str(excinfo.value)
     assert "analysis.method" in str(excinfo.value)
+
+
+def test_a_resolver_reading_a_swept_parameter_gets_no_impossible_remedy(
+    installed, registries, tmp_path
+):
+    """M1: `E-STEP-SWEPT-PARAM`'s own message ends in a remedy written for a
+    step ("read it from a `condition`- or `repeat`-scoped step") — a resolver
+    has no scope to move to, so that remedy must not survive into
+    `E-RESOLVER-SWEPT-PARAM`'s message. Pinned because the fix round that
+    dropped it shipped with no test: reverting `_from_resolver`'s
+    `str(exc).split(";", 1)[0]` back to `str(exc)` would let the whole
+    original message — remedy included — through unchanged, and nothing
+    before this test would catch that."""
+    from publishable.errors import ContractError
+    from publishable.runner import resolve_wide_cfg
+    from publishable.sweep import wide_swept_paths
+    from publishable.units import resolve_units
+
+    doc = {
+        "parameters": {"analysis": {"method": "pearson"}},
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+    }
+    cfg = resolve_wide_cfg(doc, wide_swept_paths(doc["sweep"]))
+    _install_resolver(installed, tmp_path, "swept_r29b", _READS_A_PARAM)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=cfg)
+    finally:
+        sys.modules.pop("swept_r29b", None)
+    message = str(excinfo.value)
+    assert "scoped step" not in message  # the step-only remedy `E-STEP-SWEPT-PARAM` carries
+    assert "Read a parameter the sweep leaves alone" in message
 
 
 def test_a_resolver_reading_a_parameter_the_sweep_leaves_alone_resolves(
