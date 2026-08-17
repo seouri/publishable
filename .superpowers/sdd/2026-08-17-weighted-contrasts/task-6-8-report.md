@@ -73,3 +73,97 @@ source files) clean after each task.
 - `E-DATA-WEIGHT-CONTRAST` is untouched and still fires; all new tests call the three comparison
   functions directly, never through `run`, per the brief's own note that task 12 (end-to-end) is
   blocked on task 13 (refusal retirement).
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-17-weighted-contrasts/task-6-8-review.md` (`dbc0830`). Spec
+compliance passed; four Majors and six Minors on quality, none a wrong answer in shipped arithmetic.
+All ten closed. Every mutation below reverted by editing the file back (never `git checkout --`),
+`__pycache__` cleared between runs, reverts verified by re-running — the full suite, not a `-k`
+filter, for every mutation the review itself ran against the full suite.
+
+**Major 1 — `_compute_declared_contrasts`'s `weights` threading was unpinned.** The test whose name
+claimed all three signatures (`test_the_three_comparison_functions_accept_weights_and_strata`)
+asserted only `n_paired == 6` on that arm, true under any weighting. Added
+`assert out[0]["s"]["m"]["delta"] == pytest.approx(8.0)` beside it.
+*Mutation:* `weights=weights,` → `weights=None,` at the `_comparison_step_blocks` call inside
+`_compute_declared_contrasts` (`cli.py`, then line 1278) — **FAIL**, `AssertionError: 6.0 == 8.0 ±
+8.0e-06` on the new assertion, full suite: 1 failed, 2146 passed. Reverted; full suite back to 2147
+passed.
+
+**Major 2 — the "silent, task 13 catches it" excuse for `strata=None` at `command_run`'s two call
+sites was wrong.** `E-DATA-WEIGHT-CONTRAST`'s emit (`validate.py:5020`) gates on `weight_by`, not on
+`stratify_by`, so an unweighted config declaring `statistics.resample.stratify_by` beside a sweep
+validates and runs today — I had inferred "this path does not run" from "a *different* config shape
+is refused," the exact substitution `CLAUDE.md` names, and had offered a `-k`-filtered 29-test run as
+evidence of silence rather than the full suite. Built
+`test_a_declared_stratify_by_reaches_a_contrasts_interval_through_run`: an unweighted,
+`weight_by`-free config with a baseline sweep *and* a declared `statistics.contrasts` entry, using a
+step (`_COHORT_CONTRAST_STEP`) whose per-unit spearman-minus-pearson difference is a deterministic
+0.0 for cohort `a` and 5.0 for cohort `b` — so a stratified draw is a fixed 50/50 mix every time and
+an unstratified one is not, giving a measurably narrower interval at both call sites in one run.
+*Mutations, each against the full, unfiltered suite:*
+- `_compute_vs_baseline`'s `strata=resample_strata,` → `strata=None,` — **FAIL**,
+  `assert 1.6249999999999998 < 1.6249999999999998` on the `vs_baseline` width assertion; full suite 1
+  failed, 2146 passed. Reverted; full suite back to 2147.
+- `_compute_declared_contrasts`'s `strata=resample_strata,` → `strata=None,` — **FAIL**, the same
+  equal-width assertion on the declared-contrast width; full suite 1 failed, 2146 passed. Reverted;
+  full suite back to 2147.
+
+Also corrected here rather than by editing the original entries above (the development record is not
+retro-edited): the task 6 mutation-table row for this same `strata=None` mutation gave the right
+observed outcome (silent) for the wrong reason (task 13's blocker, which does not gate `stratify_by`)
+and cited filtered output as if it were evidence of silence. The observation stands; the reasoning in
+that row does not.
+
+**Major 3 — `weighted_cohens_dz`'s zero-denominator branch was reachable, and two docstrings claimed
+a refusal no assertion made.** My report's `weighted_cohens_dz([1.0, 2.0], [1, 0])` probed one input
+and generalized to "structurally unreachable" — a proxy (one candidate) standing in for the real
+question (is the branch reachable at all). It is: `Σw − Σw²/Σw` for `[1e17, 1.0]` computes to exactly
+`0.0` in floating point (`1e17 + 1.0` and `1e17 - 1e34/1e17` both round to `1e17`), not by concentrating
+all weight on one unit (algebraically impossible for two positive weights — `checked_weights` also
+refuses a literal zero weight before the denominator is ever reached). Rewrote both docstrings
+(`stats.py`'s `weighted_cohens_dz` and the test's) to name the actually-reachable cause, and added
+`assert weighted_cohens_dz([1.0, 2.0], [1e17, 1.0]) is None` to
+`test_a_weighted_dz_refuses_the_degenerate_shapes_the_unweighted_one_does`, plus a direct assertion
+that the computed denominator is exactly `0.0` for that input.
+*Mutation:* `if denominator <= 0:` → `if denominator < 0:` in `weighted_cohens_dz` — **FAIL**,
+`ZeroDivisionError: float division by zero` inside the test (still a failure, just raised rather than
+asserted). Reverted; test green.
+
+**Major 4 — `_comparison_step_blocks`'s docstring still described the pre-task-7/8 column branch.**
+"A recorded column takes `paired_t_over_units`... with `cohens_d = cohens_dz(diffs)`... while
+`cohens_d` keeps computing from the local `diffs` list regardless" is false under a weight
+(`cohens_d` is `weighted_cohens_dz(diffs, col_weights)` there), and the paragraph task 6 added named
+what `weights` *is* without ever saying what it *does* to the block. Re-read the whole docstring (not
+just the lines task 6 touched) and rewrote: deleted the false `cohens_d = cohens_dz(diffs)` clause
+and the "regardless" claim, and replaced the `weights`-is paragraph's missing half with what the
+weighted path actually produces — the weighted `delta`, `cohens_d`, `method` spelling, and the two
+additional record keys (`weighted_by`, `n_paired_effective`) and the derived/column split those keys
+still travel across.
+
+**Minor 5** — deleted the nonexistent `entry_weights` name and the positional "below" locator from
+the Kish comment; the sentence is complete without either. **Minor 6** — "The mean of the per-unit
+differences" → "The (weighted, when `col_weights` is not `None`) mean...". **Minor 7** — amended the
+task-6 test's docstring again to name what it does *not* yet pin: a weighted `delta`/`cohens_d`
+beside an unweighted `paired_t_over_units` interval at `resample_columns=False`, owned by task 10,
+unreachable through `run` while the refusal stands. **Minor 8** — added
+`test_a_weighted_contrast_records_the_declared_attribute_name_not_a_constant`, passing
+`weighted_by="cohort_inverse_probability"` (distinct from every other fixture's
+`"sampling_weight"`) and asserting it comes back unchanged.
+*Mutation:* `metric_block[metric_key]["weighted_by"] = weighted_by` → `= "sampling_weight"` —
+**FAIL**, `AssertionError: 'sampling_weight' == 'cohort_inverse_probability'`. Reverted; test green.
+**Minor 9** — narrowed `test_a_weighted_stratified_column_contrast_weights_inside_the_strata`'s
+docstring: it does not, by itself, separate a correctly-drawn weight vector from the mispairing
+mutation the review found (that mutation passed this test; only the payoff test's `ci95[0] >
+plain_ci95[0]` comparison catches it) — the docstring now says which two separations the assertions
+actually make and names the sibling test that catches the mispairing. **Minor 10** — the count is a
+report fact, not a code fact; recorded here rather than edited into the original line: the correct
+figure throughout was 2139 → 2145, not 2143.
+
+**Full-suite counts:** 2145 → 2147 passed (1 skipped, 2 xfailed) — two new tests
+(`test_a_declared_stratify_by_reaches_a_contrasts_interval_through_run`,
+`test_a_weighted_contrast_records_the_declared_attribute_name_not_a_constant`); every other finding
+closed inside an existing test. `uv run ruff check .`, `uv run ruff format --check .` (80 files), and
+`uv run mypy` (45 source files) clean; `uv run pytest` run in the foreground throughout, including
+every mutation's full-suite run.
