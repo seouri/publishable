@@ -143,3 +143,35 @@ Tasks 12-15: reviewed (opus), eight verdicts. **One CRITICAL.**
   reordering the fixture, not the assertion.
 Tasks 12-15: fix round. Commit 9479e13. All eight closed, plus a stale "Not yet emitted" on
   `E-PLUGIN-COLLISION` that entered with tasks 1-6. 2040 passed + 2 xfailed; gates clean.
+
+Tasks 16-20: BATCHED, the slice's last five. Committed separately baa8337..aa37916. 2054 passed,
+  1 skipped, 2 xfailed.
+Tasks 16-20: reviewed (opus), ten verdicts. One CRITICAL, three Important, four Minor.
+  C1: `plugins.py`'s module docstring still said **"nothing here calls `EntryPoint.load()`, and nothing
+  that calls this module may either"** — falsified by `load_entry_point`, which task 17 added. The file
+  held two sentences that could not both hold, **and the false one was the argument justifying the whole
+  mechanism.** Fixed by RE-ARGUING the paragraph rather than appending an exception clause, which is
+  what the reviewer specifically asked for: resolving a name answers from metadata and imports nothing;
+  loading the object is a separate named operation a caller performs deliberately, and `validate` is not
+  such a caller. Both no-import assertions untouched.
+  **C2 is the inversion this slice has now hit twice: a mutation's SILENCE read as confirmation.** Task
+  20 emptied `_claims`' `partial_templates`, saw all 2054 tests stay green, and concluded no test could
+  reach the payload. The reviewer built the discriminating test instead — `c.credentials` is a public,
+  inspectable chain carrying `SHADOW_KEY` today. A mutation that changes nothing is evidence about the
+  TESTS, not about the code.
+  I2 is the same family from the other side: the report claimed brief mutation (a) FAILS, and it does
+  not — moved below `_claims` the test still passes; it only fails when moved past the first disk write.
+  So the ordering guarantee both the code comment and the test docstring name was pinned by nothing.
+  Resolved by PINNING it, with a faked `uv_add` that writes a template as a side effect — so the test
+  can only pass if the install really precedes name resolution.
+  I1: `discover_local`'s pre-drain was not mirrored, and a stale `_pending` entry was inherited and
+  misattributed onto an unrelated refusal while the docstring asserted the opposite.
+  Ruling on the skipped test: KEPT, but made honest. `test_uv_add_really_installs`'s body was an
+  unconditional `pytest.skip`, so it never ran under ANY invocation including `-m slow` — a test that
+  does not exist wearing a marker. It is not the sole pin for task 18's headline (both CLI tests drive
+  `main` unskipped and pin that `--plugin` is genuinely threaded), and no offline-installable
+  `git+https://` dependency exists because a scaffolded project cannot resolve `uv add` at all. Now a
+  decoration-level skip with a reason, and the residual — **no test executes `uv_add`'s body** — is
+  written into the test file rather than left to be rediscovered.
+Tasks 16-20: fix round. Commit cac8e1f. All eight closed. 2059 passed, 1 skipped, 2 xfailed.
+ALL TWENTY TASKS COMPLETE. Whole-branch review next, then merge and push.
