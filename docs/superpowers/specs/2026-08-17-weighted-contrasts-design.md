@@ -102,3 +102,37 @@ exists.
 Clusters through contrasts — **H4b-2**, seven tasks, zero configs unblocked. The unpaired
 constructions — **H4c**. `null_test` — **H4d**. `io.reuse_from` — unbuilt, unowned, and the reason
 C1–C3's executable status stays unsettled after this slice.
+
+---
+
+## Corrections from planning — appended 2026-08-17, replacing nothing above but qualifying it
+
+The plan author found four disagreements. All four change the order or the contents of a task.
+
+1. **Task 12 as written is impossible before task 13.** `cli.command_run` calls `validate_config` and
+   returns `EXIT_WRONG` on any error, and `E-DATA-WEIGHT-CONTRAST` is one — so **no weighted contrast
+   reaches `_comparison_step_blocks` through `run` until the refusal is retired.** Tasks 6–12 therefore
+   test by direct call, which the suite already does at three sites, and **task 13 carries the
+   `validate`-clean and `run`-through halves.**
+2. **`weighted_paired_t_over_units` is built in task 9, not 10.** `correction._corrected_bounds`'
+   `diffs` branch is its **first caller**, so the spec's ordering inverts the dependency. Task 10 wires
+   the same function into the raw interval.
+3. **The § Validation row *Weighted deltas aren't computed* moves from task 11 to task 13.** A
+   § Validation row and its § Errors row are one check seen from two ends; striking one while the emit
+   still fires would have the document **deny a live refusal for two commits.**
+4. **Two scoping tasks were absent from the spec's fifteen and are absorbed into task 8**, named as
+   absorbed: Kish over the intersection, and a weighted `cohens_dz`. Without them the payoff path
+   would publish a weighted delta **beside an unweighted effect size.**
+
+**Also recorded:** the scoping's *"`_comparison_step_blocks` never calls `_attributed`"* is true only of
+the **column** path — `resample_fns_by_key`'s closures do re-attribute, which is what makes decision 1's
+derived/column split correct rather than a gap.
+
+**The discriminating fixture, stated here so no later task weakens it.** Six units, column `m` at
+1, 2, 3, 9, 10, 11 against a zero baseline, weights 1, 1, 1, 3, 3, 3 — arithmetic checked by the
+controller: **unweighted delta 6.0, weighted delta 8.0**; `cohens_d` 1.3416407864998738 versus exactly
+**2.0**; Kish effective size **6 versus 4.8**. A second fixture separates Kish over the intersection
+(3.0) from Kish over the whole weight mapping (6.0) from `n_paired` (4) — **three distinct answers**,
+needed because all three payoff configs declare `holdout: null` and so cannot separate those readings.
+
+**Task count is 15.**
