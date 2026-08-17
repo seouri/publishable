@@ -897,3 +897,41 @@ class StepIO:
                 code="E-ARTIFACT-UNREADABLE",
             )
         return reader(path.read_bytes())
+
+
+class ResolverIO:
+    """What a resolver receives: `read_input` and nothing else.
+
+    `reference.md` § Where units come from — "The `io` a resolver receives is
+    read-only: `io.read_input` and nothing else. There is no run directory yet at
+    validate time and no step yet at run time, so there is nothing for it to write
+    into." A `StepIO` with its directories defaulted would carry every write and
+    every cross-scope read into a place where each either has no directory to act
+    on or would let a resolver write into a run that has not started. Core cannot
+    inspect the body of user Python, so the refusal is that the method does not
+    exist rather than that it raises.
+
+    Reads through `StepIO._read`, the one dispatch, so a plugin's registered
+    reader serves a resolver exactly as it serves a step — two dispatches would be
+    two answers to "what does this suffix mean".
+
+    Records each relative path it was asked for, in the order it was asked, so
+    `input_manifest_policy: hash_index` can name "the paths the resolver read"
+    without a second walk that could disagree with what was actually opened.
+    Duplicates are kept: this is a log of reads, and its one consumer builds a set
+    from it.
+    """
+
+    __slots__ = ("input_dir", "_read_paths")
+
+    def __init__(self, input_dir: Path) -> None:
+        self.input_dir = input_dir
+        self._read_paths: list[str] = []
+
+    def read_input(self, relpath: str) -> Any:
+        self._read_paths.append(relpath)
+        return StepIO._read(self.input_dir / relpath)
+
+    @property
+    def read_paths(self) -> tuple[str, ...]:
+        return tuple(self._read_paths)
