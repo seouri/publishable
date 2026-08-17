@@ -9994,3 +9994,43 @@ def test_a_weighted_derived_contrast_carries_the_record_keys_without_a_weighted_
     assert entry["n_paired_effective"] == pytest.approx(4.8)
     assert entry["method"] == "paired_percentile_over_units"
     assert entry["cohens_d"] is None
+
+
+def test_a_weighted_column_contrast_with_no_resample_takes_the_weighted_t():
+    """The general case, off the payoff path: C1-C3 all declare
+    `statistics.resample`, so `resample_columns` is True for them and this branch
+    is never taken. What it makes honest is a weighted column contrast in a config
+    that declares no `resample`, which would otherwise publish an unweighted
+    interval beside a weighted delta.
+
+    The centre is exact — 8.0 weighted against 6.0 unweighted — so this cannot
+    pass by landing on a similar interval, and the `method` is checked against the
+    document's own construction tables rather than a second literal."""
+    weighted, members = _weighted_contrast_block(resample_columns=False, weights=_W_WEIGHTS)
+    plain, plain_members = _weighted_contrast_block(resample_columns=False)
+    assert weighted["method"] == "weighted_paired_t_over_units"
+    assert weighted["method"] in _interval_method_names()
+    assert plain["method"] == "paired_t_over_units"
+    low, high = weighted["ci95"]
+    assert (low + high) / 2 == pytest.approx(8.0)
+    low_p, high_p = plain["ci95"]
+    assert (low_p + high_p) / 2 == pytest.approx(6.0)
+    # The member carries the weights beside the differences, so the corrected
+    # bound task 9 built is reachable from a real run rather than from a
+    # hand-built `Member` alone.
+    assert members[0].weights == (1, 1, 1, 3, 3, 3)
+    assert members[0].diffs is not None
+    assert plain_members[0].weights is None
+
+
+def test_a_resampled_column_contrasts_member_carries_no_weights():
+    """`corrected_from_pool = is_derived or resample_columns`, so the payoff path's
+    member carries the POOL — already drawn from weighted values — and `Member`
+    refuses weights beside one. Pinned because setting `weights` unconditionally is
+    the natural mistake, and task 4's second `__post_init__` rule is what would
+    turn it into a loud `ValueError` rather than a doubled weighting."""
+    weighted, members = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    assert members[0].pool is not None
+    assert members[0].diffs is None
+    assert members[0].weights is None
+

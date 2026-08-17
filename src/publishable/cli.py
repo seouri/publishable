@@ -76,6 +76,7 @@ from publishable.stats import (
     unit_table_from_rows,
     weighted_cohens_dz,
     weighted_mean_of,
+    weighted_paired_t_over_units,
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -905,6 +906,12 @@ def _comparison_step_blocks(
         # real name, would be the first entry of every contrast block.
         for metric_key in sorted((set(of_summary) & set(against_summary)) - {"by"}):
             is_derived = metric_key in of_derived or metric_key in against_derived
+            # Bound here, before either branch, so the name is always defined —
+            # the derived branch never assigns it, and relying on
+            # `corrected_from_pool`'s short-circuit below to keep it out of reach
+            # there would make an unrelated refactor of that expression silently
+            # load-bearing.
+            col_weights: list[Any] | None = None
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
@@ -1039,7 +1046,17 @@ def _comparison_step_blocks(
                     )
                     interval = resampled.interval
                 else:
-                    interval = paired_t_over_units(diffs)
+                    # The general case, and it is off the payoff path: a config
+                    # declaring `resample` never reaches here. Weighted when a
+                    # weight is declared, because the delta above already is —
+                    # `weighted_paired_t_over_units` takes its df from Kish's
+                    # effective size over this intersection, which is the
+                    # `n_paired_effective` recorded beside it.
+                    interval = (
+                        paired_t_over_units(diffs)
+                        if col_weights is None
+                        else weighted_paired_t_over_units(diffs, col_weights)
+                    )
                 metric_block[metric_key] = {
                     # The (weighted, when `col_weights` is not `None`) mean of
                     # the per-unit differences over `col_keys` — the same unit
@@ -1121,6 +1138,14 @@ def _comparison_step_blocks(
                     ci95=(interval.low, interval.high) if interval else None,
                     pool=tuple(resampled.pool) if corrected_from_pool and resampled else None,
                     diffs=None if corrected_from_pool else tuple(diffs),
+                    # Only where `diffs` is: a pool is already drawn from weighted
+                    # values, so weights beside one would be applied twice, and
+                    # `Member.__post_init__` refuses that rather than letting it
+                    # through. `corrected_from_pool` is the single decision, read
+                    # once for both fields, so the two cannot disagree.
+                    weights=(
+                        None if corrected_from_pool or col_weights is None else tuple(col_weights)
+                    ),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
