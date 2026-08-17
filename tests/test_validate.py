@@ -12854,6 +12854,30 @@ def test_one_distribution_per_plugin_name_reports_nothing(installed, write_confi
     assert "E-PLUGIN-COLLISION" not in codes(write_config())
 
 
+def test_a_template_collision_reports_only_once_not_also_as_plugin_collision(
+    installed, write_config
+):
+    """`_check_plugin_collisions` loops over all five entry-point groups,
+    including `publishable.templates`, and its own docstring argues that group
+    never needs a skip there: `validate_config` already returned from the
+    `_claims`/`E-TEMPLATE-COLLISION` merge before this function ever runs, so
+    the loop's own `publishable.templates` pass never fires live.
+
+    Nothing in the suite pinned that argument before this test (whole-branch
+    review finding M5) — every other `_check_plugin_collisions` test uses
+    `publishable.resolvers`. If the early return in `validate_config` ever
+    moved below this call, the same fault would report under both codes and
+    this is the test that would catch it: two installed distributions
+    claiming one template name must report `E-TEMPLATE-COLLISION` alone.
+    """
+    installed("dist-two", "2.0", {"publishable.templates": {"my_assay": "no_two:T"}})
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    found = codes(write_config({"experiment_type": "my_assay"}))
+    assert "E-TEMPLATE-COLLISION" in found
+    assert "E-PLUGIN-COLLISION" not in found
+
+
 def test_an_installed_only_template_name_is_known_and_refused(installed, write_config):
     """Known, and not resolved: core answers the name from metadata and does not
     import the distribution to get a class. So the finding is neither

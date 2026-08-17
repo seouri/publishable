@@ -2767,6 +2767,15 @@ def _dispatch(command: str, rest: list[str]) -> int:
 
 
 def _dispatch_generate(command: str, rest: list[str]) -> int:
+    """Parse `--flag value` pairs into `opts` and leave everything else positional.
+
+    Unrecognized options are silently accepted into `opts` and then silently
+    dropped by whichever `kind` branch below does not read them — `--plugin`
+    passed to `generate step` or `generate template`, or a misspelled
+    `--plguin` anywhere, installs nothing and prints nothing. Each `kind`
+    branch below validates its own required options by name (`missing` for
+    `experiment`); it does not reject an option it was not asked for.
+    """
     opts: dict[str, str] = {}
     positional: list[str] = []
     i = 0

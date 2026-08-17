@@ -427,19 +427,28 @@ already commits to deleting on a schedule neither this table nor its author cont
 
 Each row states the condition, not the wording.
 
-Five codes return `validate_config` early, in this order: a config that does not parse
+The codes that return `validate_config` early, in this order: a config that does not parse
 (`E-CONFIG-PARSE`), a container-shaped `E-CONFIG-SHAPE` fault, a `templates/*.py` that fails
-to load (`E-TEMPLATE-LOAD`), a `templates/` core cannot merge (`E-TEMPLATE-COLLISION`), and an
-unresolvable `experiment_type` (`E-TEMPLATE-UNKNOWN`). That is five *codes*. A plugin-side collision adds no sixth: an installed distribution's template claim is decided in the same merge a local one is, so it arrives here as `E-TEMPLATE-COLLISION` — a code already counted. The identifiers a plugin registry mints for its other groups reach this list not at all, for two different reasons: [`E-PLUGIN-COLLISION`](#errors-core-raises) is reported by a check that does not return early, the way `E-TEMPLATE-COLLISION`'s is; `E-PLUGIN-DECORATOR` and `E-PLUGIN-LOAD` are not reported by `validate` at all, early-return or not — `validate` never imports a plugin, so neither check runs there. `E-TEMPLATE-LOAD`
+to load (`E-TEMPLATE-LOAD`), a `templates/` core cannot merge (`E-TEMPLATE-COLLISION`), an
+unresolvable `experiment_type` (`E-TEMPLATE-UNKNOWN`), and a name that resolves to an installed
+template this build cannot load (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — the last two decided by
+the same branch and returning at the same site. A plugin-side collision returns early under a
+code already in that set: an installed distribution's template claim is decided in the same
+merge a local one is, so it arrives here as `E-TEMPLATE-COLLISION` rather than minting its own.
+The identifiers a plugin registry mints for its other groups reach this list not at all, for two
+different reasons: [`E-PLUGIN-COLLISION`](#errors-core-raises) is reported by a check that does
+not return early, the way `E-TEMPLATE-COLLISION`'s is; `E-PLUGIN-DECORATOR` and `E-PLUGIN-LOAD`
+are not reported by `validate` at all, early-return or not — `validate` never imports a plugin,
+so neither check runs there. `E-TEMPLATE-LOAD`
 covers three shapes — a file that raises while importing, one that imports cleanly and registers
 nothing, one that registers a non-`BaseTemplate` — and a `Param` whose construction raises is the
 first of them, so a bad `default=None` or a
 [`requires_env`](#a-credential-can-belong-to-a-parameter-value) mapping that is not total over
-`choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to [the table this section carries](#errors-validate-reports) or a sixth
-code to this count. Each returns because every check after it reads what it just found wrong, and each is
-what triggers its own return rather than sitting behind it. Every other row in this table fires only once all five have passed — except
+`choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to [the table this section carries](#errors-validate-reports)
+or a code to this set. Each returns because every check after it reads what it just found wrong, and each is
+what triggers its own return rather than sitting behind it. Every other row in this table fires only once every code above has passed — except
 `E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
-loads, before any of the later four returns is possible, and except the one non-container
+loads, before any of the later returns is possible, and except the one non-container
 `E-CONFIG-SHAPE` fault — a `sweep.groups` axis name that renders blank — which `_check_shape`
 reports on its way past without giving up: nothing later indexes into it, so there is nothing
 to cascade.
@@ -3440,7 +3449,7 @@ assay_instrument = "publishable_my_assay.probes.instrument:probe"
 
 That authority costs the guarantee two paragraphs up: an entry-point name is resolved from package metadata without importing a line of the package, but a local file's name lives only in the decorator argument, so `validate` can learn it only by importing the file — and because a collision between two local templates is only detectable between files a config never mentions, discovery is eager, importing **every** non-`__`-prefixed file under `templates/`, not only the one a config names. So `validate` does import user files no config references. This is not a greenfield breach — importing is not inspecting, core still never reads the body of that Python, and it is the same line `validate` already crosses to resolve [`entrypoint`](#generators) — but it widens that exception from one named module to a whole directory.
 
-**A name is claimed once, and a collision is refused rather than resolved.** Two installed plugins registering `plate_wells`, a plugin registering `generic`, a plugin claiming an extension core already writes, two [local `templates/*.py`](#templates-where-parameters-are-defined) files registering one name — or one such file registering it twice — and a local file taking the name of an installed one or of core's own `generic` all fail at load, naming both providers — **the installed cases arrive with entry-point resolution; today only the two local cases and the local-core shadow are checked.** Install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design — a run whose template depended on which package resolved first would be reproducible everywhere except where it mattered. Shadowing is refused in the same breath and for a sharper reason: a plugin that could redefine `generic` could change what a config means without changing the config, which is the one thing [`parameters_hash`](#three-hashes) is supposed to make impossible. Rename yours. A local provider is named as `<path>::<ClassName>`, since the file is what you rename and one file can hold two classes; core's own is named as its class, and two decorators on one class — the pair that cannot distinguish — are named once and said to be one class claiming twice. [`E-TEMPLATE-COLLISION`](#errors-validate-reports) is the code every **template** case carries and [`E-PLUGIN-COLLISION`](#errors-core-raises) is the code the other four groups carry, including a writer claiming a suffix core already writes: a template name has a second home in a project's own `templates/`, and one row cannot state both sets of providers.
+**A name is claimed once, and a collision is refused rather than resolved.** Two installed plugins registering `plate_wells`, a plugin registering `generic`, a plugin claiming an extension core already writes, two [local `templates/*.py`](#templates-where-parameters-are-defined) files registering one name — or one such file registering it twice — and a local file taking the name of an installed one or of core's own `generic` all fail at load, naming both providers. Install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design — a run whose template depended on which package resolved first would be reproducible everywhere except where it mattered. Shadowing is refused in the same breath and for a sharper reason: a plugin that could redefine `generic` could change what a config means without changing the config, which is the one thing [`parameters_hash`](#three-hashes) is supposed to make impossible. Rename yours. A local provider is named as `<path>::<ClassName>`, since the file is what you rename and one file can hold two classes; core's own is named as its class, and two decorators on one class — the pair that cannot distinguish — are named once and said to be one class claiming twice. [`E-TEMPLATE-COLLISION`](#errors-validate-reports) is the code every **template** case carries and [`E-PLUGIN-COLLISION`](#errors-core-raises) is the code the other four groups carry, including a writer claiming a suffix core already writes: a template name has a second home in a project's own `templates/`, and one row cannot state both sets of providers.
 
 **Every non-dunder-stemmed file under `templates/` is a template, and one that fails to load is a fault rather than a silence.** Discovery imports every such file to find its registration, so a file that raises while importing, imports cleanly but never calls `@register_template`, or registers something that is not a `BaseTemplate` subclass leaves `validate` with nothing it can resolve a name against — reported as [`E-TEMPLATE-LOAD`](#errors-validate-reports), naming the file, ahead of a collision for the same partial-information reason a collision is checked ahead of an unresolved `experiment_type`. A helper a template means to import as a sibling, rather than have discovered as a template in its own right, is exempt the same way `__init__.py` already is: name it with the same `__`-prefix.
 
@@ -3636,7 +3645,7 @@ publishable/
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
 │   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries
-│   ├── apparatus.py           # probe registry, per-condition facts, change gate — not yet built
+│   ├── apparatus.py           # per-condition facts, the change gate, `Apparatus` — not yet built
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance)
 │   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built

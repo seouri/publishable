@@ -13,9 +13,11 @@ it returns — which is exactly what `validate` never does.
 
 Loading the object behind a name is a separate, named operation —
 `load_entry_point`, the one function in this module that calls
-`EntryPoint.load()` — performed deliberately by a caller that has already
-resolved a name and now needs the object: `run`/`dry-run`, once a command is
-past validation. `validate` is not such a caller.
+`EntryPoint.load()` — meant for a caller that has already resolved a name and
+now needs the object, once a command is past validation. `validate` is not
+such a caller. As measured on 2026-08-17 against commit `deaed2b`, no command
+has yet been wired to call it; `docs/reference.md`'s `E-PLUGIN-DECORATOR` and
+`E-PLUGIN-LOAD` rows carry the same dated note.
 
 The cost of that, stated rather than discovered: a claim read from metadata is a
 name and a provider and nothing else. A refusal computed from it therefore has
@@ -223,9 +225,11 @@ def check_registration(ep: EntryPoint, declared: Sequence[str]) -> None:
     discovery pass drains, and a reverse lookup here would depend on whether
     anything had drained it yet.
 
-    Reached only where an object behind a key has actually been loaded, which is
-    not `validate` — `validate` answers a name from package metadata and never
-    holds the object. That is the guarantee working rather than a check missing.
+    Meant to run only once an object behind a key has actually been loaded —
+    not `validate`, which answers a name from package metadata and never holds
+    the object. As measured on 2026-08-17 against commit `deaed2b`, no command
+    yet loads a plugin, so this function has no production caller either;
+    `docs/reference.md`'s `E-PLUGIN-DECORATOR` row carries the same dated note.
     """
     if ep.name in declared:
         return

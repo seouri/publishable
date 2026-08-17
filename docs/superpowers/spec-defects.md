@@ -6070,12 +6070,33 @@ narrows the *`BaseTemplate` attribute* family to `field_convention` and `apparat
 `PROBES` and `RESOLVERS` are a different shape — module-level registries, not class attributes —
 and join the wider shipped-but-unread family in the same four commits.
 
-**Owner:** `PROBES` → **H7d** (probe execution: `Apparatus`, facts, ledger, change gate).
-`RESOLVERS` → **H7b Part B**, the resolver-dispatch task.
+**AMENDED 2026-08-17 (whole-branch review, finding I4): the filing under-counted by four.** Four
+more surfaces this branch added have no production caller either — `grep -rn` for each across `src/`
+returns only its own definition or its own module's docstring:
 
-**Found by:** H7b Part A tasks 12-15 review. **Severity:** Minor. Both registries are populated
-correctly and read by nothing yet — inert rather than misleading, since no config field depends on
-either registry being read today.
+| Surface | Added by |
+|---|---|
+| `plugins.load_entry_point` | task 17 |
+| `plugins.check_registration` | task 16 |
+| `plugins.declared_names` | task 16 |
+| `registry.template_provenance` | task 9 |
+
+`load_entry_point`, `check_registration` and `declared_names` are group-generic — the same three
+calls serve templates, resolvers, probes, writers and readers alike — so their first production
+caller is whichever slice first dispatches *any* group, which by construction is **H7b Part B**: its
+nine tasks build the resolver half's dispatch, the first slice scheduled to call `load_entry_point`
+at all. `template_provenance` is template-specific and belongs with the *installed template's class
+is never loaded* gap below rather than with this one; that entry's owner is unassigned, and
+`template_provenance` shares it.
+
+**Owner:** `PROBES` → **H7d** (probe execution: `Apparatus`, facts, ledger, change gate).
+`RESOLVERS`, `load_entry_point`, `check_registration`, `declared_names` → **H7b Part B**, the
+resolver-dispatch task. `template_provenance` → unassigned, with
+`## OPEN — an installed template's name resolves but its class is never loaded`.
+
+**Found by:** H7b Part A tasks 12-15 review; extended by the H7b whole-branch review (finding I4).
+**Severity:** Minor. All six surfaces are populated or computed correctly and read by nothing yet —
+inert rather than misleading, since no config field depends on any of them being read today.
 
 ## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
 
@@ -6101,3 +6122,27 @@ message core built from an installed claimant's own data, and no such message ex
 **Struck when** an installed template's class is held at the merge, which is
 `## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
 The two close together or not at all.
+
+## OPEN — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired — **Owner: H7b Part B**
+
+A writer or reader claiming an extension core itself writes or reads is refused at decoration time
+as `ContractError` · `E-PLUGIN-COLLISION` — `register_writer`/`register_reader` raise it directly,
+with no plugin loaded yet. `docs/reference.md` § Errors core raises promises `E-PLUGIN-COLLISION` its
+own code for that arm, distinct from the code a plugin's top-level import failure carries
+(`E-PLUGIN-LOAD`).
+
+That promise holds only because nothing loads a plugin today. The moment `load_entry_point` gets a
+production caller — Part B's, by construction, per the amendment above — the same raise is reached
+*inside* the module import it decorates, where `load_entry_point`'s broad `except Exception` catches
+it and re-reports it as `E-PLUGIN-LOAD` instead. That is the identical substitution
+§ Errors already documents and accepts for `E-TEMPLATE-LOAD` swallowing a coded error from a local
+template's top level — the precedent exists — but `E-PLUGIN-COLLISION`'s own row does not yet say
+its code can be re-coded this way for the writer/reader groups.
+
+**Filed as a hazard for Part B to resolve when it wires loading, not fixed here**: there is no
+production caller yet, so the substitution cannot happen today and there is nothing to reproduce.
+Part B's task that gives `load_entry_point` its first caller should either let the `E-PLUGIN-LOAD`
+re-code stand and add one sentence to `E-PLUGIN-COLLISION`'s row noting the precedent, or catch
+`ContractError` before the broad `except` so the writer/reader arm keeps its own code through a load.
+
+**Found by:** H7b whole-branch review, finding M4.

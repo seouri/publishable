@@ -1103,11 +1103,7 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
         for path, param in template.parameter_spec.items()
         if path not in set_here and param.default is not MISSING
     ]
-    detail = (
-        f"; unset here and left to the installed template's default: {', '.join(unset)}"
-        if unset
-        else ""
-    )
+    detail = f"; unset here and left to the template's default: {', '.join(unset)}" if unset else ""
     c.warn(
         "W-TEMPLATE-VERSION",
         "template_version",
@@ -3907,9 +3903,9 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         c.error(
             "E-DATA-RESOLVER-UNSUPPORTED",
             "data.units.from.resolver",
-            f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
-            "plugin registry is not implemented in this build; resolvers will be honored "
-            "in a later slice. Use a table or a glob for now",
+            f"names `{source['resolver']}`, but a resolver cannot be dispatched in this "
+            "build; resolvers will be honored in a later slice. Use a table or a glob "
+            "for now",
         )
     # No `data.units` *block* is refused wholesale any more — a `resolver`
     # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
@@ -3959,9 +3955,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `allocation.json` and `provenance.allocation_hash`.
     #
     # One `data.units` sub-field remains read by nothing: a `resolver` source
-    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since resolvers are
-    # plugin artifacts and the plugin registry is not implemented in this
-    # build). `holdout` left this family with this slice.
+    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since a resolver
+    # cannot be dispatched in this build — the registry that decides a name
+    # collision among resolver distributions is built; loading the resolver
+    # an accepted name points at is not). `holdout` left this family with
+    # this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`

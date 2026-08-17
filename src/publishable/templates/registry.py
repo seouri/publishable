@@ -58,6 +58,15 @@ def _claims(repo_root: Path | None) -> dict[str, Claim]:
     Two local registrations of one name never reach here — `discover_local`
     refuses that pair itself, knowing what a repo declares — so this function
     sees at most one local claimant per name.
+
+    Underscore-private to this module's own readers (`_merged`, `template_names`,
+    `template_provenance`, `get_template`), and imported anyway by two callers
+    outside it — `validate.py` and `generators/experiment.py` — because both need
+    a `Claim`'s `provenance` to route between `E-TEMPLATE-INSTALLED-UNSUPPORTED`
+    and `E-TEMPLATE-UNKNOWN`, and no public reader here returns anything but a
+    resolved class or a bare name. Kept private rather than promoted: the two
+    cross-module imports are the whole set, both read-only, and neither is a
+    signal that this function is meant for general use.
     """
     claims: dict[str, list[Claim]] = {}
     for name, core in _BUILTIN.items():
