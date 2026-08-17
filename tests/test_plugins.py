@@ -1,5 +1,6 @@
 # tests/test_plugins.py
-import pytest
+import importlib
+import sys
 
 from publishable.plugins import GROUPS, names, provider_of, scan_group
 
@@ -45,9 +46,20 @@ def test_a_scan_selects_its_own_group_only(installed):
 def test_two_distributions_claiming_one_name_both_arrive(installed):
     """The metadata scan reports every claimant; deciding between them is the
     collision check's job and not this function's. Two distributions, because one
-    cannot produce this arrangement at all."""
-    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "pkg_two.r:resolve"}})
-    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_one.r:resolve"}})
+    cannot produce this arrangement at all.
+
+    The fixture is arranged so that the asserted list distinguishes provider
+    order from the two orderings it must rule out, neither of which a smaller
+    one separates. `dist-one` is installed **first**, so `syspath_prepend` puts
+    `dist-two` at `sys.path[0]` and the walk order is `dist-two, dist-one` — the
+    reverse of the assertion, so dropping the sort fails here. And `dist-one`'s
+    target sorts **after** `dist-two`'s (`pkg_zeta` > `pkg_alpha`) while its
+    provider sorts before, so sorting by `ep.value` instead of by provider also
+    fails here. Both were verified by mutation; with the values tracking the
+    distribution names, as they first did, neither ordering was pinned at all.
+    """
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "pkg_zeta.r:resolve"}})
+    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "pkg_alpha.r:resolve"}})
     providers = [provider_of(ep) for ep in scan_group("publishable.resolvers")["plate_wells"]]
     assert providers == ["dist-one 1.0", "dist-two 2.0"]
 
@@ -73,19 +85,31 @@ def test_names_are_sorted_and_the_sort_is_not_the_install_order(installed):
     assert names("publishable.resolvers") == ["aa_second", "mm_third", "zz_first"]
 
 
-def test_the_scan_imports_nothing(installed, monkeypatch):
+def test_the_scan_imports_nothing(installed):
     """The whole argument for entry points, asserted rather than described.
 
-    The entry point points at a module that does not exist, so any `.load()` —
-    core's or a caller's — raises `ModuleNotFoundError`. The scan returning
-    normally is the proof, and the second half proves the fixture could have
-    caught one: calling `.load()` on the very object the scan returned raises.
+    The target is a module that **does** import, and the assertion is that it is
+    absent from `sys.modules` after the scan. That is the only shape that
+    catches a load: against a target that cannot import, a scan calling
+    `.load()` inside a bare `except` returns normally and every assertion still
+    holds — verified by mutation, which is how this test was rewritten. The
+    trailing `.load()` is the positive control: the same object does resolve,
+    and resolving it is exactly what puts the module in `sys.modules`, so the
+    absence above is a fact about the scan rather than about the fixture.
     """
-    installed(
-        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_such_module:resolve"}}
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_probe:resolve"}}
     )
+    (site / "loadable_probe.py").write_text("def resolve():\n    return []\n")
+    importlib.invalidate_caches()
+    assert "loadable_probe" not in sys.modules
+
     found = scan_group("publishable.resolvers")
     assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
+    assert "loadable_probe" not in sys.modules
 
-    with pytest.raises(ModuleNotFoundError):
-        found["plate_wells"][0].load()
+    try:
+        assert found["plate_wells"][0].load()() == []
+        assert "loadable_probe" in sys.modules
+    finally:
+        sys.modules.pop("loadable_probe", None)
