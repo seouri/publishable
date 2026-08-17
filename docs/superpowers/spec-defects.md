@@ -6076,3 +6076,28 @@ and join the wider shipped-but-unread family in the same four commits.
 **Found by:** H7b Part A tasks 12-15 review. **Severity:** Minor. Both registries are populated
 correctly and read by nothing yet — inert rather than misleading, since no config field depends on
 either registry being read today.
+
+## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
+
+H7c's `PartialLoadError` carries the classes a discovery pass constructed, so a credential a refused
+`templates/*.py` declared is redacted out of the refusal's own message. H7b Part A task 8 adds
+installed distributions as a third claim source to that merge, and an installed claim carries **no
+class**: the scan is metadata-only by decision 3 of
+`2026-08-16-plugin-registries-design.md`, so nothing was imported and there is no `required_env` or
+`parameter_spec` to read.
+
+**Filed as accepted rather than as work.** The repair is to call `EntryPoint.load()`, which destroys
+the invariant the entry-point mechanism exists for — that `validate` resolves a name without
+importing a line — and § Creating a plugin justifies the whole design by that promise. A named
+residual beats a silently weaker guarantee. Recorded here so the next reader meets the argument
+rather than the temptation, which will arrive dressed as "we need the class to redact its
+credentials."
+
+**Bound on the exposure.** A collision message names providers — a distribution and a version, a
+path and a class name — and interpolates no declaration, so the text at risk is an exception's
+rather than a credential's by construction. What is unmatched is a credential value appearing in a
+message core built from an installed claimant's own data, and no such message exists today.
+
+**Struck when** an installed template's class is held at the merge, which is
+`## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
+The two close together or not at all.

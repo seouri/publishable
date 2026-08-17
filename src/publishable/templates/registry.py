@@ -85,6 +85,14 @@ def _claims(repo_root: Path | None) -> dict[str, Claim]:
                 "import order are the only tie-breaks available, and both are "
                 "properties of a machine rather than of a design. Rename yours.",
                 code="E-TEMPLATE-COLLISION",
+                # Every class this merge constructed, whether or not it ends up
+                # usable — the same set `discover_local` accumulates, so a caller
+                # that never gets a resolved template can still ask an abandoned
+                # class what credentials it declares. An installed claim
+                # contributes nothing here and structurally cannot: its claim is
+                # read from package metadata and no module was imported, so there
+                # is no class to ask. That is the cost of the guarantee rather
+                # than a gap in this expression — see § Secrets & credentials.
                 partial_templates=[
                     claim.cls
                     for these in claims.values()

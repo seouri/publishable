@@ -12979,3 +12979,14 @@ def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config
     )
     assert "E-UNITS-SOURCE-AMBIGUOUS" not in resolver_only
     assert "E-DATA-RESOLVER-UNSUPPORTED" in resolver_only
+
+
+# Decision 3's own test was written and then deleted: a `Shadower` template
+# colliding with core's `generic`, declaring `required_env = ["SHADOW_KEY"]`,
+# with `SHADOW_KEY` set in the environment to a sentinel value, checked with
+# `publishable.diagnostics.redact` patched to a no-op first — and the sentinel
+# never appeared in the unredacted `E-TEMPLATE-COLLISION` message. The message
+# names providers (a path::ClassName, a dotted module path), never a
+# declaration, so nothing there is ever a candidate for `credential_values` to
+# match against. No test in this slice reaches `partial_templates`' payload at
+# all — see docs/superpowers/spec-defects.md's entry on the residual.
