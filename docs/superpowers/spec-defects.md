@@ -5974,3 +5974,18 @@ positionally; should name the table by its heading instead.
 **Found by:** H7c, Task 14 (surfaced while sweeping `reference.md`, not itself part of the
 credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
 makes is still true, only the cross-reference is positional.
+
+## STRUCK 2026-08-16 — `publishable.readers` had no entry-point group, so a third-party writer had no reader
+
+**Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
+inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
+two module dicts, `io.write` dispatches through `_suffix_for`, which iterates `WRITERS` alone, and
+`StepIO._read` indexes `READERS` — so a suffix registered as a writer and not as a reader gives
+`io.read_upstream` a bare `KeyError` rather than a coded `ArtifactError`. Proved by mutation
+(`H7b-SCOPING-2.md` § 5a): adding one key to `WRITERS` alone reproduced it, and deleting the key
+restored the read. Filed here for the first time — `H7c` task 14 filed four entries in this family
+and none of them was this one.
+
+**Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
+decorator `register_reader`, with `register_writer` refusing a suffix that has no reader. The code
+is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not before.
