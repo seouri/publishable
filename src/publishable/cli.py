@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from publishable.artifacts import allocation_hash, build_allocation_document
+from publishable.artifacts import ResolverIO, allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
@@ -75,13 +75,12 @@ from publishable.stats import (
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
-    _swept_paths,
-    ablated_paths,
     condition_dir_name,
     expand,
     sample_seed_for,
     selector_paths,
     sweep_document,
+    wide_swept_paths,
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
@@ -260,55 +259,6 @@ def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") ->
     return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
 
 
-def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
-    """Every `parameters` path a condition fixes, for `resolve_wide_cfg` to mark unreadable.
-
-    Every path any condition fixes, not just the grid's axes. A path
-    `sweep.baseline` fixes varies across conditions by definition — condition
-    `00` uses the baseline's value and every other condition uses the base
-    config's — so it is exactly as unreadable at `run`/`summary` scope as a
-    grid axis is. Reading the grid alone left a baseline-only path resolving
-    to the base value, which is a value no condition in the run used.
-
-    `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
-    across conditions, and `paired`'s and `sample`'s did not reach here when each
-    became a real axis — a sampled path stayed readable at `run`/`summary` scope
-    and resolved to the base config's value, which is exactly the "a value no
-    condition in the run used" failure the baseline half of this union exists to
-    prevent, reached through a mode added after it was written.
-    `ablated_paths` is unioned in for the same reason and by the same rule,
-    from the other side of the axis/non-axis split: an ablated path varies
-    across conditions too. Most are already covered by the `baseline` term —
-    a removed path is one the baseline fixes — but an `override` path the
-    baseline leaves alone is not, and it is exactly the residue this union has
-    now been widened for three times.
-
-    **`selector_paths` is subtracted**, and it is the one term that narrows
-    rather than widens. Every `groups` axis's path arrives through the
-    `_swept_paths` term above, in every design that declares one, and a group
-    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
-    would invent the same
-    phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
-    over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
-    get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
-    parameter that does not exist in any scope. Subtracting leaves the honest
-    refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
-
-    A function rather than the inline union it was, so the subtraction is
-    testable directly: `tests/test_cli.py`'s
-    `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
-    hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
-    reaches this line for real through `command_run`, now that `validate` no
-    longer refuses a declared `groups` axis outright.
-    """
-    selectors = set(selector_paths(sweep_block))
-    return (
-        set(_swept_paths(sweep_block))
-        | set(ablated_paths(sweep_block))
-        | set(sweep_block.get("baseline") or {})
-    ) - selectors
-
-
 def _flatten_parameters(node: Any, prefix: str = "") -> dict[str, Any]:
     """Mirrors `validate._flatten` for this one caller, rather than reaching
     across a module boundary for a name private to that module."""
@@ -462,7 +412,7 @@ def _resolved_group_axes(
     `test_a_group_axis_actually_narrows_end_to_end` and
     `test_allocation_json_is_written_with_exact_arm_keys_when_declared` reach
     this line for real, through a passing `command_run`, the same way
-    `_wide_swept_paths` above is now reachable for the selector-path
+    `wide_swept_paths` (in `sweep.py`) is now reachable for the selector-path
     subtraction it depends on.
     """
     if roster is None:
@@ -1361,8 +1311,16 @@ def command_run(config_path: Path) -> int:
     # two-route rule and which document sentence decides each). `provenance.units`
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
+    resolver_io = ResolverIO(input_dir)
     roster, technical_n, _columns = (
-        resolve_units(units_decl, input_dir) if units_decl else (None, None, frozenset())
+        resolve_units(
+            units_decl,
+            input_dir,
+            cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
+            resolver_io=resolver_io,
+        )
+        if units_decl
+        else (None, None, frozenset())
     )
     # Carried only when the input path actually merged rows. A run whose STEP does
     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
@@ -1546,7 +1504,7 @@ def command_run(config_path: Path) -> int:
     # redaction in `execute_plan`.
     credentials = credential_values(declared_credential_names(doc, run_template, conditions))
     sweep_block = doc.get("sweep") or {}
-    swept_paths = _wide_swept_paths(sweep_block)
+    swept_paths = wide_swept_paths(sweep_block)
     # One frozenset of unit keys per condition that selects a group axis — `None`
     # for a design declaring none. Reachable now that task 17 retired
     # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s

@@ -18,7 +18,6 @@ from publishable.cli import (
     _evaluation_roster,
     _resolved_group_axes,
     _resolved_holdout,
-    _wide_swept_paths,
     main,
 )
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
@@ -29,6 +28,7 @@ from publishable.hashes import design_digest
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.sweep import wide_swept_paths
 from publishable.units import HoldoutPlan, holdout_seed_for, resolve_units
 from publishable.validate import validate_config
 
@@ -948,7 +948,7 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
 
 
 def test_a_group_path_gets_no_swept_away_marker():
-    """`_wide_swept_paths` marks parameters, and a group cell is not one.
+    """`wide_swept_paths` marks parameters, and a group cell is not one.
 
     A group axis's path reaches the union through `_swept_paths` in every design
     that declares one — and a `SweptAway` marker at
@@ -958,13 +958,13 @@ def test_a_group_path_gets_no_swept_away_marker():
 
     A focused unit test on the function itself, kept beside the end-to-end
     coverage `test_a_group_axis_actually_narrows_end_to_end` provides: this one
-    pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
+    pins the exact set `wide_swept_paths` returns for a hand-built `sweep`
     block, which discriminates the subtraction rule directly rather than
     through a whole `run`'s aggregated output.
 
     The block below also fixes the group level in its `baseline`, a declaration
     `validate` refuses (`E-SWEEP-BASELINE-GROUP`) and `command_run` therefore
-    never resolves. It is kept because `_wide_swept_paths` is a pure function
+    never resolves. It is kept because `wide_swept_paths` is a pure function
     over whatever block it is handed, and the property under test is that the
     subtraction does not depend on which term of the union a group path arrived
     by — asserting it from two terms at once is what pins that.
@@ -977,10 +977,10 @@ def test_a_group_path_gets_no_swept_away_marker():
     # `analysis.min_samples` is the control that must report: a baseline-only
     # parameter path, on the same term of the union the group path arrives by,
     # so a subtraction that took the whole `baseline` would fail here.
-    assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+    assert wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
     # And with no `groups` declared, a baseline path named `arm` is an ordinary
     # parameter the wide config must still mark.
-    assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+    assert wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
 
 
 def _levels_roster():

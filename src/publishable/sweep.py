@@ -685,6 +685,60 @@ def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> st
     return body
 
 
+def wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+    """Every `parameters` path a condition fixes, for `resolve_wide_cfg` to mark unreadable.
+
+    Every path any condition fixes, not just the grid's axes. A path
+    `sweep.baseline` fixes varies across conditions by definition — condition
+    `00` uses the baseline's value and every other condition uses the base
+    config's — so it is exactly as unreadable at `run`/`summary` scope as a
+    grid axis is. Reading the grid alone left a baseline-only path resolving
+    to the base value, which is a value no condition in the run used.
+
+    `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+    across conditions, and `paired`'s and `sample`'s did not reach here when each
+    became a real axis — a sampled path stayed readable at `run`/`summary` scope
+    and resolved to the base config's value, which is exactly the "a value no
+    condition in the run used" failure the baseline half of this union exists to
+    prevent, reached through a mode added after it was written.
+    `ablated_paths` is unioned in for the same reason and by the same rule,
+    from the other side of the axis/non-axis split: an ablated path varies
+    across conditions too. Most are already covered by the `baseline` term —
+    a removed path is one the baseline fixes — but an `override` path the
+    baseline leaves alone is not, and it is exactly the residue this union has
+    now been widened for three times.
+
+    **`selector_paths` is subtracted**, and it is the one term that narrows
+    rather than widens. Every `groups` axis's path arrives through the
+    `_swept_paths` term above, in every design that declares one, and a group
+    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
+    would invent the same
+    phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
+    over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
+    get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
+    parameter that does not exist in any scope. Subtracting leaves the honest
+    refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
+
+    A function rather than the inline union it was, so the subtraction is
+    testable directly: `tests/test_cli.py`'s
+    `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
+    hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
+    reaches this line for real through `command_run`, now that `validate` no
+    longer refuses a declared `groups` axis outright.
+
+    Moved here from `cli.py`, and renamed without its leading underscore, so
+    `validate.py` can call it too: `validate` needs the same set to build the
+    `cfg` a resolver dispatch reads, and `validate` importing `cli` would be
+    the cycle `cli` importing `validate` already occupies.
+    """
+    selectors = set(selector_paths(sweep_block))
+    return (
+        set(_swept_paths(sweep_block))
+        | set(ablated_paths(sweep_block))
+        | set(sweep_block.get("baseline") or {})
+    ) - selectors
+
+
 def condition_dir_name(index: int, label: str) -> str:
     """The `<nn>_<label>` name a condition nests under, in `run_dir/conditions/`.
 

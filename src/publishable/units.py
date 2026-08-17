@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from publishable.artifacts import ResolverIO
+from publishable.config import Config
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
@@ -306,32 +308,107 @@ def _resolver_for(name: str) -> Callable[..., Any]:
     return cast("Callable[..., Any]", fn)
 
 
+def _from_resolver(
+    decl: dict[str, Any],
+    name: str,
+    input_dir: Path,
+    cfg: "Config | None",
+    resolver_io: ResolverIO | None,
+) -> tuple[list[Unit], frozenset[str]]:
+    """The units a plugin's resolver yields, and the attribute names it yielded.
+
+    The columns come back beside the roster for the reason `_from_table`'s do: they
+    are the only honest reference set for `data.units.measurements.by`, and a
+    resolver has no columns beyond the attributes it yields, so the field a CSV
+    would simply have carried is checked against what actually arrived. The union
+    over yielded units rather than the intersection, matching a table header's
+    "this column exists" rather than "every row filled it in" — the same reading
+    `collapse_measurements` takes when it treats a name only some rows carry as no
+    disagreement.
+
+    Yield order is preserved and nothing re-sorts it: `reference.md` § Where units
+    come from makes resolver yield order the resolved order, `assign.method:
+    blocked` reads that order as data, and `provenance.units_hash` covers the list
+    in it.
+    """
+    if cfg is None:
+        raise ContractError(
+            f"`data.units.from.resolver` names `{name}`, and resolution was reached with no "
+            'config to hand it — a resolver sees the same `cfg` a `scope: "run"` step does, '
+            "so core's resolved state disagrees with itself here rather than the config being "
+            "wrong",
+            code="E-RUN-RESOLVER-UNCONFIGURED",
+        )
+    resolve = _resolver_for(name)
+    io = resolver_io if resolver_io is not None else ResolverIO(input_dir)
+    units: list[Unit] = []
+    yielded: set[str] = set()
+    for item in resolve(io, cfg):
+        if not isinstance(item, Unit):
+            raise ContractError(
+                f"resolver `{name}` yielded a {type(item).__name__} — a resolver yields "
+                "`Unit`s, which is what makes its roster a unit table with the columns a "
+                "CSV would have supplied",
+                code="E-RESOLVER-YIELD",
+            )
+        units.append(item)
+        yielded.update(item.attributes)
+    if not units:
+        raise ContractError(
+            f"resolver `{name}` yielded no units; a run measuring zero units has nothing to report",
+            code="E-UNITS-EMPTY",
+        )
+    return units, frozenset(yielded)
+
+
 def resolve_units(
-    units_decl: dict[str, Any], input_dir: Path
+    units_decl: dict[str, Any],
+    input_dir: Path,
+    *,
+    cfg: "Config | None" = None,
+    resolver_io: ResolverIO | None = None,
 ) -> tuple[UnitList, dict[str, float] | None, frozenset[str]]:
     """Resolve the roster, preserving the order it was resolved in.
 
     Returns the roster, `technical_n` — `None` unless `data.units.measurements` is
-    declared — and the source's own column names, empty under a `{glob: ...}`
-    source. Both travel *beside* the roster rather than on it because `io.units`
-    **is** a `UnitList` handed to steps, and `reference.md` § The unit list is
-    three operations promises exactly iteration, `len`, and integer indexing, plus
-    `.train`. A fourth operation would be a fourth thing every future backing has
-    to provide.
+    declared — and the source's own column names: a table's header, a glob's
+    empty set, or a resolver's yielded attribute names. Both travel *beside* the
+    roster rather than on it because `io.units` **is** a `UnitList` handed to
+    steps, and `reference.md` § The unit list is three operations promises
+    exactly iteration, `len`, and integer indexing, plus `.train`. A fourth
+    operation would be a fourth thing every future backing has to provide.
 
     The columns are for `validate._check_measurements`, which checks
     `measurements.by` against the columns the source actually has. They are
     threaded from the one read `_from_table` already does rather than re-read
     there, so the two cannot come to disagree about what the table holds.
+
+    `cfg` and `resolver_io` are defaulted keywords rather than required
+    parameters — decision 6, ~60 existing call sites in `tests/` with no
+    behavioural content to give them. `cfg` is what a `{resolver: ...}` source
+    needs and every other source ignores; reaching a resolver source with
+    `cfg=None` refuses under `E-RUN-RESOLVER-UNCONFIGURED` rather than crashing.
+    `resolver_io` defaults to a fresh `ResolverIO(input_dir)`; only
+    `cli.command_run` needs the object back afterwards, to read `read_paths`.
     """
     source = units_decl.get("from")
     if isinstance(source, str):
         units, columns = _from_table(units_decl, input_dir, source)
     elif isinstance(source, dict) and "glob" in source:
         units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
+    elif isinstance(source, dict) and "resolver" in source:
+        # `glob` is tested first, deliberately: `data.units.from` declaring both
+        # keys is refused by `validate._check_from_source_exclusivity` as
+        # `E-UNITS-SOURCE-AMBIGUOUS`, and keeping this order means the two
+        # modules cannot come to read one declaration two ways in the window
+        # before that check runs.
+        units, columns = _from_resolver(
+            units_decl, str(source["resolver"]), input_dir, cfg, resolver_io
+        )
     else:
         raise ContractError(
-            f"`data.units.from` is {source!r}; expected a table name or {{glob: ...}}",
+            f"`data.units.from` is {source!r}; expected a table name, {{glob: ...}}, or "
+            "{{resolver: ...}}",
             code="E-UNITS-SOURCE-MISSING",
         )
     # Before the uniqueness loop, not after: under a `measurements` declaration a

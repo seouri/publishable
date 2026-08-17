@@ -600,7 +600,7 @@ likewise apart from those same two envelope rows, none of the others.
 | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
 | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
 | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
-| `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+| `data.units.from` names a table that is not a file under `input_dir`, or is none of a table name, a `{glob: ...}` mapping, or a `{resolver: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
 | [`data.units.from`](#where-units-come-from) is a mapping declaring **both** `glob` and `resolver`. `from` answers one question — how core finds a unit — and a declaration with two answers has none: one form builds the table from matching paths and the other hands the work to a plugin, and they resolve different rosters. Refused rather than ordered, for the reason every collision in this document is: a rule for which key wins would be a rule nobody could read off the config | `E-UNITS-SOURCE-AMBIGUOUS` |
 
 ---

@@ -3750,3 +3750,122 @@ def test_a_core_suffix_claim_at_import_time_is_recoded_as_plugin_load(installed,
         sys.modules.pop("collides_r24", None)
     assert excinfo.value.code == "E-PLUGIN-LOAD"
     assert ".csv" in str(excinfo.value)
+
+
+def _install_resolver(installed, tmp_path, module: str, body: str):
+    """One installed distribution whose `publishable.resolvers` entry point points
+    at a module this writes. Returns nothing: every caller pops `module` from
+    `sys.modules` in its own `finally`, because a real import leaks and Part A's
+    fixtures deliberately could not import at all."""
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(body)
+    importlib.invalidate_caches()
+
+
+_YIELDS_TWO = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    for row in io.read_input("layout.csv"):
+        yield Unit(
+            key=row["barcode"] + ":" + row["well"],
+            paths=(row["read"],),
+            attributes={"operator": row["operator"]},
+        )
+"""
+
+
+def test_a_resolver_source_yields_the_roster_in_yield_order(installed, registries, tmp_path):
+    """THE HONOURING, and the property `units_hash` and `assign.method: blocked`
+    both rest on: yield order is the resolved order. The fixture's rows are
+    deliberately NOT in sorted key order, so a dispatch that sorted — the way
+    `_from_glob` must — comes out different rather than identical."""
+    from publishable.artifacts import ResolverIO
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    (tmp_path / "layout.csv").write_text(
+        "barcode,well,read,operator\nB9,h3,reads/b9.fq,mo\nA1,c2,reads/a1.fq,kj\n"
+    )
+    _install_resolver(installed, tmp_path, "yielding_r25", _YIELDS_TWO)
+    try:
+        roster, technical_n, columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["operator"]},
+            tmp_path,
+            cfg=Config({}),
+            resolver_io=ResolverIO(tmp_path),
+        )
+    finally:
+        sys.modules.pop("yielding_r25", None)
+
+    assert [u.key for u in roster] == ["B9:h3", "A1:c2"]
+    assert [u.paths for u in roster] == [("reads/b9.fq",), ("reads/a1.fq",)]
+    assert technical_n is None
+    assert columns == frozenset({"operator"})
+
+
+def test_a_resolver_yielding_something_that_is_not_a_unit_is_refused(
+    installed, registries, tmp_path
+):
+    """`E-RESOLVER-YIELD`. A resolver is the second place user code runs inside
+    resolution, and `validate` is contracted never to raise — without this a
+    yielded mapping reaches `u.key` as an `AttributeError` escaping `validate`."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "wrongyield_r25",
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    yield {'key': 'a1'}\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path, cfg=Config({})
+            )
+    finally:
+        sys.modules.pop("wrongyield_r25", None)
+    assert excinfo.value.code == "E-RESOLVER-YIELD"
+    assert "dict" in str(excinfo.value)
+
+
+def test_a_resolver_source_reached_with_no_cfg_refuses_rather_than_crashing(
+    installed, registries, tmp_path
+):
+    """Decision 6's named price. `cfg` is a defaulted keyword so ~60 existing call
+    sites keep compiling, which makes `cfg=None` a reachable state rather than a
+    hypothetical — core's resolved state disagreeing with itself, reported under
+    the row that family already has."""
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "nocfg_r25", _YIELDS_TWO)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units({"from": {"resolver": "plate_wells"}, "key": "well"}, tmp_path)
+    finally:
+        sys.modules.pop("nocfg_r25", None)
+    assert excinfo.value.code == "E-RUN-RESOLVER-UNCONFIGURED"
+
+
+def test_a_table_source_still_resolves_with_no_cfg(tmp_path):
+    """THE CONTROL for the refusal above: the defaulted keyword must not have
+    turned every existing caller into a refusal. Without this, a `cfg is None`
+    guard placed one branch too high would pass every test in this file that
+    passes a `cfg` and break every one that does not."""
+    from publishable.units import resolve_units
+
+    (tmp_path / "index.csv").write_text("patient_id\np1\np2\n")
+    roster, _technical_n, columns = resolve_units(
+        {"from": "index.csv", "key": "patient_id"}, tmp_path
+    )
+    assert [u.key for u in roster] == ["p1", "p2"]
+    assert columns == frozenset({"patient_id"})

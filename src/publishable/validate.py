@@ -20,6 +20,7 @@ from publishable.param import MISSING
 from publishable.plugins import GROUPS, names, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
+from publishable.runner import resolve_wide_cfg
 from publishable.scope import step_name as _step_name
 from publishable.secrets import credential_values, load_env, missing_env
 from publishable.stats import min_honest_draws
@@ -34,6 +35,7 @@ from publishable.sweep import (
     render_value,
     sample_fault,
     selector_paths,
+    wide_swept_paths,
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
@@ -1347,7 +1349,16 @@ def _check_units(
         # discarded: `run` reports the first, and `_check_measurements` reads its
         # `max` to know whether the input path merged any rows at all and the
         # second to know what `measurements.by` could name.
-        roster, technical_n, columns = resolve_units(units_decl, path)
+        #
+        # The same `cfg` a `scope: "run"` step sees, so a resolver reading a swept
+        # parameter meets a `SweptAway` marker rather than a value no condition
+        # used. Built here rather than threaded from `validate_config` because
+        # every other check in this module re-derives from `doc` locally.
+        roster, technical_n, columns = resolve_units(
+            units_decl,
+            path,
+            cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
+        )
         return roster, technical_n, columns
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
