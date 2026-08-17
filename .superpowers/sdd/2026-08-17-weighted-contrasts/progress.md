@@ -33,3 +33,27 @@ here because "the scan is clean" without them is not a scan that was run.
 weighted delta 96/12 = 8.0; Kish effective size 144/30 = 4.8 against a raw 6. **Three distinct answers,
 so a wrong weighting cannot pass** — which is the trap statistics tasks in this repo keep falling into,
 sixteen unfailable checks in two slices.
+
+## Tasks 1-5 — the decisions and documents — complete
+
+Dispatched as one batch (the decisions-and-documents group, sharing `docs/reference.md`).
+Commits: `39b5a53`, `0c469f5`, `06b52f0`, `7cb2834`, `c210873`. Report: `task-1-5-report.md`.
+Suite 2118 → 2132 passed, 1 skipped, 2 xfailed. `E-DATA-WEIGHT-CONTRAST` alive, as required.
+
+**Ruling carried out of task 4 (decision 4):** `Member` gains `weights: tuple[Any, ...] | None`
+as a **modifier on `diffs`**, not a third evidence kind — `__post_init__`'s exactly-one
+`pool`/`diffs` invariant is untouched. The corrected path is *not* forced onto `pool`, because
+that would make declaring a weight silently imply resampling, flipping the emitted `method` on
+an unrelated declaration. **Cost if wrong:** a fourth evidence dialect in `Member` that H4b-2
+and H4c both have to widen.
+
+**Ruling carried out of task 5 (decision 5):** honoured, not filed. `paired_percentile_of_derived`
+takes `strata`, drawing one shared key list across both sides so pairing is preserved.
+**Cost if wrong:** the payoff configs' contrast intervals silently ignore a stratification they
+declared — the failure decision 5 exists to prevent.
+
+**Recorded against the implementer's own report:** it flagged task 5's third prescribed mutation
+(content-order → insertion-order pools) as **blind on its own fixture** — `_PAIRED_STRATA` uses
+two contiguous key blocks, so swapping labels does not change which content-block is inserted
+first. Verified empirically by the implementer rather than carried from the brief. Handed to the
+task reviewer as its own attack line: whether the implementation is pinned by anything at all.
