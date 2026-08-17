@@ -2309,9 +2309,9 @@ def test_a_plain_holdout_declaration_is_now_accepted(write_config, tmp_path):
     declaration core honors — `cluster_by` counts the clusters, keeps one out
     of two folds, and makes every `basis: units` interval cluster-robust;
     `weight_by` computes Kish's effective size and weights every `basis: units`
-    column and interval. What either may not yet be combined with is checked by
-    `test_a_clustered_generated_comparison_is_refused` and
-    `test_a_weighted_generated_comparison_is_refused` below, and, at run time,
+    column and interval, and, as of H4b-1, every weighted contrast too. What
+    `cluster_by` may not yet be combined with is checked by
+    `test_a_clustered_generated_comparison_is_refused` below, and, at run time,
     by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`. `holdout` left the same family
     with task 18: `_check_holdout` checks the declaration for real, and a
     plain, well-formed one earns none of its findings.
@@ -7298,11 +7298,12 @@ def test_a_declared_weight_by_is_no_longer_refused(write_config, tmp_path):
     assert codes(path) == set()
 
 
-def test_a_weighted_generated_comparison_is_refused(write_config, tmp_path):
-    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
-    `paired_t_over_units` weights neither side. The delta and its interval would
-    be unweighted numbers reported beside weighted per-condition values — two
-    answers to different questions in one block."""
+def test_a_weighted_generated_comparison_validates_clean(write_config, tmp_path):
+    """The retirement. A weighted roster with a baseline over an enumerated axis
+    generates `vs_baseline` deltas, and every construction they need now exists —
+    the weighted column closure, the weighted paired *t*, the weighted corrected
+    bound, the record keys, and the stratified draw. Free of every finding rather
+    than merely of the old code, which is what says the design is one core runs."""
     _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
     path = write_config(
         {
@@ -7313,16 +7314,13 @@ def test_a_weighted_generated_comparison_is_refused(write_config, tmp_path):
             },
         }
     )
-    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
-    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
-    assert "publishes 2 comparisons," in message
+    assert codes(path) == set()
 
 
-def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
-    """The other source of a comparison. A `statistics.contrasts` entry is named
-    rather than generated, so no baseline is involved at all — and it reaches the
-    same unweighted `paired_t_over_units`, which is why the guard reads the
-    resolved family rather than `sweep.baseline`."""
+def test_a_weighted_declared_contrast_validates_clean(write_config, tmp_path):
+    """The other route to a comparison — named rather than generated, so no
+    baseline is involved at all. It reached the same refusal and it reaches the
+    same weighted constructions now."""
     _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
     path = write_config(
         {
@@ -7339,70 +7337,29 @@ def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
             },
         }
     )
-    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
-    # The singular, and pinned as a whole word: `"1 comparison" in ...` would
-    # pass against `1 comparisons` too, which is the shape this slice keeps
-    # writing tests that cannot see.
-    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
-    assert "publishes 1 comparison," in message
-
-
-def test_the_weight_refusal_does_not_promise_the_derived_estimators_will_weight(
-    write_config, tmp_path
-):
-    """The derived half is settled by the code, not by this slice: a derived
-    metric's resample closures re-attribute the roster inside every draw
-    (`cli._make_resample_fn`), so the weight column reaches `aggregate` as a unit
-    attribute and the template weights its own metric. `paired_delta_of_derived`
-    and `paired_percentile_of_derived` therefore take no weights.
-
-    The message's own over-broad half is *"the paired estimators"*, plural and
-    total. Narrowed to name the construction that is actually missing, and pinned
-    beside the `Estimate` remedy — a presence that must report, since a control
-    asserting only absences passes identically if nothing ran."""
-    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
-    path = write_config(
-        {
-            "data.units": _weighted_units(),
-            "sweep": {
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {"analysis.method": ["spearman"]},
-            },
-        }
-    )
-    assert "E-DATA-WEIGHT-CONTRAST" in codes(path)
-    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
-    assert "`summary` step" in message
-    assert "once a weighted contrast construction exists" in message
-    assert "once the paired estimators take weights" not in message
+    assert codes(path) == set()
 
 
 def test_a_weighted_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
     """The edge that makes the guard narrower than `sweep.baseline` being
     declared. A baseline with no axis beside it expands to one condition, which
     `resolve_contrasts` skips as an `of` — the run publishes no delta at all, so
-    there is no unweighted number for the refusal to prevent. Refusing it would
-    strand a design core computes correctly."""
+    there is nothing for a weighted contrast construction to compute."""
     _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
     overrides = {
         "data.units": _weighted_units(),
         "sweep": {"baseline": {"analysis.method": "pearson"}},
     }
     assert codes(write_config(overrides)) == set()
-    # The control that must report: the same weighted config with one axis added
-    # generates a comparison and is refused, so the silence above is this
-    # baseline's shape rather than a guard that never fires.
-    crossed = dict(overrides)
-    crossed["sweep"] = {
-        "baseline": {"analysis.method": "pearson"},
-        "grid": {"analysis.method": ["spearman"]},
-    }
-    assert codes(write_config(crossed)) == {"E-DATA-WEIGHT-CONTRAST"}
 
 
 def test_an_unweighted_comparison_is_untouched(write_config, tmp_path):
     """The neighbouring shape: the same sweep with no `weight_by` is the ordinary
-    design, and nothing about it moved."""
+    design, and nothing about it moved. `codes(path) == set()` is not reachable
+    here — `sampling_weight` still varies and still looks like an inverse
+    sampling probability with `weight_by` unset, so `W-DATA-WEIGHT-UNDECLARED`
+    fires regardless of the retirement — so the pin is exact equality with that
+    one warning rather than emptiness, which is the accurate stronger claim."""
     _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
     path = write_config(
         {
@@ -7417,7 +7374,7 @@ def test_an_unweighted_comparison_is_untouched(write_config, tmp_path):
             },
         }
     )
-    assert "E-DATA-WEIGHT-CONTRAST" not in codes(path)
+    assert codes(path) == {"W-DATA-WEIGHT-UNDECLARED"}
 
 
 def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
@@ -7563,15 +7520,14 @@ def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path)
 
 # --- the clustered contrast family, which does not exist ----------------------
 #
-# H3b task 12 minted `E-DATA-CLUSTER-CONTRAST` in the place H3a's
-# `E-DATA-WEIGHT-CONTRAST` and H2's `E-SWEEP-SAMPLE-BASELINE` occupy: a narrow
-# refusal of a *combination* that retiring a broad declaration refusal had just
-# made reachable. § Statistical reporting gives each contrast construction a
-# `_clustered` suffix under `cluster_by` — cluster-robust *t* forms and percentile
-# forms resampling whole clusters "jointly across both sides when paired" — and
-# none of those five exists. The probes below mirror the weighted set above one for
-# one, because the guard is deliberately the same shape: it reads the *resolved*
-# comparison family, not the declaration.
+# H3b task 12 minted `E-DATA-CLUSTER-CONTRAST` in the place H2's
+# `E-SWEEP-SAMPLE-BASELINE` occupies: a narrow refusal of a *combination* that
+# retiring a broad declaration refusal had just made reachable. § Statistical
+# reporting gives each contrast construction a `_clustered` suffix under
+# `cluster_by` — cluster-robust *t* forms and percentile forms resampling
+# whole clusters "jointly across both sides when paired" — and none of those
+# five exists. The guard reads the *resolved* comparison family, not the
+# declaration, for the same reason the retired weighted guard did.
 
 
 def _clustered_units(**extra) -> dict:
@@ -7896,11 +7852,10 @@ def test_the_cluster_warning_is_skipped_without_a_roster():
 # --- a contrast whose two sides differ on a group axis has no unpaired ------
 # construction ----------------------------------------------------------------
 #
-# `E-DATA-ALLOCATION-CONTRAST` is the third row in this family, beside
-# `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` above — a refusal of a
-# *combination* a resolved comparison family can carry, not of a declaration.
-# It differs from its two siblings in the one way that matters: those two fire
-# on `comparisons > 0`, because a weight or a cluster affects every contrast in
+# `E-DATA-ALLOCATION-CONTRAST` is beside `E-DATA-CLUSTER-CONTRAST` above — a
+# refusal of a *combination* a resolved comparison family can carry, not of a
+# declaration. It differs from its sibling in the one way that matters: that
+# one fires on `comparisons > 0`, because a cluster affects every contrast in
 # the family alike. This one cannot — a `groups × grid` design's within-arm
 # comparisons (control-pearson vs. control-spearman) are paired and computable,
 # sharing the same arm's units, while its cross-arm ones (control-pearson vs.

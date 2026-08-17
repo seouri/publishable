@@ -3467,8 +3467,8 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
     imbalance is visible only to a reader who crosses it against the arms list
     by hand — the silently-wrong class. The repo's own precedent is to refuse
     the COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-WEIGHT-CONTRAST`, `E-DATA-CLUSTER-CONTRAST`,
-    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+    `E-DATA-CLUSTER-CONTRAST`, `E-DATA-ALLOCATION-CONTRAST`,
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
 
     **The `fold` half closes a defect that is live at this commit**, not a
     hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
@@ -3997,10 +3997,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     #
     # `weight_by` is checked by `_check_weight_by`; `attrition` computes
     # Kish's effective size from it, and `summarize_step` weights every
-    # `basis: units` column's value and interval. What a weighted run may
-    # *not* yet do is publish a contrast: `_check_sweep` refuses that
-    # combination under `E-DATA-WEIGHT-CONTRAST`, a refusal of a combination
-    # rather than of a declaration, so it lives there rather than here.
+    # `basis: units` column's value and interval. A weighted run now also
+    # publishes a weighted contrast — the paired constructions take the same
+    # weights the per-condition values do, and the record carries
+    # `weighted_by` and `n_paired_effective` — so nothing about `weight_by`
+    # is checked here at all.
     #
     # `measurements` is checked by `_check_measurements`; `resolve_units`
     # collapses the input path, `finalize` collapses the step path, and
@@ -4971,69 +4972,10 @@ def _check_sweep(
     except (TypeError, KeyError, AttributeError, ValueError):
         resolved_contrasts = []
     comparisons = len(resolved_contrasts)
-    # A weighted design that publishes a contrast. `reference.md` § Weighted
-    # samples: core computes weighted means for `basis: units` metrics and a
-    # weighted `t_over_units` interval whose df comes from Kish's effective size,
-    # and "a contrast between two weighted conditions uses the same weights on
-    # both sides". Nothing in this build weights a contrast at all — no weighted
-    # paired construction exists, and the closure a column contrast's resample
-    # runs through takes the plain collapsed row — so a weighted run's
-    # `vs_baseline` delta and its interval would be unweighted numbers sitting
-    # beside weighted per-condition values, each side answering a different
-    # question with nothing in the record distinguishing them. That is the same
-    # defect the per-condition wiring was widened to prevent one level up, one
-    # level down.
-    #
-    # **A DERIVED metric is not core's to weight, and that is settled rather than
-    # pending.** Its resample closures re-attribute the roster inside every draw
-    # (`cli._make_resample_fn`), so the weight column reaches `aggregate` as a
-    # unit attribute and the template weights its own metric; the paired derived
-    # estimators take no weights and will not. What is missing is the weighted
-    # form of a recorded COLUMN's contrast, raw and corrected.
-    #
-    # **The guard reads the resolved family, not the declaration.** It fires on
-    # what `resolve_contrasts` will actually build — the same count
-    # `W-STATS-FAMILY` below reports — because `sweep.baseline` does not imply a
-    # comparison: a baseline with no axis beside it expands to a single
-    # `is_baseline` row, which the generated loop skips as an `of`, so the run
-    # publishes no delta and there is no wrong number to prevent. Refusing every
-    # declared `baseline` would strand that design, which is the
-    # wider-than-the-harm failure `E-SWEEP-SAMPLE-BASELINE` checked for
-    # explicitly. Reading the family also picks up the other source of a delta —
-    # a declared `statistics.contrasts` entry over a sweep with no baseline at
-    # all — which a declaration-shaped guard would have missed in the other
-    # direction. `statistics.report_by` is deliberately outside it: a stratum
-    # repeats a metric without publishing a delta or joining the family, and its
-    # weighted values are the same construction the whole-table block gets.
-    #
-    # Temporary, and narrowly so: H4 Statistics owns the paired estimator family
-    # and lifts this the moment a weighted contrast construction exists. It is a
-    # refusal of a *combination* rather than of a declaration, so it carries a
-    # row in § Validation's registry and is not one of the `NOT BUILT`
-    # declarations § The one config file counts — the same placement
-    # `E-SWEEP-SAMPLE-BASELINE` and `E-SWEEP-ABLATE-CROSSED` have.
-    # One call, read twice. `_units_declaration` takes the collector and reports
-    # a malformed `data.units` under its own code, so a second call in the same
-    # pass would report the same fault twice.
+    # `_units_declaration` takes the collector and reports a malformed
+    # `data.units` under its own code; reading it once here and reusing the
+    # result avoids reporting that fault again for the cluster guard below.
     units_here = _units_declaration(doc.get("data") or {}, c) or {}
-    weight_by = units_here.get("weight_by")
-    if comparisons > 0 and isinstance(weight_by, str) and weight_by:
-        plural = "" if comparisons == 1 else "s"
-        c.error(
-            "E-DATA-WEIGHT-CONTRAST",
-            "data.units.weight_by",
-            f"weights each condition's own value and interval, and this design also "
-            f"publishes {comparisons} comparison{plural}, which no construction in this "
-            "build weights: a `vs_baseline` delta and a declared `statistics.contrasts` "
-            "entry are both computed over unweighted per-unit differences, so the delta "
-            "would answer a different question than the two weighted values it sits "
-            "beside, with nothing in the record saying so. Declare one or the other "
-            "here: drop `weight_by` and report the contrast over the sample as it was "
-            "drawn, or keep the weighting and express the difference as an `Estimate` "
-            "returned by a `summary` step, which core records as reported rather than "
-            "recomputing. The combination will be honored once a weighted contrast "
-            "construction exists",
-        )
 
     # A clustered design that publishes a contrast. `reference.md` § Statistical
     # reporting: when `cluster_by` is declared each contrast construction "takes a
@@ -5052,8 +4994,8 @@ def _check_sweep(
     # record distinguishing the two. § Clustered units calls exactly that interval
     # "too narrow", and the delta is the number a reader acts on.
     #
-    # **The guard reads the resolved family, not the declaration**, for the
-    # reasons the weighted one above states in full: a `sweep.baseline` with no
+    # **The guard reads the resolved family, not the declaration.** It fires on
+    # what `resolve_contrasts` will actually build: a `sweep.baseline` with no
     # axis beside it expands to a single `is_baseline` row that is never a
     # comparison's subject, so such a run publishes no delta and stays legal,
     # while a declared `statistics.contrasts` entry over a sweep with no baseline
@@ -5062,12 +5004,12 @@ def _check_sweep(
     # interval *is* clustered, and publishes no delta.
     #
     # Temporary, and narrowly so: H4 Statistics owns the `_clustered` contrast
-    # family and lifts this the moment those constructions exist. Like
-    # `E-DATA-WEIGHT-CONTRAST` it refuses a *combination* rather than a
-    # declaration, so it carries a row in § Validation's registry and is not one
-    # of the `NOT BUILT` declarations § The one config file counts —
-    # `data.units.cluster_by` itself is built, and a clustered run publishing no
-    # contrast gets cluster-robust intervals on every `basis: units` column.
+    # family and lifts this the moment those constructions exist. It refuses a
+    # *combination* rather than a declaration, so it carries a row in
+    # § Validation's registry and is not one of the `NOT BUILT` declarations
+    # § The one config file counts — `data.units.cluster_by` itself is built,
+    # and a clustered run publishing no contrast gets cluster-robust intervals
+    # on every `basis: units` column.
     cluster_by = units_here.get("cluster_by")
     if comparisons > 0 and isinstance(cluster_by, str) and cluster_by:
         plural = "" if comparisons == 1 else "s"
@@ -5102,9 +5044,9 @@ def _check_sweep(
     # true, "n_paired": 0, "ci95": null}` for every metric, with a `paired: true`
     # that is false and nothing saying so.
     #
-    # **Unlike `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` above, this
-    # guard does not fire on `comparisons > 0`.** A weight or a cluster affects
-    # every contrast alike, but a group axis does not: in a `groups × grid`
+    # **Unlike `E-DATA-CLUSTER-CONTRAST` above, this guard does not fire on
+    # `comparisons > 0`.** A cluster affects every contrast alike, but a group
+    # axis does not: in a `groups × grid`
     # design, control-pearson vs. control-spearman shares the same arm's units
     # and is paired and computable, while control-pearson vs. treatment-pearson
     # is not. Firing on the resolved family's size alone would refuse the first

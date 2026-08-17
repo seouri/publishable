@@ -6826,22 +6826,6 @@ def test_the_weighted_contrast_record_keys_are_documented():
     assert "n_paired_effective" in section
 
 
-def test_the_weight_refusals_errors_row_names_no_estimator():
-    """The row and the message are one claim seen from two ends, and the row is
-    where the three functions were actually enumerated. Parsed from the document
-    rather than compared against a second literal: a test comparing each of two
-    spellings to its own hard-coded string is how this repo shipped a name that
-    claimed an agreement no assertion made."""
-    row = next(
-        line
-        for line in REFERENCE_MD.read_text().split("\n")
-        if line.rstrip().endswith("| `E-DATA-WEIGHT-CONTRAST` |")
-    )
-    assert "weight_by" in row  # the control: the right row was located
-    assert "paired_delta_of_derived" not in row
-    assert "paired_percentile_of_derived" not in row
-
-
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to
@@ -7465,9 +7449,9 @@ class Step(BaseStep):
 def test_a_declared_stratify_by_reaches_a_contrasts_interval_through_run(tmp_path, capsys):
     """Major 2 of fix round 1: task 6's report excused an unpinned `strata=None`
     mutation at `command_run`'s two `_compute_vs_baseline`/
-    `_compute_declared_contrasts` call sites by citing `E-DATA-WEIGHT-CONTRAST`
-    — a refusal gated on `weight_by`, not on `stratify_by`. An **unweighted**
-    config declaring `statistics.resample.stratify_by` beside a baseline sweep
+    `_compute_declared_contrasts` call sites by citing the (now-retired) weighted
+    contrast refusal — gated on `weight_by`, not on `stratify_by`. An
+    **unweighted** config declaring `statistics.resample.stratify_by` beside a baseline sweep
     AND a declared `statistics.contrasts` entry validates clean and runs today,
     so decision 5's production sites (not just the direct-call ones tasks 6-8
     already cover) are pinnable now, at **both** call sites in one run. No
@@ -9655,11 +9639,12 @@ _W_STRATA = {"u0": "A", "u1": "A", "u2": "A", "u3": "B", "u4": "B", "u5": "B"}
 
 
 def _weighted_contrast_block(**extra):
-    """One column contrast over the six-unit weighted fixture, called directly.
-
-    Direct because `command_run` validates first and `E-DATA-WEIGHT-CONTRAST` is
-    an error until task 13, so no weighted contrast reaches this function through
-    `run` yet. Returns `(metric_block, members)`.
+    """One column contrast over the six-unit weighted fixture, called directly
+    rather than through `run` — precise control over `weights`, `strata` and the
+    collapsed rows a real run would have to be engineered to produce.
+    `test_a_weighted_run_publishes_a_weighted_delta_end_to_end` is the pin that
+    a real `run` reaches the identical construction through `command_run`.
+    Returns `(metric_block, members)`.
     """
     from publishable.cli import _comparison_step_blocks
     from publishable.contrasts import Comparison
@@ -9719,15 +9704,14 @@ def test_the_three_comparison_functions_accept_weights_and_strata():
     test asserts that rather than the pre-task-7 no-op, so the regression this
     file pins stays true of the code that exists.
 
-    **What this pins is half of the record § Contrasts requires.** At
-    `resample_columns=False` the interval below is `paired_t_over_units(diffs)`
-    — unweighted — beside this weighted `delta` and a weighted `cohens_d`,
-    which is the exact combination § Contrasts forbids ("all four move
-    together or none of them does"). Task 10 owns building
-    `weighted_t_over_units` into this branch and is not reachable through `run`
-    while `E-DATA-WEIGHT-CONTRAST` stands, so it is a scoped gap rather than a
-    shipped defect — recorded here rather than left for a reader to discover
-    by noticing the interval never moved."""
+    **What this pins is half of the record § Contrasts requires — the other
+    half is `test_a_weighted_run_publishes_a_weighted_delta_end_to_end`'s.**
+    Task 10 wires `weighted_paired_t_over_units` into this same
+    `resample_columns=False` branch, so the interval beside this weighted
+    `delta` and weighted `cohens_d` is weighted too rather than the unweighted
+    `paired_t_over_units(diffs)` § Contrasts forbids sitting beside them
+    ("all four move together or none of them does"); this test does not itself
+    assert the interval or `cohens_d`, only the `delta` the threading changed."""
     from publishable.cli import _compute_declared_contrasts, _compute_vs_baseline
     from publishable.sweep import Condition
 
@@ -10042,16 +10026,71 @@ def test_a_resampled_column_contrasts_member_carries_no_weights():
     assert members[0].weights is None
 
 
+def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, monkeypatch):
+    """The first weighted contrast to reach `run.yaml`. Until this task
+    `command_run` returned before running on `E-DATA-WEIGHT-CONTRAST`, so every
+    weighted-contrast test called `_comparison_step_blocks` directly — this is the
+    pin that the whole path is wired, including the three things `command_run`
+    threads and no direct call can see: `weights`, `weighted_by` and
+    `resample_strata`.
+
+    `_METHOD_VARYING_STEP` is the starter step for the reason
+    `test_a_baseline_sweep_reports_a_delta` uses it: its per-unit values differ
+    both by condition and per unit between conditions, so the per-unit differences
+    themselves vary. A step recording the same numbers under two labels gives a
+    zero-width interval and a `cohens_d` of `None` whatever the weighting does,
+    which is the trap this file's own comment records.
+
+    Six units weighted 1/1/1/3/3/3, so Kish's size is 12²/30 = 4.8 against six
+    completed — the two figures differ, which is what makes the `n_paired_effective`
+    assertion say something."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=(
+            "patient_id,sampling_weight,band\n"
+            "p1,1,low\np2,1,low\np3,1,low\np4,3,high\np5,3,high\np6,3,high\n"
+        ),
+        units_overrides={
+            "attributes": ["sampling_weight", "band"],
+            "weight_by": "sampling_weight",
+        },
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["band"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    assert entry["method"] == "weighted_paired_percentile_over_units"
+    assert entry["weighted_by"] == "sampling_weight"
+    assert entry["n_paired"] == 6
+    assert entry["n_paired_effective"] == pytest.approx(4.8)
+    assert entry["cohens_d"] is not None
+    # The corrected bound came off the same weighted pool rather than from a
+    # re-run unweighted construction: `corrected_from_pool` is True under a
+    # declared `resample`, so this is the payoff path's own corrected interval.
+    assert entry["ci95_corrected"] is not None
+
+
 def test_the_sibling_refusal_rows_state_their_own_reading():
-    """Two § Errors rows contrasted their own family-reading against
-    `E-DATA-WEIGHT-CONTRAST`'s. That row is deleted in the task after next, so a
-    citation of it becomes a dangling reference — and this repo's rule is to delete
-    a claim rather than rewrite it into a second one. Each row now states the
-    property itself.
+    """Two § Errors rows each state their own family-reading property directly,
+    rather than by contrast with a sibling row — the weighted-contrast refusal's
+    row is retired, so a row that argued "unlike that one" would now be a
+    dangling reference, and this repo's rule is to delete a claim rather than
+    rewrite it into a second one.
 
     Located by each row's own final cell, which is what tells a row from a
-    citation, and asserted with a presence beside each absence so a mislocated row
-    cannot pass by matching nothing."""
+    citation."""
     lines = REFERENCE_MD.read_text().split("\n")
 
     def _row(code: str) -> str:
@@ -10061,8 +10100,6 @@ def test_the_sibling_refusal_rows_state_their_own_reading():
     cluster = _row("E-DATA-CLUSTER-CONTRAST")
     assert "per comparison" in allocation  # the control
     assert "cluster_by" in cluster  # the control
-    assert "E-DATA-WEIGHT-CONTRAST" not in allocation
-    assert "E-DATA-WEIGHT-CONTRAST" not in cluster
 
 
 def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
