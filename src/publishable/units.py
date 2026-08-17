@@ -13,12 +13,13 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from publishable.errors import ContractError
+from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
 RESERVED_FIELDS = ("key", "paths", "attributes")
 
@@ -258,6 +259,48 @@ def _from_glob(
     # An empty column set, not a missing one: a glob yields a key and a path and
     # nothing else, so there is no name `measurements.by` could correctly hold.
     return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels], frozenset()
+
+
+RESOLVER_GROUP = "publishable.resolvers"
+
+
+def _resolver_for(name: str) -> Callable[..., Any]:
+    """The callable `data.units.from.resolver` names, or the refusal that answers instead.
+
+    Three steps, three codes, in the order the information arrives:
+
+    - **The name**, answered from package metadata alone (`scan_group`), so a name
+      no installed distribution registers costs no import at all —
+      `reference.md` § Creating a plugin makes that the whole argument for entry
+      points. `E-RESOLVER-UNKNOWN`, naming every member of the group it did find,
+      because the ordinary cause is a spelling.
+    - **The object**, through `load_entry_point`, the one function in core that
+      calls `EntryPoint.load()`. Every way a plugin's top level can fail arrives
+      as `E-PLUGIN-LOAD`, including `SystemExit`.
+    - **The declaration against the key** (`check_registration` over
+      `declared_names`), `E-PLUGIN-DECORATOR`. Checked here rather than deferred
+      to `run`: the object is already in hand, and reporting at `run` a fault
+      `validate` had the evidence for is the shape this repo refuses.
+
+    A collision between two distributions claiming this key is **not** decided
+    here. `validate._check_plugin_collisions` reports it as `E-PLUGIN-COLLISION`
+    for every config, from metadata, over the complete claim set in name order —
+    the first claimant is used here rather than re-deciding the tie, since a
+    verdict computed twice is a verdict that can disagree with itself.
+    """
+    found = scan_group(RESOLVER_GROUP)
+    claimants = found.get(name)
+    if not claimants:
+        listed = ", ".join(found) if found else "none installed"
+        raise ContractError(
+            f"`data.units.from.resolver` names `{name}`, which no installed distribution "
+            f"registers in the `{RESOLVER_GROUP}` entry-point group (registered: {listed})",
+            code="E-RESOLVER-UNKNOWN",
+        )
+    ep = claimants[0]
+    fn = load_entry_point(ep)
+    check_registration(ep, declared_names(RESOLVER_GROUP, fn))
+    return cast("Callable[..., Any]", fn)
 
 
 def resolve_units(

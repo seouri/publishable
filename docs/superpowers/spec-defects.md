@@ -6123,7 +6123,7 @@ message core built from an installed claimant's own data, and no such message ex
 `## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
 The two close together or not at all.
 
-## OPEN — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired — **Owner: H7b Part B**
+## CLOSED — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired
 
 A writer or reader claiming an extension core itself writes or reads is refused at decoration time
 as `ContractError` · `E-PLUGIN-COLLISION` — `register_writer`/`register_reader` raise it directly,
@@ -6146,3 +6146,14 @@ re-code stand and add one sentence to `E-PLUGIN-COLLISION`'s row noting the prec
 `ContractError` before the broad `except` so the writer/reader arm keeps its own code through a load.
 
 **Found by:** H7b whole-branch review, finding M4.
+
+**Closed by H7b Part B, task 24, taking the first resolution named above: let the re-code stand.**
+Catching `ContractError` ahead of `load_entry_point`'s broad arm would let *any* coded
+`ContractError` a plugin's top level raises escape the containment under whatever code it happened
+to carry — a fail-open of exactly the shape `CLAUDE.md` § Answering a question with a proxy names,
+and one that would defeat the reason `load_entry_point` is broad. Narrowing the catch to the single
+code `E-PLUGIN-COLLISION` would instead make `load_entry_point` — a group-generic function — know
+about a code only two of the five groups can raise. The precedent already exists and is documented:
+§ Errors accepts `E-TEMPLATE-LOAD` swallowing a coded error from a local template's top level, for
+the same reason. `docs/reference.md` § Errors core raises' `E-PLUGIN-COLLISION` row now carries one
+sentence recording this precedent.

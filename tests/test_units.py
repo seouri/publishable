@@ -1,4 +1,6 @@
 # tests/test_units.py
+import importlib
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -3637,3 +3639,84 @@ def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
     assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
         {}, "holdout", "sha256:aaa", roster
     )
+
+
+def test_an_unregistered_resolver_name_is_refused_from_metadata_alone(installed, registries):
+    """`E-RESOLVER-UNKNOWN`, and the message names what it did find — the ordinary
+    cause is a spelling and the ordinary remedy is reading the list."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:resolve"}})
+    with pytest.raises(ContractError) as excinfo:
+        _resolver_for("plate_welz")
+    assert excinfo.value.code == "E-RESOLVER-UNKNOWN"
+    assert "plate_welz" in str(excinfo.value)
+    assert "plate_wells" in str(excinfo.value)  # the list it names
+
+
+def test_a_registered_resolver_name_loads_the_object_behind_it(installed, registries, tmp_path):
+    """THE HONOURING. Without this, a `_resolver_for` returning `None` for every
+    name would pass every refusal test above and below it."""
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_r24:resolve"}}
+    )
+    (site / "loadable_r24.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    return ['loaded']\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        assert _resolver_for("plate_wells")(None, None) == ["loaded"]
+    finally:
+        sys.modules.pop("loadable_r24", None)
+
+
+def test_a_resolver_whose_module_raises_is_contained_as_a_plugin_load(installed, registries):
+    """`E-PLUGIN-LOAD`'s first production caller. The distribution is named rather
+    than the module, since a distribution is what a reader uninstalls or pins."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "broken_r24:resolve"}}
+    )
+    (site / "broken_r24.py").write_text("raise RuntimeError('module scope blew up')\n")
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("broken_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert "dist-one 1.0" in str(excinfo.value)
+
+
+def test_a_decorator_argument_disagreeing_with_the_entry_point_key_is_refused(
+    installed, registries
+):
+    """`E-PLUGIN-DECORATOR`'s first production caller, and decision 4's siting:
+    the object is in hand at `validate`, so the disagreement is knowable there."""
+    from publishable.errors import ContractError
+    from publishable.units import _resolver_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "misnamed_r24:resolve"}}
+    )
+    (site / "misnamed_r24.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_positions")\n'
+        "def resolve(io, cfg):\n    return []\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _resolver_for("plate_wells")
+    finally:
+        sys.modules.pop("misnamed_r24", None)
+    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
+    assert "plate_wells" in str(excinfo.value)
+    assert "plate_positions" in str(excinfo.value)
