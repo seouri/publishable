@@ -130,7 +130,8 @@ claim — but it is the sentence to re-read when Part B lands, since it will bec
 **M6 — `git checkout --` on `.superpowers/sdd/.gitignore`, disclosed in the report.** Restoring a tracked
 file to its committed content is the sanctioned repair for that clobber and the report says so plainly, so
 no finding — noted only because CLAUDE.md's warning is about a *different* use of the same command.
-The file was clobbered to a bare `*` again before this review; restored from `HEAD` while here.
+The file was clobbered to a bare `*` again before this review; restored from `HEAD` while here — the
+restore is byte-identical to the committed content, so it appears in no commit of mine.
 
 ---
 
@@ -146,7 +147,16 @@ Two residuals the report did not name, both accepted:
 
 - The fixture does not exercise a build backend translating a `pyproject.toml` entry-points table into
   `entry_points.txt`. The brief names this and core reads no `pyproject.toml`, so nothing here could pin it.
-- `test_the_scan_imports_nothing` proves the scan imports no *plugin*. It cannot distinguish "core never
-  loads" from "core loads and the module happened to be imported already" for a module a later task's
-  import graph pulls in for its own reasons; the target name is deliberately unique so no other test or
-  source module can pre-import it.
+- `test_the_scan_imports_nothing` proves the scan imports no *plugin*. The "core loads, but the module was
+  already imported" reading is ruled out by the **pre**-scan assertion, not merely by the unique target
+  name — both are present, and the pre-assertion is the one doing the work.
+
+**The single-line mutation for every test in the file**, so the obligation is discharged rather than
+implied. `test_the_groups_core_reads_are_the_five_the_document_declares`: none — a constant pinned by a
+literal, as the report says. `test_an_absent_group_is_empty_and_a_present_one_is_not`,
+`test_a_scan_selects_its_own_group_only` and `test_names_are_sorted_and_the_sort_is_not_the_install_order`
+are all pinned by dropping the group filter (`entry_points()` for `entry_points(group=group)`) — run, **3
+failed, 3 passed**, so group selection is genuinely checked and not merely described; the sort test is
+additionally pinned by walk-order return (run in the report, re-verified here).
+`test_two_distributions_claiming_one_name_both_arrive` by either sort mutation in I1.
+`test_the_scan_imports_nothing` by the swallowed `.load()` in C1.
