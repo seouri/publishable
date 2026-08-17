@@ -16,7 +16,6 @@ from publishable.envelope import check_envelope
 from publishable.errors import ContractError
 from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
-from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.plugins import GROUPS, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
@@ -1037,17 +1036,19 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     the author deliberately left at its default, and asserting which it is would
     be a claim the declaration does not carry.
 
-    A local template is skipped regardless of what `template_version` declares.
-    `TEMPLATE_VERSION` is core's own constant — comparing a config's declared
-    string against it is meaningless for a template core did not write, whether
-    that string happens to match, differ, or was never set at all: `docs/
-    reference.md` § Three hashes says `template_version` "isn't the answer for
-    a local template — it's a string its author remembers to bump."
+    A local template is skipped regardless of what `template_version` declares,
+    and so is any template reporting no version of its own. What a config's
+    declared string is compared against is the template's own `version`, read
+    off the class: a module constant would be core's answer for a template core
+    did not write, which `docs/reference.md` § Three hashes rejects — a
+    `template_version` "isn't the answer for a local template — it's a string
+    its author remembers to bump."
     """
     if is_local_template(type(template)):
         return
+    reported = type(template).version
     declared = doc.get("template_version")
-    if not declared or declared == TEMPLATE_VERSION:
+    if reported is None or not declared or declared == reported:
         return
     set_here = _flatten(doc.get("parameters"), "")
     unset = [
@@ -1063,7 +1064,7 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     c.warn(
         "W-TEMPLATE-VERSION",
         "template_version",
-        f"is {declared} but the installed template reports {TEMPLATE_VERSION}{detail}",
+        f"is {declared} but the template reports {reported}{detail}",
     )
 
 

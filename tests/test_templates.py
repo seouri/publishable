@@ -6,6 +6,7 @@ import pytest
 from publishable import BaseTemplate, Param
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
+from publishable.materialize import TEMPLATE_VERSION
 from publishable.stats import UnitTable
 from publishable.templates.discovery import discover_local, is_local_template
 from publishable.templates.registry import get_template, template_names, template_provenance
@@ -1129,3 +1130,45 @@ def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(instal
     assert template_provenance("my_assay", tmp_path) == "local"
     assert template_provenance("vendor_assay", tmp_path) == "installed"
     assert template_provenance("nothing_claims_this", tmp_path) is None
+
+
+def test_a_template_reports_its_own_version_and_the_base_declares_none():
+    """`None` and a string are different claims: the first is "this template
+    tracks no version", which is every template that does not set one, and the
+    second is what `template_version` in a config is compared against."""
+    assert BaseTemplate.version is None
+    assert get_template("generic").version == TEMPLATE_VERSION
+
+
+def test_the_version_warning_names_what_the_template_reports_not_a_core_constant(
+    tmp_path: Path, git_repo: Path
+):
+    """The false guarantee Row 212 names, closed by comparing against the class.
+
+    A local template declaring a version of its own is still skipped — that is
+    `_check_versions`' first line and § Three hashes' rule — so the observable
+    change is that the comparison reads the class rather than a module constant,
+    and the fixture that shows it is a subclass whose `version` differs from
+    core's.
+    """
+    from publishable.diagnostics import Collector
+    from publishable.validate import _check_versions
+
+    class Versioned(BaseTemplate):
+        version = "9.9.9"
+        parameter_spec = {}
+
+    c = Collector()
+    # Declared as `2.0.0` rather than core's own `TEMPLATE_VERSION` (`1.0.0`):
+    # asserting the constant is absent from the message would be trivially true
+    # if the declared value happened to equal it, so the two must differ.
+    _check_versions({"template_version": "2.0.0"}, Versioned(), c)
+    message = next(f.message for f in c.findings if f.code == "W-TEMPLATE-VERSION")
+    assert "9.9.9" in message
+    assert TEMPLATE_VERSION not in message
+
+    # THE CONTROL, produced by the code under test: a config declaring the
+    # version the template reports draws nothing at all.
+    quiet = Collector()
+    _check_versions({"template_version": "9.9.9"}, Versioned(), quiet)
+    assert [f.code for f in quiet.findings] == []

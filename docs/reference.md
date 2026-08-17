@@ -970,7 +970,7 @@ Core imports your classes before any instance exists — the [execution plan is 
 | | Must define | Defaulted | Core's |
 |---|---|---|---|
 | `BaseStep` | `run(self, cfg, io)` | `scope = "repeat"`, `nondeterministic = False` | `__init__`, `self.condition` / `self.repeat` / `self.rng`, `derive_seed` |
-| `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]` | The registry, materialization, and every check `parameter_spec` drives |
+| `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]`, `version` is `None` | The registry, materialization, and every check `parameter_spec` drives |
 | `BaseExperiment` | `steps` | — | Everything the plan is derived from |
 | `BaseReport` | `sections(self, run, io)`, a generator | — | The standard sections `super().sections` yields |
 
@@ -1525,6 +1525,7 @@ class GenericTemplate(BaseTemplate):
     naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
     field_convention = "generic"
     default_repeats = 1
+    version = "1.0.0"
     required_env = []
     apparatus_probe = None            # see "The apparatus core can only observe"
     apparatus_facts = []              # which keys the probe must supply, if one is declared

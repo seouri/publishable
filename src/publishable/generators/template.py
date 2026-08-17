@@ -4,16 +4,17 @@ from pathlib import Path
 
 from publishable.errors import ContractError
 
-# The stub emits five members — `parameter_spec`, `validate`, `aggregate`,
-# `naming_pattern`, `default_repeats` — and none of `BaseTemplate`'s other
-# four. `required_env` now has a reader (`validate` checks it), but a stub
-# declaring `[]` would only ever satisfy that check trivially and would
-# still teach its reader to set a field this generated file has no other use
-# for. `field_convention`, `apparatus_probe` and `apparatus_facts` are
-# declared on the base class and read by nothing in this build.
-# `docs/reference.md` § Templates: where parameters are defined shows all
-# nine, because that example is core's own `generic` rather than a file you
-# are about to edit.
+# The stub emits `parameter_spec`, `validate`, `aggregate`, `naming_pattern` and
+# `default_repeats`, and none of the rest. `required_env` has a reader
+# (`validate` checks it), but a stub declaring `[]` would only ever satisfy that
+# check trivially and would still teach its reader to set a field this generated
+# file has no other use for. `version` is omitted for a sharper reason: a
+# project-local template is never version-checked at all, so a version in this
+# file would be a string nothing reads. `field_convention`, `apparatus_probe`
+# and `apparatus_facts` are declared on the base class and read by nothing in
+# this build. `docs/reference.md` § Templates: where parameters are defined
+# shows the whole set, because that example is core's own `generic` rather than
+# a file you are about to edit.
 #
 # Everything the stub imports comes from `publishable` itself — the one import
 # root; `publishable.templates` and every other submodule are implementation

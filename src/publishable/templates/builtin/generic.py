@@ -1,3 +1,4 @@
+from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import Param
 from publishable.templates.base import BaseTemplate
 
@@ -9,6 +10,7 @@ class GenericTemplate(BaseTemplate):
     required_env: list[str] = []
     apparatus_probe = None
     apparatus_facts: list[str] = []
+    version = TEMPLATE_VERSION
 
     parameter_spec = {
         "analysis.method": Param(

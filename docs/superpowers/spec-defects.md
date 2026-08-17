@@ -3739,6 +3739,20 @@ rather than an installed template's own reported version, and still becomes obse
 plugin ships a template carrying one. **Owner stays H7 — specifically H7b.** Unlike its sibling, this
 row was *not* renamed: it is still "Template version moved".
 
+**AMENDED 2026-08-16 (H7b Part A task 10): the comparison is fixed; the reachability is not.**
+`BaseTemplate.version` now exists, `GenericTemplate` reports it, `_check_versions` compares a
+config's `template_version` against `type(template).version`, and `materialize` writes what the
+template reports. The false guarantee this row named — a warning saying "the installed template
+reports" while comparing against core's own module constant — is gone.
+
+What remains, and it is why this row is amended rather than struck: **no installed template's class
+is ever held in this build**, so the comparison still only ever runs against core's own template and
+a project-local one is still skipped. `Claim.cls` is `None` for an installed claim by decision 3 of
+`2026-08-16-plugin-registries-design.md`. This row's own words — "It becomes observable when a
+plugin ships a template with a version of its own" — are still the condition, and it is now filed
+separately as `## OPEN — an installed template's name resolves but its class is never loaded`,
+**owner unassigned**. Strike this row when that one is closed, not before.
+
 ### Row 284 "Correction can be applied" — **Owner: H4 Statistics**
 
 `_check_sweep` raises `W-STATS-CORRECTION-INAPPLICABLE` whenever `statistics.correction` is

@@ -16,6 +16,12 @@ class BaseTemplate:
     apparatus_probe: str | None = None
     apparatus_facts: list[str] = []
     parameter_spec: dict[str, Param] = {}
+    # What this template reports as its own spec version, which a config's
+    # `template_version` is compared against. `None` for a template that tracks
+    # no version — the base's answer, and the right one for a project-local file,
+    # whose version is a string its author remembers to bump rather than a fact
+    # core can check.
+    version: str | None = None
 
     def validate(self, config: Any) -> list[str]:
         """Cross-field rules. Receives the WHOLE config; [] when OK."""
