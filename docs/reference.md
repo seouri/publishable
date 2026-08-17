@@ -3113,7 +3113,7 @@ These take a name plus what's needed to bring something into existence.
 | `publishable demo` | NOT BUILT | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then walks you through validating and running it one command at a time. Data goes outside the created repo, as it would for real work. See [What `demo` walks you through](#what-demo-walks-you-through) |
 | `publishable new` | built | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
 | `publishable plugin new` | NOT BUILT | plugin name | Scaffolds an installable template/resolver/step package |
-| `publishable generate` (`g`) | built | generator, name, generator args | `experiment` \| `step` \| `template` \| `report` (NOT BUILT); `experiment` accepts `--plugin` |
+| `publishable generate` (`g`) | built | generator, name, generator args | `experiment` \| `step` \| `template` \| `report` (NOT BUILT); `experiment` accepts `--plugin` (NOT BUILT — the flag parses and is dropped) |
 | `publishable init` | built | `--template`, `--name`, `--input-dir`, `--output-dir`, `[--plugin]` | Alias for `generate experiment` |
 | `publishable study new` | NOT BUILT | bundle path, `--title` | Creates an empty study bundle, outside any experiment repo |
 | `publishable study add` | NOT BUILT | bundle path, run.yaml path, `--as <name>` | Copies a run record into the bundle under that name, with host paths redacted |
@@ -3298,7 +3298,7 @@ The `<!-- publishable:begin ... -->` regions are **managed**: a generator that p
 
 | Generator | Status | Example | Creates |
 |---|---|---|---|
-| `experiment` | built | `publishable g experiment cohort-pilot --template generic --input-dir ~/data --output-dir ~/results` | A fully-populated `configs/cohort-pilot/config.yaml`, `src/cohort_pilot/` (thin `experiment.py` declaring step order, plus `steps/` with one **working** starter step). Refuses if either path resolves inside the repo. Adding a row to the README's managed experiments table is NOT BUILT — the same half `generate template` does not write either |
+| `experiment` | built | `publishable g experiment cohort-pilot --template generic --input-dir ~/data --output-dir ~/results` | A fully-populated `configs/cohort-pilot/config.yaml`, `src/cohort_pilot/` (thin `experiment.py` declaring step order, plus `steps/` with one **working** starter step). Refuses if either path resolves inside the repo. Adding a row to the README's managed experiments table is NOT BUILT — the same half `generate template` does not write either. `--plugin` is accepted and dropped: the flag parses, nothing is installed, and `plugin:` is written `null` — NOT BUILT, and the [`plugin` field](#the-one-config-file) is a readable note rather than an install instruction in either case |
 | `step` | built | `publishable g step cohort-pilot analyze` | Next-numbered `src/cohort_pilot/steps/step03_analyze.py` with a `BaseStep` stub, registered in order |
 | `template` | built | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Refuses if that file already exists, and takes a name `templates/<name>.py` can be imported under and not one prefixed with `__`, which [discovery skips](#templates-where-parameters-are-defined). Adding its parameter table to the README is NOT BUILT: the scaffolded README carries no managed region for one |
 | `report` | NOT BUILT | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment; see below |
@@ -3377,7 +3377,9 @@ uv run publishable generate experiment triage-pilot \
   --input-dir /secure/phi-data/xray-2026 --output-dir /secure/results/triage-pilot
 ```
 
-`--plugin <github-username>/<repo>` runs `uv add git+https://github.com/<user>/<repo>` and nothing more. No registry, no bespoke installer, no new trust boundary beyond "this is a git dependency," because it is one. Pin however `uv` supports: `--plugin someuser/publishable-llm@v1.2.0`.
+`--plugin <github-username>/<repo>` runs `uv add git+https://github.com/<user>/<repo>` and nothing more — **NOT BUILT** in this build, where the flag parses and is dropped. No registry, no bespoke installer, no new trust boundary beyond "this is a git dependency," because it is one. Pin however `uv` supports: `--plugin someuser/publishable-llm@v1.2.0`.
+
+A flag here rather than a field in the file is not the exception it looks like: [operation commands](#operation-commands) take paths and nothing else, and `generate` is a **creation** command — the file it would read does not exist yet, which is the whole distinction that rule draws.
 
 This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses, [unit resolvers](#where-units-come-from), and [apparatus probes](#the-apparatus-core-can-only-observe), not just templates, so shared machinery is importable rather than copy-pasted.
 
