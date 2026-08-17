@@ -1544,3 +1544,20 @@ def test_a_suffix_neither_table_knows_is_still_raw_bytes(tmp_path):
     target = tmp_path / "a.bin"
     target.write_bytes(b"\x00\x01")
     assert artifacts.StepIO._read(target) == b"\x00\x01"
+
+
+def test_a_reader_with_no_writer_is_never_dispatched_to(registries, tmp_path):
+    """The reverse of the refusal above, stated rather than left implicit:
+    `_suffix_for` decides the suffix from `WRITERS` alone, so a suffix
+    `READERS` holds and `WRITERS` does not never reaches that table at
+    all — the registered reader is skipped, not consulted and rejected."""
+    from publishable import artifacts
+
+    read_calls = []
+    artifacts.READERS[".fastq"] = lambda data: read_calls.append(data) or {"read": data}
+
+    target = tmp_path / "a.fastq"
+    target.write_bytes(b"raw")
+
+    assert artifacts.StepIO._read(target) == b"raw"
+    assert read_calls == []

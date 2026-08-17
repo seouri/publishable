@@ -6001,7 +6001,7 @@ positionally; should name the table by its heading instead.
 credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
 makes is still true, only the cross-reference is positional.
 
-## CLOSED 2026-08-17 — `publishable.readers` had no entry-point group, so a third-party writer had no reader
+## `publishable.readers` had no entry-point group, so a third-party writer had no reader — CLOSED by H7b Part A task 15
 
 **Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
 inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
@@ -6013,12 +6013,17 @@ restored the read. Filed here for the first time — `H7c` task 14 filed four en
 and none of them was this one.
 
 **Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
-decorator `register_reader`. **Closed in code by task 15**: `StepIO._read` now raises
-`ArtifactError` · `E-ARTIFACT-UNREADABLE` for a suffix `WRITERS` holds and `READERS` does not, rather
-than the bare `KeyError`. The refusal fires at the read, not at registration — `register_writer`
-does not refuse a suffix with no reader, since a plugin may register the reader later in the same
-module; task 14's registration-time refusal is the unrelated core-suffix-shadow check, under the
-same code for a different reason.
+decorator `register_reader`, ~~with `register_writer` refusing a suffix that has no reader. The
+code is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not
+before.~~
+
+**CORRECTED 2026-08-17 (H7b Part A task 15 merge-gate review):** the struck clause named the wrong
+mechanism. **Closed in code by task 15**: `StepIO._read` now raises `ArtifactError` ·
+`E-ARTIFACT-UNREADABLE` for a suffix `WRITERS` holds and `READERS` does not, rather than the bare
+`KeyError`. The refusal fires at the read, not at registration — `register_writer` does not refuse
+a suffix with no reader, since a plugin may register the reader later in the same module; task 14's
+registration-time refusal is the unrelated core-suffix-shadow check, under the same code for a
+different reason.
 
 ## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
 
@@ -6040,3 +6045,34 @@ loading.
 class-taking callers (`validate._check_versions`, `materialize.materialize_config`) reading
 `Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
 `provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**
+
+## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
+
+H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
+`RESOLVERS["<name>"] = fn` is set by `register_resolver`'s decorator (task 12) and
+`PROBES["<name>"] = fn` by `register_probe`'s (task 13); `grep -rn "RESOLVERS\|PROBES" src/`
+shows each written at exactly one site and read at none. This is a different fact from what
+`validate._check_probe` does: that check reads `BaseTemplate.apparatus_probe` against
+`plugins.names("publishable.probes")`, the entry-point **metadata** scan — a reader for the
+declared *name*, not for the `PROBES` **registry** the decorator populates. The registry itself
+stays unread by either check.
+
+**Why this is a filing rather than a fix.** A reader for `PROBES` means *executing* a probe —
+`Apparatus`, per-condition facts, the ledger, and the change gate — all H7d and explicitly out of
+scope for H7b (`docs/superpowers/specs/2026-08-16-plugin-registries-design.md` § Out of scope).
+Shipping any part of that to give `PROBES` a reader here would be worse than recording the gap. A
+reader for `RESOLVERS` is `data.units.from.resolver`'s dispatch — the resolver-half of `data.units`
+that H7b Part B builds, not this task.
+
+This makes the shipped-and-unread family **larger** than the amendment task 13 wrote in the entry
+above (`BaseTemplate.field_convention` is declarable and read by nothing): that amendment correctly
+narrows the *`BaseTemplate` attribute* family to `field_convention` and `apparatus_facts`, but
+`PROBES` and `RESOLVERS` are a different shape — module-level registries, not class attributes —
+and join the wider shipped-but-unread family in the same four commits.
+
+**Owner:** `PROBES` → **H7d** (probe execution: `Apparatus`, facts, ledger, change gate).
+`RESOLVERS` → **H7b Part B**, the resolver-dispatch task.
+
+**Found by:** H7b Part A tasks 12-15 review. **Severity:** Minor. Both registries are populated
+correctly and read by nothing yet — inert rather than misleading, since no config field depends on
+either registry being read today.

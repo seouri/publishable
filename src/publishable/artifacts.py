@@ -867,9 +867,21 @@ class StepIO:
         Two tables and one dispatch: `_suffix_for` decides from `WRITERS`, and
         the reader is then looked up in `READERS`. That is an inversion only
         while the two hold the same keys, which core's own five do and a plugin's
-        pair need not — so the gap is a coded refusal rather than the bare
-        `KeyError` it was, and § Steps and artifacts' promise that what a writer
-        takes is what its reader gives back is stated where it can be enforced.
+        pair need not — so a suffix `WRITERS` holds and `READERS` does not is a
+        coded refusal rather than the bare `KeyError` it was, and § Steps and
+        artifacts' promise that what a writer takes is what its reader gives
+        back is stated where it can be enforced.
+
+        The reverse is not handled, deliberately rather than by omission:
+        `_suffix_for` is the single dispatch and it iterates `WRITERS` alone,
+        so a suffix `READERS` holds and `WRITERS` does not is invisible to
+        it — `suffix` comes back `None`, and this reads the file as raw bytes
+        without ever consulting `READERS`. That suffix registered no writer
+        in this process, so nothing here could have written the file `_read`
+        is now looking at; a reader with no writer is not a broken pair the
+        way the other direction is, so it is left as the ordinary
+        no-suffix-known case rather than given its own refusal.
+
         A suffix *neither* table knows is not a fault at all: it is the raw-bytes
         case `write` already accepts.
         """

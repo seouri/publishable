@@ -132,6 +132,30 @@ def test_register_resolver_records_the_name_and_returns_the_function(registries)
     assert resolve(None, None) == ["a unit"]  # still callable under its own name
 
 
+def test_a_leaked_registration_would_be_visible_to_the_next_test(registries):
+    """Pins the `registries` fixture's restore loop itself. A fixture that
+    snapshots but never restores looks identical to a working one to every
+    other test in this module, because none of them checks state left behind
+    by a *previous* test — so this one plants a registration and the test
+    immediately below, which runs next in this file's declaration order,
+    checks it is gone. If the restore loop were replaced with a no-op, this
+    test would still pass (it only registers) and the one below would go red."""
+    from publishable.plugins import register_resolver
+
+    @register_resolver("_registries_fixture_leak_probe")
+    def resolve(io, cfg):
+        return []
+
+
+def test_the_previous_test_s_registration_did_not_leak(registries):
+    """Companion to the test immediately above — see its docstring. Also uses
+    `registries` itself, so a failure here means the *previous* test's
+    teardown didn't run, not this test's own setup."""
+    from publishable.plugins import RESOLVERS
+
+    assert "_registries_fixture_leak_probe" not in RESOLVERS
+
+
 def test_a_resolver_is_importable_from_the_one_root():
     """`reference.md` § The importable surface: everything you write against is
     imported from `publishable` itself. A plugin importing
@@ -155,18 +179,56 @@ def test_register_probe_records_the_name_and_returns_the_function(registries):
 
 
 def test_a_probe_is_importable_from_the_one_root():
+    """`reference.md` § The importable surface: everything you write against is
+    imported from `publishable` itself. Asserting `__all__` membership alone
+    cannot catch a dropped export — the import line above it can still fail
+    while `__all__` stays untouched — so this must import the name itself."""
     import publishable
 
     assert "register_probe" in publishable.__all__
+    assert publishable.register_probe is not None
+
+
+def test_a_writer_is_importable_from_the_one_root():
+    """Same shape as the resolver and probe checks above: `__all__` membership
+    alone cannot catch a dropped export from `publishable/__init__.py`."""
+    import publishable
+
+    assert "register_writer" in publishable.__all__
+    assert publishable.register_writer is not None
+
+
+def test_a_reader_is_importable_from_the_one_root():
+    """Same shape as the resolver and probe checks above: `__all__` membership
+    alone cannot catch a dropped export from `publishable/__init__.py`."""
+    import publishable
+
+    assert "register_reader" in publishable.__all__
+    assert publishable.register_reader is not None
 
 
 def test_a_third_party_suffix_reaches_io_write_s_dispatch(registries, tmp_path):
     """Registration is only real if `io.write` finds it, so the assertion is over
     the dispatch rather than over the dict — `_suffix_for` is what decides, and
-    it iterates `WRITERS`."""
+    it iterates `WRITERS`.
+
+    `.gz` is registered *before* `.fastq.gz` on purpose: registering the
+    longer suffix first would leave "longest wins" and "first-registered
+    wins" agreeing on the answer, since the longer one would also be first.
+    Registering the shorter one first is what makes the two readings diverge
+    — only "longest wins" gets `.fastq.gz` for `sample.fastq.gz`."""
     from publishable import artifacts
     from publishable.plugins import register_writer
 
+    @register_writer(".gz")
+    def write_gz(rows):
+        return b""
+
+    assert artifacts._suffix_for("sample.fastq.gz") == ".gz"
+
+    # The longest registered suffix still wins, which is what a compound
+    # extension is registered for: `.gz` alone must not claim this name,
+    # even though it was registered first.
     @register_writer(".fastq.gz")
     def write_fastq(rows):
         return b"@read\n"
@@ -174,13 +236,27 @@ def test_a_third_party_suffix_reaches_io_write_s_dispatch(registries, tmp_path):
     assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
     assert artifacts.WRITERS[".fastq.gz"] is write_fastq
 
-    # The longest registered suffix still wins, which is what a compound
-    # extension is registered for: `.gz` alone must not claim this name.
-    @register_writer(".gz")
-    def write_gz(rows):
-        return b""
 
-    assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
+def test_a_plugin_writer_is_reached_through_the_public_io_write(registries, tmp_path):
+    """The test above stops at `_suffix_for` and `WRITERS[...] is write_fn` — one
+    call frame short of `io.write` itself, which is what a step actually calls.
+    `StepIO.write` calls `WRITERS[suffix](obj)` and then writes the returned
+    bytes, so this drives a plugin suffix through that public method and reads
+    the bytes back off disk, rather than asserting on the private dispatch."""
+    from publishable.artifacts import StepIO
+    from publishable.plugins import register_writer
+
+    @register_writer(".fastq")
+    def write_fastq(rows):
+        return "|".join(rows).encode()
+
+    step_dir = tmp_path / "run" / "step"
+    step_dir.mkdir(parents=True)
+    (tmp_path / "input").mkdir()
+    io = StepIO(step_dir=step_dir, input_dir=tmp_path / "input", run_dir=tmp_path / "run")
+
+    path = io.write("out.fastq", ["a", "b"])
+    assert path.read_bytes() == b"a|b"
 
 
 def test_a_writer_may_not_claim_a_suffix_core_writes(registries):

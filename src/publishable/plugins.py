@@ -93,10 +93,9 @@ def register_resolver(name: str) -> Callable[[F], F]:
 
     The entry point is the registration and this argument is a declaration
     checked against it — `reference.md` § Creating a plugin — so this records
-    what the source says and `check_registration` is what compares the two.
-    Returned unchanged so the plugin's own module keeps a callable under the
-    name it just defined, which is what makes the artifact testable in its own
-    suite.
+    what the source says. Returned unchanged so the plugin's own module keeps
+    a callable under the name it just defined, which is what makes the
+    artifact testable in its own suite.
     """
 
     def decorator(fn: F) -> F:
@@ -152,7 +151,10 @@ def register_reader(suffix: str) -> Callable[[F], F]:
 
     Refuses a core suffix for the reason `register_writer` does, and under the
     same code: the pair is one claim on one extension, so redefining half of it
-    is redefining it.
+    is redefining it. The check is `suffix in CORE_SUFFIXES`, i.e. `WRITERS`'s
+    keys at import time — a proxy for "core itself reads `suffix`" rather than
+    a read of `artifacts.READERS` directly, correct only because core's own
+    writer and reader tables in `artifacts.py` are defined with identical keys.
     """
 
     def decorator(fn: F) -> F:
