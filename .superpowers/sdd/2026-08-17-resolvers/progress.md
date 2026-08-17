@@ -210,3 +210,28 @@ M1, M2 in a fix round.
   docstring rather than changing the fixture, since both assertions still discriminate under it.
   Gates after the fix round: `uv run pytest` → 2092 passed, 1 skipped, 2 xfailed (2089 before; +3 new
   tests); `ruff check` clean; `ruff format --check` clean; `mypy` clean.
+
+Tasks 27-29: implemented at 4e47f50 / 5b14a61 / 86d87f9, report cf92b70. 2089 passed.
+Tasks 27-29: reviewed (opus), six verdicts. **Task 27's BUILD axis FAILED on a Critical; task 29's
+  PINNING axis failed.**
+  Critical: `_from_resolver`'s new attribute loop hashed a declared attribute against a `set`, so
+  `attributes: [{"operator": 1}]` under a resolver source raised a **bare `TypeError` out of `validate`
+  with no finding** — breaking the never-raise contract. The table path guards it and `_from_glob` is
+  immune, so **task 27 introduced the only crashing path in the family.** Closed with one `isinstance`
+  guard; the sibling shapes were enumerated by READING the loop (`dict` and `list` are the only
+  unhashable things a YAML attribute entry can be), not by grepping.
+  I1: `E-RESOLVER-MEASUREMENT-FIELD` fired ungated — correct per spec correction 4 — but gated on
+  **nothing at all, including roster resolution**, so an unregistered resolver reported it beside
+  `E-RESOLVER-UNKNOWN`, asserting what a resolver that was never imported had yielded. And **all three
+  of task 28's tests stayed green under the fix**, which is exactly why they could not see it.
+  **I2 is the finding to carry, and it is about process rather than code.** Task 29 deferred pinning the
+  `cfg` threading to task 33, citing the spec's correction that tasks 25/27/28/29 cannot test through
+  `validate_config` because the skip is only deleted at 26. **That licence had already expired — task 26
+  landed ahead of task 27's commit.** The reviewer probed it and a `validate_config`-level test using
+  fixtures already in the file reports the code at HEAD and nothing under the substitution. So task 29
+  could have pinned it and did not.
+  Ruling: **a deferral inherits the expiry of the claim licensing it.** A spec correction written before
+  a task lands stops being true the moment it lands, and carrying it forward is the same error as
+  carrying a stale scoping — which this repo re-measures precisely to avoid. The `cli.py` half IS still
+  open, and remains task 33's.
+Tasks 27-29: fix round. Commit 33ebe79. All five closed. 2092 passed, 1 skipped, 2 xfailed.
