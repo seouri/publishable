@@ -61,3 +61,30 @@ Tasks 1-6: reviewed (opus), twelve verdicts. **Tasks 2 and 3 FAILED spec complia
   registries" and task 3 minted a fifth. **`CLAUDE.md` names itself in the consistency sweep regardless
   of a brief's file list**, which is why this was task 3's rather than a later sweep's.
 Tasks 1-6: fix round. Commit 24a56ff. All thirteen closed. 2000 passed + 2 xfailed; gates clean.
+
+Task 7: implemented at 9d28200 / e744b44 — the entry-point METADATA scan over five groups, and the
+  installed-distribution fixture neither prior document budgeted. 2006 passed + 2 xfailed.
+  The implementer confirmed the invariant by an independent script OUTSIDE pytest — snapshotting
+  `sys.modules` around the scan and then calling `.load()` to show it would have imported. It also
+  found brief mutation (c) NON-DISCRIMINATING (the fixture's values sort the same way its providers do)
+  and reverted it rather than altering a verbatim test. Seventh blind mutation caught across four
+  slices, and the first caught by an implementer rather than a reviewer.
+Task 7: reviewed (opus). Both verdicts PASS after the reviewer closed two gaps in place. `plugins.py`
+  itself was correct throughout — **the tests could not see it change.**
+  **C1: `test_the_scan_imports_nothing` could not fail on the guarantee its own name states.** Its
+  target was `no_such_module`, so it caught a load only if the exception ESCAPED — wrapping the scan's
+  loop in `try: ep.load() except Exception: pass` left all six green. The test named the invariant and
+  measured something adjacent to it. Closed: the target now genuinely imports, the assertion is its
+  absence from `sys.modules`, and the trailing `.load()` became the positive control.
+  I1 is sharper than the implementer's own finding: claimant order was pinned by NOTHING — **deleting
+  the inner sort entirely also passed**, because `syspath_prepend` made walk order equal provider order.
+  Ruling on where that belonged: closed in task 7, not routed to task 8. "Claimants in provider order"
+  is `scan_group`'s own shipped docstring claim and `scan_group` is task 7's deliverable; task 8 asserts
+  on message text and would not pin this list's order even incidentally. And "the tests are verbatim
+  from the brief" is not a spec constraint — the brief's own mutation argued from a fixture property
+  that does not hold, so repairing the fixture IS the brief's stated methodology. The implementer was
+  right to refuse to change the CODE; changing the fixture cost nothing.
+  The reviewer also attacked the no-import invariant against CPython 3.13.7 source rather than assuming:
+  `load()` is the sole `import_module` site, `.dist` is stamped by `_for`, `.name`/`.value`/`.group` are
+  instance vars, and `Distribution.name`/`.version` parse METADATA. No shipped path imports.
+Task 7: complete at 46e62d2 / c909080. 2006 passed + 2 xfailed; gates clean.
