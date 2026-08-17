@@ -418,6 +418,47 @@ def cohens_dz(diffs: Sequence[float]) -> float | None:
     return mean / sd if sd > 0 else None
 
 
+def weighted_cohens_dz(diffs: Sequence[float], weights: Sequence[Any]) -> float | None:
+    """The weighted mean of the per-unit differences over their weighted standard
+    deviation.
+
+    `reference.md` § Statistical reporting: "A weighted condition standardizes by
+    the weighted standard deviation, on the same weights the mean used." So the
+    same weights the delta was computed with, and no others — a *d* standardized by
+    an unweighted dispersion is a ratio of two different samples' summaries.
+
+    **The variance denominator is `Σw − Σw²/Σw`, not `Σw`**, the same choice
+    `weighted_t_over_units` argues at length: at w ≡ 1 it is n − 1, so equal
+    weights reproduce `cohens_dz` digit for digit and this is a generalization
+    rather than a second statistic wearing the same name. `Σw` would shrink the
+    denominator and inflate every *d*.
+
+    Invariant to rescaling the weights, as every weighted construction here is:
+    both the mean and the variance divide the scale out.
+
+    `None` below two differences and `None` at zero dispersion, the two refusals
+    `cohens_dz` carries, kept so the pair refuses the same inputs — and `None` for
+    a zero denominator, which is all the weight concentrated on one unit and the
+    same n − 1 = 0 fact the length guard answers.
+
+    `weights` is annotated `Any` for the reason `weighted_t_over_units`' is: a
+    weight is a unit attribute, `units._from_table` builds those from
+    `csv.DictReader`, and `units.usable_weight` — reached through
+    `checked_weights` — is the single gate `validate` approved the config against.
+    """
+    if len(diffs) < 2:
+        return None
+    w = checked_weights(weights)
+    total = sum(w)
+    denominator = total - sum(x * x for x in w) / total
+    if denominator <= 0:
+        return None
+    mean = _weighted_mean(w, diffs)
+    variance = sum(a * (d - mean) ** 2 for a, d in zip(w, diffs, strict=True)) / denominator
+    sd = math.sqrt(variance)
+    return mean / sd if sd > 0 else None
+
+
 def resample_seed(digest: str) -> int:
     """From the design digest, never `parameters_hash`.
 

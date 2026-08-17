@@ -63,6 +63,7 @@ from publishable.stats import (
     UnitTable,
     cohens_dz,
     collapse_repeats,
+    kish_effective_n,
     mean_of,
     min_honest_draws,
     paired_delta_of_derived,
@@ -73,6 +74,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     unit_table_from_rows,
+    weighted_cohens_dz,
     weighted_mean_of,
 )
 from publishable.strata import levels_for
@@ -778,6 +780,7 @@ def _comparison_step_blocks(
     resample_columns: bool,
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
@@ -1043,9 +1046,32 @@ def _comparison_step_blocks(
                     # value, which a column has and a derived metric does not,
                     # and it is computed from the local `diffs` list rather than
                     # from anything the `Member` carries.
-                    "cohens_d": cohens_dz(diffs),
+                    "cohens_d": (
+                        cohens_dz(diffs)
+                        if col_weights is None
+                        else weighted_cohens_dz(diffs, col_weights)
+                    ),
                     "correction": None,
                 }
+            # The three facts a weight adds to a contrast entry, and they move
+            # together with the delta and the interval: § Contrasts requires it,
+            # and a weighted delta beside an unweighted effect size or an
+            # `n_paired` with no effective size beside it is a declaration
+            # accepted whose effect is half delivered. Absent — not null — when no
+            # weight is declared, the same absent-not-null shape `weighted_by`
+            # already has per condition.
+            #
+            # **Kish is over the PAIRED INTERSECTION**, whose weights are
+            # `entry_weights` below, not over the roster-wide mapping `weights`
+            # holds: under a declared `holdout` the collapsed table is the test
+            # partition alone, and the size reported beside an interval has to be
+            # the size the interval was computed at. Summing the mapping is the
+            # natural implementation and the wrong one.
+            if weights is not None:
+                metric_block[metric_key]["weighted_by"] = weighted_by
+                metric_block[metric_key]["n_paired_effective"] = kish_effective_n(
+                    [weights[k] for k in (base_keys if is_derived else col_keys)]
+                )
             if confounded:
                 # Marked, not merely reported: a delta mixing two axes is the
                 # factorial main-effects problem, which core refuses to
@@ -1118,6 +1144,7 @@ def _compute_vs_baseline(
     resample_columns: bool,
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -1160,6 +1187,7 @@ def _compute_vs_baseline(
             resample_columns=resample_columns,
             weights=weights,
             strata=strata,
+            weighted_by=weighted_by,
         )
         if block:
             out[comp.of] = block
@@ -1184,6 +1212,7 @@ def _compute_declared_contrasts(
     resample_columns: bool,
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1234,6 +1263,7 @@ def _compute_declared_contrasts(
             resample_columns=resample_columns,
             weights=weights,
             strata=strata,
+            weighted_by=weighted_by,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -2625,6 +2655,7 @@ def command_run(config_path: Path) -> int:
                 resample_columns=resample_spec["declared"],
                 weights=weights,
                 strata=resample_strata,
+                weighted_by=weight_by if weights else None,
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2640,6 +2671,7 @@ def command_run(config_path: Path) -> int:
                 resample_columns=resample_spec["declared"],
                 weights=weights,
                 strata=resample_strata,
+                weighted_by=weight_by if weights else None,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:

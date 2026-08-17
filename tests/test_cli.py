@@ -9572,6 +9572,9 @@ def _weighted_contrast_block(**extra):
     from publishable.contrasts import Comparison
     from publishable.sweep import Condition
 
+    if "weights" in extra:
+        extra.setdefault("weighted_by", "sampling_weight")
+
     block, members = _comparison_step_blocks(
         Comparison(id="c", of=1, against=0),
         roster=_cli_roster(6),
@@ -9742,3 +9745,123 @@ def test_a_weighted_stratified_column_contrast_weights_inside_the_strata():
     assert both["ci95"][0] >= 7.0 - 1e-9
     assert stratified_only["ci95"][0] >= 5.0 - 1e-9
     assert stratified_only["ci95"][0] < 7.0
+
+
+_K_OF = {f"u{i}": {"m": float(i + 1)} for i in range(4, 8)}
+_K_AGAINST = {k: {"m": 0.0} for k in _K_OF}
+_K_WEIGHTS = {
+    "u0": 1,
+    "u1": 1,
+    "u2": 1,
+    "u3": 3,
+    "u4": 1,
+    "u5": 1,
+    "u6": 1,
+    "u7": 3,
+}
+
+
+def test_a_weighted_contrast_entry_carries_the_three_documented_keys():
+    """§ Contrasts: `weighted_by` beside `method`, `n_paired_effective` as a scalar
+    sibling of `n_paired`, and `cohens_d` weighted on the same weights the delta
+    used. All four move together or the declaration is half delivered.
+
+    The key names are compared against the document's own § Contrasts text rather
+    than against a second literal, which is the agreement a hard-coded pair of
+    strings cannot make."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert weighted["weighted_by"] == "sampling_weight"
+    assert "weighted_by" in section
+    assert "n_paired_effective" in section
+    assert weighted["n_paired_effective"] == pytest.approx(4.8)
+    assert weighted["n_paired"] == 6
+    assert weighted["cohens_d"] == pytest.approx(2.0)
+    # The unweighted neighbour: absent keys, not null ones, and the unweighted dz.
+    assert "weighted_by" not in plain
+    assert "n_paired_effective" not in plain
+    assert plain["cohens_d"] == pytest.approx(1.3416407864998738)
+
+
+def test_kish_is_taken_over_the_paired_intersection_not_the_weight_mapping():
+    """The trap `cli`'s own weight-construction site sets up: `weights` is built
+    from the WHOLE roster, while a contrast is computed over the intersection —
+    under a declared `holdout` the collapsed table is the test partition alone.
+
+    Three distinct answers separate the three readings, which is what makes this
+    fixture discriminating: Kish over the whole mapping is 12²/24 = 6.0, over the
+    four-unit intersection 6²/12 = 3.0, and `n_paired` is 4. No two coincide, so a
+    denominator taken from the mapping and one taken from the count both fail.
+
+    C1-C3 all declare `holdout: null`, so no payoff config separates them — the
+    fixture instantiates the seam directly."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(8),
+        aggregated={1: {"s": {"m": 6.5}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _K_OF, (0, "s"): _K_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_K_WEIGHTS,
+    )
+    assert block["s"]["m"]["n_paired"] == 4
+    assert block["s"]["m"]["n_paired_effective"] == pytest.approx(3.0)
+
+
+def test_a_weighted_derived_contrast_carries_the_record_keys_without_a_weighted_method():
+    """Decision 1's other half. Core does not weight a derived metric, so `method`
+    stays the unweighted spelling and `cohens_d` stays `null` — the worked
+    example's own rule, a derived metric having no per-unit value to difference.
+    But `weighted_by` and `n_paired_effective` still travel beside it: the
+    declaration is true of the run either way, which is the same arrangement
+    `summarize_step` makes per condition."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.m
+        return float(sum(column) / len(column))
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"d": 6.0}}, 0: {"s": {"d": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={(1, "s"): {"d": 6.0}, (0, "s"): {"d": 0.0}},
+        resample_fns_by_key={(1, "s"): {"d": _derived}, (0, "s"): {"d": _derived}},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+        weighted_by="sampling_weight",
+    )
+    entry = block["s"]["d"]
+    assert entry["weighted_by"] == "sampling_weight"
+    assert entry["n_paired_effective"] == pytest.approx(4.8)
+    assert entry["method"] == "paired_percentile_over_units"
+    assert entry["cohens_d"] is None

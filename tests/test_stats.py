@@ -4010,3 +4010,45 @@ def test_a_relabelled_stratum_draws_the_identical_sequence():
         strata=swapped,
     )
     assert first.pool == second.pool
+
+
+def test_a_weighted_dz_standardizes_by_the_weighted_standard_deviation():
+    """`reference.md` § Statistical reporting: "A weighted condition standardizes by
+    the weighted standard deviation, on the same weights the mean used."
+
+    Exact arithmetic, not an observation. Σw = 12, Σw² = 30, so the denominator is
+    12 − 30/12 = 9.5; Σw(d − 8)² = 49 + 36 + 25 + 3 + 12 + 27 = 152; 152/9.5 = 16.0,
+    sd = 4.0, dz = 8.0/4.0 = 2.0. The unweighted answer over the same differences
+    is 6/√20 = 1.3416..., so a weighting that did nothing lands on a different
+    number rather than on this one."""
+    from publishable.stats import cohens_dz, weighted_cohens_dz
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    assert weighted_cohens_dz(diffs, [1, 1, 1, 3, 3, 3]) == pytest.approx(2.0)
+    assert cohens_dz(diffs) == pytest.approx(1.3416407864998738)
+
+
+def test_a_weighted_dz_at_equal_weights_is_the_unweighted_one():
+    """The oracle, and the reason the variance denominator is `Σw − Σw²/Σw` rather
+    than `Σw`: at w ≡ 1 it is n − 1, so this is a generalization rather than a
+    second statistic wearing the same name. If this ever fails, the formula is
+    wrong rather than this test."""
+    from publishable.stats import cohens_dz, weighted_cohens_dz
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    assert weighted_cohens_dz(diffs, [1] * 6) == pytest.approx(cohens_dz(diffs))
+    # Invariant to rescaling, as every weighted construction here is: a weight
+    # column summing to a population size gives the same answer as one summing to
+    # the row count.
+    assert weighted_cohens_dz(diffs, [7] * 6) == pytest.approx(cohens_dz(diffs))
+
+
+def test_a_weighted_dz_refuses_the_degenerate_shapes_the_unweighted_one_does():
+    """`None` below two differences, and `None` at zero dispersion — the two
+    refusals `cohens_dz` carries, kept so the pair refuses the same inputs. Plus
+    the one the weights add: a denominator of zero, which is all the weight on one
+    unit, is the same n − 1 = 0 fact the length guard answers."""
+    from publishable.stats import weighted_cohens_dz
+
+    assert weighted_cohens_dz([1.0], [1]) is None
+    assert weighted_cohens_dz([2.0, 2.0], [1, 3]) is None
