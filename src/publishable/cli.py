@@ -73,6 +73,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     unit_table_from_rows,
+    weighted_mean_of,
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -945,6 +946,12 @@ def _comparison_step_blocks(
                     of_collapsed[k][metric_key] - against_collapsed[k][metric_key] for k in col_keys
                 ]
                 n_paired = len(col_keys)
+                # The intersection's OWN weights, in `col_keys` order, so nothing
+                # downstream can weight a unit the difference beside it did not
+                # come from. `None` when no weight is declared, which is what
+                # keeps every unweighted construction on exactly the arithmetic it
+                # had.
+                col_weights = None if weights is None else [weights[k] for k in col_keys]
                 resampled = None
                 if resample_columns and n_paired >= 2:
                     # `col_keys`, NOT `base_keys`. The derived branch above uses
@@ -964,9 +971,39 @@ def _comparison_step_blocks(
                     # shared-closure cancellation `paired_percentile_of_derived`
                     # warns about — that one is about a SWEPT AXIS changing which
                     # formula `aggregate` runs, and a column mean is one formula.
-                    def _column_mean(table: UnitTable, _name: str = metric_key) -> float:
+                    #
+                    # **The weights live in the CLOSURE, not in the
+                    # construction.** `paired_percentile_of_derived` is shared
+                    # with the derived branch, which core does not weight
+                    # (§ Weighted samples hands that weight column to `aggregate`
+                    # as a unit attribute), so a `weights` parameter there would
+                    # weight the wrong half. The closure can reach them because
+                    # the construction keeps the real unit key inside every draw:
+                    # each row is `{"unit": k, **of[k]}`, and a bootstrap draw
+                    # duplicates units on purpose, so the vector is built from the
+                    # DRAWN keys rather than from the roster — a vector filtered
+                    # or ordered differently weights the wrong unit, which is
+                    # `summarize_step`'s own discipline one level over.
+                    def _column_mean(
+                        table: UnitTable,
+                        _name: str = metric_key,
+                        _weights: dict[str, Any] | None = weights,
+                    ) -> float:
                         column: list[float] = getattr(table, _name)
-                        return float(sum(column) / len(column))
+                        if _weights is None:
+                            return float(sum(column) / len(column))
+                        drawn = [_weights[k] for k in table.unit]
+                        got = weighted_mean_of([float(v) for v in column], drawn)
+                        if got is None:
+                            # An empty column — the identical input on which the
+                            # unweighted branch above raises `ZeroDivisionError`,
+                            # and which `paired_percentile_of_derived` catches as a
+                            # degenerate draw either way. Raised rather than
+                            # coerced to a number, so the two branches refuse the
+                            # same input; a fabricated 0.0 here would enter the
+                            # pool as a real draw.
+                            raise ValueError("a weighted column contrast drew an empty table")
+                        return got
 
                     resampled = paired_percentile_of_derived(
                         of_collapsed,
@@ -977,6 +1014,11 @@ def _comparison_step_blocks(
                         seed,
                         draws=draws,
                         strata=strata,
+                        method=(
+                            "paired_percentile_over_units"
+                            if weights is None
+                            else "weighted_paired_percentile_over_units"
+                        ),
                     )
                     interval = resampled.interval
                 else:
@@ -987,7 +1029,11 @@ def _comparison_step_blocks(
                     # the difference of the two column means over that set, so
                     # the point estimate and the pool cannot drift onto
                     # different rosters.
-                    "delta": mean_of(diffs),
+                    "delta": (
+                        mean_of(diffs)
+                        if col_weights is None
+                        else weighted_mean_of(diffs, col_weights)
+                    ),
                     "basis": "units",
                     "paired": True,
                     "method": interval.method if interval else None,

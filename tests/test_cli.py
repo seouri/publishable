@@ -9610,10 +9610,18 @@ def test_a_contrasts_column_draw_honours_resample_stratify_by():
 
 def test_the_three_comparison_functions_accept_weights_and_strata():
     """The threading itself, at all three signatures — `_comparison_step_blocks`
-    above plus the two callers. `weights` reaches no arithmetic at this commit
-    (task 7's closure is what reads it), so this pins acceptance and the
-    unchanged-answer property: a weight passed today must not silently move a
-    number, because nothing has been built to move it correctly yet."""
+    above plus the two callers.
+
+    **Amended from its task 6 form** (which this docstring replaces rather than
+    layering a correction onto): task 6 pinned "a weight passed today must not
+    silently move a number", true only until task 7 built the weighted
+    `_column_mean` closure. Task 7's `delta` formula weights a recorded column's
+    mean whenever `col_weights` is not `None` — unconditionally on
+    `resample_columns`, the same way a weighted *condition* mean is unconditional
+    on a declared `resample` (§ Weighted samples). So a weight passed here, even
+    with `resample_columns=False`, now moves `delta` from 6.0 to 8.0 — and this
+    test asserts that rather than the pre-task-7 no-op, so the regression this
+    file pins stays true of the code that exists."""
     from publishable.cli import _compute_declared_contrasts, _compute_vs_baseline
     from publishable.sweep import Condition
 
@@ -9637,9 +9645,100 @@ def test_the_three_comparison_functions_accept_weights_and_strata():
     threaded, _ = _compute_vs_baseline(doc={}, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
     assert plain is not None and threaded is not None
     assert plain[1]["s"]["m"]["delta"] == pytest.approx(6.0)
-    assert threaded[1]["s"]["m"]["delta"] == pytest.approx(6.0)
+    assert threaded[1]["s"]["m"]["delta"] == pytest.approx(8.0)
 
     doc = {"statistics": {"contrasts": [{"id": "c1", "of": "arm", "against": "baseline"}]}}
     out, _ = _compute_declared_contrasts(doc=doc, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
     assert out is not None
     assert out[0]["s"]["m"]["n_paired"] == 6
+
+
+def test_a_weighted_column_contrast_weights_its_delta_and_its_draws():
+    """The payoff path. All three C configs declare `statistics.resample`, so a
+    recorded column's contrast goes through `paired_percentile_of_derived` with the
+    `_column_mean` closure — `paired_t_over_units` is never called on them.
+
+    The two answers are exact arithmetic, not observations: unweighted
+    (1+2+3+9+10+11)/6 = 6.0, weighted (1+2+3+27+30+33)/12 = 8.0. A weighting that
+    did nothing, or that weighted only the point estimate, lands on 6.0 for one of
+    the two assertions."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert plain["delta"] == pytest.approx(6.0)
+    assert weighted["delta"] == pytest.approx(8.0)
+    # The interval moved with it, drawn from the same seed: per-draw the weight is
+    # monotone in the value here (1.0-3.0 carry 1, 9.0-11.0 carry 3), so every
+    # drawn multiset's weighted mean is at least its unweighted mean, and sorting
+    # preserves that elementwise. So the pool DOMINATES rather than merely
+    # differing, which a wrong weighting would break in a detectable direction.
+    assert weighted["ci95"][0] > plain["ci95"][0]
+    assert weighted["ci95"][1] > plain["ci95"][1]
+
+
+def test_a_weighted_column_contrast_records_the_documented_method_string():
+    """The agreement pin, against the document rather than against a second
+    literal: a test comparing each of two spellings to its own hard-coded string
+    is how this repo shipped a name claiming an agreement no assertion made.
+    `_interval_method_names` parses § Statistical reporting's construction
+    tables."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert weighted["method"] == "weighted_paired_percentile_over_units"
+    assert plain["method"] == "paired_percentile_over_units"
+    assert weighted["method"] in _interval_method_names()
+    assert plain["method"] in _interval_method_names()
+
+
+def test_a_weighted_derived_contrast_keeps_the_unweighted_method_string():
+    """Decision 1, pinned. Core does not weight a derived metric: its resample
+    closure re-attributes the roster inside every draw, so the weight column
+    reaches `aggregate` as a unit attribute and the template weights its own
+    metric. So `method` stays `paired_percentile_over_units` even under a declared
+    weight — the split this slice's whole payoff argument rests on, and the one no
+    other test in this file can see."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.m
+        return float(sum(column) / len(column))
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"d": 6.0}}, 0: {"s": {"d": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={(1, "s"): {"d": 6.0}, (0, "s"): {"d": 0.0}},
+        resample_fns_by_key={(1, "s"): {"d": _derived}, (0, "s"): {"d": _derived}},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+    )
+    assert block["s"]["d"]["method"] == "paired_percentile_over_units"
+    # And the unweighted arithmetic: core handed the closure the plain collapsed
+    # rows, so the derived delta is 6.0 and not 8.0.
+    assert block["s"]["d"]["delta"] == pytest.approx(6.0)
+
+
+def test_a_weighted_stratified_column_contrast_weights_inside_the_strata():
+    """The ordering constraint task 5 exists for, made observable. A weighted
+    stratified draw is three `A` keys and three `B` keys with `B` carrying weight
+    3, so its forced floor is (3·1·1 + 3·3·9)/12 = 7.0 — above the unweighted
+    stratified floor of 5.0 and far above the unweighted unstratified 4.33. A
+    closure built before the strata decision would weight over the wrong pool and
+    miss this bound."""
+    both, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS, strata=_W_STRATA)
+    stratified_only, _ = _weighted_contrast_block(resample_columns=True, strata=_W_STRATA)
+    assert both["ci95"][0] >= 7.0 - 1e-9
+    assert stratified_only["ci95"][0] >= 5.0 - 1e-9
+    assert stratified_only["ci95"][0] < 7.0

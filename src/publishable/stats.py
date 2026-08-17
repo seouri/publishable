@@ -1143,6 +1143,7 @@ def paired_percentile_of_derived(
     draws: int = 2000,
     confidence: float = 0.95,
     strata: dict[str, str] | None = None,
+    method: str = "paired_percentile_over_units",
 ) -> PairedResample:
     """Percentiles of the resampled difference, one draw applied to both sides.
 
@@ -1167,6 +1168,14 @@ def paired_percentile_of_derived(
     nothing to raise. A caller that genuinely wants the same statistic on both
     sides passes the same callable twice; that's a normal call, not a special
     case this function has to detect.
+
+    `method` names the `Interval` the caller gets back, rather than this
+    function deriving one from a `weights` parameter it deliberately does not
+    take: this construction is shared by a derived contrast, which core does
+    not weight (the weight column reaches `aggregate` as a unit attribute
+    instead), and a recorded column's contrast, which it does — one
+    construction, two possible `method` strings, and the arithmetic that picks
+    between them lives in the caller's own resample closure, not here.
 
     `strata`, when given, resamples within each stratum rather than over the
     whole `keys` list — the same `resample.stratify_by` honoured per condition
@@ -1265,7 +1274,7 @@ def paired_percentile_of_derived(
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
     return PairedResample(
-        interval=Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
+        interval=Interval(low=values[lo], high=values[hi], method=method),
         draws_used=len(values),
         pool=values,
     )
