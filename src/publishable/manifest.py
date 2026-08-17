@@ -20,7 +20,11 @@ def _sha256(path: Path) -> str:
 def build_manifest(
     input_dir: Path, policy: str, index_names: set[str] | None = None
 ) -> dict[str, Any]:
-    """Relative paths plus size, mtime, and — at the policy's depth — content hash."""
+    """Relative paths plus size, mtime, and — at the policy's depth — content hash.
+
+    `units.index_names` supplies `index_names` for `hash_index`: the source's own
+    file, where the source names one, plus every path its resolved units name.
+    """
     if policy not in POLICIES:
         raise ValueError(f"unknown input_manifest_policy {policy!r}")
     files: dict[str, Any] = {}

@@ -97,6 +97,7 @@ from publishable.units import (
     fold_basis,
     holdout_for,
     holdout_seed_for,
+    index_names,
     partition_units,
     resolve_units,
     stratum_names,
@@ -1313,12 +1314,13 @@ def command_run(config_path: Path) -> int:
     # two-route rule and which document sentence decides each). `provenance.units`
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
+    resolver_io = ResolverIO(input_dir)
     roster, technical_n, _columns = (
         resolve_units(
             units_decl,
             input_dir,
             cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
-            resolver_io=ResolverIO(input_dir),
+            resolver_io=resolver_io,
         )
         if units_decl
         else (None, None, frozenset())
@@ -1569,7 +1571,11 @@ def command_run(config_path: Path) -> int:
 
     ch = code_hash(repo_root)
     ph = parameters_hash(doc)
-    manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
+    manifest = build_manifest(
+        input_dir,
+        doc["data"]["input_manifest_policy"],
+        index_names(units_decl or {}, roster, resolver_io.read_paths),
+    )
     lock_path, lock_hash = uv_lock_info(repo_root)
     if lock_path is None:
         # A warning, not an error: it must not change the exit code. There are

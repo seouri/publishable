@@ -110,3 +110,24 @@ def test_a_same_size_edit_is_detected_under_none_at_nanosecond_resolution(input_
     os.utime(path, ns=(entry["mtime"] + 1, entry["mtime"] + 1))
     assert path.stat().st_size == entry["size"]
     assert verify_manifest(input_dir, m) == ["index.csv"]
+
+
+def test_hash_index_hashes_the_named_files_and_nothing_else(tmp_path: Path):
+    """The VALUE, not the key. Under `hash_index` the `sha256` key is present and
+    `None` today, so `"sha256" in entry` passes on a completely broken policy —
+    which is how this went unnoticed since the policy shipped. The unnamed file is
+    the control that separates `hash_index` from `hash_all`."""
+    (tmp_path / "index.csv").write_text("patient_id\np1\n")
+    (tmp_path / "scan.bin").write_bytes(b"\x00\x01")
+    (tmp_path / "unnamed.txt").write_text("not named by anything\n")
+
+    manifest = build_manifest(tmp_path, "hash_index", {"index.csv", "scan.bin"})
+    files = manifest["files"]
+
+    assert files["index.csv"]["sha256"] is not None
+    assert files["scan.bin"]["sha256"] is not None
+    assert files["unnamed.txt"]["sha256"] is None
+    assert (
+        files["index.csv"]["sha256"]
+        == build_manifest(tmp_path, "hash_all")["files"]["index.csv"]["sha256"]
+    )

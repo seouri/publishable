@@ -2819,3 +2819,32 @@ def units_hash(units: UnitList) -> str:
         ensure_ascii=False,
     ).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def index_names(
+    units_decl: dict[str, Any], roster: "UnitList | None", reads: tuple[str, ...] = ()
+) -> set[str]:
+    """The relative paths `input_manifest_policy: hash_index` hashes.
+
+    `reference.md` § Three hashes: "the index and whatever it names". One
+    expression over all three sources, because a per-source branch is how one of
+    them comes to be left silently unhashed:
+
+    - a **table** names one file and its units name no paths;
+    - a **glob** names no file and each unit names the path it was built from;
+    - a **resolver** names whatever it read (`ResolverIO.read_paths`) and its
+      units name their own payloads — § Where units come from: "the paths the
+      resolver read plus the paths its units name, so a unit whose payload the
+      resolver never opened still gets that payload hashed".
+
+    A roster that did not resolve still yields the source's own file: the index is
+    named by the declaration, not by the roster, and a manifest built beside a
+    failed resolution should not silently stop hashing it.
+    """
+    source = units_decl.get("from")
+    named: set[str] = set(reads)
+    if isinstance(source, str) and source:
+        named.add(source)
+    for unit in roster or ():
+        named.update(unit.paths)
+    return named

@@ -4111,3 +4111,24 @@ def test_a_resolvers_own_coded_refusal_keeps_its_own_identifier(installed, regis
     finally:
         sys.modules.pop("coded_r29", None)
     assert excinfo.value.code == "E-UNITS-EMPTY"
+
+
+def test_index_names_covers_every_source_shape(tmp_path):
+    """One expression, three sources: the source's own file where it names one,
+    plus every path its units name. A table names its index and no paths; a glob
+    names no index and one path per unit; a resolver names what it read and
+    whatever its units carry. Asserted together, because shipping two of the three
+    is how the glob case would be left at `sha256: None` silently."""
+    from publishable.units import Unit, UnitList, index_names
+
+    table = UnitList([Unit(key="p1"), Unit(key="p2")])
+    globbed = UnitList([Unit(key="a.dcm", paths=("a.dcm",)), Unit(key="b.dcm", paths=("b.dcm",))])
+    resolved = UnitList([Unit(key="a1", paths=("reads/a1.fq",))])
+
+    assert index_names({"from": "index.csv"}, table) == {"index.csv"}
+    assert index_names({"from": {"glob": "*.dcm"}}, globbed) == {"a.dcm", "b.dcm"}
+    assert index_names({"from": {"resolver": "plate_wells"}}, resolved, ("layout.csv",)) == {
+        "layout.csv",
+        "reads/a1.fq",
+    }
+    assert index_names({"from": "index.csv"}, None) == {"index.csv"}  # no roster, still the index

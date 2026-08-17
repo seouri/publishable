@@ -6173,3 +6173,35 @@ about a code only two of the five groups can raise. The precedent already exists
 § Errors accepts `E-TEMPLATE-LOAD` swallowing a coded error from a local template's top level, for
 the same reason. `docs/reference.md` § Errors core raises' `E-PLUGIN-COLLISION` row now carries one
 sentence recording this precedent.
+
+## CLOSED — `hash_index` hashed nothing for any source, and was unfiled
+
+**Measured 2026-08-17 against `352ea28` (H7b Part B task 30):** `build_manifest`'s `index_names`
+parameter had zero callers in `src/` and `hash_index` appeared in no test. Under `hash_index` every
+`sha256` came back `None` — for a table source and a glob source exactly as much as for a resolver's,
+since nothing supplied the set the policy needs. Three `reference.md` passages promised otherwise —
+§ Three hashes ("Content hashes for the files `data.units.from` resolves — the index and whatever it
+names"), § What `run.yaml` records ("Under `hash_index` the `sha256` key is present for the files
+`data.units.from` resolves and absent for the rest"), and § Where units come from — and the gap had
+no entry here.
+
+**Closed by H7b Part B task 31.** `units.index_names(units_decl, roster, reads=())` covers all three
+sources in one expression: the source's own file where it names one (a table), plus every path its
+resolved units name (a glob's per-unit path, a resolver's `Unit.paths`), plus whatever the resolver
+itself read (`ResolverIO.read_paths`, threaded through `resolver_io` at the one `build_manifest` call
+site in `cli.command_run`). A roster that failed to resolve still yields the source's own file, since
+the index is named by the declaration rather than by the roster.
+
+**Found by:** the same task that needed it closed to build the resolver half — `hash_index`'s
+resolver case cannot be tested against a policy broken for every source.
+
+**The two `ResolverIO` questions task 23's docstring left as task 31's, decided.** Both are benign.
+Append-before-read means a read that raises still lands in `read_paths`, and `index_names` therefore
+still names it — but `build_manifest` only ever hashes a path it found by walking `input_dir`, so a
+name that corresponds to no file on disk (the ordinary shape of a failed read) simply never gets a
+`files` entry to attach a hash to; nothing crashes and nothing hashes a file that was not there. A
+`relpath` containing `../` behaves the same way in the other direction: `index_names` would include
+it verbatim, but `build_manifest`'s `files` dict is keyed by paths `rglob`'d from inside `input_dir`,
+so a name that resolves outside it never matches an entry either. Neither needs a containment check
+to make `hash_index` correct; one would be a change to what a resolver may read, which is a decision
+this task was not asked to make.

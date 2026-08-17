@@ -9238,3 +9238,38 @@ def test_a_resolver_run_records_the_plugin_version_it_resolved_through(
     table_run = yaml.safe_load((table_doc["run_dir"] / "run.yaml").read_text())
     assert resolver_run["provenance"]["plugin_versions"] == {"dist-one": "1.0"}
     assert table_run["provenance"]["plugin_versions"] == {}
+
+
+def test_a_hash_index_run_hashes_the_index_and_nothing_else(tmp_path, capsys):
+    """End to end: `hash_index` names `index.csv` (the table `data.units.from`
+    resolves), so the manifest's `sha256` for it must be a real digest — never
+    the `None` every source got before task 31 wired `units.index_names` into
+    the one `build_manifest` call site. An unnamed file beside it is the
+    control: `hash_index` behaving like `hash_all` would pass on `index.csv`
+    alone."""
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "index.csv").write_text("patient_id\np1\n")
+    (payload / "unnamed.txt").write_text("not named by anything\n")
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        data={
+            "input_dir": str(payload),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_index",
+            "units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": [],
+                "allocation": "within",
+                "cluster_by": None,
+                "weight_by": None,
+                "measurements": None,
+                "holdout": None,
+            },
+        },
+    )
+    manifest = json.loads((doc["run_dir"] / "manifest" / "input.json").read_text())
+    assert manifest["files"]["index.csv"]["sha256"] is not None
+    assert manifest["files"]["unnamed.txt"]["sha256"] is None
