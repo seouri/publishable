@@ -4062,3 +4062,56 @@ def test_a_weighted_dz_refuses_the_degenerate_shapes_the_unweighted_one_does():
     total = 1e17 + 1.0
     assert total - (1e17 * 1e17 + 1.0) / total == 0.0
     assert weighted_cohens_dz([1.0, 2.0], [1e17, 1.0]) is None
+
+
+def test_a_weighted_paired_t_is_the_weighted_construction_under_a_paired_name():
+    """The general case's raw interval, and its corrected counterpart. Delegates to
+    `weighted_t_over_units` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units` — so the `Σw − Σw²/Σw`
+    denominator, the Kish df and the rescaling invariance are inherited rather than
+    re-derived.
+
+    The centre is exact arithmetic: Σwd/Σw = 96/12 = 8.0 weighted against 36/6 =
+    6.0 unweighted. A centre is asserted rather than an endpoint because it is
+    exact under any df, so this cannot be a test that agrees with a wrong critical
+    value."""
+    from publishable.stats import paired_t_over_units, weighted_paired_t_over_units
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    weighted = weighted_paired_t_over_units(diffs, [1, 1, 1, 3, 3, 3])
+    plain = paired_t_over_units(diffs)
+    assert weighted is not None and plain is not None
+    assert (weighted.low + weighted.high) / 2 == pytest.approx(8.0)
+    assert (plain.low + plain.high) / 2 == pytest.approx(6.0)
+    assert weighted.method == "weighted_paired_t_over_units"
+    assert plain.method == "paired_t_over_units"
+    # The df moved too, and it is the part that bites: Kish's size here is
+    # 12²/30 = 4.8 against 6 units, so the weighted half-width is wider than the
+    # weighted sem alone would give. Pinned as the half-width ratio against the
+    # unweighted one, which no equal-weight implementation can reproduce.
+    assert (weighted.high - weighted.low) != pytest.approx(plain.high - plain.low)
+
+
+def test_a_weighted_paired_t_at_equal_weights_is_the_unweighted_one():
+    """The oracle. Equal weights must reproduce `paired_t_over_units` digit for
+    digit — endpoints, not merely centre — which is what `weighted_t_over_units`'
+    variance denominator buys and what a `Σw` denominator would break."""
+    from publishable.stats import paired_t_over_units, weighted_paired_t_over_units
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    weighted = weighted_paired_t_over_units(diffs, [1] * 6)
+    plain = paired_t_over_units(diffs)
+    assert weighted is not None and plain is not None
+    assert weighted.low == pytest.approx(plain.low)
+    assert weighted.high == pytest.approx(plain.high)
+
+
+def test_a_weighted_paired_t_returns_none_when_kish_falls_below_two():
+    """Inherited from `weighted_t_over_units`, and worth its own pin because the
+    record shape it produces is new: `ci95: null` beside a present `weighted_by`
+    and an `n_paired_effective` below 2. Eight rows concentrated onto 1.7
+    effective units have no more dispersion for a df to describe than one row
+    does. Weights [1,1,1,9] give 12²/84 = 1.714."""
+    from publishable.stats import weighted_paired_t_over_units
+
+    assert weighted_paired_t_over_units([1.0, 2.0, 3.0, 10.0], [1, 1, 1, 9]) is None

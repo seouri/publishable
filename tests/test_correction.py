@@ -578,3 +578,45 @@ def test_weights_are_checked_even_when_ci95_is_none():
             declaration_index=1,
         )
     assert "length" in str(excinfo.value)
+
+
+def test_a_corrected_bound_over_weighted_differences_is_weighted_too():
+    """Decision 4, made observable. `_corrected_bounds` rebuilds the corrected
+    interval from the same evidence as the raw one — so weighted differences get a
+    weighted construction at the smaller α, not an unweighted counterpart of a
+    weighted raw interval.
+
+    Two members, identical but for the weights, at a family size of one so the
+    level is α itself and the corrected bound is the raw one's own construction.
+    The centres are exact: 8.0 weighted, 6.0 unweighted."""
+    diffs = (1.0, 2.0, 3.0, 9.0, 10.0, 11.0)
+    common = dict(step="s", metric="m", ci95=(4.0, 12.0), pool=None, declaration_index=0)
+    weighted = Member(where="cond:1", delta=8.0, diffs=diffs, weights=(1, 1, 1, 3, 3, 3), **common)
+    plain = Member(where="cond:2", delta=6.0, diffs=diffs, **common)
+    got_w = corrected_for([weighted], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    got_p = corrected_for([plain], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    low_w, high_w = got_w[("cond:1", "s", "m")]["ci95_corrected"]
+    low_p, high_p = got_p[("cond:2", "s", "m")]["ci95_corrected"]
+    assert (low_w + high_w) / 2 == pytest.approx(8.0)
+    assert (low_p + high_p) / 2 == pytest.approx(6.0)
+
+
+def test_a_pool_carrying_member_is_unaffected_by_the_weights_branch():
+    """The payoff path's own corrected bound, pinned as unchanged. A column
+    contrast under a declared `resample` carries the POOL, whose draws task 7's
+    closure already weighted, so `interval_at` reads a second rank pair off
+    weighted evidence and nothing more is needed. `Member` refuses weights beside a
+    pool, so this is the shape that must keep working untouched."""
+    pool = tuple(float(i) for i in range(200))
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=100.0,
+        ci95=(5.0, 195.0),
+        pool=pool,
+        diffs=None,
+        declaration_index=0,
+    )
+    got = corrected_for([member], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    assert got[("cond:1", "s", "m")]["ci95_corrected"] is not None

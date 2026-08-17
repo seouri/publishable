@@ -404,6 +404,34 @@ def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Int
     return Interval(low=plain.low, high=plain.high, method="paired_t_over_units")
 
 
+def weighted_paired_t_over_units(
+    diffs: Sequence[float], weights: Sequence[Any], confidence: float = 0.95
+) -> Interval | None:
+    """Student's *t* on the *weighted* per-unit differences, df = Kish's effective n − 1.
+
+    The contrast's interval is its own construction over the paired intersection,
+    never a difference of the two sides' intervals — `paired_t_over_units`'
+    argument, unchanged by the weighting.
+
+    Delegates to `weighted_t_over_units` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units`. That is not tidiness: it is
+    what makes the `Σw − Σw²/Σw` variance denominator, the Kish df, the exact
+    reduction to the unweighted form at equal weights, and the invariance to
+    rescaling the weights properties of ONE construction rather than of two that
+    can drift apart. A hand-rolled variance here is how a paired interval and a
+    per-condition one come to disagree about what a weighted interval is.
+
+    `None` below two differences and `None` when Kish's effective size falls below
+    two, both inherited: the record then carries `ci95: null` beside a present
+    `weighted_by` and an `n_paired_effective` below 2 — the weighting happened, and
+    there was no df to describe it with.
+    """
+    plain = weighted_t_over_units(diffs, weights, confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="weighted_paired_t_over_units")
+
+
 def cohens_dz(diffs: Sequence[float]) -> float | None:
     """The mean of the per-unit differences over their standard deviation.
 

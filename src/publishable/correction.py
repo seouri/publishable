@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from publishable.stats import interval_at, paired_t_over_units
+from publishable.stats import interval_at, paired_t_over_units, weighted_paired_t_over_units
 
 ALPHA = 0.05
 
@@ -200,7 +200,17 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     precisely the number a reader cannot tell is wrong.
     """
     if member.diffs is not None:
-        got = paired_t_over_units(member.diffs, confidence=1.0 - level)
+        # The weights, when the member carries them, decide WHICH t construction
+        # rebuilds the bound — the same evidence at a smaller α either way. A
+        # weighted raw interval with an unweighted corrected counterpart is
+        # narrower or wider than the truth by construction rather than by
+        # evidence, which is the fault `__post_init__`'s exactly-one rule refuses
+        # one axis over and which no reader of `run.yaml` could detect.
+        got = (
+            paired_t_over_units(member.diffs, confidence=1.0 - level)
+            if member.weights is None
+            else weighted_paired_t_over_units(member.diffs, member.weights, confidence=1.0 - level)
+        )
         return None if got is None else (got.low, got.high)
     if member.pool is not None:
         return interval_at(member.pool, 1.0 - level)
