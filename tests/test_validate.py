@@ -3191,6 +3191,63 @@ def test_check_measurements_called_directly_with_no_roster_still_finds_shape_fau
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in {f.code for f in c.findings}
 
 
+def test_a_resolver_yielding_no_measurement_field_is_refused_under_its_own_code():
+    """`E-RESOLVER-MEASUREMENT-FIELD`, ungated: § Where units come from makes
+    yielding `measurements.by` an obligation for a resolver, where a table's `by`
+    may name an identity the step invents. Its own code rather than
+    `E-UNITS-ATTR-MISSING`: the two name different declarations, and a reader
+    fixing one is not fixing the other."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "plate_wells"},
+            "measurements": {"by": "read_id", "collapse": "mean"},
+        },
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        None,
+        frozenset({"operator"}),
+        c,
+    )
+    found = {f.code: f.message for f in c.findings}
+    assert "E-RESOLVER-MEASUREMENT-FIELD" in found
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert "read_id" in found["E-RESOLVER-MEASUREMENT-FIELD"]
+    assert "plate_wells" in found["E-RESOLVER-MEASUREMENT-FIELD"]
+
+
+def test_a_resolver_that_does_yield_the_measurement_field_reports_nothing():
+    """THE CONTROL. Without it, a branch that reported unconditionally would pass
+    the test above."""
+    c = Collector()
+    _check_measurements(
+        {
+            "from": {"resolver": "plate_wells"},
+            "measurements": {"by": "read_id", "collapse": "first"},
+        },
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        None,
+        frozenset({"operator", "read_id"}),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_table_source_keeps_its_collapse_gated_reading_of_the_same_field():
+    """The two paths stay different, deliberately. A table's `by` naming no column
+    is only a fault once rows were actually collapsed, because the same
+    declaration serves the step path. Asserting this here is what stops a future
+    tidy-up from unifying the two branches on the resolver's stricter rule."""
+    c = Collector()
+    _check_measurements(
+        {"from": "index.csv", "measurements": {"by": "read_id", "collapse": "first"}},
+        UnitList([Unit(key="a1", attributes={"operator": "kj"})]),
+        {"min": 1, "max": 1, "median": 1},
+        frozenset({"operator"}),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
 def test_a_declared_contrast_is_no_longer_refused(write_config):
     found = codes(
         write_config(

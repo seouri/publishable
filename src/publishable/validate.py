@@ -1407,7 +1407,34 @@ def _check_measurements(
             "a second measurement of one unit from a resumed retry of the same one, "
             "and the two collapse in opposite directions",
         )
-    elif technical_n is not None and technical_n["max"] > 1:
+    source = units.get("from")
+    resolver = source.get("resolver") if isinstance(source, dict) else None
+    if valid_by is not None and isinstance(resolver, str) and resolver:
+        # Ungated, unlike the table arm below it. A table's `by` may name a
+        # measurement identity the STEP invents through `io.record(...,
+        # measurement=)`, which is why that arm waits until rows were actually
+        # collapsed. A resolver has no columns at all, so `reference.md` § Where
+        # units come from turns yielding `by` into an obligation — "the field a
+        # CSV would simply have carried has to be named" — and
+        # `E-RESOLVER-MEASUREMENT-FIELD`'s row states the fault without a collapse
+        # precondition. The columns here are what the resolver yielded, before the
+        # projection onto `data.units.attributes`: the projected roster carries
+        # only declared attributes, and `by` is not one of them.
+        if valid_by not in columns:
+            c.error(
+                "E-RESOLVER-MEASUREMENT-FIELD",
+                "data.units.measurements.by",
+                f"names {valid_by!r}, and resolver `{resolver}` yields no unit carrying an "
+                "attribute of that name to collapse on. A resolver has no columns beyond the "
+                "attributes it yields, so yield one `Unit` per measurement, sharing a `key`, "
+                f"and emit {valid_by!r} as an attribute",
+            )
+    elif (
+        valid_by is not None
+        and resolver is None
+        and technical_n is not None
+        and technical_n["max"] > 1
+    ):
         # The input table actually merged rows, so `by` had to name one of ITS
         # columns — and `units.collapse_measurements` groups on the unit `key`
         # alone, reading `by` only to drop that name from the merged attributes.
