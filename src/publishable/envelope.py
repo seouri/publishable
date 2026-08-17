@@ -47,9 +47,8 @@ from typing import Any
 #
 # The table stopping at a key is the end of the line for everything under it:
 # the closure below never descends into a known leaf, and `_check_shape` checks
-# a container's *shape* and never the names inside one, so a misspelled
-# `resolverr` in a `data.units.from` mapping is reported by no check in this
-# build. That is the documented cost of a whole leaf (`reference.md`
+# a container's *shape* and never the names inside one. That is the documented
+# cost of a whole leaf (`reference.md`
 # § Validation names the blocks it applies to and the slice that closes each),
 # not a claim that such a key could never be named — a `methodd` in `holdout`
 # was in exactly that position and is now reported, its children's names being
@@ -77,6 +76,15 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "data.output_dir": str,
     "data.input_manifest_policy": str,
     "data.units.from": (str, dict),
+    # Closed one level in, the arrangement `data.units.measurements` and
+    # `.holdout` already have: the two keys a `from` mapping may carry are fixed,
+    # so leaving the block whole makes a typo among them unreachable by any check
+    # — which is what a `resolverr` was until this closure, reported only as a
+    # missing source and never as a misspelled key. Closed here **before** the
+    # resolver's own wholesale refusal retires, the same order `resample` took:
+    # the shape is checked before the values are honoured.
+    "data.units.from.glob": str,
+    "data.units.from.resolver": str,
     "data.units.key": str,
     "data.units.attributes": list,
     "data.units.allocation": str,
@@ -204,12 +212,10 @@ def _immediate_children(prefix: str) -> list[str]:
 def _check_unknown_keys(node: Any, findings: list[tuple[str, str, str]], prefix: str = "") -> None:
     """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
     two exempt subtrees entirely and never descending into a known LEAF's
-    value unless the table also declares paths BENEATH it — a `from` dict's
-    `resolver` is reached by no check in this build: not here, and not by
-    `_check_shape`, which checks a container's shape and never the names
-    inside one. See the module docstring for why a leaf is left whole rather
-    than half-closed, and why `data.units.measurements`, `statistics.resample`
-    and `data.units.holdout` are not among them.
+    value unless the table also declares paths BENEATH it. See the module
+    docstring for why a leaf is left whole rather than half-closed, and why
+    `data.units.measurements`, `statistics.resample` and `data.units.holdout`
+    are not among them.
     """
     if not isinstance(node, dict):
         return

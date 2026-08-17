@@ -647,6 +647,7 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
+    _check_units_source(doc, c)
     roster, technical_n, columns = _check_units(doc, c)
     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
     _check_measurements(units_decl, roster, technical_n, columns, c)
@@ -1184,6 +1185,31 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
                 f"data.{field}",
                 f"resolves inside the git repository at {repo_root}",
             )
+
+
+def _check_units_source(doc: dict[str, Any], c: Collector) -> None:
+    """A `data.units.from` mapping may declare `glob` or `resolver`, not both.
+
+    Two answers to one declaration: this module reads such a mapping as a
+    resolver — `_check_unimplemented` and `_check_units` both test for the
+    `resolver` key — while `units.resolve_units` tests for `glob` first and would
+    resolve it as a glob. Whichever is right, they cannot both be, and a run that
+    executed one while `validate` had checked the other is the fault this refuses.
+
+    Its own function rather than a branch beside the resolver refusal, because
+    that refusal retires and this one does not: a `from` naming two sources is
+    ambiguous whether or not resolvers are honoured.
+    """
+    units = _units_declaration(doc.get("data") or {}, c) or {}
+    source = units.get("from")
+    if isinstance(source, dict) and "glob" in source and "resolver" in source:
+        c.error(
+            "E-UNITS-SOURCE-AMBIGUOUS",
+            "data.units.from",
+            "declares both `glob` and `resolver`, which name two different ways of "
+            "finding the same roster — `from` says how core finds a unit, and a "
+            "declaration with two answers has none. Declare one",
+        )
 
 
 def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | None:

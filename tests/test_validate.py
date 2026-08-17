@@ -12942,3 +12942,40 @@ def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_dr
         write_config({"experiment_type": "probing", "parameters": {}})
     )
     assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none
+
+
+def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
+    """Two answers to one declaration: `validate` reads it as a resolver
+    (`_check_unimplemented` tests `resolver in source`) and `resolve_units` would
+    read it as a glob (it tests `glob` first). Unreachable while the wholesale
+    refusal stands and reachable the moment dispatch lands, so the refusal is
+    minted in the slice that closes the envelope.
+
+    Asserted ALONGSIDE the wholesale refusal, never instead of it, and never on
+    the whole code set — Part B deletes one line here.
+    """
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": {
+                    "from": {"glob": "*.csv", "resolver": "plate_wells"},
+                    "key": "patient_id",
+                }
+            }
+        )
+    )
+    message = found["E-UNITS-SOURCE-AMBIGUOUS"]
+    assert "glob" in message
+    assert "resolver" in message
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
+
+    # THE CONTROLS, both produced by the code under test: either key alone is not
+    # ambiguous. Without these, a check that fired for any mapping would pass.
+    assert "E-UNITS-SOURCE-AMBIGUOUS" not in codes(
+        write_config({"data.units": {"from": {"glob": "*.csv"}, "key": "patient_id"}})
+    )
+    resolver_only = codes(
+        write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "patient_id"}})
+    )
+    assert "E-UNITS-SOURCE-AMBIGUOUS" not in resolver_only
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in resolver_only

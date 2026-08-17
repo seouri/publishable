@@ -270,6 +270,7 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
 | Attribute names aren't reserved | `data.units.attributes` names `paths`, which is a field of [`Unit`](#where-units-come-from) itself — `key`, `paths`, and `attributes` can't also be attributes |
 | Resolver is installed | `data.units.from.resolver` names `plate_wells`, which no installed plugin registers |
+| One source per roster | `data.units.from` declares `{glob: "*.dcm", resolver: plate_wells}`; the two find different units |
 | Resolver supplies the attributes | resolver `plate_wells` yields units with no `operator`, declared in `data.units.attributes` |
 | Attributes have a source | `data.units.attributes` names `label` under `from: {glob: "*.dcm"}`, which yields a key and a path and nothing else — declare a table or a resolver, or drop the attribute |
 | Resolver supplies the measurement field | `measurements: {by: read_id}` is declared but resolver `plate_wells` yields no `read_id` attribute to collapse on |
@@ -587,6 +588,7 @@ likewise apart from those same two envelope rows, none of the others.
 | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
 | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
 | `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+| [`data.units.from`](#where-units-come-from) is a mapping declaring **both** `glob` and `resolver`. `from` answers one question — how core finds a unit — and a declaration with two answers has none: one form builds the table from matching paths and the other hands the work to a plugin, and they resolve different rosters. Refused rather than ordered, for the reason every collision in this document is: a rule for which key wins would be a rule nobody could read off the config | `E-UNITS-SOURCE-AMBIGUOUS` |
 
 ---
 
