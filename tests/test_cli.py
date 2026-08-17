@@ -9546,3 +9546,100 @@ def test_command_run_threads_the_real_wide_cfg_to_its_own_resolver_call_too(
         sys.modules.pop(module, None)
     captured = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-RESOLVER-SWEPT-PARAM" in captured
+
+
+_W_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 9.0},
+    "u4": {"m": 10.0},
+    "u5": {"m": 11.0},
+}
+_W_AGAINST = {k: {"m": 0.0} for k in _W_OF}
+_W_WEIGHTS = {"u0": 1, "u1": 1, "u2": 1, "u3": 3, "u4": 3, "u5": 3}
+_W_STRATA = {"u0": "A", "u1": "A", "u2": "A", "u3": "B", "u4": "B", "u5": "B"}
+
+
+def _weighted_contrast_block(**extra):
+    """One column contrast over the six-unit weighted fixture, called directly.
+
+    Direct because `command_run` validates first and `E-DATA-WEIGHT-CONTRAST` is
+    an error until task 13, so no weighted contrast reaches this function through
+    `run` yet. Returns `(metric_block, members)`.
+    """
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"m": 6.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        **extra,
+    )
+    return block["s"]["m"], members
+
+
+def test_a_contrasts_column_draw_honours_resample_stratify_by():
+    """Task 5's `strata` reaching the contrast call site. The forced bound is the
+    assertion: a stratified draw is three `A` keys and three `B` keys, so its
+    smallest possible mean is (3·1 + 3·9)/6 = 5.0, while an unstratified draw over
+    the same six units reaches 4.33. Nothing about RNG or draw count can move
+    that bound."""
+    stratified, _ = _weighted_contrast_block(resample_columns=True, strata=_W_STRATA)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert stratified["ci95"][0] >= 5.0 - 1e-9
+    # The control that must report: without strata the same seed and draw count
+    # produce a lower bound below the forced floor.
+    assert plain["ci95"][0] < 5.0
+
+
+def test_the_three_comparison_functions_accept_weights_and_strata():
+    """The threading itself, at all three signatures — `_comparison_step_blocks`
+    above plus the two callers. `weights` reaches no arithmetic at this commit
+    (task 7's closure is what reads it), so this pins acceptance and the
+    unchanged-answer property: a weight passed today must not silently move a
+    number, because nothing has been built to move it correctly yet."""
+    from publishable.cli import _compute_declared_contrasts, _compute_vs_baseline
+    from publishable.sweep import Condition
+
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="arm"),
+    ]
+    common = dict(
+        conditions=conditions,
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"m": 6.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        findings=Collector(),
+        resample_columns=False,
+    )
+    plain, _ = _compute_vs_baseline(doc={}, **common)
+    threaded, _ = _compute_vs_baseline(doc={}, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
+    assert plain is not None and threaded is not None
+    assert plain[1]["s"]["m"]["delta"] == pytest.approx(6.0)
+    assert threaded[1]["s"]["m"]["delta"] == pytest.approx(6.0)
+
+    doc = {"statistics": {"contrasts": [{"id": "c1", "of": "arm", "against": "baseline"}]}}
+    out, _ = _compute_declared_contrasts(doc=doc, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
+    assert out is not None
+    assert out[0]["s"]["m"]["n_paired"] == 6

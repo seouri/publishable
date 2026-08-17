@@ -775,10 +775,22 @@ def _comparison_step_blocks(
     where_id: str,
     conditions_by_index: dict[int, "Condition"],
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
+
+    `weights` is `command_run`'s roster-wide `{unit key: weight}` mapping, or
+    `None` when `data.units.weight_by` is undeclared, and `strata` its resolved
+    `statistics.resample.stratify_by` mapping. Both are defaulted rather than
+    required: the direct call sites in the test suite would otherwise take an edit
+    with no behavioural content, and "no weight declared" and "this caller has not
+    been taught about weights" are the same fact. `strata` reaches both percentile
+    branches, because a declaration honoured for a derived metric and dropped for
+    a recorded column would be the asymmetry § Weighted samples' pairing of
+    `weight_by` with `resample.stratify_by` exists to rule out.
 
     A recorded column takes `paired_t_over_units` over the per-unit
     differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
@@ -910,6 +922,7 @@ def _comparison_step_blocks(
                             compute_against,
                             seed,
                             draws=draws,
+                            strata=strata,
                         )
                         interval = resampled.interval
                 metric_block[metric_key] = {
@@ -963,6 +976,7 @@ def _comparison_step_blocks(
                         _column_mean,
                         seed,
                         draws=draws,
+                        strata=strata,
                     )
                     interval = resampled.interval
                 else:
@@ -1056,6 +1070,8 @@ def _compute_vs_baseline(
     draws: int,
     findings: Collector,
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -1096,6 +1112,8 @@ def _compute_vs_baseline(
             where_id=f"cond:{comp.of}",
             conditions_by_index=conditions_by_index,
             resample_columns=resample_columns,
+            weights=weights,
+            strata=strata,
         )
         if block:
             out[comp.of] = block
@@ -1118,6 +1136,8 @@ def _compute_declared_contrasts(
     draws: int,
     findings: Collector,
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1166,6 +1186,8 @@ def _compute_declared_contrasts(
             where_id=f"contrast:{comp.id}",
             conditions_by_index=conditions_by_index,
             resample_columns=resample_columns,
+            weights=weights,
+            strata=strata,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -2555,6 +2577,8 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
                 resample_columns=resample_spec["declared"],
+                weights=weights,
+                strata=resample_strata,
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2568,6 +2592,8 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
                 resample_columns=resample_spec["declared"],
+                weights=weights,
+                strata=resample_strata,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:
