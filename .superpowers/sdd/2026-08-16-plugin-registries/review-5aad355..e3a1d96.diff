@@ -1,0 +1,866 @@
+# Review package: 5aad355..HEAD
+
+## Commits
+e3a1d96 feat: register_reader, and a suffix with no reader is a coded refusal rather than a KeyError
+0ad8327 feat: register_writer feeds io.write's own table, and refuses a suffix core writes
+98eb381 feat: register_probe, and the Probe-is-installed check that reads apparatus_probe
+433a29f feat: register_resolver, exported — and the registry-restoring fixture the next three tasks use
+
+## Files changed
+ docs/reference.md                      |   7 +-
+ docs/superpowers/spec-defects.md       |  15 +++-
+ src/publishable/__init__.py            |   5 ++
+ src/publishable/artifacts.py           |  36 ++++++++-
+ src/publishable/generators/template.py |   8 +-
+ src/publishable/plugins.py             | 102 +++++++++++++++++++++++
+ src/publishable/validate.py            |  38 ++++++++-
+ tests/conftest.py                      |  30 +++++++
+ tests/test_artifacts.py                |  36 +++++++++
+ tests/test_plugins.py                  | 142 +++++++++++++++++++++++++++++++++
+ tests/test_validate.py                 |  47 +++++++++++
+ 11 files changed, 453 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 5becefa..b8886ce 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -932,22 +932,24 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
+ |---|---|---|---|
+ | `BaseExperiment` | subclass | built | The ordered `steps` list, and nothing else — see [Generators](#generators) |
+ | `BaseStep` | subclass | built | One stage: `scope`, `run(cfg, io)`, `nondeterministic`, `derive_seed` — see [Steps and artifacts](#steps-and-artifacts) |
+ | `BaseTemplate` | subclass | built | An experiment type's `parameter_spec`, `validate`, `aggregate` — see [Templates](#templates-where-parameters-are-defined) |
+ | `BaseReport` | subclass | not yet built | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
+ | `Param` | construct | built | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
+ | `Unit` | construct | built | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
+ | `Apparatus` | construct | not yet built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
+ | `Estimate` | construct | built | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+ | `register_template` | decorator | built | One of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+-| `register_resolver` · `register_probe` | decorator | not yet built | Two more of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+-| `register_writer` · `register_reader` | decorator | not yet built | The registries an artifact suffix is claimed through, in the pair `io.write` and `io.read_upstream` require — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
++| `register_resolver` | decorator | built | The registry a [`data.units.from.resolver`](#where-units-come-from) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
++| `register_probe` | decorator | not yet built | The registry an [`apparatus_probe`](#the-apparatus-core-can-only-observe) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
++| `register_writer` | decorator | built | The registry an artifact suffix's writer is claimed through — see [Steps and artifacts](#steps-and-artifacts) |
++| `register_reader` | decorator | built | Its inverse, which `io.read_upstream` dispatches through — see [Steps and artifacts](#steps-and-artifacts) |
+ | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
+ 
+ **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
+ 
+ **A row marked `not yet built` is a promise, not an export.** Importing one raises `ImportError`
+ today. The rows stay because this table is the enumerated surface every plugin is written against,
+ and a contract that appears only once its implementation lands is a contract nobody could have
+ designed to.
+ 
+ **Not everything core adds is a name on this table, and the credential mechanism is the example.** `required_env` is an attribute of a class you already subclass and [`requires_env`](#a-credential-can-belong-to-a-parameter-value) is a keyword of a construct you already import, so declaring either adds no import line to your template. A mechanism reaching you through a class you subclass and a keyword you pass is the shape to expect: this table enumerates what you *import*, and it moves only when there is a new name to import.
+@@ -990,20 +992,21 @@ PublishableError                   # catch this to catch everything core raises
+ └── ArtifactError                  # core will not write this
+     └── ArtifactExistsError        # …because the target is already there
+ ```
+ 
+ Two levels, and only one leaf, because only one of these is ever a *state* rather than a mistake: after a crash, the target of a write existing is an ordinary fact about a run being resumed, while every other error in the table means the code is wrong and no `except` improves it. Even there, [`io.exists` is the way through](#resuming) rather than a `try` — the type exists so a failure is greppable and testable, not to make catching it the pattern. **Each carries `.code`**, the same stable `E-` identifier a command [prints beside a diagnostic](#exit-codes-and-diagnostics) — for the same reason it exists there, that a message gets clearer over time and something pinned to the wording breaks when it does.
+ 
+ | Raised by | Type · code |
+ |---|---|
+ | [`io.write`](#steps-and-artifacts) or `io.path` onto a target that exists | `ArtifactExistsError` · `E-ARTIFACT-EXISTS` |
+ | A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
++| [Reading](#steps-and-artifacts) a name whose suffix has a registered writer and no reader. A writer and its reader are [registered as a pair](#creating-a-plugin-publishable-plugin-new), through two entry-point groups, because `io.write` dispatches on the writer table and `io.read_upstream` looks up the reader table — an inversion only while the two hold the same keys. A suffix *neither* table knows is not this fault: that is the raw-bytes case `io.write` already accepts, and it reads back as bytes | `ArtifactError` · `E-ARTIFACT-UNREADABLE` |
+ | [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
+ | [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions, or naming a repeat-scoped step once the run resolves more than one repeat](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
+ | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
+ | [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
+ | `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) whose `ci95` is not two numbers in ascending order, or whose `value` is not a number | `ContractError` · `E-STEP-ESTIMATE-CI95`, `E-STEP-ESTIMATE-VALUE` |
+ | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+ | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) under a `collapse` rule name that is none of `mean`, `median`, `sum`, `first`, or `mode` | `ContractError` · `E-UNITS-COLLAPSE-RULE` |
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index 70533d3..62d9873 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -5832,20 +5832,25 @@ example: H7c retired `required_env` from that role by giving it a reader, and of
+ remaining members `apparatus_probe` is **H7b task 13's** and `apparatus_facts` is **H7d's**, which
+ leaves this one unowned.
+ 
+ **Owner:** unassigned. Whichever slice next touches § Naming conventions & repeat defaults should
+ either give it a reader or state in `reference.md` that it is declarative only.
+ 
+ **Found by:** H7c, Task 14. **Severity:** Minor. The value is inert rather than misleading — no
+ config field references it — but it is a second shipped-and-unread surface alongside the ones this
+ repo has already tracked.
+ 
++**Amended 2026-08-17 — H7b Part A task 13:** `apparatus_probe` gained a reader. `validate` now
++checks it against the installed `publishable.probes` distributions (`E-PROBE-UNKNOWN`), so the
++family this entry's `field_convention` belongs to is now `field_convention` and `apparatus_facts`
++only.
++
+ ## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
+ 
+ `docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
+ `io.reuse_from` as "unbuilt and unowned by any H7 sub-slice, which is a gap this slice files rather
+ than closes." Re-confirmed on 2026-08-16: `grep -n "reuse_from" docs/superpowers/spec-defects.md`
+ returned nothing before this entry, so there was no prior filing to re-owner. `reference.md` §
+ Steps that consume an earlier run's artifacts is where `reuse_from` is specified — a step that
+ reads another run's output records it as an upstream with its own hashes — and nothing in `src/`
+ implements it.
+ 
+@@ -5989,34 +5994,38 @@ locating anything by position: "the two rows above", "further up"). Confirmed 20
+ present, unchanged by this slice. Pre-existing and out of scope for every H7c task — none of them
+ touches this paragraph or the table it refers to.
+ 
+ **Owner:** whichever slice next edits that paragraph or the provenance table it names
+ positionally; should name the table by its heading instead.
+ 
+ **Found by:** H7c, Task 14 (surfaced while sweeping `reference.md`, not itself part of the
+ credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
+ makes is still true, only the cross-reference is positional.
+ 
+-## OPEN — `publishable.readers` had no entry-point group, so a third-party writer had no reader
++## CLOSED 2026-08-17 — `publishable.readers` had no entry-point group, so a third-party writer had no reader
+ 
+ **Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
+ inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
+ two module dicts, `io.write` dispatches through `_suffix_for`, which iterates `WRITERS` alone, and
+ `StepIO._read` indexes `READERS` — so a suffix registered as a writer and not as a reader gives
+ `io.read_upstream` a bare `KeyError` rather than a coded `ArtifactError`. Proved by mutation
+ (`H7b-SCOPING-2.md` § 5a): adding one key to `WRITERS` alone reproduced it, and deleting the key
+ restored the read. Filed here for the first time — `H7c` task 14 filed four entries in this family
+ and none of them was this one.
+ 
+ **Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
+-decorator `register_reader`, with `register_writer` refusing a suffix that has no reader. The code
+-is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not before.
++decorator `register_reader`. **Closed in code by task 15**: `StepIO._read` now raises
++`ArtifactError` · `E-ARTIFACT-UNREADABLE` for a suffix `WRITERS` holds and `READERS` does not, rather
++than the bare `KeyError`. The refusal fires at the read, not at registration — `register_writer`
++does not refuse a suffix with no reader, since a plugin may register the reader later in the same
++module; task 14's registration-time refusal is the unrelated core-suffix-shadow check, under the
++same code for a different reason.
+ 
+ ## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
+ 
+ H7b Part A task 8 makes an installed distribution's `publishable.templates` entry point a claim in
+ the merge, so its name is known, collisions against it are decided, and `template_names` lists it.
+ Task 9 refuses a config naming one, as `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the `-UNSUPPORTED` build
+ family, no § Errors row. Closed at both emit sites that can name a template: `validate_config`'s
+ finding and `generate_experiment`'s raise (the task 8-11 review's C1, closed the same review cycle —
+ the second site had been left reporting the false `E-TEMPLATE-UNKNOWN` instead).
+ 
+diff --git a/src/publishable/__init__.py b/src/publishable/__init__.py
+index d4f6456..5c25d6d 100644
+--- a/src/publishable/__init__.py
++++ b/src/publishable/__init__.py
+@@ -3,28 +3,33 @@
+ from publishable.base_experiment import BaseExperiment
+ from publishable.base_step import BaseStep
+ from publishable.errors import (
+     ArtifactError,
+     ArtifactExistsError,
+     ContractError,
+     PublishableError,
+ )
+ from publishable.estimate import Estimate
+ from publishable.param import Param
++from publishable.plugins import register_probe, register_reader, register_resolver, register_writer
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.discovery import register_template
+ from publishable.units import Unit
+ 
+ __all__ = [
+     "ArtifactError",
+     "ArtifactExistsError",
+     "BaseExperiment",
+     "BaseStep",
+     "BaseTemplate",
+     "ContractError",
+     "Estimate",
+     "Param",
+     "PublishableError",
+     "Unit",
++    "register_probe",
++    "register_reader",
++    "register_resolver",
+     "register_template",
++    "register_writer",
+ ]
+ __version__ = "0.1.0"
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index 516b352..a3b31e5 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -151,20 +151,29 @@ WRITERS = {
+ }
+ 
+ READERS = {
+     ".json": _decode_json,
+     ".yaml": _decode_yaml,
+     ".jsonl": _decode_jsonl,
+     ".csv": _decode_csv,
+     ".parquet": _decode_parquet,
+ }
+ 
++CORE_SUFFIXES = frozenset(WRITERS)
++"""The suffixes core itself writes, fixed at import.
++
++Snapshotted rather than read live, because `plugins.register_writer` adds to
++`WRITERS` and a shadow check reading the live table would start refusing one
++plugin's suffix on behalf of another's. What a plugin may not claim is what
++*core* writes, which is a property of this file and not of what is installed.
++"""
++
+ 
+ def _suffix_for(name: str) -> str | None:
+     """The longest registered suffix of the name's last component, lower-cased."""
+     last = name.rsplit("/", 1)[-1].lower()
+     best: str | None = None
+     for suffix in WRITERS:
+         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
+             best = suffix
+     return best
+ 
+@@ -845,15 +854,34 @@ class StepIO:
+                 base = (
+                     base
+                     / "conditions"
+                     / condition_dir_name(self._condition_index, self._condition_label)
+                 )
+             base = self._nest_repeat(base, target, self._repeat_label)
+         return self._read(base / step / name)
+ 
+     @staticmethod
+     def _read(path: Path) -> Any:
+-        """Inverts the same table `write` dispatches through — see `WRITERS`/`READERS`."""
++        """Reads back what `write` wrote, through the inverse of the table it
++        dispatched on.
++
++        Two tables and one dispatch: `_suffix_for` decides from `WRITERS`, and
++        the reader is then looked up in `READERS`. That is an inversion only
++        while the two hold the same keys, which core's own five do and a plugin's
++        pair need not — so the gap is a coded refusal rather than the bare
++        `KeyError` it was, and § Steps and artifacts' promise that what a writer
++        takes is what its reader gives back is stated where it can be enforced.
++        A suffix *neither* table knows is not a fault at all: it is the raw-bytes
++        case `write` already accepts.
++        """
+         suffix = _suffix_for(path.name)
+-        if suffix is not None:
+-            return READERS[suffix](path.read_bytes())
+-        return path.read_bytes()
++        if suffix is None:
++            return path.read_bytes()
++        reader = READERS.get(suffix)
++        if reader is None:
++            raise ArtifactError(
++                f"`{path.name}` claims the suffix `{suffix}`, which has a registered "
++                "writer and no reader — a writer and its reader are registered as a "
++                "pair, and core cannot invert one it was never given",
++                code="E-ARTIFACT-UNREADABLE",
++            )
++        return reader(path.read_bytes())
+diff --git a/src/publishable/generators/template.py b/src/publishable/generators/template.py
+index 34696a9..780105b 100644
+--- a/src/publishable/generators/template.py
++++ b/src/publishable/generators/template.py
+@@ -3,23 +3,25 @@
+ from pathlib import Path
+ 
+ from publishable.errors import ContractError
+ 
+ # The stub emits `parameter_spec`, `validate`, `aggregate`, `naming_pattern` and
+ # `default_repeats`, and none of the rest. `required_env` has a reader
+ # (`validate` checks it), but a stub declaring `[]` would only ever satisfy that
+ # check trivially and would still teach its reader to set a field this generated
+ # file has no other use for. `version` is omitted for a sharper reason: a
+ # project-local template is never version-checked at all, so a version in this
+-# file would be a string nothing reads. `field_convention`, `apparatus_probe`
+-# and `apparatus_facts` are declared on the base class and read by nothing in
+-# this build. `docs/reference.md` § Templates: where parameters are defined
++# file would be a string nothing reads. `field_convention` and `apparatus_facts`
++# are declared on the base class and read by nothing in this build;
++# `apparatus_probe` is read (`validate` checks it against the installed probes)
++# but a stub declaring `None` would only ever satisfy that check trivially.
++# `docs/reference.md` § Templates: where parameters are defined
+ # shows the whole set, because that example is core's own `generic` rather than
+ # a file you are about to edit.
+ #
+ # Everything the stub imports comes from `publishable` itself — the one import
+ # root; `publishable.templates` and every other submodule are implementation
+ # detail.
+ TEMPLATE_PY = '''\
+ # templates/{name}.py — a template only this project needs, discovered by path
+ from publishable import BaseTemplate, Param, register_template
+ 
+diff --git a/src/publishable/plugins.py b/src/publishable/plugins.py
+index f466365..0e52b30 100644
+--- a/src/publishable/plugins.py
++++ b/src/publishable/plugins.py
+@@ -15,21 +15,28 @@ name and a provider and nothing else. A refusal computed from it therefore has
+ no class to interrogate — no `parameter_spec`, no `required_env` — which is why
+ a plugin-side collision cannot redact a credential the way a project-local one
+ can. See `templates/registry.py` and § Creating a plugin for that residual.
+ 
+ Templates are scanned through here like everything else, but they are *merged*
+ in `templates/registry.py`, because a template name has a second home — a
+ project's own `templates/` — and the merge is the one place holding all three
+ sources at once.
+ """
+ 
++from collections.abc import Callable
+ from importlib.metadata import EntryPoint, entry_points
++from typing import Any, TypeVar
++
++from publishable.artifacts import CORE_SUFFIXES, READERS, WRITERS
++from publishable.errors import ContractError
++
++F = TypeVar("F", bound=Callable[..., Any])
+ 
+ GROUPS = (
+     "publishable.templates",
+     "publishable.resolvers",
+     "publishable.probes",
+     "publishable.writers",
+     "publishable.readers",
+ )
+ """Every entry-point group core reads, one per registry § Creating a plugin declares."""
+ 
+@@ -58,10 +65,105 @@ def scan_group(group: str) -> dict[str, list[EntryPoint]]:
+     """
+     found: dict[str, list[EntryPoint]] = {}
+     for ep in entry_points(group=group):
+         found.setdefault(ep.name, []).append(ep)
+     return {name: sorted(found[name], key=provider_of) for name in sorted(found)}
+ 
+ 
+ def names(group: str) -> list[str]:
+     """The keys `group` registers, in name order."""
+     return list(scan_group(group))
++
++
++RESOLVERS: dict[str, Callable[..., Any]] = {}
++"""Every resolver a plugin module registered, by the name a config writes.
++
++Module-global because a decorator runs when a plugin is imported and has nowhere
++else to put what it recorded. That is the opposite arrangement from
++`templates/registry.py`'s per-call merge, and for a reason that does not apply
++here: two projects resolved in one process must never see each other's
++`templates/`, but an installed distribution is the same distribution for both.
++"""
++
++PROBES: dict[str, Callable[..., Any]] = {}
++"""Every apparatus probe a plugin module registered. See `RESOLVERS`."""
++
++
++def register_resolver(name: str) -> Callable[[F], F]:
++    """Record `name -> fn` for this process and return `fn` unchanged.
++
++    The entry point is the registration and this argument is a declaration
++    checked against it — `reference.md` § Creating a plugin — so this records
++    what the source says and `check_registration` is what compares the two.
++    Returned unchanged so the plugin's own module keeps a callable under the
++    name it just defined, which is what makes the artifact testable in its own
++    suite.
++    """
++
++    def decorator(fn: F) -> F:
++        RESOLVERS[name] = fn
++        return fn
++
++    return decorator
++
++
++def register_probe(name: str) -> Callable[[F], F]:
++    """Record `name -> fn` for this process and return `fn` unchanged. See
++    `register_resolver` for why the mapping is module-global and why the object
++    comes back untouched."""
++
++    def decorator(fn: F) -> F:
++        PROBES[name] = fn
++        return fn
++
++    return decorator
++
++
++def register_writer(suffix: str) -> Callable[[F], F]:
++    """Record a writer for `suffix` in the table `io.write` dispatches through.
++
++    One table rather than a registry of its own: `io.write` finds a writer with
++    `_suffix_for`, which iterates `artifacts.WRITERS`, and a second mapping would
++    be a second answer to "what suffix does core know".
++
++    A suffix core itself writes is refused here rather than resolved by import
++    order — `reference.md` § Creating a plugin — because a plugin that could
++    redefine `.csv` could change what an artifact means without changing the step
++    that wrote it. Two *plugins* claiming one suffix is the other half of the same
++    rule and is decided from entry-point metadata by `validate`, since core's own
++    table appears in nobody's metadata and an installed pair appears in no table.
++    """
++
++    def decorator(fn: F) -> F:
++        if suffix in CORE_SUFFIXES:
++            raise ContractError(
++                f"a writer claims `{suffix}`, which core itself writes — a plugin that "
++                "could redefine a core suffix could change what an artifact means "
++                "without changing the step that wrote it. Claim a suffix of your own",
++                code="E-PLUGIN-COLLISION",
++            )
++        WRITERS[suffix] = fn
++        return fn
++
++    return decorator
++
++
++def register_reader(suffix: str) -> Callable[[F], F]:
++    """Record a reader for `suffix`, the inverse `io.read_upstream` dispatches to.
++
++    Refuses a core suffix for the reason `register_writer` does, and under the
++    same code: the pair is one claim on one extension, so redefining half of it
++    is redefining it.
++    """
++
++    def decorator(fn: F) -> F:
++        if suffix in CORE_SUFFIXES:
++            raise ContractError(
++                f"a reader claims `{suffix}`, which core itself reads — a plugin that "
++                "could redefine a core suffix could change what an artifact means "
++                "without changing the step that wrote it. Claim a suffix of your own",
++                code="E-PLUGIN-COLLISION",
++            )
++        READERS[suffix] = fn
++        return fn
++
++    return decorator
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index cf5346e..b01ddfc 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -10,21 +10,21 @@ import yaml
+ 
+ from publishable.base_experiment import load_experiment
+ from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+ from publishable.correction import ALPHA
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
+ from publishable.hashes import design_digest
+ from publishable.manifest import POLICIES
+ from publishable.param import MISSING
+-from publishable.plugins import GROUPS, provider_of, scan_group
++from publishable.plugins import GROUPS, names, provider_of, scan_group
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+ from publishable.secrets import credential_values, load_env, missing_env
+ from publishable.stats import min_honest_draws
+ from publishable.strata import levels_for
+ from publishable.sweep import (
+     NAMEABLE_CHAR,
+     SWEEP_MODES,
+     check_swept_value,
+@@ -629,20 +629,21 @@ def validate_config(
+                 "E-ENTRYPOINT-IMPORT",
+                 "entrypoint",
+                 str(exc) if own else f"could not be imported: {type(exc).__name__}: {exc}",
+             )
+ 
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
+     _check_plugin_collisions(c)
+     _check_required_env(doc, template, c)
+     _check_requires_env(doc, template, c)
++    _check_probe(name, template, c)
+     # Set once `template` is resolved, so `c.render()` — whenever it is finally
+     # called, by `command_validate` or `command_run` — redacts a credential value
+     # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
+     # built before this line runs. Redaction happens at render, not at
+     # construction (`Diagnostic` is a frozen record with no methods), so setting
+     # this after the fact still covers every finding already appended.
+     c.credentials = credential_values(declared_credential_names_for(doc, template))
+     _check_parameters(doc, template, c)
+     _check_versions(doc, template, c)
+     _check_data(doc, config_path, c)
+@@ -937,20 +938,55 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
+         path, value, label = first_seen[variable]
+         where = f"condition `{label}`" if label else "the base parameters"
+         c.error(
+             "E-CRED-PARAM-MISSING",
+             f"parameters.{path}",
+             f"is `{value}` in {where}, which requires `{variable}` — no value in the "
+             "environment or in `.env`",
+         )
+ 
+ 
++def _check_probe(name: str, template: Any, c: Collector) -> None:
++    """The resolved template's `apparatus_probe` against the installed probes.
++
++    Read from package metadata, so a name no distribution declares is refused
++    without importing one — the same guarantee every other plugin name is
++    answered under. Reported at `experiment_type` because the declaration is the
++    template's rather than the config's: a reader who cannot install the plugin
++    changes which template the experiment uses, and `experiment_type` is where
++    that decision is written.
++
++    Takes the registered name rather than recovering it from the class, which
++    cannot be done: a class knows what it was decorated with only until the
++    pending buffer is drained, and `validate_config` is holding the name anyway.
++
++    A template declaring no probe is the ordinary case and draws nothing —
++    `reference.md` § The apparatus core can only observe: an experiment whose
++    measurements never leave the machine declares nothing and records
++    `apparatus: null`.
++    """
++    declared = getattr(template, "apparatus_probe", None)
++    if not isinstance(declared, str) or not declared:
++        return
++    known = names("publishable.probes")
++    if declared in known:
++        return
++    listed = ", ".join(known) if known else "none installed"
++    c.error(
++        "E-PROBE-UNKNOWN",
++        "experiment_type",
++        f"resolves template `{name}`, which declares `apparatus_probe: {declared}` — "
++        "a name no installed distribution registers in the `publishable.probes` "
++        f"entry-point group (registered: {listed})",
++    )
++
++
+ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:
+     """Every environment variable this config's declarations name.
+ 
+     The same two collectors `_check_required_env` and `_check_requires_env`
+     check for *presence* above, read here for their *values* — deliberately the
+     same set, which is what makes the redaction this feeds a fact rather than a
+     guess. Not shared as one function with `cli.declared_credential_names`: that
+     one takes the `conditions` its caller already expanded, because a second
+     `expand(doc)` there would be a second derivation of the plan actually
+     executed; this module's every other check (`_check_requires_env`,
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 802c05e..1816219 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -120,10 +120,40 @@ def installed(tmp_path: Path, monkeypatch):
+             "".join(
+                 f"[{group}]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()) + "\n"
+                 for group, entries in groups.items()
+             )
+         )
+         monkeypatch.syspath_prepend(str(site))
+         importlib.invalidate_caches()
+         return site
+ 
+     return _install
++
++
++@pytest.fixture
++def registries():
++    """Restore the process-level plugin registries around a test that fills them.
++
++    These mappings are module-global by design — a decorator runs at import and
++    has nowhere else to put what it recorded — so a test that registers a name
++    leaks it into every test after it. Restored by snapshot rather than by
++    unsetting what was seen, which covers a test that replaces an entry as well
++    as one that adds it. A plain fixture requested by name: the suite's one
++    autouse fixture is `conftest`'s environ restore and there may not be a
++    second.
++    """
++    from publishable import artifacts, plugins
++
++    saved = (
++        dict(plugins.RESOLVERS),
++        dict(plugins.PROBES),
++        dict(artifacts.WRITERS),
++        dict(artifacts.READERS),
++    )
++    yield
++    for live, was in zip(
++        (plugins.RESOLVERS, plugins.PROBES, artifacts.WRITERS, artifacts.READERS),
++        saved,
++        strict=True,
++    ):
++        live.clear()
++        live.update(was)
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 4a1eb86..f461f10 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -1501,10 +1501,46 @@ def test_the_allocation_hash_covers_the_holdout_block():
+ 
+     The positive companion is the inequality: two documents differing only in
+     which units were held out must hash differently, or the coverage claim is
+     empty."""
+     a = build_allocation_document({}, HoldoutPlan(("P1",), ("P2",), 7, ()))
+     b = build_allocation_document({}, HoldoutPlan(("P2",), ("P1",), 7, ()))
+     assert allocation_hash(a) != allocation_hash(b)
+     assert allocation_hash(a) == allocation_hash(
+         build_allocation_document({}, HoldoutPlan(("P1",), ("P2",), 7, ()))
+     )
++
++
++def test_a_suffix_with_a_writer_and_no_reader_is_a_coded_refusal(registries, tmp_path):
++    """The bare `KeyError` § Steps and artifacts' promise breaks on.
++
++    The mutation that can fail is adding a key to ONE dict — swapping a value
++    between them cannot, since both hold the same keys.
++    """
++    from publishable import artifacts
++    from publishable.errors import ArtifactError
++
++    artifacts.WRITERS[".fastq"] = lambda rows: b"x"
++    target = tmp_path / "a.fastq"
++    target.write_bytes(b"x")
++
++    with pytest.raises(ArtifactError) as excinfo:
++        artifacts.StepIO._read(target)
++    assert excinfo.value.code == "E-ARTIFACT-UNREADABLE"
++    assert ".fastq" in str(excinfo.value)
++
++    # THE CONTROL, produced by the code under test: with the reader supplied,
++    # the same path reads. Without this the assertion above would pass for a
++    # `_read` that refused every unknown suffix, including the ones it is
++    # supposed to hand back as raw bytes.
++    artifacts.READERS[".fastq"] = lambda data: {"read": data.decode()}
++    assert artifacts.StepIO._read(target) == {"read": "x"}
++
++
++def test_a_suffix_neither_table_knows_is_still_raw_bytes(tmp_path):
++    """The behaviour that must survive the refusal above: an unregistered suffix
++    is bytes, and always was."""
++    from publishable import artifacts
++
++    target = tmp_path / "a.bin"
++    target.write_bytes(b"\x00\x01")
++    assert artifacts.StepIO._read(target) == b"\x00\x01"
+diff --git a/tests/test_plugins.py b/tests/test_plugins.py
+index 064843c..5cd81dc 100644
+--- a/tests/test_plugins.py
++++ b/tests/test_plugins.py
+@@ -1,14 +1,16 @@
+ # tests/test_plugins.py
+ import importlib
+ import sys
+ 
++import pytest
++
+ from publishable.plugins import GROUPS, names, provider_of, scan_group
+ 
+ 
+ def test_the_groups_core_reads_are_the_five_the_document_declares():
+     """Named rather than counted: `reference.md` § Creating a plugin shows one
+     `[project.entry-points."publishable.*"]` block per registry."""
+     assert set(GROUPS) == {
+         "publishable.templates",
+         "publishable.resolvers",
+         "publishable.probes",
+@@ -106,10 +108,150 @@ def test_the_scan_imports_nothing(installed):
+ 
+     found = scan_group("publishable.resolvers")
+     assert provider_of(found["plate_wells"][0]) == "dist-one 1.0"
+     assert "loadable_probe" not in sys.modules
+ 
+     try:
+         assert found["plate_wells"][0].load()() == []
+         assert "loadable_probe" in sys.modules
+     finally:
+         sys.modules.pop("loadable_probe", None)
++
++
++def test_register_resolver_records_the_name_and_returns_the_function(registries):
++    """The decorator's two obligations. Returning the object unchanged is the
++    half a decorator gets wrong silently: a `None` return leaves the plugin's own
++    module holding `None` under the name it just defined, and its own test suite
++    is where that surfaces."""
++    from publishable.plugins import RESOLVERS, register_resolver
++
++    @register_resolver("plate_wells")
++    def resolve(io, cfg):
++        return ["a unit"]
++
++    assert RESOLVERS["plate_wells"] is resolve
++    assert resolve(None, None) == ["a unit"]  # still callable under its own name
++
++
++def test_a_resolver_is_importable_from_the_one_root():
++    """`reference.md` § The importable surface: everything you write against is
++    imported from `publishable` itself. A plugin importing
++    `publishable.plugins.register_resolver` is not a supported spelling even
++    where it works."""
++    import publishable
++
++    assert "register_resolver" in publishable.__all__
++    assert publishable.register_resolver is not None
++
++
++def test_register_probe_records_the_name_and_returns_the_function(registries):
++    from publishable.plugins import PROBES, register_probe
++
++    @register_probe("assay_instrument")
++    def probe(cfg):
++        return {"model": "x"}
++
++    assert PROBES["assay_instrument"] is probe
++    assert probe(None) == {"model": "x"}
++
++
++def test_a_probe_is_importable_from_the_one_root():
++    import publishable
++
++    assert "register_probe" in publishable.__all__
++
++
++def test_a_third_party_suffix_reaches_io_write_s_dispatch(registries, tmp_path):
++    """Registration is only real if `io.write` finds it, so the assertion is over
++    the dispatch rather than over the dict — `_suffix_for` is what decides, and
++    it iterates `WRITERS`."""
++    from publishable import artifacts
++    from publishable.plugins import register_writer
++
++    @register_writer(".fastq.gz")
++    def write_fastq(rows):
++        return b"@read\n"
++
++    assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
++    assert artifacts.WRITERS[".fastq.gz"] is write_fastq
++
++    # The longest registered suffix still wins, which is what a compound
++    # extension is registered for: `.gz` alone must not claim this name.
++    @register_writer(".gz")
++    def write_gz(rows):
++        return b""
++
++    assert artifacts._suffix_for("sample.fastq.gz") == ".fastq.gz"
++
++
++def test_a_writer_may_not_claim_a_suffix_core_writes(registries):
++    """A plugin that could redefine `.csv` could change what an artifact means
++    without changing the step that wrote it."""
++    from publishable.errors import ContractError
++    from publishable.plugins import register_writer
++
++    with pytest.raises(ContractError) as excinfo:
++
++        @register_writer(".csv")
++        def write_csv(rows):
++            return b""
++
++    assert excinfo.value.code == "E-PLUGIN-COLLISION"
++    message = str(excinfo.value)
++    assert ".csv" in message
++    assert "core" in message
++
++
++def test_a_suffix_core_does_not_write_is_accepted(registries):
++    """THE CONTROL, and the honouring: a refusal that fired for every suffix
++    would pass the test above. Paired here rather than left implicit."""
++    from publishable import artifacts
++    from publishable.plugins import register_writer
++
++    @register_writer(".fastq")
++    def write_fastq(rows):
++        return b""
++
++    assert ".fastq" in artifacts.WRITERS
++
++    # A second plugin claiming the SAME suffix is not this check's refusal — it
++    # is decided from entry-point metadata, where both claimants are visible.
++    # Registering twice in one process is what a plugin's own test suite does,
++    # and refusing it here would refuse that.
++    @register_writer(".fastq")
++    def write_fastq_again(rows):
++        return b""
++
++    assert artifacts.WRITERS[".fastq"] is write_fastq_again
++
++
++def test_register_reader_completes_the_pair_io_read_upstream_needs(registries, tmp_path):
++    """Registering both halves is what a plugin does, and the pair is what makes
++    the round trip real — asserted as a round trip rather than as two dict
++    entries, since two entries is what the broken state also looks like."""
++    from publishable import artifacts
++    from publishable.plugins import register_reader, register_writer
++
++    @register_writer(".fastq")
++    def write_fastq(rows):
++        return "|".join(rows).encode()
++
++    @register_reader(".fastq")
++    def read_fastq(data):
++        return data.decode().split("|")
++
++    target = tmp_path / "a.fastq"
++    target.write_bytes(artifacts.WRITERS[".fastq"](["a", "b"]))
++    assert artifacts.StepIO._read(target) == ["a", "b"]
++
++
++def test_a_reader_may_not_claim_a_suffix_core_reads(registries):
++    from publishable.errors import ContractError
++    from publishable.plugins import register_reader
++
++    with pytest.raises(ContractError) as excinfo:
++
++        @register_reader(".csv")
++        def read_csv(data):
++            return []
++
++    assert excinfo.value.code == "E-PLUGIN-COLLISION"
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 722227a..8eb3191 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -12888,10 +12888,57 @@ def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write
+     assert "generic" in message  # the known list is still printed
+ 
+     # THE CONTROL: with no `plugin` declared the message must not invent one, and
+     # must not carry the hint's connective either — a fragment that appeared
+     # under both declarations would pin nothing.
+     plain = messages_by_code(write_config({"experiment_type": "llm_diagnostic"}))[
+         "E-TEMPLATE-UNKNOWN"
+     ]
+     assert "someuser/publishable-llm" not in plain
+     assert "`plugin` says" not in plain
++
++
++_PROBING_TEMPLATE = """\
++from publishable import BaseTemplate, register_template
++
++
++@register_template("probing")
++class Probing(BaseTemplate):
++    apparatus_probe = "assay_instrument"
++    parameter_spec = {}
++"""
++
++
++def test_a_declared_probe_no_distribution_registers_is_reported(git_repo, write_config):
++    """The first reader `BaseTemplate.apparatus_probe` has ever had.
++
++    Answered from metadata, so an absent name costs no import — which is also why
++    this reports rather than raising: nothing was loaded to fail.
++    """
++    templates = git_repo / "templates"
++    templates.mkdir()
++    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
++
++    found = messages_by_code(write_config({"experiment_type": "probing", "parameters": {}}))
++    message = found["E-PROBE-UNKNOWN"]
++    assert "assay_instrument" in message
++    assert "publishable.probes" in message
++
++
++def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_draws_nothing(
++    installed, git_repo, write_config
++):
++    """THE HONOURING, and the control in one test.
++
++    Without the first half, a `_check_probe` that reported unconditionally passes
++    the refusal test above. Without the second, one that reported for every
++    template — including `generic`, which declares no probe — would too.
++    """
++    templates = git_repo / "templates"
++    templates.mkdir()
++    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
++    installed("dist-one", "1.0", {"publishable.probes": {"assay_instrument": "no_one:probe"}})
++
++    assert "E-PROBE-UNKNOWN" not in codes(
++        write_config({"experiment_type": "probing", "parameters": {}})
++    )
++    assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none

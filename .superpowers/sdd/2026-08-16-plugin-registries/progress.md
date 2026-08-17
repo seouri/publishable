@@ -115,3 +115,31 @@ Tasks 8-11: reviewed (opus), eight verdicts. **One CRITICAL blocked.**
   importable would have silently retired it. Now asserted at `get_template` with a genuinely importable
   fixture.
 Tasks 8-11: fix round. Commit 3f477de. All six closed. 2021 passed + 2 xfailed; gates clean.
+
+Tasks 12-15: BATCHED (all add a registry to `plugins.py` plus its export). Committed separately
+  433a29f..e3a1d96. 2034 passed + 2 xfailed. The implementer stalled once mid-batch waiting on a
+  background suite run; I measured the state myself, told it the count, and told it not to background
+  the suite again — it finished 14 and 15 without further stalls.
+Tasks 12-15: reviewed (opus), eight verdicts. **One CRITICAL.**
+  T13-A: `reference.md` still marked `register_probe` **not yet built** while task 13 exported it —
+  task 13 touched no `reference.md` at all — which made the normative sentence *"Importing one raises
+  `ImportError` today"* FALSE. And the test meant to guard it **could not catch it**: deleting the
+  export left it green, because it asserted only `__all__` membership rather than importing the name.
+  Ruling on T13-B, adopting the reviewer's: **`PROBES` is a fifth shipped-but-unread surface and the
+  answer is a FILING, not a reader.** `_check_probe` reads the ATTRIBUTE against the metadata scan;
+  that is a different fact from something reading the REGISTRY. A reader for `PROBES` means executing
+  a probe — `Apparatus` + facts + ledger + change gate, all H7d. One entry now covers `PROBES` (H7d)
+  and `RESOLVERS` (Part B), owners named as slices.
+  T12-B is the shape this repo keeps finding: **the isolation fixture could not fail.** Replacing its
+  whole restore loop with `_ = saved` left the full suite green — a fixture that restores nothing looks
+  identical to one that works. Now pinned by a leak probe across two adjacent tests.
+  T15-A: the reverse asymmetry was neither handled nor stated — a reader with no writer is never
+  dispatched to and `_read` silently returns raw bytes, under prose reading symmetric at three sites.
+  Ruling: STATE it rather than handle it. Symmetric dispatch needs a second dispatch keyed off
+  `READERS`, out of proportion here. An unstated asymmetry under symmetric prose is the defect; the
+  asymmetry itself is a choice.
+  T14-A was the ninth blind-mutation shape: the compound-suffix assertion could not distinguish
+  "longest wins" from "first-registered wins", because `.fastq.gz` was registered first. Fixed by
+  reordering the fixture, not the assertion.
+Tasks 12-15: fix round. Commit 9479e13. All eight closed, plus a stale "Not yet emitted" on
+  `E-PLUGIN-COLLISION` that entered with tasks 1-6. 2040 passed + 2 xfailed; gates clean.
