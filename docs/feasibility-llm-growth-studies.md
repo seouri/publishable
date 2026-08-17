@@ -1062,7 +1062,8 @@ verified against the merged tree rather than carried from the plan.
 
 ### Measured on 2026-08-17 against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2` — after H7b Part B
 
-H7b **Part B** is complete on its branch at the commit above and retires `E-DATA-RESOLVER-UNSUPPORTED`. This is the
+H7b **Part B** retires `E-DATA-RESOLVER-UNSUPPORTED`; this measurement was taken against the commit
+above, on its branch, and Part B merged to `main` the same day. This is the
 first re-measurement in this section to actually **run** every one of the nine configs' `data`/
 `statistics` blocks through `validate_config`, rather than re-deriving from emit sites or extending a
 prior grep — the same discipline the 2026-08-16 (H3d) entry set and the one this entry's own
