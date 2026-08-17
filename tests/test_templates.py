@@ -1011,3 +1011,104 @@ def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
     assert "E-TEMPLATE-LOAD" in rendered
     assert "E-TEMPLATE-UNKNOWN" not in rendered
     assert str(repo / "templates" / "broken.py") in rendered
+
+
+CLAIMS_MY_ASSAY = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("my_assay")
+class LocalAssay(BaseTemplate):
+    parameter_spec = {}
+"""
+
+
+def test_two_installed_distributions_claiming_one_template_name_are_refused(installed, tmp_path):
+    """Entry-point × entry-point — the arm one distribution cannot produce.
+
+    Both providers are named, as `<distribution> <version>`, which is what a
+    reader uninstalls. Decided from metadata: neither module exists, so a
+    verdict that reached for either class would raise `ModuleNotFoundError`
+    instead of reporting.
+    """
+    installed("dist-two", "2.0", {"publishable.templates": {"my_assay": "no_two:T"}})
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("my_assay", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "my_assay" in message
+    assert "dist-one 1.0" in message
+    assert "dist-two 2.0" in message
+
+
+def test_an_installed_distribution_may_not_shadow_a_core_name(installed, tmp_path):
+    """Entry-point × core. Core's claimant is named as its dotted class path,
+    there being no file to rename."""
+    installed("dist-one", "1.0", {"publishable.templates": {"generic": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("generic", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "dist-one 1.0" in message
+    assert "publishable.templates.builtin.generic.GenericTemplate" in message
+
+
+def test_a_local_template_may_not_shadow_an_installed_one(installed, tmp_path):
+    """Entry-point × local, and the case that needs both a repo and a
+    distribution. Both providers are named in their own spelling — a path and a
+    class for the local one, a distribution and a version for the installed."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("my_assay", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert f"{templates / 'mine.py'}::LocalAssay" in message
+    assert "dist-one 1.0" in message
+
+
+def test_the_colliding_template_name_reported_is_the_first_in_name_order(installed, tmp_path):
+    """Three colliding names, installed in an order that is neither sorted nor
+    reverse-sorted, so neither candidate reading of "which one is reported"
+    survives. Two names could not tell them apart.
+
+    A fourth collision is mixed in on `generic` — core's own name, always the
+    *first* key `_claims` ever inserts, from the very first source it reads.
+    Three entry-point-only collisions cannot separate "sorted by name" from
+    "whichever collision the merge inserted first": `scan_group` hands back
+    its own group already sorted by name, so an unsorted walk of an
+    entry-point-only claim set coincides with a sorted one by construction.
+    Only a claim whose *first* insertion comes from a different source —
+    core, inserted before any entry point is scanned at all — can pull the
+    two readings apart, since `generic` sorts after `a_one` but is seen
+    first regardless of sorting.
+    """
+    claims = {"m_two": "no:T", "a_one": "no:T", "z_three": "no:T"}
+    installed("dist-two", "2.0", {"publishable.templates": claims})
+    installed("dist-one", "1.0", {"publishable.templates": claims})
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)  # shadows core: a 4th collision
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("a_one", tmp_path)
+    assert "`a_one`" in str(excinfo.value)
+    assert "m_two" not in str(excinfo.value)
+    assert "z_three" not in str(excinfo.value)
+    assert "`generic`" not in str(excinfo.value)
+
+
+def test_a_clean_installed_claim_is_not_a_collision(installed, tmp_path):
+    """THE HONOURING, and the control that makes every refusal above about a
+    collision rather than about installing anything at all: one distribution
+    claiming a name nothing else claims raises nothing, and the name is known.
+    """
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+    assert "my_assay" in template_names(tmp_path)
+    assert get_template("my_assay", tmp_path) is None  # known, and not loaded — decision 3

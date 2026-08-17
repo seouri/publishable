@@ -18,7 +18,9 @@ template too, and there is no order left for a merge to express.
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
+from publishable.plugins import provider_of, scan_group
 from publishable.templates.base import BaseTemplate
 from publishable.templates.builtin.generic import GenericTemplate
 from publishable.templates.discovery import PartialLoadError, discover_local
@@ -26,24 +28,76 @@ from publishable.templates.discovery import PartialLoadError, discover_local
 _BUILTIN: dict[str, type[BaseTemplate]] = {"generic": GenericTemplate}
 
 
-def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
-    if repo_root is None:
-        return dict(_BUILTIN)
-    local = discover_local(repo_root)
-    for name in sorted(local):  # name order: import order may decide nothing here
-        if name in _BUILTIN:
-            core = _BUILTIN[name]
+class Claim(NamedTuple):
+    """One registration of one template name, and who made it.
+
+    `cls` is `None` for an installed claim, and that is the mechanism rather than
+    a gap: an entry point is resolved from package metadata, so core knows the
+    name and the distribution without importing a line — see `plugins.py`. The
+    consequences are that an installed name is *known* and not *resolvable* in
+    this build, and that a refused installed claim carries no class whose
+    declarations could be read.
+    """
+
+    provider: str
+    cls: type[BaseTemplate] | None
+
+
+def _claims(repo_root: Path | None) -> dict[str, Claim]:
+    """Every claim on every template name, from all three sources, verdict reached.
+
+    The three sources are core's own registry, the installed distributions'
+    `publishable.templates` entry points, and — when a repo root is given — that
+    repo's `templates/`. Collected in full before any verdict, on
+    `discover_local`'s precedent and for its reason: a verdict reached while a
+    claim set was still partial is a verdict over the wrong set. Reported in name
+    order, and claimants within a name in provider order, because install order
+    and import order are properties of a machine rather than of a design.
+
+    Two local registrations of one name never reach here — `discover_local`
+    refuses that pair itself, knowing what a repo declares — so this function
+    sees at most one local claimant per name.
+    """
+    claims: dict[str, list[Claim]] = {}
+    for name, core in _BUILTIN.items():
+        claims.setdefault(name, []).append(
+            Claim(provider=f"{core.__module__}.{core.__qualname__}", cls=core)
+        )
+    for name, entries in scan_group("publishable.templates").items():
+        for ep in entries:
+            claims.setdefault(name, []).append(Claim(provider=provider_of(ep), cls=None))
+    local = discover_local(repo_root) if repo_root is not None else {}
+    for name, found in local.items():
+        claims.setdefault(name, []).append(Claim(provider=found.provider, cls=found.cls))
+    for name in sorted(claims):
+        if len(claims[name]) > 1:
+            who = " and ".join(sorted(claim.provider for claim in claims[name]))
             raise PartialLoadError(
-                f"the project-local template `{local[name].provider}` claims the name "
-                f"`{name}`, which core itself registers as "
-                f"{core.__module__}.{core.__qualname__} — a local template that could "
-                "redefine a core name could change what a config means without "
-                "changing the config, which is what `parameters_hash` exists to make "
-                "impossible. Rename yours.",
+                f"the template name `{name}` is claimed more than once: {who} — a "
+                "template that could redefine another's name could change what a "
+                "config means without changing the config, which is what "
+                "`parameters_hash` exists to make impossible. Install order and "
+                "import order are the only tie-breaks available, and both are "
+                "properties of a machine rather than of a design. Rename yours.",
                 code="E-TEMPLATE-COLLISION",
-                partial_templates=[found.cls for found in local.values()],
+                partial_templates=[
+                    claim.cls
+                    for these in claims.values()
+                    for claim in these
+                    if claim.cls is not None
+                ],
             )
-    return {name: found.cls for name, found in local.items()} | _BUILTIN
+    return {name: these[0] for name, these in claims.items()}
+
+
+def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
+    """The names this build can hand back a class for: core's and this repo's.
+
+    An installed name is in `_claims` and not here. `template_names` reads
+    `_claims`, so the name is known; `get_template` reads this, so it is not
+    resolved — see `Claim.cls`.
+    """
+    return {name: claim.cls for name, claim in _claims(repo_root).items() if claim.cls is not None}
 
 
 def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | None:
@@ -62,14 +116,18 @@ def resolve_template(
     user top level twice. `reference.md` § Creating a plugin widens `validate`'s
     import exception from one named module to a whole directory; it does not
     widen it to that directory twice.
+
+    `_claims` is called once per call here, exactly as `_merged` was — asking
+    for the two halves separately would import every `templates/*.py` twice.
     """
-    merged = _merged(repo_root)
-    cls = merged.get(name)
-    return (cls() if cls else None), sorted(merged)
+    claims = _claims(repo_root)
+    claim = claims.get(name)
+    cls = claim.cls if claim is not None else None
+    return (cls() if cls else None), sorted(claims)
 
 
 def template_names(repo_root: Path | None = None) -> list[str]:
-    return sorted(_merged(repo_root))
+    return sorted(_claims(repo_root))
 
 
 def unknown_template_message(name: str, known: Sequence[str]) -> str:

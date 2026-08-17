@@ -18,6 +18,7 @@ from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
+from publishable.plugins import GROUPS, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
@@ -608,6 +609,7 @@ def validate_config(
 
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
+    _check_plugin_collisions(c)
     _check_required_env(doc, template, c)
     _check_requires_env(doc, template, c)
     # Set once `template` is resolved, so `c.render()` — whenever it is finally
@@ -768,6 +770,36 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
             "metadata.name",
             f"is `{name}` under `configs/{directory}/`; the two name one experiment",
         )
+
+
+def _check_plugin_collisions(c: Collector) -> None:
+    """One entry-point key claimed by two installed distributions, outside templates.
+
+    Templates are not here: a template name has a second home in a project's own
+    `templates/`, so its verdict is reached at the merge that holds all three
+    sources and is reported as `E-TEMPLATE-COLLISION`. These four groups have one
+    source each, so the verdict is a property of the machine's installed set
+    alone and is reported wherever it is noticed.
+
+    Reported rather than raised, and reported for every config rather than only
+    for one naming a colliding key: a registry core cannot make sense of is
+    refused however it is asked, which is the same shape `_claims` takes for a
+    `templates/` core cannot merge. Read from metadata, so no plugin is imported
+    to reach a verdict.
+    """
+    for group in GROUPS:
+        if group == "publishable.templates":
+            continue
+        for name, entries in scan_group(group).items():
+            if len(entries) > 1:
+                who = " and ".join(sorted(provider_of(ep) for ep in entries))
+                c.error(
+                    "E-PLUGIN-COLLISION",
+                    "plugin",
+                    f"key `{name}` in the `{group}` entry-point group is claimed by "
+                    f"{who} — install order is the only tie-break available and it is "
+                    "a property of a machine rather than of a design. Uninstall one",
+                )
 
 
 def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:

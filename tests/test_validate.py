@@ -12807,3 +12807,45 @@ def test_ablate_remove_resolves_a_value_with_no_key_and_requires_nothing(
     found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
     assert len(found) == 1, [f.message for f in found]
     assert "OPENAI_TEST_KEY" in found[0].message  # the baseline's, and only it
+
+
+def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
+    installed, write_config
+):
+    """`E-PLUGIN-COLLISION` over a non-template group, reported rather than
+    raised, and reported for a repo whose config names no resolver at all — a
+    registry core cannot make sense of is refused however it is asked.
+
+    Asserted ALONGSIDE nothing: this config declares a table source, so
+    `E-DATA-RESOLVER-UNSUPPORTED` is not in play. The resolver-adjacent
+    companion is the second half of this test.
+    """
+    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "no_two:r"}})
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:r"}})
+
+    found = messages_by_code(write_config())
+    message = found["E-PLUGIN-COLLISION"]
+    assert "publishable.resolvers" in message
+    assert "plate_wells" in message
+    assert "dist-one 1.0" in message
+    assert "dist-two 2.0" in message
+
+    # Alongside, never instead of: a config that DOES name a resolver still
+    # carries the wholesale refusal. Part B deletes this one line.
+    both = codes(write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}}))
+    assert "E-PLUGIN-COLLISION" in both
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in both
+
+
+def test_one_distribution_per_plugin_name_reports_nothing(installed, write_config):
+    """THE CONTROL. A check that reported unconditionally would pass the test
+    above; this is what makes that one about a collision."""
+    installed(
+        "dist-one",
+        "1.0",
+        {
+            "publishable.resolvers": {"plate_wells": "no_one:r"},
+            "publishable.probes": {"assay_instrument": "no_one:p"},
+        },
+    )
+    assert "E-PLUGIN-COLLISION" not in codes(write_config())
