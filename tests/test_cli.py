@@ -438,6 +438,79 @@ def test_generate_experiments_unknown_template_message_matches_validates(tmp_pat
     )
 
 
+def test_generate_experiment_refuses_an_installed_only_template_the_same_way_validate_does(
+    installed, tmp_path: Path
+):
+    """The second `E-TEMPLATE-UNKNOWN` emit site, closed.
+
+    Spec correction 1: for a name only an installed distribution's entry
+    point claims, `E-TEMPLATE-UNKNOWN` is **false** — the name is known from
+    package metadata, just not resolvable in this build without importing the
+    package. Task 9 closed that at `validate_config`'s own emit site
+    (`test_an_installed_only_template_name_is_known_and_refused` in
+    `tests/test_validate.py`) but left `generate_experiment`'s raise
+    reporting the code the correction calls false, with a message that
+    contradicted itself by listing the very name it claimed nothing
+    registers. This is the same check repeated at the second surface.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="a-pilot",
+            template_name="vendor_assay",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-INSTALLED-UNSUPPORTED"
+    message = str(excinfo.value)
+    assert "vendor_assay" in message
+    assert "dist-one 1.0" in message
+
+    # THE ACTUAL GUARANTEE: the two live messages equal each other, same as
+    # the unknown-name test above.
+    validate_collector = Collector()
+    cfg = root / "configs" / "generic-check" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "1.0",
+                "experiment_type": "vendor_assay",
+                "metadata": {"name": "generic-check", "description": "", "authors": []},
+                "entrypoint": "does.not:Matter",
+                "data": {"units": {"from": "index.csv", "key": "patient_id"}},
+            }
+        )
+    )
+    validate_config(cfg, validate_collector)
+    validate_message = next(
+        f.message
+        for f in validate_collector.findings
+        if f.code == "E-TEMPLATE-INSTALLED-UNSUPPORTED"
+    )
+    assert message == validate_message
+
+    # THE CONTROL: a name nothing claims still draws `E-TEMPLATE-UNKNOWN` at
+    # this surface too — the refusal above is about the installed claim, not
+    # about every name this call resolves.
+    with pytest.raises(ContractError) as unknown_excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-pilot",
+            template_name="nothing_claims_this",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert unknown_excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+
 def test_generate_experiment_cli_resolves_a_project_local_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):

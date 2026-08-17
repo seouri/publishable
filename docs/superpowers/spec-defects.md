@@ -6016,7 +6016,9 @@ is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 
 H7b Part A task 8 makes an installed distribution's `publishable.templates` entry point a claim in
 the merge, so its name is known, collisions against it are decided, and `template_names` lists it.
 Task 9 refuses a config naming one, as `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the `-UNSUPPORTED` build
-family, no § Errors row.
+family, no § Errors row. Closed at both emit sites that can name a template: `validate_config`'s
+finding and `generate_experiment`'s raise (the task 8-11 review's C1, closed the same review cycle —
+the second site had been left reporting the false `E-TEMPLATE-UNKNOWN` instead).
 
 The refusal exists because decision 3 of `2026-08-16-plugin-registries-design.md` states the
 entry-point invariant of **resolution** and not merely of the negative answer: "`validate` resolves a

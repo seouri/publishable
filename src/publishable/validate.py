@@ -37,7 +37,11 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
-from publishable.templates.registry import _claims, unknown_template_message
+from publishable.templates.registry import (
+    _claims,
+    installed_template_message,
+    unknown_template_message,
+)
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -511,10 +515,10 @@ def validate_config(
     # `.env`, once, before the first check that reads the environment —
     # `_check_required_env` below, today, which is what
     # `test_a_required_env_variable_may_be_supplied_by_dot_env` pins. That is
-    # weaker than "before `resolve_template`", and deliberately so: no test
+    # weaker than "before `_claims`", and deliberately so: no test
     # distinguishes the two placements, so the stronger claim would be one the
     # suite cannot hold. It is not that resolution is environment-free —
-    # `resolve_template` imports every project-local `templates/*.py`, executing
+    # `_claims` imports every project-local `templates/*.py`, executing
     # user top level, which may read anything. Loading before that is why the
     # call sits here rather than lower; only the weaker property is pinned.
     # `reference.md` § CLI reference promises `validate` "creates nothing and
@@ -574,15 +578,16 @@ def validate_config(
             c.error(
                 "E-TEMPLATE-INSTALLED-UNSUPPORTED",
                 "experiment_type",
-                f"names `{name}`, which {claim.provider} registers as a "
-                "`publishable.templates` entry point — but core resolves an installed "
-                "template's name without importing its package, and loading one is not "
-                "implemented in this build; installed templates will be honored in a "
-                "later slice. Use a project-local `templates/` file or a core template "
-                "for now",
+                installed_template_message(name, claim),
             )
         else:
             plugin = doc.get("plugin")
+            # The `isinstance(plugin, str) and plugin` guard is unpinned: no
+            # config in the suite declares a non-string `plugin` alongside an
+            # unresolved `experiment_type`, so a `plugin: 123` rendering
+            # "should come from `123`" would go undetected if this guard were
+            # deleted. Left rather than fixed with a fixture — recorded here
+            # so the gap is not lost (`spec-defects.md`/review M3).
             c.error(
                 "E-TEMPLATE-UNKNOWN",
                 "experiment_type",
@@ -794,11 +799,15 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
 def _check_plugin_collisions(c: Collector) -> None:
     """One entry-point key claimed by two installed distributions, outside templates.
 
-    Templates are not here: a template name has a second home in a project's own
-    `templates/`, so its verdict is reached at the merge that holds all three
-    sources and is reported as `E-TEMPLATE-COLLISION`. These four groups have one
-    source each, so the verdict is a property of the machine's installed set
-    alone and is reported wherever it is noticed.
+    `publishable.templates` needs no skip in the loop below, because this
+    function is never reached while one is live: `validate_config` calls
+    `_claims(repo_root)` earlier, inside a `try` that returns from the `except
+    ContractError` branch on `E-TEMPLATE-COLLISION` — the same merge that
+    would raise it — before `_check_plugin_collisions` is ever called. A
+    template collision is reported as `E-TEMPLATE-COLLISION` at that earlier
+    call, not here. These four groups have no such earlier merge, so their
+    collision is a property of the machine's installed set alone, decided
+    only when this loop notices it.
 
     Reported rather than raised, and reported for every config rather than only
     for one naming a colliding key: a registry core cannot make sense of is
@@ -807,8 +816,6 @@ def _check_plugin_collisions(c: Collector) -> None:
     to reach a verdict.
     """
     for group in GROUPS:
-        if group == "publishable.templates":
-            continue
         for name, entries in scan_group(group).items():
             if len(entries) > 1:
                 who = " and ".join(sorted(provider_of(ep) for ep in entries))

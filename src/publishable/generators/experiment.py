@@ -5,7 +5,11 @@ from pathlib import Path
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
-from publishable.templates.registry import resolve_template, unknown_template_message
+from publishable.templates.registry import (
+    _claims,
+    installed_template_message,
+    unknown_template_message,
+)
 
 STARTER_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
@@ -51,8 +55,28 @@ def generate_experiment(
 ) -> Path:
     # One merge for both halves — the resolution and the known-name list the
     # message prints — so a repo's `templates/` is imported once here too.
-    template, known = resolve_template(template_name, repo_root)
+    # Read through `_claims` rather than `resolve_template`, because this site
+    # also has to tell an installed-only claim apart from a name nothing
+    # claims — the same distinction `validate_config` makes at its own emit
+    # site, and for the same reason: an installed name is known from package
+    # metadata without importing it, so `E-TEMPLATE-UNKNOWN` would be false of
+    # it (spec correction 1).
+    claims = _claims(repo_root)
+    claim = claims.get(template_name)
+    template = claim.cls() if claim is not None and claim.cls is not None else None
+    known = sorted(claims)
     if template is None:
+        if claim is not None and claim.provenance == "installed":
+            raise ContractError(
+                installed_template_message(template_name, claim),
+                code="E-TEMPLATE-INSTALLED-UNSUPPORTED",
+            )
+        # `plugin=None` is untested but true by construction: `None` is
+        # `unknown_template_message`'s own default for the parameter, so
+        # passing it explicitly here is documentation rather than behaviour —
+        # no mutation of this argument can differ from deleting it. `generate
+        # experiment` has no config to read a `plugin` field from; it is the
+        # command writing the file that field would live in (review M3).
         raise ContractError(
             unknown_template_message(template_name, known, plugin=None),
             code="E-TEMPLATE-UNKNOWN",

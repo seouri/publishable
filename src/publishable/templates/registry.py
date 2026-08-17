@@ -110,27 +110,6 @@ def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | Non
     return cls() if cls else None
 
 
-def resolve_template(
-    name: str, repo_root: Path | None = None
-) -> tuple[BaseTemplate | None, list[str]]:
-    """`get_template`, plus the known names, from **one** merge.
-
-    The pair exists because the two callers that report `E-TEMPLATE-UNKNOWN`
-    need both halves, and asking for them separately would run local discovery
-    twice — which means importing every `templates/*.py` twice, executing every
-    user top level twice. `reference.md` § Creating a plugin widens `validate`'s
-    import exception from one named module to a whole directory; it does not
-    widen it to that directory twice.
-
-    `_claims` is called once per call here, exactly as `_merged` was — asking
-    for the two halves separately would import every `templates/*.py` twice.
-    """
-    claims = _claims(repo_root)
-    claim = claims.get(name)
-    cls = claim.cls if claim is not None else None
-    return (cls() if cls else None), sorted(claims)
-
-
 def template_names(repo_root: Path | None = None) -> list[str]:
     return sorted(_claims(repo_root))
 
@@ -150,11 +129,33 @@ def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
     return claim.provenance if claim is not None else None
 
 
+def installed_template_message(name: str, claim: Claim) -> str:
+    """The one wording for a name only an installed distribution's entry point
+    claims — `validate`'s finding and `generate_experiment`'s raise both read
+    this rather than each keeping its own copy, for the same reason
+    `unknown_template_message` is shared: two hard-coded literals would
+    eventually drift, and `E-TEMPLATE-UNKNOWN`'s own history (`CLAUDE.md` §
+    Misreadings) is what a second, uncoordinated emit site costs.
+
+    Takes the already-resolved `claim` rather than a repo root, so building the
+    message costs no second discovery — the caller has just merged, and has it
+    in hand.
+    """
+    return (
+        f"names `{name}`, which {claim.provider} registers as a "
+        "`publishable.templates` entry point — but core resolves an installed "
+        "template's name without importing its package, and loading one is not "
+        "implemented in this build; installed templates will be honored in a "
+        "later slice. Use a project-local `templates/` file or a core template "
+        "for now"
+    )
+
+
 def unknown_template_message(name: str, known: Sequence[str], plugin: str | None = None) -> str:
-    """The one wording for a name neither `resolve_template` call site resolved —
-    `validate`'s finding and `generate_experiment`'s raise both read this
-    rather than each keeping its own copy, so the two surfaces cannot drift
-    the way two hard-coded literals eventually would.
+    """The one wording for a name neither emit site resolved to a class —
+    `validate_config`'s finding and `generate_experiment`'s raise both read
+    this rather than each keeping its own copy, so the two surfaces cannot
+    drift the way two hard-coded literals eventually would.
 
     Takes the already-resolved names rather than a repo root, so building the
     message costs no second discovery: each caller has just merged, and has

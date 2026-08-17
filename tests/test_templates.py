@@ -1,3 +1,4 @@
+import importlib
 import sys
 from pathlib import Path
 
@@ -1070,8 +1071,17 @@ def test_a_local_template_may_not_shadow_an_installed_one(installed, tmp_path):
         get_template("my_assay", tmp_path)
     assert excinfo.value.code == "E-TEMPLATE-COLLISION"
     message = str(excinfo.value)
-    assert f"{templates / 'mine.py'}::LocalAssay" in message
+    local = f"{templates / 'mine.py'}::LocalAssay"
+    assert local in message
     assert "dist-one 1.0" in message
+    # Provider order inside the message is name order, not insertion order:
+    # the installed claim is appended to `claims[name]` before the local one
+    # (entry points are scanned before `discover_local` runs), so insertion
+    # order would print "dist-one 1.0" first. The local claimant's path
+    # starts with `/`, which sorts before the letter `d`, so provider-name
+    # order prints it first instead — the two orders disagree, and this
+    # asserts the message follows the latter.
+    assert message.index(local) < message.index("dist-one 1.0")
 
 
 def test_the_colliding_template_name_reported_is_the_first_in_name_order(installed, tmp_path):
@@ -1115,6 +1125,37 @@ def test_a_clean_installed_claim_is_not_a_collision(installed, tmp_path):
     assert get_template("my_assay", tmp_path) is None  # known, and not loaded — decision 3
 
 
+def test_get_template_imports_nothing_for_an_installed_claim(installed, tmp_path):
+    """The no-import invariant, pinned at the `_claims`/`get_template` level.
+
+    `test_the_scan_imports_nothing` (task 7) pins this at `scan_group`, one
+    level below where tasks 8-9 put the new callers — every fixture elsewhere
+    in this file that stands in for an installed claim names an unimportable
+    target (`no_one:T`), so the guarantee at *this* level has so far been
+    pinned only by those targets being unable to import, not by an assertion.
+    A target that genuinely can be imported closes the gap: if a later task
+    (13, 15) added a `.load()` inside `_claims` or `get_template`, this would
+    catch it where the unimportable fixtures cannot.
+    """
+    site = installed(
+        "dist-one", "1.0", {"publishable.templates": {"vendor_assay": "loadable_tpl:T"}}
+    )
+    (site / "loadable_tpl.py").write_text(
+        "from publishable import BaseTemplate\n\n\nclass T(BaseTemplate):\n    pass\n"
+    )
+    importlib.invalidate_caches()
+    assert "loadable_tpl" not in sys.modules
+
+    assert "vendor_assay" in template_names(tmp_path)
+    assert "loadable_tpl" not in sys.modules
+
+    assert template_provenance("vendor_assay", tmp_path) == "installed"
+    assert "loadable_tpl" not in sys.modules
+
+    assert get_template("vendor_assay", tmp_path) is None
+    assert "loadable_tpl" not in sys.modules
+
+
 def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
     """The direct question, asked where all three sources are in hand.
 
@@ -1140,9 +1181,7 @@ def test_a_template_reports_its_own_version_and_the_base_declares_none():
     assert get_template("generic").version == TEMPLATE_VERSION
 
 
-def test_the_version_warning_names_what_the_template_reports_not_a_core_constant(
-    tmp_path: Path, git_repo: Path
-):
+def test_the_version_warning_names_what_the_template_reports_not_a_core_constant():
     """The false guarantee Row 212 names, closed by comparing against the class.
 
     A local template declaring a version of its own is still skipped — that is
