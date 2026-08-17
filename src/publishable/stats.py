@@ -1206,8 +1206,25 @@ def paired_percentile_of_derived(
     # come to disagree about which units exist is a core defect, not a silent
     # extra stratum. It need not be exactly `keys`' set: a caller passing a
     # roster-wide mapping simply never has the extra entries looked up.
+    #
+    # **`keys` must already be sorted ascending when `strata` is given.**
+    # `grouped`'s label order is first-occurrence order over this walk, and the
+    # relabelling invariance above holds only because that first-occurrence
+    # order coincides with content order whenever `keys` is ascending — the same
+    # precondition `percentile_of_derived` enforces itself by calling
+    # `sorted(collapsed)` rather than trusting its caller. This function trusts
+    # `paired_keys`, which returns its intersection sorted, so it checks instead
+    # of silently sorting: a caller that has stopped passing a sorted list is a
+    # bookkeeping error worth raising on, not one worth correcting quietly.
     pools: list[list[str]] | None = None
     if strata is not None:
+        if keys != sorted(keys):
+            raise ValueError(
+                "paired_percentile_of_derived requires keys sorted ascending "
+                "when strata is given, since the stratum pools' relabelling "
+                "invariance depends on first-occurrence order coinciding with "
+                "content order"
+            )
         grouped: dict[str, list[str]] = {}
         for key in keys:
             grouped.setdefault(strata[key], []).append(key)

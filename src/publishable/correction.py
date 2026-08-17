@@ -30,6 +30,12 @@ class Member:
     Neither may reach `run.yaml`: they are tuples so a member cannot be mutated
     into the record by accident. `pool` must already be sorted ascending —
     `interval_at` reads fixed ranks off it and does not sort.
+
+    `weights`, when set, is the weight vector a weighted column contrast's
+    `diffs` were weighted by, one weight per difference and in the same order —
+    a modifier on that evidence rather than a third kind of it, so it travels
+    alongside `diffs` and never alongside `pool`. `None` is the default and the
+    shape every construction predating this field still builds.
     """
 
     where: str

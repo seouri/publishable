@@ -5545,11 +5545,18 @@ amendment.
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
 finding added below by the whole-branch review at `d59316d`. Three
-findings, all **deferred with a named owner — H4b, "weights and clusters through the contrast
-family"** (`docs/superpowers/H4-SCOPING.md` § Decomposition; a third finding was appended by the
-H4a whole-branch review, and the owner named here was "H4's contrast-side hardening", a description
-rather than a slice, until the same review) — because all are
-disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
+findings, all **deferred with a named owner** (`docs/superpowers/H4-SCOPING.md` § Decomposition; a
+third finding was appended by the H4a whole-branch review, and the owner named here was "H4's
+contrast-side hardening", a description rather than a slice, until the same review) — because all
+are disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
+**Re-owned**, `H4b` having since split into H4b-1 (weights through contrasts) and H4b-2 (clusters
+through contrasts): Finding 2 is the general form of the gap H4b-1 task 5 closed the reachable
+instance of — see the entry below this one, `OPEN — a stratified paired draw can publish a
+zero-width contrast interval`, which names H4b-2 as owner for the same reason this one now does; the
+paired construction still has no content-based degenerate refusal at all, stratified or not.
+Findings 1 and 3 are general contrast-disclosure gaps that neither weights nor clusters created, so
+they stay with **H4b-2** as the nearer of the two contrast-family slices rather than being split a
+third way.
 
 **Finding 1 — a declared `resample` can silently remove a column contrast's interval.** Task 16
 routes a recorded column's contrast through `stats.paired_percentile_of_derived` under a declared

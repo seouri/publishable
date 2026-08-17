@@ -117,3 +117,116 @@ suite re-run between each)
 
 No other disagreements found: task 1's replacement tests, task 3's ruling and shape, and task 4's
 ruling all matched the code exactly as briefed.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-17-weighted-contrasts/task-1-5-review.md`, read in full. All three
+Majors closed; all six named Minors closed (4, 6, 7, 8, 9) or superseded by the reviewer's own ruling
+(Minor 5, folded into Major 3's fix; Minor 4 dismissed by the coordinator's ruling — see below).
+
+**Major 1 — `docs/reference.md`'s contrast construction table, stale prose around six rows.**
+- `reference.md:2424`: "Which of the four below applies follows from two facts" → "Which row below
+  applies follows from whether the contrast is `paired`, whether the metric is a column or a derived
+  one, and whether `weight_by` is declared" — no count, a third fact named, self-maintaining against
+  future rows.
+- `reference.md:2445` (the `_clustered` rule): narrowed "each takes a `_clustered` suffix" → "each of
+  the **unweighted** forms above takes a `_clustered` suffix", resolving the direct contradiction with
+  the paragraph ten lines above it that says the suffix does not compose with either weighted form.
+- Moved task 2's new paragraph ("A weighted contrast weights a recorded column...") to *after* the
+  `_clustered` rule paragraph, as task 2's brief originally specified — the exception now reads after
+  the rule it excepts.
+- `reference.md:514`, the `E-DATA-CLUSTER-CONTRAST` § Errors row: same narrowing, "gives each
+  **unweighted** contrast construction a `_clustered` suffix ... none of those exists in this build" —
+  dropped the stale "five" count rather than updating it to a new number, per the coordinator's
+  instruction to prefer a self-maintaining sentence.
+- Verified by: re-reading the full section after the edit (not the diff), confirming the `_clustered`
+  paragraph and the weighted-exception paragraph no longer both make a claim about "each"/"either" that
+  contradicts the other; anchor resolution and table-cell-count checks re-run over the touched region;
+  full suite green.
+
+**Major 2 — `tests/test_validate.py:7277`, the stale "until the paired estimators weight" comment.**
+Swept `README.md`, `docs/*.md`, `src/`, `tests/` for `"paired estimators"` (the reviewer's exact grep).
+Closed the one instance in scope (the section comment above the weighted-contrast tests, now reading
+"...refused under its own code until a weighted contrast construction exists"). Left untouched, on
+purpose: `docs/feasibility-llm-growth-studies.md:515,963`, which also carry the phrase — this is a
+feasibility analysis, not one of the four documents, and it is a dated claim about what the refusal
+said of itself at the time it was measured; retro-editing a feasibility analysis's dated claims is the
+practice `CLAUDE.md` reserves for the four documents' cross-document pass, and applying it here would
+destroy the evidence of what was true when the analysis was written. Flagged rather than fixed. The two
+other `src/publishable/validate.py` hits (`validate.py:4705,5087,5154`, "unpaired estimators" /
+"paired and unpaired estimators take clusters") are unrelated refusals (`E-DATA-ALLOCATION-CONTRAST`,
+the cluster-contrast family) and were not touched.
+
+**Major 3 — `test_a_relabelled_stratum_draws_the_identical_sequence` pinned nothing; rebuilt on the
+reviewer's discriminating fixture.**
+- Replaced `_PAIRED_STRATA` (equal-sized, constant-offset) with a new fixture, `_UNEQUAL_OF` /
+  `_UNEQUAL_STRATA` — strata of size 2 and 4, values 1,2 against 3,4,100,200 — matching the reviewer's
+  construction exactly.
+- Re-verified both outcomes myself before writing the new test: applied the reviewer's label-order
+  mutation (`pools = [sorted(group) for _lab, group in sorted(grouped.items())]`) against the new
+  fixture via a standalone script — pools differed (`False` on equality) — then against the shipped
+  `sorted(sorted(group) for group in grouped.values())` — pools agreed (`True`). Then applied the same
+  mutation to `src/publishable/stats.py` directly and ran the rewritten test: **FAILED** (index-1
+  values 2.667 vs 2.833). Reverted by editing the file back, `__pycache__` cleared, re-ran: **PASSED**.
+- Rewrote the test's docstring to state the actual property (label order alone, not "insertion order
+  and label order — two orderings") and to record why the old fixture couldn't see it (constant offset
+  between strata makes every drawn difference shift by the same amount regardless of pool order).
+- Did **not** keep or re-test the content-order-vs-insertion-order mutation against this or any fixture
+  — see Minor 4/5 below for why, and Minor 5 for what was built instead.
+
+**Minor 4 — ruled by the coordinator: the report's remediation claim was wrong, and the proposed fix
+(an interleaved fixture) is impossible, not merely unbuilt.** Not rebuilt, per the ruling. The report's
+"Disagreements" section above (task 5 entry) is superseded by this fix-round section rather than
+rewritten in place, per `CLAUDE.md`'s "prefer deleting a claim to rewriting it" — the original entry is
+left as a record of what was believed at the time and corrected here, the way the repo corrects a
+published claim by appending rather than editing.
+
+**Minor 5 — the sorted-`keys` contract is now enforced at the function, not left an unstated
+divergence from `percentile_of_derived`.** Added a guard in `paired_percentile_of_derived`: when
+`strata` is given and `keys != sorted(keys)`, raises `ValueError` naming the precondition, rather than
+silently sorting (which would mask a caller bug) or leaving the divergence undocumented. Extended the
+docstring and the inline comment to state the contract and why the relabelling invariance depends on
+it. Added `test_an_unsorted_key_list_with_strata_is_a_core_defect`, which passes an out-of-order `keys`
+list with `strata` and asserts `ValueError` is raised, matching "sorted" in the message. Verified: ran
+with the guard in place (passes), and confirmed by reading that every current production call site
+(`paired_keys` returns `sorted(...)`; the column path's `col_keys` is an order-preserving filter of it)
+already satisfies the new precondition, so nothing downstream needed to change.
+
+**Minor 6 — `Member`'s class docstring extended.** Added a paragraph after the `pool`/`diffs` paragraph
+naming `weights` as a modifier on `diffs`, travelling alongside it and never alongside `pool`, `None`
+by default. Left the field's type (`tuple[Any, ...]`) as briefed — the reviewer's own note says this is
+"a note for task 9," not a defect in tasks 1–5.
+
+**Minor 7 — `_section_text`'s control in `test_the_weighted_contrast_record_keys_are_documented` made
+discriminating.** Replaced `assert "n_paired" in section` (implied by the very next assertion, since
+`n_paired` is a substring of `n_paired_effective`) with two independent checks: `section.startswith(...)`
+against the exact heading text, and `"Reporting strata" not in section` — the next `####`-level sibling
+heading, ruling out "the slicer ran to end of file." Verified the new control is genuinely
+discriminating by mutating `_section_text`'s depth comparison (`<=` → `<`, which makes it skip past the
+Contrasts section's own closing boundary and run into `#### Reporting strata`): the test **FAILED** on
+the new `"Reporting strata" not in section` assertion. Reverted, re-ran: passed. The `StopIteration`
+mutation from the original submission (`heading` → `heading + "!"`) was re-run and still **FAILS** as
+before.
+
+**Minor 8 — the reused `id: sensitivity` in `reference.md`'s new YAML block renamed.** `id:
+arm_sensitivity`, distinguishing it from the pre-existing `sensitivity`/`sensitivity_f` examples keyed
+on `shift=abnormal`/`shift=normal`. Grepped `tests/` and `docs/*.md` for `id: sensitivity` and
+`02_arm=abnormal` first to confirm nothing depended on the old string; nothing did.
+
+**Minor 9 — the stale `H4b` owner in `spec-defects.md`'s pre-existing "contrast path discloses
+nothing..." entry (line ~5544) re-owned.** Findings 1 and 3 (general contrast-disclosure gaps) and
+Finding 2 (the zero-width sweep `paired_percentile_of_derived` still lacks) now name **H4b-2** as
+owner, with Finding 2's paragraph cross-referencing the new `OPEN` entry task 5 added just below it in
+the same file, which names H4b-2 for the identical reason. Did not split the three findings across
+H4b-1/H4b-2 — none of the three is a weights-specific gap, so H4b-2 (the nearer of the two contrast-
+family slices) takes all three rather than inventing a third owner.
+
+**Verification for the whole round:** full suite run in the foreground after all fixes — **2133
+passed, 1 skipped, 2 xfailed** (2132 + the one new `test_an_unsorted_key_list_with_strata_is_a_core_defect`).
+`ruff check .`, `ruff format --check .` (80 files, 0 to reformat), and `mypy` (45 source files) all
+clean. `E-DATA-WEIGHT-CONTRAST` still alive — untouched by this round, confirmed by re-running
+`tests/test_validate.py::test_a_weighted_declared_contrast_is_refused` and the two task-1 tests.
+
+**Findings not closed, with reason:** none. All nine (three Major, six Minor) were addressed as
+described above; Minor 4 was closed by accepting the coordinator's ruling rather than by building
+anything.

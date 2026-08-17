@@ -3933,34 +3933,80 @@ def test_a_stratum_mapping_missing_a_drawn_key_is_a_core_defect():
         )
 
 
+def test_an_unsorted_key_list_with_strata_is_a_core_defect():
+    """The relabelling invariance above depends on `grouped`'s first-occurrence
+    order coinciding with pool content order, which holds only when `keys` is
+    ascending — the same precondition `percentile_of_derived` enforces itself by
+    sorting its own `collapsed` keys rather than trusting a caller. This
+    function trusts `paired_keys` to hand it a sorted list instead of sorting
+    defensively, so a caller that stops doing so is a bookkeeping error worth
+    raising on."""
+    from publishable.stats import paired_percentile_of_derived
+
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            ["u3", "u4", "u5", "u0", "u1", "u2"],
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata=_PAIRED_STRATA,
+        )
+
+
+_UNEQUAL_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 4.0},
+    "u4": {"m": 100.0},
+    "u5": {"m": 200.0},
+}
+_UNEQUAL_AGAINST = {k: {"m": 0.0} for k in _UNEQUAL_OF}
+_UNEQUAL_KEYS = ["u0", "u1", "u2", "u3", "u4", "u5"]
+_UNEQUAL_STRATA = {"u0": "A", "u1": "A", "u2": "B", "u3": "B", "u4": "B", "u5": "B"}
+
+
 def test_a_relabelled_stratum_draws_the_identical_sequence():
     """The invariance `percentile_over_units` and `percentile_of_derived` both
     keep, and for the identical reason: pools are ordered by their own sorted
     contents rather than by label, so renaming a stratum cannot change the
-    interval. Two labels is enough here because the two orderings this must rule
-    out are exactly two — insertion order and label order — and swapping the two
-    labels reverses one and not the other."""
+    interval.
+
+    **The strata are deliberately unequal-sized (2 and 4) with values that do
+    not merely offset by a constant** (1, 2 against 3, 4, 100, 200) — an earlier
+    version of this test used equal-sized strata differing by a constant, under
+    which every drawn difference shifts by the same amount regardless of which
+    pool is drawn first, so a genuine relabelling bug (swapping which pool a
+    label points at) was invisible: it passed under a label-order mutation that
+    should have failed it. This fixture breaks that translation symmetry, and a
+    label-order mutation (`pools = [sorted(group) for _lab, group in
+    sorted(grouped.items())]`, ordering by the label string rather than by pool
+    contents) was verified to make the two calls' pools differ before this test
+    was written; only the shipped content-ordering makes them agree."""
     from publishable.stats import paired_percentile_of_derived
 
-    swapped = {k: ("B" if v == "A" else "A") for k, v in _PAIRED_STRATA.items()}
+    swapped = {k: ("B" if v == "A" else "A") for k, v in _UNEQUAL_STRATA.items()}
     first = paired_percentile_of_derived(
-        _PAIRED_OF,
-        _PAIRED_AGAINST,
-        _PAIRED_KEYS,
+        _UNEQUAL_OF,
+        _UNEQUAL_AGAINST,
+        _UNEQUAL_KEYS,
         _mean_of_m,
         _mean_of_m,
         seed=7,
-        draws=200,
-        strata=_PAIRED_STRATA,
+        draws=100,
+        strata=_UNEQUAL_STRATA,
     )
     second = paired_percentile_of_derived(
-        _PAIRED_OF,
-        _PAIRED_AGAINST,
-        _PAIRED_KEYS,
+        _UNEQUAL_OF,
+        _UNEQUAL_AGAINST,
+        _UNEQUAL_KEYS,
         _mean_of_m,
         _mean_of_m,
         seed=7,
-        draws=200,
+        draws=100,
         strata=swapped,
     )
     assert first.pool == second.pool

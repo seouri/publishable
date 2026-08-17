@@ -7274,7 +7274,7 @@ def test_no_weight_warning_for_a_zero_valued_weight_looking_column(write_config,
 # honors, for a single condition's value, interval and `n.effective`. No
 # *contrast* construction weights — `paired_t_over_units` takes differences and
 # nothing else — so the one combination that would publish a wrong delta is
-# refused under its own code until the paired estimators weight.
+# refused under its own code until a weighted contrast construction exists.
 
 
 def _weighted_units(**extra) -> dict:

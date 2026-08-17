@@ -6813,10 +6813,15 @@ def test_the_weighted_contrast_record_keys_are_documented():
     Kish's size over the intersection takes a scalar sibling rather than the shape
     § Weighted samples uses per condition.
 
-    The control asserts the section was really located: a slicer that returned the
-    empty string would fail every `in` and pass every `not in`."""
+    The control asserts the section was really located and is bounded — not
+    `"n_paired" in section`, which a slicer returning the empty string would
+    already fail on the two assertions below it (`n_paired` is a substring of
+    `n_paired_effective`, so it adds no discriminating power of its own):
+    the slice must start at the heading it was asked for and must not run to
+    the end of the file, which only a genuinely bounded slice can satisfy."""
     section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
-    assert "n_paired" in section  # the control
+    assert section.startswith("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert "Reporting strata" not in section  # the next sibling heading — rules out "ran to EOF"
     assert "weighted_by" in section
     assert "n_paired_effective" in section
 
