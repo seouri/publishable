@@ -82,3 +82,63 @@ Tasks 22-24: reviewed (opus), six verdicts. Task 22's narrowing FAILED on a **Cr
 Tasks 22-24: fix round. Commit 54a994f. All closed. A closed `spec-defects.md` entry was resting on an
   unpinned behaviour — the `E-PLUGIN-COLLISION` -> `E-PLUGIN-LOAD` substitution — now pinned, because a
   closure resting on nothing is how a closure goes stale. 2075 passed, 1 skipped, 2 xfailed.
+
+## Review findings closed (tasks 25-26, `54a994f..4c09532`)
+
+Critical (task 26, obligations b/c): added `assert "retire_r26" in sys.modules` inside
+`test_a_resolver_source_is_no_longer_refused_wholesale`'s existing `try`, right after the resolver-source
+`codes()` call. Rewrote `test_validate_imports_no_plugin_for_a_config_that_names_no_resolver`'s docstring
+to state the invariant in the present tense — the positive companion exists, is named, and pins the other
+half — rather than pointing at task 26 as future work.
+  Re-verified both directions by mutation, foreground, `__pycache__` cleared before each run:
+  - Negative half unconditional-load mutation (`for _n in scan_group(RESOLVER_GROUP): _resolver_for(_n)`
+    at the top of `_check_units_source`): `test_validate_imports_no_plugin_for_a_config_that_names_no_resolver`
+    FAILS on `assert "loadable_units" not in sys.modules`; the new assertion in the other test stays green.
+  - Positive half inverse mutation (`_resolver_for` fabricates a `Unit`-yielding generator instead of
+    loading the entry point): `test_a_resolver_source_is_no_longer_refused_wholesale` FAILS on the new
+    `assert "retire_r26" in sys.modules` (the roster still resolves, so `found == set()` alone would have
+    stayed green — the added assertion is what turns this red). Only `tests/test_units.py` reddens beside
+    it, as the review reported.
+  Both reverted by restoring the file from a scratchpad copy, never `git checkout --`, and re-run to
+  confirm green.
+
+Important (task 26, guard's sole pin): re-sited the direct-call test onto `_check_units_source` as
+`test_check_units_source_alone_reports_a_malformed_units_block`, calling it with
+`{"data": {"units": "index.csv"}}` and asserting `E-CONFIG-SHAPE`. Deleted (not rewrote) the invented
+"exercised directly ... as several `_check_*` functions already are in tests" justification from
+`_units_declaration`'s docstring; replaced with a plain statement of the callers it actually guards.
+  Verified: gutting `_units_declaration`'s non-mapping branch to a bare `return None` now FAILS the new
+  test (`E-CONFIG-SHAPE` not in findings) — reverted and confirmed green again.
+
+Important (task 25, docstring claiming an unbuilt check): deleted `_from_resolver`'s "is checked against
+what actually arrived" clause; states in its place that task 28 (`E-RESOLVER-MEASUREMENT-FIELD`) is where
+that check lands and that none exists as of this commit.
+
+Important (task 25, garbled message): `E-UNITS-SOURCE-MISSING`'s continuation is now an f-string, so
+`{resolver: ...}` renders correctly beside `{glob: ...}`. Pinned with a new message-text assertion,
+`test_a_wrong_typed_source_names_both_alternatives_without_doubled_braces` in `tests/test_units.py`.
+
+Important (task 25, missing § Errors rows): added `E-RESOLVER-YIELD` to both `docs/reference.md` § Errors
+validate reports and § Errors core raises (dual-surfaced — `_check_units`'s `except ContractError` reports
+it under the same code, the same route `E-DATA-CLUSTER-VARIES` takes). Added `E-RUN-RESOLVER-UNCONFIGURED`
+to § Errors core raises' existing "core's plan disagreeing with the state core resolved beside it" row
+only (never reachable through `validate`, which always threads a real `cfg`) and updated that row's
+"six"/"those six" prose to "seven".
+
+Minor (`ResolverIO` construction): moved inside `command_run`'s `if units_decl` ternary in `cli.py` so
+nothing is constructed for a run with no units block. `resolver_io` has no reader today besides that one
+call site, so nothing else needed to change.
+
+Minor (`cfg` fixture gap, M2): **not built here — task 29's.** No fixture in this diff reads its `cfg`
+argument, so swapping either production-threaded `cfg` (`validate.py`'s `resolve_wide_cfg(...)` call or
+`cli.py`'s matching one) for `Config({})` would pass the suite unnoticed. Task 29 (`E-RESOLVER-SWEPT-PARAM`)
+is the first task that needs a resolver fixture reading `cfg` at all — its own fixture should assert on a
+value it read from `cfg`, which incidentally closes this gap; it should not be assumed closed already.
+
+Did not touch: dispatch, yield-order preservation, the `sweep.py` move (all verified sound by the review),
+or the end-to-end milestone pin (task 33's, per the plan's own deferral).
+
+Gates after the fix round: `uv run pytest` → 2079 passed, 1 skipped, 2 xfailed (2077 before this round;
++2 for two new tests — the message-text pin in `tests/test_units.py` and the direct-call test onto
+`_check_units_source` in `tests/test_validate.py` — plus one existing test gaining an assertion in place);
+ruff check clean; ruff format --check clean (80 files); mypy clean (45 source files).

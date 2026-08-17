@@ -1311,13 +1311,12 @@ def command_run(config_path: Path) -> int:
     # two-route rule and which document sentence decides each). `provenance.units`
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
-    resolver_io = ResolverIO(input_dir)
     roster, technical_n, _columns = (
         resolve_units(
             units_decl,
             input_dir,
             cfg=resolve_wide_cfg(doc, wide_swept_paths(doc.get("sweep") or {})),
-            resolver_io=resolver_io,
+            resolver_io=ResolverIO(input_dir),
         )
         if units_decl
         else (None, None, frozenset())

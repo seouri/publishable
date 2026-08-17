@@ -157,14 +157,10 @@ def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
     group unconditionally — or loaded before deciding what shape `from` is —
     turns this red.
 
-    Its positive companion does not exist yet. `_resolver_for` (task 24) has no
-    production caller today, so `validate` does not load a resolver for any
-    config — task 26 is where that wiring lands, and task 26 owes a test
-    asserting the module IS present for a config that names one (the concrete
-    form recorded in the review: `assert "retire_r26" in sys.modules`). Until
-    that lands, this test alone would also pass on a `validate` that has no
-    resolver path at all — it proves only that nothing is loaded early or
-    unconditionally, not that the right thing is loaded when it should be.
+    Its positive companion is `test_a_resolver_source_is_no_longer_refused_wholesale`,
+    which asserts `"retire_r26" in sys.modules` for a config that does name a
+    resolver. Together the two pin both directions: nothing loads for a config
+    that doesn't need it, and the right module loads for one that does.
     """
     site = installed(
         "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_units:resolve"}}
@@ -2636,6 +2632,7 @@ def test_a_resolver_source_is_no_longer_refused_wholesale(
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     try:
         found = codes(write_config({"data.units": units}))
+        assert "retire_r26" in sys.modules
         unknown = codes(write_config({"data.units": {**units, "from": {"resolver": "nope"}}}))
     finally:
         sys.modules.pop("retire_r26", None)
@@ -4195,6 +4192,19 @@ def test_a_malformed_units_block_is_reported_exactly_once(write_config):
     validate_config(path, c)
     shape_findings = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
     assert len(shape_findings) == 1
+
+
+def test_check_units_source_alone_reports_a_malformed_units_block():
+    """Exercised directly, bypassing `_check_shape` (which normally would have
+    stopped `validate_config` first): a non-mapping `data.units` reaching
+    `_check_units_source` — and, through it, `_units_declaration` — on its own
+    must still produce `E-CONFIG-SHAPE` rather than an `AttributeError` from
+    calling `.get` on a string."""
+    from publishable.validate import _check_units_source
+
+    c = Collector()
+    _check_units_source({"data": {"units": "index.csv"}}, c)
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
 @pytest.mark.parametrize(

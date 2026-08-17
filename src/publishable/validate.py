@@ -1215,9 +1215,10 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
 
     In the normal pipeline this shape is already guaranteed by `_check_shape`, which
     runs first in `validate_config` and stops the whole check before any of this
-    module's readers of `data.units` are ever called. This guard exists for those
-    readers being exercised directly (as several `_check_*` functions already are
-    in tests), so none crashes on a non-mapping `data.units` reached on its own.
+    module's readers of `data.units` are ever called. This guard exists so a
+    caller of this function — `_check_units_source`, `_check_units`, and any
+    other reader of `data.units` — does not crash on a non-mapping `data.units`
+    reached on its own, whether through `_check_shape` or a direct call.
     Reported —
     under the same `E-CONFIG-SHAPE` identifier `_check_shape` uses, so a bad shape is
     never two different codes — only if that exact diagnostic is not already in

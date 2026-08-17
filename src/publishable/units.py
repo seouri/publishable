@@ -319,10 +319,12 @@ def _from_resolver(
 
     The columns come back beside the roster for the reason `_from_table`'s do: they
     are the only honest reference set for `data.units.measurements.by`, and a
-    resolver has no columns beyond the attributes it yields, so the field a CSV
-    would simply have carried is checked against what actually arrived. The union
-    over yielded units rather than the intersection, matching a table header's
-    "this column exists" rather than "every row filled it in" — the same reading
+    resolver has no columns beyond the attributes it yields. Task 28
+    (`E-RESOLVER-MEASUREMENT-FIELD`) is where the field a CSV would simply have
+    carried gets checked against what actually arrived; as of this commit no
+    such check exists. The union over yielded units rather than the intersection,
+    matching a table header's "this column exists" rather than "every row filled
+    it in" — the same reading
     `collapse_measurements` takes when it treats a name only some rows carry as no
     disagreement.
 
@@ -408,7 +410,7 @@ def resolve_units(
     else:
         raise ContractError(
             f"`data.units.from` is {source!r}; expected a table name, {{glob: ...}}, or "
-            "{{resolver: ...}}",
+            f"{{resolver: ...}}",
             code="E-UNITS-SOURCE-MISSING",
         )
     # Before the uniqueness loop, not after: under a `measurements` declaration a

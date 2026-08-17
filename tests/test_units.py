@@ -134,6 +134,20 @@ def test_a_missing_table_is_refused(input_dir: Path):
     assert e.value.code == "E-UNITS-SOURCE-MISSING"
 
 
+def test_a_wrong_typed_source_names_both_alternatives_without_doubled_braces(input_dir: Path):
+    """`data.units.from` that is neither a string nor a `glob`/`resolver` mapping
+    must render both alternatives as single braces — the continuation is an
+    f-string specifically so `{{resolver: ...}}` unescapes to `{resolver: ...}`,
+    matching `{glob: ...}` in the same sentence rather than rendering literal
+    doubled braces."""
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": 42, "key": "patient_id"}, input_dir)
+    assert e.value.code == "E-UNITS-SOURCE-MISSING"
+    assert str(e.value) == (
+        "`data.units.from` is 42; expected a table name, {glob: ...}, or {resolver: ...}"
+    )
+
+
 def test_duplicate_keys_are_refused_naming_the_offender(input_dir: Path):
     (input_dir / "dup.csv").write_text("patient_id\np1\np2\np1\n")
     with pytest.raises(ContractError) as e:
