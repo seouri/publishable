@@ -142,3 +142,36 @@ Gates after the fix round: `uv run pytest` → 2079 passed, 1 skipped, 2 xfailed
 +2 for two new tests — the message-text pin in `tests/test_units.py` and the direct-call test onto
 `_check_units_source` in `tests/test_validate.py` — plus one existing test gaining an assertion in place);
 ruff check clean; ruff format --check clean (80 files); mypy clean (45 source files).
+
+Tasks 25-26: implemented at c563d30 / 519c090, report 4c09532. **`E-DATA-RESOLVER-UNSUPPORTED` appears
+  nowhere in `src/` — the refusal that has stood since H1 is retired**, and a resolver-sourced config
+  validates and runs clean through `main(["run", ...])` to a real `run.yaml`. The reviewer reproduced it
+  independently: `EXIT_OK`, `provenance.units: {n: 10, key: patient_id}`.
+Tasks 25-26: reviewed (opus), four verdicts. Task 26's PINNING axis FAILED on a Critical.
+  **Two of the four inherited obligations were unmet, and the proof is the sharpest of the slice: with
+  `_resolver_for` fabricating a roster and NEVER IMPORTING, all 706 `test_validate.py` tests passed.**
+  Decision 1's invariant — the slice's central claim — survived only at `units.resolve_units`. And the
+  docstring still said "its positive companion does not exist yet... task 26 owes a test", false in every
+  clause and pointing a reader at a closed task.
+  Now both halves pin independently, and the fix round proved the pairing rather than asserting it: an
+  unconditional load reddens the negative test and leaves the positive green; a fabricated roster reddens
+  the positive and leaves the negative green. **A mutation that reddens both would have meant one half was
+  doing nothing.**
+  Ruling on the deleted test, and the reviewer's framing is the one to keep: **the premise was true and
+  the deletion was not therefore safe.** `_check_unimplemented` genuinely no longer reads `data.units`, so
+  deleting it as a test OF THAT FUNCTION was right — but it was doing double duty, and gutting
+  `_units_declaration`'s `E-CONFIG-SHAPE` emit to a bare `return None` left the full suite green at 2077.
+  It was that guard's only pin across four surviving callers. Closed by re-siting a direct-call test onto
+  `_check_units_source`, not by restoring the old one.
+  **And task 26 had rewritten that guard's docstring to justify it by "those readers being exercised
+  directly (as several `_check_*` functions already are in tests)" — no test calls any of them directly.
+  A rewrite invented a justification a deletion could not have.** That is the rule this repo already
+  carries, earning a second instance: prefer deleting a claim to rewriting it.
+  Also closed: a docstring claiming `measurements.by` "is checked against what actually arrived" when a
+  resolver config with `by: nosuchfield` validates to `{}` (task 28 owns that check); a message rendering
+  literal `{{resolver: ...}}` because a continuation line was not an f-string, now pinned; and two codes
+  with emit sites, tests and **no § Errors row**.
+  **TASK 33 OWES the end-to-end regression** — the milestone is real and nothing surviving pins
+  resolver -> roster -> run -> `run.yaml`. The spec defers it there explicitly. **TASK 29 OWES a fixture
+  that reads `cfg`** — replacing either threaded `cfg` with `Config({})` goes unnoticed today.
+Tasks 25-26: fix round. Commit d5c1acb. 2079 passed, 1 skipped, 2 xfailed; gates clean.
