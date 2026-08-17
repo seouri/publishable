@@ -45,6 +45,13 @@ beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA
 (weighted contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
 execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b.
 
+**H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
+feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
+plugin H7b's registry would resolve **could not be written**. The spine design calls H7c order-independent;
+that is the claim [its scoping](docs/superpowers/H7c-SCOPING.md) falsified. It retires no refusal and newly
+executes nothing — there was no refusal in that family to retire — and it closes the defect § Misreadings
+named by hand, `BaseTemplate.required_env` being declarable and unread.
+
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
 16 against a charter saying "3 rows", H3c-3 17 against a charter saying 6. Two consequences worth
@@ -131,6 +138,7 @@ every session.
 | Assuming a documented rule has code behind it | Five § Validation rows described checks with no emit site, no check and no test. **Grep for the code before building on the row**; a row and a code are the same check seen from two ends, and either end can be missing |
 | Reading a temporary refusal as permanent, or the reverse | A `-UNSUPPORTED` suffix is the undocumented build family, retired wholesale and absent from the registry. A *narrow* refusal of a combination is documented, carries rows, and outlives the slice that minted it |
 | Scoping a diagnostic by the helper it calls | `E-TEMPLATE-UNKNOWN` had **two** emit sites; a task scoped by `template_names()`'s single call site missed the second, which went on claiming "no installed template registers" under a § Errors row just rewritten to say otherwise. **§ Errors carries one row per code, not per emit site**, so a diagnostic's unit of work is every site that raises *or* reports it |
+| Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
 | Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` and `apparatus_facts` are the other two, and each is owned — H7b and H7d respectively — where `field_convention` is not) |
 
 ### Writing checks that can fail
@@ -172,6 +180,13 @@ A corollary that cost its own round: **state read at the wrong moment is a third
 was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
 class's module is gone, while an external one is still cached.
 
+**A grep for one spelling is a fourth**, and it shipped a credential leak. H7c's redaction was sited by
+measuring every place an exception reaches a stream with `grep 'type(exc).__name__'` — which answers
+*where does this spelling appear*, not *where does this happen*. A site formatting a bare `{exc}` matched
+nothing, and a declared credential reached stderr through it. Enumerate by **reading** where a thing can
+happen, then confirm with greps; the reverse order is the substitution this section is about, and it was
+made by the author of the rule forbidding it, while measuring for it.
+
 ### Habits that cost real work
 
 - **A comment or docstring claiming a guarantee the code does not provide** — at least a dozen instances,
@@ -182,6 +197,17 @@ class's module is gone, while an external one is still cached.
   the files that *did* load is still found rather than masked" appeared at four sites including a
   normative § Errors row, while the reason load-failure is checked first is precisely that a collision
   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
+- **A fix that carries its own justification is not thereby verified**, and the justification is written
+  from the intent while the behaviour has already moved. Closing H7c's "core honours an undocumented
+  environment variable" gap by swapping `load_dotenv(override=False)` for `dotenv_values` **broke "a
+  shell value wins"** — that helper hardcodes `override=True`, which is the flag deciding whether a
+  `${VAR}` reference resolves from the shell or the file. The new docstring claimed "`setdefault` is
+  exactly `override=False`" and justified it with *"a stale `.env` cannot silently redirect a run to the
+  wrong account"* — the precise property the change had just broken. Probe the property the sentence
+  names, not the intent behind it.
+- **Prefer deleting a claim to rewriting it.** A round closing a false-owner comment closed it by
+  **propagating the claim to two more sites**, one of which contradicted a third comment in the same
+  commit. A rewrite invents; a deletion cannot.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
 - **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.

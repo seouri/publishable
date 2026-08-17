@@ -5834,7 +5834,7 @@ implements it.
 contradiction between a built check and its documentation — filed so it is not silently assumed
 closed by a later slice's scoping.
 
-~~## OPEN — `python-dotenv` honours an undocumented behavior-changing environment variable~~
+## `python-dotenv` honoured an undocumented behavior-changing environment variable — CLOSED by H7c
 
 ~~`python-dotenv`'s `load_dotenv` checks `PYTHON_DOTENV_DISABLED` and skips loading entirely when it
 is set to a truthy value (confirmed 2026-08-16 against the installed package,

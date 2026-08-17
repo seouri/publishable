@@ -1012,6 +1012,31 @@ Full local `pytest`/`ruff`/`mypy` gates at this commit: 1954 passed + 2 xfailed,
 
 ---
 
+### Measured on 2026-08-16 against commit `c42eb877c304c308a7b8530720ca7ff9cf842c54` — after H7c
+
+H7c (credentials and secrets) merged to `main` at the commit above. **Nothing in the picture above
+changes: still zero of nine execute, and H7c retires no refusal** — the credential family never had one,
+only checks that were specified and unbuilt. What changed is narrower and is a prerequisite rather than a
+result.
+
+- **The plugin this analysis describes can now be written.** `llm_screen`'s `llm.provider` parameter is
+  declared with `requires_env`, and `Param.__init__` rejected that keyword outright until this slice —
+  verified here by constructing exactly that `Param` against the merged build. That was a fourth,
+  unrecorded blocker sitting behind the three § Executability names, and it blocked H7b's payoff rather
+  than this analysis's: the registry H7b builds resolves a plugin that could not have been authored.
+- **`E-DATA-RESOLVER-UNSUPPORTED` is untouched** and still the gate all nine hit as written. H7b owns it.
+- **What is newly checkable, once a plugin exists:** a template's `required_env` and a swept value's
+  `requires_env` are both reported before anything executes, and a declared credential's value is kept
+  out of `run.yaml`, `executions.jsonl` and both streams. The limit is stated rather than implied — core
+  redacts only values it read for a *declared* variable, so a step reaching `os.environ` itself holds a
+  value core never saw.
+
+**Not re-measured:** the nine configs were not re-run through `validate` for this entry. They hit
+`E-DATA-RESOLVER-UNSUPPORTED` at the same point as before, and H7c adds no check ahead of it that any of
+them can reach — none declares `required_env`, and none can declare `requires_env` without the plugin.
+The two claims above that *are* dated were each verified against the merged build.
+
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
