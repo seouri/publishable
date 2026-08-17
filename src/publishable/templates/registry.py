@@ -18,7 +18,9 @@ template too, and there is no order left for a merge to express.
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
+from publishable.plugins import provider_of, scan_group
 from publishable.templates.base import BaseTemplate
 from publishable.templates.builtin.generic import GenericTemplate
 from publishable.templates.discovery import PartialLoadError, discover_local
@@ -26,24 +28,99 @@ from publishable.templates.discovery import PartialLoadError, discover_local
 _BUILTIN: dict[str, type[BaseTemplate]] = {"generic": GenericTemplate}
 
 
-def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
-    if repo_root is None:
-        return dict(_BUILTIN)
-    local = discover_local(repo_root)
-    for name in sorted(local):  # name order: import order may decide nothing here
-        if name in _BUILTIN:
-            core = _BUILTIN[name]
-            raise PartialLoadError(
-                f"the project-local template `{local[name].provider}` claims the name "
-                f"`{name}`, which core itself registers as "
-                f"{core.__module__}.{core.__qualname__} — a local template that could "
-                "redefine a core name could change what a config means without "
-                "changing the config, which is what `parameters_hash` exists to make "
-                "impossible. Rename yours.",
-                code="E-TEMPLATE-COLLISION",
-                partial_templates=[found.cls for found in local.values()],
+class Claim(NamedTuple):
+    """One registration of one template name, and who made it.
+
+    `cls` is `None` for an installed claim, and that is the mechanism rather than
+    a gap: an entry point is resolved from package metadata, so core knows the
+    name and the distribution without importing a line — see `plugins.py`. The
+    consequences are that an installed name is *known* and not *resolvable* in
+    this build, and that a refused installed claim carries no class whose
+    declarations could be read.
+    """
+
+    provenance: str
+    provider: str
+    cls: type[BaseTemplate] | None
+
+
+def _claims(repo_root: Path | None) -> dict[str, Claim]:
+    """Every claim on every template name, from all three sources, verdict reached.
+
+    The three sources are core's own registry, the installed distributions'
+    `publishable.templates` entry points, and — when a repo root is given — that
+    repo's `templates/`. Collected in full before any verdict, on
+    `discover_local`'s precedent and for its reason: a verdict reached while a
+    claim set was still partial is a verdict over the wrong set. Reported in name
+    order, and claimants within a name in provider order, because install order
+    and import order are properties of a machine rather than of a design.
+
+    Two local registrations of one name never reach here — `discover_local`
+    refuses that pair itself, knowing what a repo declares — so this function
+    sees at most one local claimant per name.
+
+    Underscore-private to this module's own readers (`_merged`, `template_names`,
+    `template_provenance`, `get_template`), and imported anyway by two callers
+    outside it — `validate.py` and `generators/experiment.py` — because both need
+    a `Claim`'s `provenance` to route between `E-TEMPLATE-INSTALLED-UNSUPPORTED`
+    and `E-TEMPLATE-UNKNOWN` **and** the known-name list, from ONE merge. Taking
+    them from separate public calls would import every `templates/*.py` twice,
+    which is the fault both call sites already explain. Kept private rather than
+    promoted: the two cross-module imports are the whole set, both read-only, and
+    neither is a signal that this function is meant for general use.
+    """
+    claims: dict[str, list[Claim]] = {}
+    for name, core in _BUILTIN.items():
+        claims.setdefault(name, []).append(
+            Claim(provenance="core", provider=f"{core.__module__}.{core.__qualname__}", cls=core)
+        )
+    for name, entries in scan_group("publishable.templates").items():
+        for ep in entries:
+            claims.setdefault(name, []).append(
+                Claim(provenance="installed", provider=provider_of(ep), cls=None)
             )
-    return {name: found.cls for name, found in local.items()} | _BUILTIN
+    local = discover_local(repo_root) if repo_root is not None else {}
+    for name, found in local.items():
+        claims.setdefault(name, []).append(
+            Claim(provenance="local", provider=found.provider, cls=found.cls)
+        )
+    for name in sorted(claims):
+        if len(claims[name]) > 1:
+            who = " and ".join(sorted(claim.provider for claim in claims[name]))
+            raise PartialLoadError(
+                f"the template name `{name}` is claimed more than once: {who} — a "
+                "template that could redefine another's name could change what a "
+                "config means without changing the config, which is what "
+                "`parameters_hash` exists to make impossible. Install order and "
+                "import order are the only tie-breaks available, and both are "
+                "properties of a machine rather than of a design. Rename yours.",
+                code="E-TEMPLATE-COLLISION",
+                # Every class this merge constructed, whether or not it ends up
+                # usable — the same set `discover_local` accumulates, so a caller
+                # that never gets a resolved template can still ask an abandoned
+                # class what credentials it declares. An installed claim
+                # contributes nothing here and structurally cannot: its claim is
+                # read from package metadata and no module was imported, so there
+                # is no class to ask. That is the cost of the guarantee rather
+                # than a gap in this expression — see § Secrets & credentials.
+                partial_templates=[
+                    claim.cls
+                    for these in claims.values()
+                    for claim in these
+                    if claim.cls is not None
+                ],
+            )
+    return {name: these[0] for name, these in claims.items()}
+
+
+def _merged(repo_root: Path | None) -> dict[str, type[BaseTemplate]]:
+    """The names this build can hand back a class for: core's and this repo's.
+
+    An installed name is in `_claims` and not here. `template_names` reads
+    `_claims`, so the name is known; `get_template` reads this, so it is not
+    resolved — see `Claim.cls`.
+    """
+    return {name: claim.cls for name, claim in _claims(repo_root).items() if claim.cls is not None}
 
 
 def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | None:
@@ -51,39 +128,66 @@ def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | Non
     return cls() if cls else None
 
 
-def resolve_template(
-    name: str, repo_root: Path | None = None
-) -> tuple[BaseTemplate | None, list[str]]:
-    """`get_template`, plus the known names, from **one** merge.
-
-    The pair exists because the two callers that report `E-TEMPLATE-UNKNOWN`
-    need both halves, and asking for them separately would run local discovery
-    twice — which means importing every `templates/*.py` twice, executing every
-    user top level twice. `reference.md` § Creating a plugin widens `validate`'s
-    import exception from one named module to a whole directory; it does not
-    widen it to that directory twice.
-    """
-    merged = _merged(repo_root)
-    cls = merged.get(name)
-    return (cls() if cls else None), sorted(merged)
-
-
 def template_names(repo_root: Path | None = None) -> list[str]:
-    return sorted(_merged(repo_root))
+    return sorted(_claims(repo_root))
 
 
-def unknown_template_message(name: str, known: Sequence[str]) -> str:
-    """The one wording for a name neither `resolve_template` call site resolved —
-    `validate`'s finding and `generate_experiment`'s raise both read this
-    rather than each keeping its own copy, so the two surfaces cannot drift
-    the way two hard-coded literals eventually would.
+def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
+    """Where the template `name` resolves from — `core`, `local`, `installed` — or
+    `None` if nothing claims it.
+
+    Asked at the merge, which is the one place holding all three sources, and
+    answered from which source a claim came from rather than from anything
+    observable on a class afterward. `discovery.is_local_template` answers a
+    narrower question about a class that is already in hand, and keeps its two
+    callers: nothing in this build ever holds an installed template's class, so a
+    class-taking predicate has no third value to return.
+    """
+    claim = _claims(repo_root).get(name)
+    return claim.provenance if claim is not None else None
+
+
+def installed_template_message(name: str, claim: Claim) -> str:
+    """The one wording for a name only an installed distribution's entry point
+    claims — `validate`'s finding and `generate_experiment`'s raise both read
+    this rather than each keeping its own copy, for the same reason
+    `unknown_template_message` is shared: two hard-coded literals would
+    eventually drift, and `E-TEMPLATE-UNKNOWN`'s own history (`CLAUDE.md` §
+    Misreadings) is what a second, uncoordinated emit site costs.
+
+    Takes the already-resolved `claim` rather than a repo root, so building the
+    message costs no second discovery — the caller has just merged, and has it
+    in hand.
+    """
+    return (
+        f"names `{name}`, which {claim.provider} registers as a "
+        "`publishable.templates` entry point — but core resolves an installed "
+        "template's name without importing its package, and loading one is not "
+        "implemented in this build; installed templates will be honored in a "
+        "later slice. Use a project-local `templates/` file or a core template "
+        "for now"
+    )
+
+
+def unknown_template_message(name: str, known: Sequence[str], plugin: str | None = None) -> str:
+    """The one wording for a name neither emit site resolved to a class —
+    `validate_config`'s finding and `generate_experiment`'s raise both read
+    this rather than each keeping its own copy, so the two surfaces cannot
+    drift the way two hard-coded literals eventually would.
 
     Takes the already-resolved names rather than a repo root, so building the
     message costs no second discovery: each caller has just merged, and has
     them in hand.
+
+    `plugin` is the config's own field, when the caller has a config. It is a
+    readable note beside the authoritative pin in `uv.lock` rather than a second
+    one — core never installs from it — so the hint says where the template was
+    expected to come from and stops there. A caller with no config passes
+    `None`: `generate experiment` is writing the file that would hold it.
     """
+    hint = f" — `plugin` says it should come from `{plugin}`" if plugin else ""
     return (
         f"names `{name}`, which no template — core's, an installed plugin's, "
         f"or this project's own `templates/` — registers "
-        f"(known: {', '.join(known)})"
+        f"(known: {', '.join(known)}){hint}"
     )

@@ -10,6 +10,7 @@ from publishable.errors import (
 )
 from publishable.estimate import Estimate
 from publishable.param import Param
+from publishable.plugins import register_probe, register_reader, register_resolver, register_writer
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import register_template
 from publishable.units import Unit
@@ -25,6 +26,10 @@ __all__ = [
     "Param",
     "PublishableError",
     "Unit",
+    "register_probe",
+    "register_reader",
+    "register_resolver",
     "register_template",
+    "register_writer",
 ]
 __version__ = "0.1.0"

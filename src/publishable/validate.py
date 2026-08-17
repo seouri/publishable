@@ -16,8 +16,8 @@ from publishable.envelope import check_envelope
 from publishable.errors import ContractError
 from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
-from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
+from publishable.plugins import GROUPS, names, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
@@ -37,7 +37,11 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
-from publishable.templates.registry import resolve_template, unknown_template_message
+from publishable.templates.registry import (
+    _claims,
+    installed_template_message,
+    unknown_template_message,
+)
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -511,10 +515,10 @@ def validate_config(
     # `.env`, once, before the first check that reads the environment —
     # `_check_required_env` below, today, which is what
     # `test_a_required_env_variable_may_be_supplied_by_dot_env` pins. That is
-    # weaker than "before `resolve_template`", and deliberately so: no test
+    # weaker than "before `_claims`", and deliberately so: no test
     # distinguishes the two placements, so the stronger claim would be one the
     # suite cannot hold. It is not that resolution is environment-free —
-    # `resolve_template` imports every project-local `templates/*.py`, executing
+    # `_claims` imports every project-local `templates/*.py`, executing
     # user top level, which may read anything. Loading before that is why the
     # call sits here rather than lower; only the weaker property is pinned.
     # `reference.md` § CLI reference promises `validate` "creates nothing and
@@ -524,12 +528,14 @@ def validate_config(
     load_env(repo_root)
     try:
         # One merge, so one local discovery: the known-name list the unknown-name
-        # finding prints comes back from the same call that resolved the name.
-        # Asking for it separately would import every `templates/*.py` a second
-        # time — every user top level executed twice — and, since the message is
-        # built after this guard closes, a `ContractError` from that second
-        # import would escape `validate_config` and discard every other finding.
-        template, known = resolve_template(name, repo_root)
+        # finding prints, and the claim (provenance and provider) an unresolved
+        # name's finding reads, both come back from the same call that resolved
+        # the name. Asking for any of them separately would import every
+        # `templates/*.py` a second time — every user top level executed twice —
+        # and, since a later finding is built after this guard closes, a
+        # `ContractError` from that second import would escape `validate_config`
+        # and discard every other finding.
+        claims = _claims(repo_root)
     except ContractError as exc:
         # The load-time refusals resolving a template can make — two codes,
         # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Two *codes*, not two
@@ -564,12 +570,31 @@ def validate_config(
         c.credentials = credential_values(names)
         c.error(exc.code, "experiment_type", str(exc))
         return None
+    claim = claims.get(name)
+    template = claim.cls() if claim is not None and claim.cls is not None else None
+    known = sorted(claims)
     if template is None:
-        c.error(
-            "E-TEMPLATE-UNKNOWN",
-            "experiment_type",
-            unknown_template_message(name, known),
-        )
+        if claim is not None and claim.provenance == "installed":
+            c.error(
+                "E-TEMPLATE-INSTALLED-UNSUPPORTED",
+                "experiment_type",
+                installed_template_message(name, claim),
+            )
+        else:
+            plugin = doc.get("plugin")
+            # The `isinstance(plugin, str) and plugin` guard is unpinned: no
+            # config in the suite declares a non-string `plugin` alongside an
+            # unresolved `experiment_type`, so a `plugin: 123` rendering
+            # "should come from `123`" would go undetected if this guard were
+            # deleted. Left rather than fixed with a fixture — recorded here
+            # so the gap is not lost (`spec-defects.md`/review M3).
+            c.error(
+                "E-TEMPLATE-UNKNOWN",
+                "experiment_type",
+                unknown_template_message(
+                    name, known, plugin if isinstance(plugin, str) and plugin else None
+                ),
+            )
         return None  # every later check reads the spec
 
     entrypoint = doc.get("entrypoint")
@@ -608,8 +633,10 @@ def validate_config(
 
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
+    _check_plugin_collisions(c)
     _check_required_env(doc, template, c)
     _check_requires_env(doc, template, c)
+    _check_probe(name, template, c)
     # Set once `template` is resolved, so `c.render()` — whenever it is finally
     # called, by `command_validate` or `command_run` — redacts a credential value
     # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
@@ -620,6 +647,7 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
+    _check_units_source(doc, c)
     roster, technical_n, columns = _check_units(doc, c)
     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
     _check_measurements(units_decl, roster, technical_n, columns, c)
@@ -770,6 +798,38 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
         )
 
 
+def _check_plugin_collisions(c: Collector) -> None:
+    """One entry-point key claimed by two installed distributions, outside templates.
+
+    `publishable.templates` needs no skip in the loop below, because this
+    function is never reached while one is live: `validate_config` calls
+    `_claims(repo_root)` earlier, inside a `try` that returns from the `except
+    ContractError` branch on `E-TEMPLATE-COLLISION` — the same merge that
+    would raise it — before `_check_plugin_collisions` is ever called. A
+    template collision is reported as `E-TEMPLATE-COLLISION` at that earlier
+    call, not here. These four groups have no such earlier merge, so their
+    collision is a property of the machine's installed set alone, decided
+    only when this loop notices it.
+
+    Reported rather than raised, and reported for every config rather than only
+    for one naming a colliding key: a registry core cannot make sense of is
+    refused however it is asked, which is the same shape `_claims` takes for a
+    `templates/` core cannot merge. Read from metadata, so no plugin is imported
+    to reach a verdict.
+    """
+    for group in GROUPS:
+        for name, entries in scan_group(group).items():
+            if len(entries) > 1:
+                who = " and ".join(sorted(provider_of(ep) for ep in entries))
+                c.error(
+                    "E-PLUGIN-COLLISION",
+                    "plugin",
+                    f"key `{name}` in the `{group}` entry-point group is claimed by "
+                    f"{who} — install order is the only tie-break available and it is "
+                    "a property of a machine rather than of a design. Uninstall one",
+                )
+
+
 def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:
     entrypoint = doc.get("entrypoint")
     if not entrypoint or not isinstance(entrypoint, str):
@@ -886,6 +946,41 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
         )
 
 
+def _check_probe(name: str, template: Any, c: Collector) -> None:
+    """The resolved template's `apparatus_probe` against the installed probes.
+
+    Read from package metadata, so a name no distribution declares is refused
+    without importing one — the same guarantee every other plugin name is
+    answered under. Reported at `experiment_type` because the declaration is the
+    template's rather than the config's: a reader who cannot install the plugin
+    changes which template the experiment uses, and `experiment_type` is where
+    that decision is written.
+
+    Takes the registered name rather than recovering it from the class, which
+    cannot be done: a class knows what it was decorated with only until the
+    pending buffer is drained, and `validate_config` is holding the name anyway.
+
+    A template declaring no probe is the ordinary case and draws nothing —
+    `reference.md` § The apparatus core can only observe: an experiment whose
+    measurements never leave the machine declares nothing and records
+    `apparatus: null`.
+    """
+    declared = getattr(template, "apparatus_probe", None)
+    if not isinstance(declared, str) or not declared:
+        return
+    known = names("publishable.probes")
+    if declared in known:
+        return
+    listed = ", ".join(known) if known else "none installed"
+    c.error(
+        "E-PROBE-UNKNOWN",
+        "experiment_type",
+        f"resolves template `{name}`, which declares `apparatus_probe: {declared}` — "
+        "a name no installed distribution registers in the `publishable.probes` "
+        f"entry-point group (registered: {listed})",
+    )
+
+
 def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:
     """Every environment variable this config's declarations name.
 
@@ -901,9 +996,10 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
     threading one resolved plan through them, so re-deriving here matches this
     file's own convention rather than breaking it.
 
-    A `None` template — reached only when `resolve_template` already returned
-    early — yields the empty list, since `getattr(None, ...)` on a missing
-    template answers nothing rather than guessing.
+    A `None` template — reached only when `validate_config` already returned
+    early, since it never calls this once `template` is `None` — yields the
+    empty list, since `getattr(None, ...)` on a missing template answers
+    nothing rather than guessing.
     """
     raw_required = getattr(template, "required_env", None)
     # Same guard as `_check_required_env`: nothing reports a `required_env`
@@ -987,17 +1083,19 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     the author deliberately left at its default, and asserting which it is would
     be a claim the declaration does not carry.
 
-    A local template is skipped regardless of what `template_version` declares.
-    `TEMPLATE_VERSION` is core's own constant — comparing a config's declared
-    string against it is meaningless for a template core did not write, whether
-    that string happens to match, differ, or was never set at all: `docs/
-    reference.md` § Three hashes says `template_version` "isn't the answer for
-    a local template — it's a string its author remembers to bump."
+    A local template is skipped regardless of what `template_version` declares,
+    and so is any template reporting no version of its own. What a config's
+    declared string is compared against is the template's own `version`, read
+    off the class: a module constant would be core's answer for a template core
+    did not write, which `docs/reference.md` § Three hashes rejects — a
+    `template_version` "isn't the answer for a local template — it's a string
+    its author remembers to bump."
     """
     if is_local_template(type(template)):
         return
+    reported = type(template).version
     declared = doc.get("template_version")
-    if not declared or declared == TEMPLATE_VERSION:
+    if reported is None or not declared or declared == reported:
         return
     set_here = _flatten(doc.get("parameters"), "")
     unset = [
@@ -1005,15 +1103,11 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
         for path, param in template.parameter_spec.items()
         if path not in set_here and param.default is not MISSING
     ]
-    detail = (
-        f"; unset here and left to the installed template's default: {', '.join(unset)}"
-        if unset
-        else ""
-    )
+    detail = f"; unset here and left to the template's default: {', '.join(unset)}" if unset else ""
     c.warn(
         "W-TEMPLATE-VERSION",
         "template_version",
-        f"is {declared} but the installed template reports {TEMPLATE_VERSION}{detail}",
+        f"is {declared} but the template reports {reported}{detail}",
     )
 
 
@@ -1087,6 +1181,31 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
                 f"data.{field}",
                 f"resolves inside the git repository at {repo_root}",
             )
+
+
+def _check_units_source(doc: dict[str, Any], c: Collector) -> None:
+    """A `data.units.from` mapping may declare `glob` or `resolver`, not both.
+
+    Two answers to one declaration: this module reads such a mapping as a
+    resolver — `_check_unimplemented` and `_check_units` both test for the
+    `resolver` key — while `units.resolve_units` tests for `glob` first and would
+    resolve it as a glob. Whichever is right, they cannot both be, and a run that
+    executed one while `validate` had checked the other is the fault this refuses.
+
+    Its own function rather than a branch beside the resolver refusal, because
+    that refusal retires and this one does not: a `from` naming two sources is
+    ambiguous whether or not resolvers are honoured.
+    """
+    units = _units_declaration(doc.get("data") or {}, c) or {}
+    source = units.get("from")
+    if isinstance(source, dict) and "glob" in source and "resolver" in source:
+        c.error(
+            "E-UNITS-SOURCE-AMBIGUOUS",
+            "data.units.from",
+            "declares both `glob` and `resolver`, which name two different ways of "
+            "finding the same roster — `from` says how core finds a unit, and a "
+            "declaration with two answers has none. Declare one",
+        )
 
 
 def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | None:
@@ -3784,9 +3903,9 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         c.error(
             "E-DATA-RESOLVER-UNSUPPORTED",
             "data.units.from.resolver",
-            f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
-            "plugin registry is not implemented in this build; resolvers will be honored "
-            "in a later slice. Use a table or a glob for now",
+            f"names `{source['resolver']}`, but a resolver cannot be dispatched in this "
+            "build; resolvers will be honored in a later slice. Use a table or a glob "
+            "for now",
         )
     # No `data.units` *block* is refused wholesale any more — a `resolver`
     # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
@@ -3836,9 +3955,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `allocation.json` and `provenance.allocation_hash`.
     #
     # One `data.units` sub-field remains read by nothing: a `resolver` source
-    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since resolvers are
-    # plugin artifacts and the plugin registry is not implemented in this
-    # build). `holdout` left this family with this slice.
+    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since a resolver
+    # cannot be dispatched in this build — the registry that decides a name
+    # collision among resolver distributions is built; loading the resolver
+    # an accepted name points at is not). `holdout` left this family with
+    # this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`

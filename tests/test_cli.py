@@ -438,6 +438,79 @@ def test_generate_experiments_unknown_template_message_matches_validates(tmp_pat
     )
 
 
+def test_generate_experiment_refuses_an_installed_only_template_the_same_way_validate_does(
+    installed, tmp_path: Path
+):
+    """The second `E-TEMPLATE-UNKNOWN` emit site, closed.
+
+    Spec correction 1: for a name only an installed distribution's entry
+    point claims, `E-TEMPLATE-UNKNOWN` is **false** — the name is known from
+    package metadata, just not resolvable in this build without importing the
+    package. Task 9 closed that at `validate_config`'s own emit site
+    (`test_an_installed_only_template_name_is_known_and_refused` in
+    `tests/test_validate.py`) but left `generate_experiment`'s raise
+    reporting the code the correction calls false, with a message that
+    contradicted itself by listing the very name it claimed nothing
+    registers. This is the same check repeated at the second surface.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="a-pilot",
+            template_name="vendor_assay",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-INSTALLED-UNSUPPORTED"
+    message = str(excinfo.value)
+    assert "vendor_assay" in message
+    assert "dist-one 1.0" in message
+
+    # THE ACTUAL GUARANTEE: the two live messages equal each other, same as
+    # the unknown-name test above.
+    validate_collector = Collector()
+    cfg = root / "configs" / "generic-check" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "1.0",
+                "experiment_type": "vendor_assay",
+                "metadata": {"name": "generic-check", "description": "", "authors": []},
+                "entrypoint": "does.not:Matter",
+                "data": {"units": {"from": "index.csv", "key": "patient_id"}},
+            }
+        )
+    )
+    validate_config(cfg, validate_collector)
+    validate_message = next(
+        f.message
+        for f in validate_collector.findings
+        if f.code == "E-TEMPLATE-INSTALLED-UNSUPPORTED"
+    )
+    assert message == validate_message
+
+    # THE CONTROL: a name nothing claims still draws `E-TEMPLATE-UNKNOWN` at
+    # this surface too — the refusal above is about the installed claim, not
+    # about every name this call resolves.
+    with pytest.raises(ContractError) as unknown_excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-pilot",
+            template_name="nothing_claims_this",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert unknown_excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+
 def test_generate_experiment_cli_resolves_a_project_local_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
@@ -8879,3 +8952,227 @@ def test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malfor
     out = capsys.readouterr().out
     assert "E-TEMPLATE-LOAD" in out, out
     assert "startup failed after registering a non-dict parameter_spec" in out, out
+
+
+def test_generate_experiment_installs_the_plugin_before_it_scaffolds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The order is the behaviour: `uv add` runs before `resolve_template`,
+    because the template the config names is the one being installed.
+
+    Patched at `publishable.generators.experiment.uv_add` — the full module
+    attribute path, since a same-named helper in `cli` would be a plausible
+    wrong target.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        calls.append((str(repo_root), requirement))
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "generic",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_OK
+    )
+    assert calls == [(str(root), "git+https://github.com/someuser/publishable-llm")]
+    config = yaml.safe_load((root / "configs" / "pilot" / "config.yaml").read_text())
+    assert config["plugin"] == "someuser/publishable-llm"
+
+    # THE CONTROL: no `--plugin`, no install, and the field stays `null`. Without
+    # it, an implementation that always installed would pass the assertion above.
+    calls.clear()
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot2",
+                "--template",
+                "generic",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results2"),
+            ]
+        )
+        == EXIT_OK
+    )
+    assert calls == []
+    plain = yaml.safe_load((root / "configs" / "pilot2" / "config.yaml").read_text())
+    assert plain["plugin"] is None
+
+
+def test_plugin_requirement_carries_a_ref_suffix_into_the_argv_uv_add_receives():
+    """M2 (H7b Part A tasks 16-20 review): brief step 9 asked whether a
+    `--plugin user/repo@ref` value's `@ref` suffix reaches the argv `uv_add`
+    passes to `uv add`, and the report did not answer. It does: `uv_add`'s own
+    body is exercised by no test (both CLI tests replace it wholesale — see the
+    module-level note below), but `plugin_requirement` is the pure function
+    that builds the string `uv_add` is handed, and it is directly testable."""
+    from publishable.generators.experiment import plugin_requirement
+
+    assert (
+        plugin_requirement("someuser/publishable-llm@v1.2.0")
+        == "git+https://github.com/someuser/publishable-llm@v1.2.0"
+    )
+
+
+# M2's residual, stated on the record rather than left for the next reader to
+# rediscover (H7b Part A tasks 16-20 review): no test in this suite executes
+# `uv_add`'s body — the argv `["uv", "add", requirement]`, `cwd=repo_root`, or
+# the `returncode != 0` -> `E-UV-ADD` branch — because both CLI tests below
+# replace `publishable.generators.experiment.uv_add` wholesale, and
+# `test_uv_add_really_installs` is an unconditional `pytest.skip` (no
+# offline-installable `git+https://` dependency exists to install against).
+# Closed by probe rather than by test: `uv add` demonstrably runs, in the
+# project directory, with the constructed requirement, and fails clean
+# (`E-UV-ADD`, empty `src/`/`configs/`) against a nonexistent repository.
+
+
+_PLUGIN_PROVIDED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("plugin_provided")
+class PluginProvided(BaseTemplate):
+    parameter_spec = {}
+"""
+
+
+def test_the_install_runs_before_the_template_name_is_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """I2 (H7b Part A tasks 16-20 review): the ordering guarantee named by the
+    code comment in `generate_experiment` ("resolving first would refuse a name
+    the install is about to provide") and by
+    `test_generate_experiment_installs_the_plugin_before_it_scaffolds`'s own
+    docstring is pinned by neither existing test — both use `--template
+    generic`, a name core already registers, so resolving before or after the
+    install makes no difference to either.
+
+    Here `--template` names something only the (faked) install provides: the
+    fake `uv_add` writes `templates/plugin_provided.py` as its side effect,
+    the same way a real install would leave an importable package behind.
+    Resolving the name before installing would refuse it with
+    `E-TEMPLATE-UNKNOWN`; resolving after succeeds. This is the test the brief's
+    mutation (a) — moving the `if plugin:` block below where `_claims`/
+    `resolve_template` reads the name — must fail.
+    """
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        templates = repo_root / "templates"
+        templates.mkdir(exist_ok=True)
+        (templates / "plugin_provided.py").write_text(_PLUGIN_PROVIDED_TEMPLATE)
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "plugin_provided",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_OK
+    )
+    config = yaml.safe_load((root / "configs" / "pilot" / "config.yaml").read_text())
+    assert config["experiment_type"] == "plugin_provided"
+
+
+def test_a_failed_plugin_install_scaffolds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """A retry after a failed install must find a clean tree — `generate
+    experiment` refuses an existing `src/<pkg>/`, so a half-scaffolded package
+    would make the failure permanent."""
+
+    def fake_uv_add(repo_root: Path, requirement: str) -> None:
+        raise ContractError("uv add failed: no such repository", code="E-UV-ADD")
+
+    monkeypatch.setattr("publishable.generators.experiment.uv_add", fake_uv_add)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "pilot",
+                "--template",
+                "generic",
+                "--plugin",
+                "someuser/publishable-llm",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_WRONG
+    )
+    assert "E-UV-ADD" in capsys.readouterr().err
+    assert not (root / "src" / "pilot").exists()
+    assert not (root / "configs" / "pilot").exists()
+
+
+@pytest.mark.skip(
+    reason="no git+https dependency this project already carries to install offline; "
+    "would need real network access to a real repository"
+)
+def test_uv_add_really_installs(tmp_path: Path):
+    """The patched tests above prove the wiring; this would prove the command
+    line, if it could run anywhere.
+
+    Decorated rather than skipping in its own body: a `slow`-marked test whose
+    body is an unconditional `pytest.skip` never runs under any invocation,
+    `-m slow` included, so it is a test that does not exist wearing a marker —
+    worse than the truth, which is that this project depends on no
+    `git+https://...` requirement it could reuse offline, and inventing a
+    throwaway repository to install from would need network access this suite
+    does not assume. A decorator-level skip reports `skipped` for a stated
+    reason instead, and does not pretend an opt-in flag would ever run it.
+    """

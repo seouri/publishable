@@ -4285,9 +4285,10 @@ def test_an_unknown_input_manifest_policy_is_reported(write_config):
 
 def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
     """`generic` has no cross-field rule of its own, so `E-TEMPLATE-RULE` is exercised
-    through a stub template swapped in for the registry lookup `validate_config` makes."""
+    through a stub template swapped in for the merge `validate_config` reads."""
     import publishable.validate as validate_mod
     from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.templates.registry import Claim
 
     class RuleBreaker(GenericTemplate):
         def validate(self, config):
@@ -4295,8 +4296,10 @@ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
 
     monkeypatch.setattr(
         validate_mod,
-        "resolve_template",
-        lambda name, repo_root=None: (RuleBreaker(), ["generic"]),
+        "_claims",
+        lambda repo_root=None: {
+            "generic": Claim(provenance="core", provider="stub", cls=RuleBreaker)
+        },
     )
     assert "E-TEMPLATE-RULE" in codes(write_config())
 
@@ -12807,3 +12810,245 @@ def test_ablate_remove_resolves_a_value_with_no_key_and_requires_nothing(
     found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
     assert len(found) == 1, [f.message for f in found]
     assert "OPENAI_TEST_KEY" in found[0].message  # the baseline's, and only it
+
+
+def test_two_installed_distributions_claiming_one_resolver_name_are_reported(
+    installed, write_config
+):
+    """`E-PLUGIN-COLLISION` over a non-template group, reported rather than
+    raised, and reported for a repo whose config names no resolver at all — a
+    registry core cannot make sense of is refused however it is asked.
+
+    Asserted ALONGSIDE nothing: this config declares a table source, so
+    `E-DATA-RESOLVER-UNSUPPORTED` is not in play. The resolver-adjacent
+    companion is the second half of this test.
+    """
+    installed("dist-two", "2.0", {"publishable.resolvers": {"plate_wells": "no_two:r"}})
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:r"}})
+
+    found = messages_by_code(write_config())
+    message = found["E-PLUGIN-COLLISION"]
+    assert "publishable.resolvers" in message
+    assert "plate_wells" in message
+    assert "dist-one 1.0" in message
+    assert "dist-two 2.0" in message
+
+    # Alongside, never instead of: a config that DOES name a resolver still
+    # carries the wholesale refusal. Part B deletes this one line.
+    both = codes(write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}}))
+    assert "E-PLUGIN-COLLISION" in both
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in both
+
+
+def test_one_distribution_per_plugin_name_reports_nothing(installed, write_config):
+    """THE CONTROL. A check that reported unconditionally would pass the test
+    above; this is what makes that one about a collision."""
+    installed(
+        "dist-one",
+        "1.0",
+        {
+            "publishable.resolvers": {"plate_wells": "no_one:r"},
+            "publishable.probes": {"assay_instrument": "no_one:p"},
+        },
+    )
+    assert "E-PLUGIN-COLLISION" not in codes(write_config())
+
+
+def test_a_template_collision_reports_only_once_not_also_as_plugin_collision(
+    installed, write_config
+):
+    """`_check_plugin_collisions` loops over all five entry-point groups,
+    including `publishable.templates`, and its own docstring argues that group
+    never needs a skip there: `validate_config` already returned from the
+    `_claims`/`E-TEMPLATE-COLLISION` merge before this function ever runs, so
+    the loop's own `publishable.templates` pass never fires live.
+
+    Nothing in the suite pinned that argument before this test (whole-branch
+    review finding M5) — every other `_check_plugin_collisions` test uses
+    `publishable.resolvers`. If the early return in `validate_config` ever
+    moved below this call, the same fault would report under both codes and
+    this is the test that would catch it: two installed distributions
+    claiming one template name must report `E-TEMPLATE-COLLISION` alone.
+    """
+    installed("dist-two", "2.0", {"publishable.templates": {"my_assay": "no_two:T"}})
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    found = codes(write_config({"experiment_type": "my_assay"}))
+    assert "E-TEMPLATE-COLLISION" in found
+    assert "E-PLUGIN-COLLISION" not in found
+
+
+def test_an_installed_only_template_name_is_known_and_refused(installed, write_config):
+    """Known, and not resolved: core answers the name from metadata and does not
+    import the distribution to get a class. So the finding is neither
+    `E-TEMPLATE-UNKNOWN` — which would be false — nor silence.
+    """
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
+    assert "E-TEMPLATE-UNKNOWN" not in found
+    message = found["E-TEMPLATE-INSTALLED-UNSUPPORTED"]
+    assert "vendor_assay" in message
+    assert "dist-one 1.0" in message
+
+    # THE CONTROL: a name nothing claims is still `E-TEMPLATE-UNKNOWN`, so the
+    # refusal above is about the installed claim rather than about any
+    # unresolved name.
+    assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "nothing_claims_this"}))
+
+
+def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write_config):
+    """Row 211. The hint is the config's own `plugin` field, which is a readable
+    note beside `uv.lock` rather than an install instruction — so the message
+    says where the template was expected to come from and does not offer to
+    fetch it.
+    """
+    found = messages_by_code(
+        write_config({"experiment_type": "llm_diagnostic", "plugin": "someuser/publishable-llm"})
+    )
+    message = found["E-TEMPLATE-UNKNOWN"]
+    assert "llm_diagnostic" in message
+    assert "someuser/publishable-llm" in message
+    assert "generic" in message  # the known list is still printed
+
+    # THE CONTROL: with no `plugin` declared the message must not invent one, and
+    # must not carry the hint's connective either — a fragment that appeared
+    # under both declarations would pin nothing.
+    plain = messages_by_code(write_config({"experiment_type": "llm_diagnostic"}))[
+        "E-TEMPLATE-UNKNOWN"
+    ]
+    assert "someuser/publishable-llm" not in plain
+    assert "`plugin` says" not in plain
+
+
+_PROBING_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("probing")
+class Probing(BaseTemplate):
+    apparatus_probe = "assay_instrument"
+    parameter_spec = {}
+"""
+
+
+def test_a_declared_probe_no_distribution_registers_is_reported(git_repo, write_config):
+    """The first reader `BaseTemplate.apparatus_probe` has ever had.
+
+    Answered from metadata, so an absent name costs no import — which is also why
+    this reports rather than raising: nothing was loaded to fail.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
+
+    found = messages_by_code(write_config({"experiment_type": "probing", "parameters": {}}))
+    message = found["E-PROBE-UNKNOWN"]
+    assert "assay_instrument" in message
+    assert "publishable.probes" in message
+
+
+def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_draws_nothing(
+    installed, git_repo, write_config
+):
+    """THE HONOURING, and the control in one test.
+
+    Without the first half, a `_check_probe` that reported unconditionally passes
+    the refusal test above. Without the second, one that reported for every
+    template — including `generic`, which declares no probe — would too.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
+    installed("dist-one", "1.0", {"publishable.probes": {"assay_instrument": "no_one:probe"}})
+
+    assert "E-PROBE-UNKNOWN" not in codes(
+        write_config({"experiment_type": "probing", "parameters": {}})
+    )
+    assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none
+
+
+def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
+    """Two answers to one declaration: `validate` reads it as a resolver
+    (`_check_unimplemented` tests `resolver in source`) and `resolve_units` would
+    read it as a glob (it tests `glob` first). Unreachable while the wholesale
+    refusal stands and reachable the moment dispatch lands, so the refusal is
+    minted in the slice that closes the envelope.
+
+    Asserted ALONGSIDE the wholesale refusal, never instead of it, and never on
+    the whole code set — Part B deletes one line here.
+    """
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": {
+                    "from": {"glob": "*.csv", "resolver": "plate_wells"},
+                    "key": "patient_id",
+                }
+            }
+        )
+    )
+    message = found["E-UNITS-SOURCE-AMBIGUOUS"]
+    assert "glob" in message
+    assert "resolver" in message
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
+
+    # THE CONTROLS, both produced by the code under test: either key alone is not
+    # ambiguous. Without these, a check that fired for any mapping would pass.
+    assert "E-UNITS-SOURCE-AMBIGUOUS" not in codes(
+        write_config({"data.units": {"from": {"glob": "*.csv"}, "key": "patient_id"}})
+    )
+    resolver_only = codes(
+        write_config({"data.units": {"from": {"resolver": "plate_wells"}, "key": "patient_id"}})
+    )
+    assert "E-UNITS-SOURCE-AMBIGUOUS" not in resolver_only
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in resolver_only
+
+
+# Decision 3's own test was written and then deleted: a `Shadower` template
+# colliding with core's `generic`, declaring `required_env = ["SHADOW_KEY"]`,
+# with `SHADOW_KEY` set in the environment to a sentinel value, checked with
+# `publishable.diagnostics.redact` patched to a no-op first — and the sentinel
+# never appeared in the unredacted `E-TEMPLATE-COLLISION` message. The message
+# names providers (a path::ClassName, a dotted module path), never a
+# declaration, so nothing there is ever a candidate for `credential_values` to
+# match against — see docs/superpowers/spec-defects.md's entry on the residual.
+
+_SHADOWS_GENERIC_WITH_CREDENTIAL = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("generic")
+class Shadower(BaseTemplate):
+    required_env = ["SHADOW_KEY"]
+    parameter_spec = {}
+"""
+
+
+def test_a_local_claimants_credentials_reach_the_collector_despite_the_collision(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The *local* half of the residual, pinned rather than left to a mutation's
+    silence: `_claims` raises `PartialLoadError` on the shadow of `generic`, but
+    still carries `Shadower` on `exc.partial_templates`, so `validate_config`
+    can read its `required_env` even though the collision refuses the name.
+
+    Review C2 (H7b Part A tasks 16-20): emptying `partial_templates` in
+    `registry._claims` left the whole suite green, because nothing asserted on
+    `partial_templates`' contents or on `c.credentials` — the public,
+    inspectable chain that carries a declared credential's value. This is that
+    assertion. It does not reach the *installed*-claim half of the residual
+    (`## OPEN` in spec-defects.md): an installed claim's `cls` is `None`
+    structurally, so it can never appear here regardless of this test.
+    """
+    monkeypatch.setenv("SHADOW_KEY", "sk-c2-sentinel-9911")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(_SHADOWS_GENERIC_WITH_CREDENTIAL)
+
+    path = write_config({"experiment_type": "generic", "parameters": {}})
+    c = Collector()
+    validate_config(path, c)
+
+    assert "E-TEMPLATE-COLLISION" in {f.code for f in c.findings}
+    assert c.credentials.get("SHADOW_KEY") == "sk-c2-sentinel-9911"

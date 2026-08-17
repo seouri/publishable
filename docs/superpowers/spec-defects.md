@@ -3713,6 +3713,13 @@ distribution is precisely what core still has no way to check. Two load-time ref
 surface (`E-TEMPLATE-LOAD`, `E-TEMPLATE-COLLISION`), reported under the code the raise carries;
 neither bears on this row. **Owner stays H7 — specifically H7b**, which owns entry-point resolution.
 
+**STRUCK 2026-08-16 (H7b Part A task 11).** `unknown_template_message` takes the config's `plugin`
+field and renders it, so `validate`'s finding names where the template was expected to come from.
+The row's stated precondition — that an unresolvable `experiment_type` can name a template some
+uninstalled distribution registers — is satisfied by task 7's metadata scan and task 8's merge.
+`generate experiment` passes `None` and shows no hint, deliberately: it is writing the file that
+would hold the field.
+
 ### Row 212 "Template version moved", first half — **Owner: H7 Plugins and the apparatus**
 
 `_check_versions` compares the declared `template_version` against the module constant
@@ -3738,6 +3745,20 @@ untouched: `_check_versions` still compares against the module constant `materia
 rather than an installed template's own reported version, and still becomes observable only when a
 plugin ships a template carrying one. **Owner stays H7 — specifically H7b.** Unlike its sibling, this
 row was *not* renamed: it is still "Template version moved".
+
+**AMENDED 2026-08-16 (H7b Part A task 10): the comparison is fixed; the reachability is not.**
+`BaseTemplate.version` now exists, `GenericTemplate` reports it, `_check_versions` compares a
+config's `template_version` against `type(template).version`, and `materialize` writes what the
+template reports. The false guarantee this row named — a warning saying "the installed template
+reports" while comparing against core's own module constant — is gone.
+
+What remains, and it is why this row is amended rather than struck: **no installed template's class
+is ever held in this build**, so the comparison still only ever runs against core's own template and
+a project-local one is still skipped. `Claim.cls` is `None` for an installed claim by decision 3 of
+`2026-08-16-plugin-registries-design.md`. This row's own words — "It becomes observable when a
+plugin ships a template with a version of its own" — are still the condition, and it is now filed
+separately as `## OPEN — an installed template's name resolves but its class is never loaded`,
+**owner unassigned**. Strike this row when that one is closed, not before.
 
 ### Row 284 "Correction can be applied" — **Owner: H4 Statistics**
 
@@ -5818,6 +5839,11 @@ either give it a reader or state in `reference.md` that it is declarative only.
 config field references it — but it is a second shipped-and-unread surface alongside the ones this
 repo has already tracked.
 
+**Amended 2026-08-17 — H7b Part A task 13:** `apparatus_probe` gained a reader. `validate` now
+checks it against the installed `publishable.probes` distributions (`E-PROBE-UNKNOWN`), so the
+family this entry's `field_convention` belongs to is now `field_convention` and `apparatus_facts`
+only.
+
 ## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
 
 `docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
@@ -5974,3 +6000,149 @@ positionally; should name the table by its heading instead.
 **Found by:** H7c, Task 14 (surfaced while sweeping `reference.md`, not itself part of the
 credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
 makes is still true, only the cross-reference is positional.
+
+## `publishable.readers` had no entry-point group, so a third-party writer had no reader — CLOSED by H7b Part A task 15
+
+**Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
+inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
+two module dicts, `io.write` dispatches through `_suffix_for`, which iterates `WRITERS` alone, and
+`StepIO._read` indexes `READERS` — so a suffix registered as a writer and not as a reader gives
+`io.read_upstream` a bare `KeyError` rather than a coded `ArtifactError`. Proved by mutation
+(`H7b-SCOPING-2.md` § 5a): adding one key to `WRITERS` alone reproduced it, and deleting the key
+restored the read. Filed here for the first time — `H7c` task 14 filed four entries in this family
+and none of them was this one.
+
+**Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
+decorator `register_reader`, ~~with `register_writer` refusing a suffix that has no reader. The
+code is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not
+before.~~
+
+**CORRECTED 2026-08-17 (H7b Part A task 15 merge-gate review):** the struck clause named the wrong
+mechanism. **Closed in code by task 15**: `StepIO._read` now raises `ArtifactError` ·
+`E-ARTIFACT-UNREADABLE` for a suffix `WRITERS` holds and `READERS` does not, rather than the bare
+`KeyError`. The refusal fires at the read, not at registration — `register_writer` does not refuse
+a suffix with no reader, since a plugin may register the reader later in the same module; task 14's
+registration-time refusal is the unrelated core-suffix-shadow check, under the same code for a
+different reason.
+
+## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
+
+H7b Part A task 8 makes an installed distribution's `publishable.templates` entry point a claim in
+the merge, so its name is known, collisions against it are decided, and `template_names` lists it.
+Task 9 refuses a config naming one, as `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the `-UNSUPPORTED` build
+family, no § Errors row. Closed at both emit sites that can name a template: `validate_config`'s
+finding and `generate_experiment`'s raise (the task 8-11 review's C1, closed the same review cycle —
+the second site had been left reporting the false `E-TEMPLATE-UNKNOWN` instead).
+
+The refusal exists because decision 3 of `2026-08-16-plugin-registries-design.md` states the
+entry-point invariant of **resolution** and not merely of the negative answer: "`validate` resolves a
+name *without importing a line*". Loading the one entry point a config names would answer a narrower
+reading of the same sentence and is the natural next step, but it is a decision, not an oversight,
+and it is not H7b Part B's — Part B is the resolver half and its nine tasks do not touch template
+loading.
+
+**What retiring it needs:** `Claim.cls` populated for an installed claim; `is_local_template`'s two
+class-taking callers (`validate._check_versions`, `materialize.materialize_config`) reading
+`Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
+`provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**
+
+## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
+
+H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
+`RESOLVERS["<name>"] = fn` is set by `register_resolver`'s decorator (task 12) and
+`PROBES["<name>"] = fn` by `register_probe`'s (task 13); `grep -rn "RESOLVERS\|PROBES" src/`
+shows each written at exactly one site and read at none. This is a different fact from what
+`validate._check_probe` does: that check reads `BaseTemplate.apparatus_probe` against
+`plugins.names("publishable.probes")`, the entry-point **metadata** scan — a reader for the
+declared *name*, not for the `PROBES` **registry** the decorator populates. The registry itself
+stays unread by either check.
+
+**Why this is a filing rather than a fix.** A reader for `PROBES` means *executing* a probe —
+`Apparatus`, per-condition facts, the ledger, and the change gate — all H7d and explicitly out of
+scope for H7b (`docs/superpowers/specs/2026-08-16-plugin-registries-design.md` § Out of scope).
+Shipping any part of that to give `PROBES` a reader here would be worse than recording the gap. A
+reader for `RESOLVERS` is `data.units.from.resolver`'s dispatch — the resolver-half of `data.units`
+that H7b Part B builds, not this task.
+
+This makes the shipped-and-unread family **larger** than the amendment task 13 wrote in the entry
+above (`BaseTemplate.field_convention` is declarable and read by nothing): that amendment correctly
+narrows the *`BaseTemplate` attribute* family to `field_convention` and `apparatus_facts`, but
+`PROBES` and `RESOLVERS` are a different shape — module-level registries, not class attributes —
+and join the wider shipped-but-unread family in the same four commits.
+
+**AMENDED 2026-08-17 (whole-branch review, finding I4): the filing under-counted by four.** Four
+more surfaces this branch added have no production caller either — `grep -rn` for each across `src/`
+returns only its own definition or its own module's docstring:
+
+| Surface | Added by |
+|---|---|
+| `plugins.load_entry_point` | task 17 |
+| `plugins.check_registration` | task 16 |
+| `plugins.declared_names` | task 16 |
+| `registry.template_provenance` | task 9 |
+
+`load_entry_point`, `check_registration` and `declared_names` are group-generic — the same three
+calls serve templates, resolvers, probes, writers and readers alike — so their first production
+caller is whichever slice first dispatches *any* group, which by construction is **H7b Part B**: its
+nine tasks build the resolver half's dispatch, the first slice scheduled to call `load_entry_point`
+at all. `template_provenance` is template-specific and belongs with the *installed template's class
+is never loaded* gap below rather than with this one; that entry's owner is unassigned, and
+`template_provenance` shares it.
+
+**Owner:** `PROBES` → **H7d** (probe execution: `Apparatus`, facts, ledger, change gate).
+`RESOLVERS`, `load_entry_point`, `check_registration`, `declared_names` → **H7b Part B**, the
+resolver-dispatch task. `template_provenance` → unassigned, with
+`## OPEN — an installed template's name resolves but its class is never loaded`.
+
+**Found by:** H7b Part A tasks 12-15 review; extended by the H7b whole-branch review (finding I4).
+**Severity:** Minor. All six surfaces are populated or computed correctly and read by nothing yet —
+inert rather than misleading, since no config field depends on any of them being read today.
+
+## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
+
+H7c's `PartialLoadError` carries the classes a discovery pass constructed, so a credential a refused
+`templates/*.py` declared is redacted out of the refusal's own message. H7b Part A task 8 adds
+installed distributions as a third claim source to that merge, and an installed claim carries **no
+class**: the scan is metadata-only by decision 3 of
+`2026-08-16-plugin-registries-design.md`, so nothing was imported and there is no `required_env` or
+`parameter_spec` to read.
+
+**Filed as accepted rather than as work.** The repair is to call `EntryPoint.load()`, which destroys
+the invariant the entry-point mechanism exists for — that `validate` resolves a name without
+importing a line — and § Creating a plugin justifies the whole design by that promise. A named
+residual beats a silently weaker guarantee. Recorded here so the next reader meets the argument
+rather than the temptation, which will arrive dressed as "we need the class to redact its
+credentials."
+
+**Bound on the exposure.** A collision message names providers — a distribution and a version, a
+path and a class name — and interpolates no declaration, so the text at risk is an exception's
+rather than a credential's by construction. What is unmatched is a credential value appearing in a
+message core built from an installed claimant's own data, and no such message exists today.
+
+**Struck when** an installed template's class is held at the merge, which is
+`## OPEN — an installed template's name resolves but its class is never loaded`, owner unassigned.
+The two close together or not at all.
+
+## OPEN — a core-suffix claim's `E-PLUGIN-COLLISION` becomes `E-PLUGIN-LOAD` once loading is wired — **Owner: H7b Part B**
+
+A writer or reader claiming an extension core itself writes or reads is refused at decoration time
+as `ContractError` · `E-PLUGIN-COLLISION` — `register_writer`/`register_reader` raise it directly,
+with no plugin loaded yet. `docs/reference.md` § Errors core raises promises `E-PLUGIN-COLLISION` its
+own code for that arm, distinct from the code a plugin's top-level import failure carries
+(`E-PLUGIN-LOAD`).
+
+That promise holds only because nothing loads a plugin today. The moment `load_entry_point` gets a
+production caller — Part B's, by construction, per the amendment above — the same raise is reached
+*inside* the module import it decorates, where `load_entry_point`'s broad `except Exception` catches
+it and re-reports it as `E-PLUGIN-LOAD` instead. That is the identical substitution
+§ Errors already documents and accepts for `E-TEMPLATE-LOAD` swallowing a coded error from a local
+template's top level — the precedent exists — but `E-PLUGIN-COLLISION`'s own row does not yet say
+its code can be re-coded this way for the writer/reader groups.
+
+**Filed as a hazard for Part B to resolve when it wires loading, not fixed here**: there is no
+production caller yet, so the substitution cannot happen today and there is nothing to reproduce.
+Part B's task that gives `load_entry_point` its first caller should either let the `E-PLUGIN-LOAD`
+re-code stand and add one sentence to `E-PLUGIN-COLLISION`'s row noting the precedent, or catch
+`ContractError` before the broad `except` so the writer/reader arm keeps its own code through a load.
+
+**Found by:** H7b whole-branch review, finding M4.

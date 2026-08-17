@@ -199,3 +199,29 @@ def test_each_holdout_child_is_typed(
     findings = check_envelope({"data": {"units": {"holdout": block}}})
     typed = [f for f in findings if f[0] == "E-CONFIG-TYPE" and f[1] == path]
     assert bool(typed) is expect_type_error, findings
+
+
+def test_a_misspelled_from_key_is_reported_rather_than_ignored():
+    """The closure's whole purpose. `envelope.py`'s own module docstring claimed
+    this key was "reported by no check in this build", which was false even
+    before the closure — `resolve_units` reported it as a missing source — and is
+    now false twice over, with a `difflib` hint naming the key meant."""
+    findings = check_envelope({"data": {"units": {"from": {"resolverr": "x"}}}})
+    codes = {code for code, _, _ in findings}
+    assert "E-CONFIG-KEY-UNKNOWN" in codes
+    message = next(m for code, _, m in findings if code == "E-CONFIG-KEY-UNKNOWN")
+    assert "did you mean `resolver`?" in message
+
+    # THE CONTROL: both spelled keys, and the string form, report nothing here —
+    # so the check above is about an unknown key rather than about descending
+    # into `from` at all.
+    assert check_envelope({"data": {"units": {"from": {"resolver": "x"}}}}) == []
+    assert check_envelope({"data": {"units": {"from": {"glob": "*.dcm"}}}}) == []
+    assert check_envelope({"data": {"units": {"from": "index.csv"}}}) == []
+
+
+def test_a_wrongly_typed_from_child_is_a_type_finding():
+    findings = check_envelope({"data": {"units": {"from": {"resolver": 123}}}})
+    assert [(code, path) for code, path, _ in findings] == [
+        ("E-CONFIG-TYPE", "data.units.from.resolver")
+    ]

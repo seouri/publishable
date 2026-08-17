@@ -1,3 +1,4 @@
+import importlib
 import sys
 from pathlib import Path
 
@@ -6,9 +7,10 @@ import pytest
 from publishable import BaseTemplate, Param
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
+from publishable.materialize import TEMPLATE_VERSION
 from publishable.stats import UnitTable
 from publishable.templates.discovery import discover_local, is_local_template
-from publishable.templates.registry import get_template, template_names
+from publishable.templates.registry import get_template, template_names, template_provenance
 from publishable.validate import validate_config
 
 
@@ -1011,3 +1013,201 @@ def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
     assert "E-TEMPLATE-LOAD" in rendered
     assert "E-TEMPLATE-UNKNOWN" not in rendered
     assert str(repo / "templates" / "broken.py") in rendered
+
+
+CLAIMS_MY_ASSAY = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("my_assay")
+class LocalAssay(BaseTemplate):
+    parameter_spec = {}
+"""
+
+
+def test_two_installed_distributions_claiming_one_template_name_are_refused(installed, tmp_path):
+    """Entry-point × entry-point — the arm one distribution cannot produce.
+
+    Both providers are named, as `<distribution> <version>`, which is what a
+    reader uninstalls. Decided from metadata: neither module exists, so a
+    verdict that reached for either class would raise `ModuleNotFoundError`
+    instead of reporting.
+    """
+    installed("dist-two", "2.0", {"publishable.templates": {"my_assay": "no_two:T"}})
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("my_assay", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "my_assay" in message
+    assert "dist-one 1.0" in message
+    assert "dist-two 2.0" in message
+
+
+def test_an_installed_distribution_may_not_shadow_a_core_name(installed, tmp_path):
+    """Entry-point × core. Core's claimant is named as its dotted class path,
+    there being no file to rename."""
+    installed("dist-one", "1.0", {"publishable.templates": {"generic": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("generic", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "dist-one 1.0" in message
+    assert "publishable.templates.builtin.generic.GenericTemplate" in message
+
+
+def test_a_local_template_may_not_shadow_an_installed_one(installed, tmp_path):
+    """Entry-point × local, and the case that needs both a repo and a
+    distribution. Both providers are named in their own spelling — a path and a
+    class for the local one, a distribution and a version for the installed."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("my_assay", tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    local = f"{templates / 'mine.py'}::LocalAssay"
+    assert local in message
+    assert "dist-one 1.0" in message
+    # Provider order inside the message is name order, not insertion order:
+    # the installed claim is appended to `claims[name]` before the local one
+    # (entry points are scanned before `discover_local` runs), so insertion
+    # order would print "dist-one 1.0" first. The local claimant's path
+    # starts with `/`, which sorts before the letter `d`, so provider-name
+    # order prints it first instead — the two orders disagree, and this
+    # asserts the message follows the latter.
+    assert message.index(local) < message.index("dist-one 1.0")
+
+
+def test_the_colliding_template_name_reported_is_the_first_in_name_order(installed, tmp_path):
+    """Three colliding names, installed in an order that is neither sorted nor
+    reverse-sorted, so neither candidate reading of "which one is reported"
+    survives. Two names could not tell them apart.
+
+    A fourth collision is mixed in on `generic` — core's own name, always the
+    *first* key `_claims` ever inserts, from the very first source it reads.
+    Three entry-point-only collisions cannot separate "sorted by name" from
+    "whichever collision the merge inserted first": `scan_group` hands back
+    its own group already sorted by name, so an unsorted walk of an
+    entry-point-only claim set coincides with a sorted one by construction.
+    Only a claim whose *first* insertion comes from a different source —
+    core, inserted before any entry point is scanned at all — can pull the
+    two readings apart, since `generic` sorts after `a_one` but is seen
+    first regardless of sorting.
+    """
+    claims = {"m_two": "no:T", "a_one": "no:T", "z_three": "no:T"}
+    installed("dist-two", "2.0", {"publishable.templates": claims})
+    installed("dist-one", "1.0", {"publishable.templates": claims})
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)  # shadows core: a 4th collision
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("a_one", tmp_path)
+    assert "`a_one`" in str(excinfo.value)
+    assert "m_two" not in str(excinfo.value)
+    assert "z_three" not in str(excinfo.value)
+    assert "`generic`" not in str(excinfo.value)
+
+
+def test_a_clean_installed_claim_is_not_a_collision(installed, tmp_path):
+    """THE HONOURING, and the control that makes every refusal above about a
+    collision rather than about installing anything at all: one distribution
+    claiming a name nothing else claims raises nothing, and the name is known.
+    """
+    installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "no_one:T"}})
+    assert "my_assay" in template_names(tmp_path)
+    assert get_template("my_assay", tmp_path) is None  # known, and not loaded — decision 3
+
+
+def test_get_template_imports_nothing_for_an_installed_claim(installed, tmp_path):
+    """The no-import invariant, pinned at the `_claims`/`get_template` level.
+
+    `test_the_scan_imports_nothing` (task 7) pins this at `scan_group`, one
+    level below where tasks 8-9 put the new callers — every fixture elsewhere
+    in this file that stands in for an installed claim names an unimportable
+    target (`no_one:T`), so the guarantee at *this* level has so far been
+    pinned only by those targets being unable to import, not by an assertion.
+    A target that genuinely can be imported closes the gap: if a later task
+    (13, 15) added a `.load()` inside `_claims` or `get_template`, this would
+    catch it where the unimportable fixtures cannot.
+    """
+    site = installed(
+        "dist-one", "1.0", {"publishable.templates": {"vendor_assay": "loadable_tpl:T"}}
+    )
+    (site / "loadable_tpl.py").write_text(
+        "from publishable import BaseTemplate\n\n\nclass T(BaseTemplate):\n    pass\n"
+    )
+    importlib.invalidate_caches()
+    assert "loadable_tpl" not in sys.modules
+
+    assert "vendor_assay" in template_names(tmp_path)
+    assert "loadable_tpl" not in sys.modules
+
+    assert template_provenance("vendor_assay", tmp_path) == "installed"
+    assert "loadable_tpl" not in sys.modules
+
+    assert get_template("vendor_assay", tmp_path) is None
+    assert "loadable_tpl" not in sys.modules
+
+
+def test_provenance_is_decided_at_the_merge_for_each_of_the_three_sources(installed, tmp_path):
+    """The direct question, asked where all three sources are in hand.
+
+    All three values in one arrangement, because a fixture with two could not
+    tell a three-valued answer from a boolean one renamed.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_MY_ASSAY)
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+
+    assert template_provenance("generic", tmp_path) == "core"
+    assert template_provenance("my_assay", tmp_path) == "local"
+    assert template_provenance("vendor_assay", tmp_path) == "installed"
+    assert template_provenance("nothing_claims_this", tmp_path) is None
+
+
+def test_a_template_reports_its_own_version_and_the_base_declares_none():
+    """`None` and a string are different claims: the first is "this template
+    tracks no version", which is every template that does not set one, and the
+    second is what `template_version` in a config is compared against."""
+    assert BaseTemplate.version is None
+    assert get_template("generic").version == TEMPLATE_VERSION
+
+
+def test_the_version_warning_names_what_the_template_reports_not_a_core_constant():
+    """The false guarantee Row 212 names, closed by comparing against the class.
+
+    A local template declaring a version of its own is still skipped — that is
+    `_check_versions`' first line and § Three hashes' rule — so the observable
+    change is that the comparison reads the class rather than a module constant,
+    and the fixture that shows it is a subclass whose `version` differs from
+    core's.
+    """
+    from publishable.diagnostics import Collector
+    from publishable.validate import _check_versions
+
+    class Versioned(BaseTemplate):
+        version = "9.9.9"
+        parameter_spec = {}
+
+    c = Collector()
+    # Declared as `2.0.0` rather than core's own `TEMPLATE_VERSION` (`1.0.0`):
+    # asserting the constant is absent from the message would be trivially true
+    # if the declared value happened to equal it, so the two must differ.
+    _check_versions({"template_version": "2.0.0"}, Versioned(), c)
+    message = next(f.message for f in c.findings if f.code == "W-TEMPLATE-VERSION")
+    assert "9.9.9" in message
+    assert TEMPLATE_VERSION not in message
+
+    # THE CONTROL, produced by the code under test: a config declaring the
+    # version the template reports draws nothing at all.
+    quiet = Collector()
+    _check_versions({"template_version": "9.9.9"}, Versioned(), quiet)
+    assert [f.code for f in quiet.findings] == []
