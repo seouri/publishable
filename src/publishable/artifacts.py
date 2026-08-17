@@ -861,8 +861,27 @@ class StepIO:
 
     @staticmethod
     def _read(path: Path) -> Any:
-        """Inverts the same table `write` dispatches through — see `WRITERS`/`READERS`."""
+        """Reads back what `write` wrote, through the inverse of the table it
+        dispatched on.
+
+        Two tables and one dispatch: `_suffix_for` decides from `WRITERS`, and
+        the reader is then looked up in `READERS`. That is an inversion only
+        while the two hold the same keys, which core's own five do and a plugin's
+        pair need not — so the gap is a coded refusal rather than the bare
+        `KeyError` it was, and § Steps and artifacts' promise that what a writer
+        takes is what its reader gives back is stated where it can be enforced.
+        A suffix *neither* table knows is not a fault at all: it is the raw-bytes
+        case `write` already accepts.
+        """
         suffix = _suffix_for(path.name)
-        if suffix is not None:
-            return READERS[suffix](path.read_bytes())
-        return path.read_bytes()
+        if suffix is None:
+            return path.read_bytes()
+        reader = READERS.get(suffix)
+        if reader is None:
+            raise ArtifactError(
+                f"`{path.name}` claims the suffix `{suffix}`, which has a registered "
+                "writer and no reader — a writer and its reader are registered as a "
+                "pair, and core cannot invert one it was never given",
+                code="E-ARTIFACT-UNREADABLE",
+            )
+        return reader(path.read_bytes())

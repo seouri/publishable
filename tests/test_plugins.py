@@ -222,3 +222,36 @@ def test_a_suffix_core_does_not_write_is_accepted(registries):
         return b""
 
     assert artifacts.WRITERS[".fastq"] is write_fastq_again
+
+
+def test_register_reader_completes_the_pair_io_read_upstream_needs(registries, tmp_path):
+    """Registering both halves is what a plugin does, and the pair is what makes
+    the round trip real — asserted as a round trip rather than as two dict
+    entries, since two entries is what the broken state also looks like."""
+    from publishable import artifacts
+    from publishable.plugins import register_reader, register_writer
+
+    @register_writer(".fastq")
+    def write_fastq(rows):
+        return "|".join(rows).encode()
+
+    @register_reader(".fastq")
+    def read_fastq(data):
+        return data.decode().split("|")
+
+    target = tmp_path / "a.fastq"
+    target.write_bytes(artifacts.WRITERS[".fastq"](["a", "b"]))
+    assert artifacts.StepIO._read(target) == ["a", "b"]
+
+
+def test_a_reader_may_not_claim_a_suffix_core_reads(registries):
+    from publishable.errors import ContractError
+    from publishable.plugins import register_reader
+
+    with pytest.raises(ContractError) as excinfo:
+
+        @register_reader(".csv")
+        def read_csv(data):
+            return []
+
+    assert excinfo.value.code == "E-PLUGIN-COLLISION"

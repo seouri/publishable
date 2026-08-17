@@ -26,7 +26,7 @@ from collections.abc import Callable
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any, TypeVar
 
-from publishable.artifacts import CORE_SUFFIXES, WRITERS
+from publishable.artifacts import CORE_SUFFIXES, READERS, WRITERS
 from publishable.errors import ContractError
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -142,6 +142,28 @@ def register_writer(suffix: str) -> Callable[[F], F]:
                 code="E-PLUGIN-COLLISION",
             )
         WRITERS[suffix] = fn
+        return fn
+
+    return decorator
+
+
+def register_reader(suffix: str) -> Callable[[F], F]:
+    """Record a reader for `suffix`, the inverse `io.read_upstream` dispatches to.
+
+    Refuses a core suffix for the reason `register_writer` does, and under the
+    same code: the pair is one claim on one extension, so redefining half of it
+    is redefining it.
+    """
+
+    def decorator(fn: F) -> F:
+        if suffix in CORE_SUFFIXES:
+            raise ContractError(
+                f"a reader claims `{suffix}`, which core itself reads — a plugin that "
+                "could redefine a core suffix could change what an artifact means "
+                "without changing the step that wrote it. Claim a suffix of your own",
+                code="E-PLUGIN-COLLISION",
+            )
+        READERS[suffix] = fn
         return fn
 
     return decorator

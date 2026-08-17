@@ -1508,3 +1508,39 @@ def test_the_allocation_hash_covers_the_holdout_block():
     assert allocation_hash(a) == allocation_hash(
         build_allocation_document({}, HoldoutPlan(("P1",), ("P2",), 7, ()))
     )
+
+
+def test_a_suffix_with_a_writer_and_no_reader_is_a_coded_refusal(registries, tmp_path):
+    """The bare `KeyError` § Steps and artifacts' promise breaks on.
+
+    The mutation that can fail is adding a key to ONE dict — swapping a value
+    between them cannot, since both hold the same keys.
+    """
+    from publishable import artifacts
+    from publishable.errors import ArtifactError
+
+    artifacts.WRITERS[".fastq"] = lambda rows: b"x"
+    target = tmp_path / "a.fastq"
+    target.write_bytes(b"x")
+
+    with pytest.raises(ArtifactError) as excinfo:
+        artifacts.StepIO._read(target)
+    assert excinfo.value.code == "E-ARTIFACT-UNREADABLE"
+    assert ".fastq" in str(excinfo.value)
+
+    # THE CONTROL, produced by the code under test: with the reader supplied,
+    # the same path reads. Without this the assertion above would pass for a
+    # `_read` that refused every unknown suffix, including the ones it is
+    # supposed to hand back as raw bytes.
+    artifacts.READERS[".fastq"] = lambda data: {"read": data.decode()}
+    assert artifacts.StepIO._read(target) == {"read": "x"}
+
+
+def test_a_suffix_neither_table_knows_is_still_raw_bytes(tmp_path):
+    """The behaviour that must survive the refusal above: an unregistered suffix
+    is bytes, and always was."""
+    from publishable import artifacts
+
+    target = tmp_path / "a.bin"
+    target.write_bytes(b"\x00\x01")
+    assert artifacts.StepIO._read(target) == b"\x00\x01"

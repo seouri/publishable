@@ -942,7 +942,7 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `register_resolver` | decorator | built | The registry a [`data.units.from.resolver`](#where-units-come-from) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_probe` | decorator | not yet built | The registry an [`apparatus_probe`](#the-apparatus-core-can-only-observe) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_writer` | decorator | built | The registry an artifact suffix's writer is claimed through — see [Steps and artifacts](#steps-and-artifacts) |
-| `register_reader` | decorator | not yet built | Its inverse, which `io.read_upstream` dispatches through — see [Steps and artifacts](#steps-and-artifacts) |
+| `register_reader` | decorator | built | Its inverse, which `io.read_upstream` dispatches through — see [Steps and artifacts](#steps-and-artifacts) |
 | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
 
 **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
@@ -999,6 +999,7 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
 |---|---|
 | [`io.write`](#steps-and-artifacts) or `io.path` onto a target that exists | `ArtifactExistsError` · `E-ARTIFACT-EXISTS` |
 | A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
+| [Reading](#steps-and-artifacts) a name whose suffix has a registered writer and no reader. A writer and its reader are [registered as a pair](#creating-a-plugin-publishable-plugin-new), through two entry-point groups, because `io.write` dispatches on the writer table and `io.read_upstream` looks up the reader table — an inversion only while the two hold the same keys. A suffix *neither* table knows is not this fault: that is the raw-bytes case `io.write` already accepts, and it reads back as bytes | `ArtifactError` · `E-ARTIFACT-UNREADABLE` |
 | [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
 | [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions, or naming a repeat-scoped step once the run resolves more than one repeat](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
 | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |

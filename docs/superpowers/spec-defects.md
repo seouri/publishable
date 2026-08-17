@@ -6001,7 +6001,7 @@ positionally; should name the table by its heading instead.
 credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
 makes is still true, only the cross-reference is positional.
 
-## OPEN — `publishable.readers` had no entry-point group, so a third-party writer had no reader
+## CLOSED 2026-08-17 — `publishable.readers` had no entry-point group, so a third-party writer had no reader
 
 **Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
 inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
@@ -6013,8 +6013,12 @@ restored the read. Filed here for the first time — `H7c` task 14 filed four en
 and none of them was this one.
 
 **Closed by specification** in H7b Part A task 3: a fifth group `publishable.readers` and a fifth
-decorator `register_reader`, with `register_writer` refusing a suffix that has no reader. The code
-is owed by tasks 14 and 15 of the same slice; this entry is struck when task 15 lands, not before.
+decorator `register_reader`. **Closed in code by task 15**: `StepIO._read` now raises
+`ArtifactError` · `E-ARTIFACT-UNREADABLE` for a suffix `WRITERS` holds and `READERS` does not, rather
+than the bare `KeyError`. The refusal fires at the read, not at registration — `register_writer`
+does not refuse a suffix with no reader, since a plugin may register the reader later in the same
+module; task 14's registration-time refusal is the unrelated core-suffix-shadow check, under the
+same code for a different reason.
 
 ## OPEN — an installed template's name resolves but its class is never loaded — **Owner: unassigned**
 
