@@ -3883,3 +3883,111 @@ def test_a_table_source_still_resolves_with_no_cfg(tmp_path):
     )
     assert [u.key for u in roster] == ["p1", "p2"]
     assert columns == frozenset({"patient_id"})
+
+
+_YIELDS_PARTIAL = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="a1", attributes={"operator": "kj", "plate": "P1", "scratch": "x"})
+    yield Unit(key="b9", attributes={"operator": "mo", "plate": "P1"})
+"""
+
+
+def test_a_resolver_roster_is_projected_onto_the_declared_attributes(
+    installed, registries, tmp_path
+):
+    """Everything downstream is indifferent to which form `from` took, and this is
+    what makes it so: an undeclared attribute is dropped exactly as an undeclared
+    CSV column is. `scratch` is yielded and not declared; asserting only that
+    `operator` survives would pass on a pass-through implementation."""
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "project_r27", _YIELDS_PARTIAL)
+    try:
+        roster, _n, columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["operator"]},
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("project_r27", None)
+
+    assert [dict(u.attributes) for u in roster] == [{"operator": "kj"}, {"operator": "mo"}]
+    assert columns == frozenset({"operator", "plate", "scratch"})  # pre-projection, for task 28
+
+
+def test_a_declared_attribute_no_unit_yields_is_refused_naming_the_resolver(
+    installed, registries, tmp_path
+):
+    """`E-UNITS-ATTR-MISSING`, generalized past "which index.csv does not have".
+    The message must name the resolver, or a reader is sent looking for a column
+    in a file that has nothing to do with the fault."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "missing_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["operator", "site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("missing_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-MISSING"
+    assert "'site'" in str(excinfo.value)
+    assert "plate_wells" in str(excinfo.value)
+    assert "index.csv" not in str(excinfo.value)
+
+
+def test_a_name_only_some_units_yield_is_not_missing(installed, registries, tmp_path):
+    """THE DISCRIMINATOR between the union and the intersection. `scratch` is
+    carried by one of the two units; declaring it must resolve, with the unit that
+    lacks it simply carrying no value — a table column that some rows leave blank
+    behaves the same way. Without this fixture, union and intersection are the
+    same answer and the choice is untested."""
+    from publishable.config import Config
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "sparse_r27", _YIELDS_PARTIAL)
+    try:
+        roster, _n, _columns = resolve_units(
+            {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["scratch"]},
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("sparse_r27", None)
+    assert [dict(u.attributes) for u in roster] == [{"scratch": "x"}, {}]
+
+
+def test_a_reserved_attribute_name_is_refused_before_a_missing_one(installed, registries, tmp_path):
+    """One declaration, one code, whichever source it sits under: `_from_table` and
+    `_from_glob` both check reserved before unsourced, and a resolver must not
+    invert that. `paths` is reserved AND unyielded, so a wrong order gives
+    `E-UNITS-ATTR-MISSING` instead."""
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.units import resolve_units
+
+    _install_resolver(installed, tmp_path, "reserved_r27", _YIELDS_PARTIAL)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["paths"]},
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("reserved_r27", None)
+    assert excinfo.value.code == "E-UNITS-ATTR-RESERVED"

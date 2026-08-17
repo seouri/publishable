@@ -318,15 +318,19 @@ def _from_resolver(
     """The units a plugin's resolver yields, and the attribute names it yielded.
 
     The columns come back beside the roster for the reason `_from_table`'s do: they
-    are the only honest reference set for `data.units.measurements.by`, and a
-    resolver has no columns beyond the attributes it yields. Task 28
-    (`E-RESOLVER-MEASUREMENT-FIELD`) is where the field a CSV would simply have
-    carried gets checked against what actually arrived; as of this commit no
-    such check exists. The union over yielded units rather than the intersection,
-    matching a table header's "this column exists" rather than "every row filled
-    it in" — the same reading
-    `collapse_measurements` takes when it treats a name only some rows carry as no
-    disagreement.
+    are the only honest reference set for `data.units.measurements.by` —
+    `validate._check_measurements` checks `by` against them — and a resolver has
+    no columns beyond the attributes it yields. The union over yielded units
+    rather than the intersection, matching a table header's "this column exists"
+    rather than "every row filled it in" — the same reading `collapse_measurements`
+    takes when it treats a name only some rows carry as no disagreement.
+
+    `Unit.attributes` on the returned roster carries only the declared
+    `data.units.attributes` — projected exactly as `_from_table` projects a CSV
+    row, which is what makes `cluster_by`, `weight_by`, `assign.<axis>.from`,
+    `holdout.from` and a `fold`'s `stratify_by` indifferent to which form `from`
+    took. An attribute a resolver yields and the config does not declare is
+    dropped, exactly as an undeclared CSV column is.
 
     Yield order is preserved and nothing re-sorts it: `reference.md` § Where units
     come from makes resolver yield order the resolved order, `assign.method:
@@ -360,6 +364,36 @@ def _from_resolver(
             f"resolver `{name}` yielded no units; a run measuring zero units has nothing to report",
             code="E-UNITS-EMPTY",
         )
+    attrs = list(decl.get("attributes") or [])
+    for attribute in attrs:
+        if attribute in RESERVED_FIELDS:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which is a field of `Unit` "
+                f"itself; {', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                code="E-UNITS-ATTR-RESERVED",
+            )
+        if attribute not in yielded:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}, which resolver `{name}` yields "
+                "no unit carrying — a resolver has no columns beyond the attributes it yields, "
+                "so the field a table would simply have carried has to be yielded",
+                code="E-UNITS-ATTR-MISSING",
+            )
+    # Projected onto the declared list exactly as `_from_table` projects a CSV
+    # row, which is what makes everything downstream indifferent to which form
+    # `from` took: `cluster_by`, `weight_by`, `assign.<axis>.from`, `holdout.from`
+    # and a `fold`'s `stratify_by` all read `Unit.attributes` and were approved by
+    # `validate` against `data.units.attributes` alone. An attribute the resolver
+    # yields and the config does not declare is dropped, the way an undeclared
+    # column is.
+    units = [
+        Unit(
+            key=unit.key,
+            paths=unit.paths,
+            attributes={a: unit.attributes[a] for a in attrs if a in unit.attributes},
+        )
+        for unit in units
+    ]
     return units, frozenset(yielded)
 
 
