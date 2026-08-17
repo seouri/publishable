@@ -6746,6 +6746,22 @@ def _cited_sections() -> set[str]:
     }
 
 
+def test_the_weight_refusals_errors_row_names_no_estimator():
+    """The row and the message are one claim seen from two ends, and the row is
+    where the three functions were actually enumerated. Parsed from the document
+    rather than compared against a second literal: a test comparing each of two
+    spellings to its own hard-coded string is how this repo shipped a name that
+    claimed an agreement no assertion made."""
+    row = next(
+        line
+        for line in REFERENCE_MD.read_text().split("\n")
+        if line.rstrip().endswith("| `E-DATA-WEIGHT-CONTRAST` |")
+    )
+    assert "weight_by" in row  # the control: the right row was located
+    assert "paired_delta_of_derived" not in row
+    assert "paired_percentile_of_derived" not in row
+
+
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to

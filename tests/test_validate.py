@@ -7347,6 +7347,36 @@ def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
     assert "publishes 1 comparison," in message
 
 
+def test_the_weight_refusal_does_not_promise_the_derived_estimators_will_weight(
+    write_config, tmp_path
+):
+    """The derived half is settled by the code, not by this slice: a derived
+    metric's resample closures re-attribute the roster inside every draw
+    (`cli._make_resample_fn`), so the weight column reaches `aggregate` as a unit
+    attribute and the template weights its own metric. `paired_delta_of_derived`
+    and `paired_percentile_of_derived` therefore take no weights.
+
+    The message's own over-broad half is *"the paired estimators"*, plural and
+    total. Narrowed to name the construction that is actually missing, and pinned
+    beside the `Estimate` remedy — a presence that must report, since a control
+    asserting only absences passes identically if nothing ran."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": _weighted_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-CONTRAST" in codes(path)
+    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    assert "`summary` step" in message
+    assert "once a weighted contrast construction exists" in message
+    assert "once the paired estimators take weights" not in message
+
+
 def test_a_weighted_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
     """The edge that makes the guard narrower than `sweep.baseline` being
     declared. A baseline with no axis beside it expands to one condition, which

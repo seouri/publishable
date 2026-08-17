@@ -6268,3 +6268,23 @@ code rather than reading it — the row had claimed this exact pattern raises, w
 relative case. Filed rather than fixed: closing it is a containment-check decision (what a `glob` or a
 resolver may read) that no task in this slice was asked to make, the same reasoning task 31's entry
 already gives for `ResolverIO`.
+
+## CLOSED by H4b-1 task 1 — the paired derived estimators were owed a weights decision, and the code had already made it
+
+`docs/superpowers/H4-SCOPING.md` § 4.3 recorded "H4b's first task, not an observation": whether
+`paired_delta_of_derived` and `paired_percentile_of_derived` take weights, or whether a weighted
+derived contrast is record-only. `docs/superpowers/H4b-SCOPING.md` § 2.1 re-measured it at `b65ab91`
+and found the code had settled it — a derived metric's resample closure is
+`tmpl.aggregate(_attributed(units, attrs), cfg)`, so the weight column reaches `aggregate` as a unit
+attribute on the contrast path exactly as it does per condition, and there is no per-unit vector for
+core to weight.
+
+**Settled: they take no weights, and `weighted_by` and the effective size still travel beside a
+derived contrast** — the declaration is true of the run either way. `method` stays the unweighted
+spelling, because core did not do the weighting.
+
+What was actually owed was the *filing*, because the settlement narrows a published refusal message
+and a normative § Errors row that both promised three constructions would take weights. Both were
+narrowed by deletion in this task; both are deleted outright in H4b-1 task 13.
+
+**Found by:** H4b-SCOPING § 2.1. **Closed by:** H4b-1, task 1.

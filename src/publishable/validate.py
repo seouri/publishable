@@ -4975,14 +4975,21 @@ def _check_sweep(
     # samples: core computes weighted means for `basis: units` metrics and a
     # weighted `t_over_units` interval whose df comes from Kish's effective size,
     # and "a contrast between two weighted conditions uses the same weights on
-    # both sides". Nothing in this build weights a contrast at all:
-    # `stats.paired_t_over_units` takes a list of per-unit differences and
-    # nothing else, and `paired_delta_of_derived` / `paired_percentile_of_derived`
-    # likewise take no weights — so a weighted run's `vs_baseline` delta and its
-    # interval would be unweighted numbers sitting beside weighted per-condition
-    # values, each side answering a different question with nothing in the record
-    # distinguishing them. That is the same defect the per-condition wiring was
-    # widened to prevent one level up, one level down.
+    # both sides". Nothing in this build weights a contrast at all — no weighted
+    # paired construction exists, and the closure a column contrast's resample
+    # runs through takes the plain collapsed row — so a weighted run's
+    # `vs_baseline` delta and its interval would be unweighted numbers sitting
+    # beside weighted per-condition values, each side answering a different
+    # question with nothing in the record distinguishing them. That is the same
+    # defect the per-condition wiring was widened to prevent one level up, one
+    # level down.
+    #
+    # **A DERIVED metric is not core's to weight, and that is settled rather than
+    # pending.** Its resample closures re-attribute the roster inside every draw
+    # (`cli._make_resample_fn`), so the weight column reaches `aggregate` as a
+    # unit attribute and the template weights its own metric; the paired derived
+    # estimators take no weights and will not. What is missing is the weighted
+    # form of a recorded COLUMN's contrast, raw and corrected.
     #
     # **The guard reads the resolved family, not the declaration.** It fires on
     # what `resolve_contrasts` will actually build — the same count
@@ -5000,7 +5007,7 @@ def _check_sweep(
     # weighted values are the same construction the whole-table block gets.
     #
     # Temporary, and narrowly so: H4 Statistics owns the paired estimator family
-    # and lifts this the moment those three constructions take weights. It is a
+    # and lifts this the moment a weighted contrast construction exists. It is a
     # refusal of a *combination* rather than of a declaration, so it carries a
     # row in § Validation's registry and is not one of the `NOT BUILT`
     # declarations § The one config file counts — the same placement
@@ -5024,8 +5031,8 @@ def _check_sweep(
             "here: drop `weight_by` and report the contrast over the sample as it was "
             "drawn, or keep the weighting and express the difference as an `Estimate` "
             "returned by a `summary` step, which core records as reported rather than "
-            "recomputing. The combination will be honored once the paired estimators "
-            "take weights",
+            "recomputing. The combination will be honored once a weighted contrast "
+            "construction exists",
         )
 
     # A clustered design that publishes a contrast. `reference.md` § Statistical
