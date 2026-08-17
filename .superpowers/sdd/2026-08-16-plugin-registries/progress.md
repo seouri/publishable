@@ -175,3 +175,38 @@ Tasks 16-20: reviewed (opus), ten verdicts. One CRITICAL, three Important, four 
   written into the test file rather than left to be rediscovered.
 Tasks 16-20: fix round. Commit cac8e1f. All eight closed. 2059 passed, 1 skipped, 2 xfailed.
 ALL TWENTY TASKS COMPLETE. Whole-branch review next, then merge and push.
+
+WHOLE-BRANCH REVIEW (opus). **Not ready, on one Critical** — and it was cross-task drift INSIDE this
+  slice: `reference.md` said "today only the two local cases and the local-core shadow are checked",
+  a sentence added by the tasks 1-6 FIX ROUND and falsified by task 8, with four tests pinning the
+  excluded cases and passing at HEAD.
+  It answered the slice's central question by probe rather than by reading: **no path reachable from
+  `validate` imports a plugin.** A real installed distribution declaring all five groups against a
+  genuinely importable module, `EntryPoint.load` patched to raise, `validate_config` over three
+  configs — no load, module absent from `sys.modules`, and the patch's own firing proved by a positive
+  control. Correctly qualified: `discover_local` does import this repo's own `templates/*.py`, which
+  is not a plugin.
+  I3 is the one to carry: **`E-DATA-RESOLVER-UNSUPPORTED`'s message told the user "the plugin registry
+  is not implemented in this build" — and this slice implemented it.** An existing test showed one
+  `validate` run emitting that message beside `E-PLUGIN-COLLISION`, a finding decided BY that registry.
+  The true statement is narrower: a resolver cannot be DISPATCHED. A refusal's message is a claim about
+  the build, and a slice that changes the build owns every message that describes it.
+  I4: the shipped-but-unread filing under-counted by four — `load_entry_point`, `check_registration`,
+  `declared_names` and `template_provenance` also have zero production callers. Six, not two.
+Whole-branch fix round. Commit 381060a. All eleven closed. 2060 passed, 1 skipped, 2 xfailed.
+SCOPED RE-REVIEW (opus). **READY TO MERGE.** Every finding confirmed closed, each re-swept the
+  reviewer's own way rather than by repeating the fix's grep list — which matters, because a sweep that
+  finds exactly what it looked for is the shape that missed a site twice in this slice.
+  It recorded two NON-findings so they are not rediscovered: the feasibility analysis still says the
+  registry is unimplemented, but inside its DATED measured-against section, which is the mechanism
+  working; and § Validation's *Resolver is installed* row is byte-identical on `main`.
+  Three new items, none blocking. I closed the two that were false claims: `_claims`'s new docstring
+  said "no public reader here returns anything but a resolved class or a bare name" — falsified by
+  `template_provenance`, which the same sentence lists — now stating the true reason, that both halves
+  come from ONE merge or every `templates/*.py` imports twice; and a comment contrasting `_claims` with
+  `resolve_template`, which this branch DELETED, so the contrast pointed at nothing. Confirmed
+  `resolve_template` appears nowhere in `src/`.
+  The third is trivial and left: an I4 amendment's stated verification does not reproduce for one
+  symbol, though its conclusion is right.
+FINAL: 2060 passed, 1 skipped, 2 xfailed; ruff check, format (78 files) and mypy (44 source files)
+  clean. Merging and pushing under the standing authorization.

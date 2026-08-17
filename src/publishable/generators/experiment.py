@@ -93,7 +93,7 @@ def generate_experiment(
         uv_add(repo_root, plugin_requirement(plugin))
     # One merge for both halves — the resolution and the known-name list the
     # message prints — so a repo's `templates/` is imported once here too.
-    # Read through `_claims` rather than `resolve_template`, because this site
+    # Read through `_claims` rather than a resolve-only helper, because this site
     # also has to tell an installed-only claim apart from a name nothing
     # claims — the same distinction `validate_config` makes at its own emit
     # site, and for the same reason: an installed name is known from package

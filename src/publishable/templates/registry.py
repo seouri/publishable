@@ -63,10 +63,11 @@ def _claims(repo_root: Path | None) -> dict[str, Claim]:
     `template_provenance`, `get_template`), and imported anyway by two callers
     outside it — `validate.py` and `generators/experiment.py` — because both need
     a `Claim`'s `provenance` to route between `E-TEMPLATE-INSTALLED-UNSUPPORTED`
-    and `E-TEMPLATE-UNKNOWN`, and no public reader here returns anything but a
-    resolved class or a bare name. Kept private rather than promoted: the two
-    cross-module imports are the whole set, both read-only, and neither is a
-    signal that this function is meant for general use.
+    and `E-TEMPLATE-UNKNOWN` **and** the known-name list, from ONE merge. Taking
+    them from separate public calls would import every `templates/*.py` twice,
+    which is the fault both call sites already explain. Kept private rather than
+    promoted: the two cross-module imports are the whole set, both read-only, and
+    neither is a signal that this function is meant for general use.
     """
     claims: dict[str, list[Claim]] = {}
     for name, core in _BUILTIN.items():
