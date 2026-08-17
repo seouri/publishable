@@ -208,3 +208,27 @@ sweep of `docs/reference.md`, `src/` and `tests/` found no third end. Suite 2160
 
 13 retires `E-DATA-WEIGHT-CONTRAST` and carries the `validate`-clean and `run`-through halves the
 plan's correction 1 moved onto it; 14 sweeps the owned prose by claim; 15 writes the dated count.
+
+## Tasks 13-15 — `E-DATA-WEIGHT-CONTRAST` retired — complete, review dispatched
+
+Commits `61d3e35` (retirement), `0f15c3f` (prose sweep and the H4b filing re-ownered), `8ec3e2f`
+(the dated count), report `03242c5`. Suite **2159** passed, 1 skipped, 2 xfailed — a net −1 from the
+2160 baseline, all of it task 13, which is what a refusal retired as a one-line deletion per test
+looks like. Four gates clean.
+
+**Measured, 2026-08-17, against `0f15c3f`:** all nine configs' `data`/`statistics` blocks validate
+with zero errors through a throwaway `validate_config` probe against a real installed resolver
+plugin. **No-remaining-core-side-blocker: three → six** — C1, C2, C3 join E1, E2, E5.
+**Executable stays at three**: E3, E4, E6 and C1-C3 all still need `io.reuse_from`, unbuilt and
+unowned. Spec decision 6's honest phrasing, unrounded.
+
+**Three implementer findings handed to the reviewer rather than accepted here.** (1) The prescribed
+`strata=None`-through-`run` mutation does **not** discriminate; the implementer left it a stated
+blind spot on the grounds that the direct-call test pins the construction — which is the exact shape
+of an excuse this repo has got wrong twice, so the reviewer decides. (2) The brief's own prescribed
+strengthening to `codes(path) == set()` was **blind against a real warning its own fixture trips**
+(`W-DATA-WEIGHT-UNDECLARED`) — the fifth blind mutation this slice's briefs have shipped, and the
+second where the brief, not the fixture, was the defect. (3) Stale citations of the retired code
+survived **beyond the brief's enumeration**, including a docstring asserting a construction was
+still unweighted after tasks 9 and 10 had wired it — found by running the exit grep to completion
+rather than trusting the enumeration, which is the sweep-for-the-claim rule working as intended.
