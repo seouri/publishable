@@ -5975,7 +5975,7 @@ positionally; should name the table by its heading instead.
 credential family). **Severity:** Minor. A wording nit rather than a factual defect — the claim it
 makes is still true, only the cross-reference is positional.
 
-## STRUCK 2026-08-16 — `publishable.readers` had no entry-point group, so a third-party writer had no reader
+## OPEN — `publishable.readers` had no entry-point group, so a third-party writer had no reader
 
 **Was:** § Creating a plugin declared four entry-point groups and said of a writer "its reader
 inverts it", with no mechanism for supplying one. `artifacts.WRITERS` and `artifacts.READERS` are
