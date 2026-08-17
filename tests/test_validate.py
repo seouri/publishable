@@ -7271,10 +7271,11 @@ def test_no_weight_warning_for_a_zero_valued_weight_looking_column(write_config,
 # --- a weighted design beside a contrast ------------------------------------
 #
 # `E-DATA-WEIGHT-UNSUPPORTED` is retired: `weight_by` is a declaration core
-# honors, for a single condition's value, interval and `n.effective`. No
-# *contrast* construction weights — `paired_t_over_units` takes differences and
-# nothing else — so the one combination that would publish a wrong delta is
-# refused under its own code until a weighted contrast construction exists.
+# honors, for a single condition's value, interval and `n.effective`. As of
+# H4b-1, a *contrast* weights too — the weighted paired *t* and the weighted
+# closure in `paired_percentile_of_derived` — so the combination that used to
+# publish a wrong delta now publishes a weighted one, and the refusal that
+# guarded it is retired.
 
 
 def _weighted_units(**extra) -> dict:

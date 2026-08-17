@@ -2362,7 +2362,7 @@ blocks; what each was missing is a named owner for the day its precondition brea
 | `correction.corrected_fields` dedupe unpinned | **H4 Statistics** — it is the slice that would build `Member` lists from somewhere other than `cli._comparison_step_blocks`, which is the condition the row names |
 | `_evidence_ratio`'s `assert` stripped under `python -O` | **No slice; closed as a convention question.** Third instance of the pattern, and the row itself says the next line raises loudly. A repo-wide convention on `assert` is not a slice's work and should not sit in a defect ledger pretending to be one |
 | `W-STATS-CORRECTED-THIN`'s message leads with `cond:1` | **No slice; closed.** `reference.md` § Exit codes and diagnostics makes the identifier the contract and the wording explicitly not, so this is a cosmetic harmonisation any slice may do opportunistically and none owes |
-| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4 Statistics** — it is the slice that adds new percentile constructions, which is the only way an unsorted pool becomes constructible |
+| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — H4b-1 task 5 gave the function a `strata` parameter, sorting each stratum's pool independently rather than the whole pool once, which is a second route to an unsorted-pool input beside "a new percentile construction adds one"; H4b-2 is the nearer of the remaining paired-construction slices |
 | `PairedResample.pool` is a `list`, so the dataclass is unhashable | **No slice; closed.** Nothing keys on it and a tuple would copy per resample. Recorded so it is not re-litigated |
 | `Member.__post_init__` exempts `ci95 is None` | **No slice; closed.** Deliberate, documented, and pinned by `family_members` dropping such a member first |
 
@@ -5282,7 +5282,7 @@ described the code at `c5de085` and stopped being true when H4a task 12 retired 
 the entry "A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the
 requested `n`" records. The rest of that paragraph stands as the dated
 record it is. The separate finiteness gap it uncovered is **not** closed and keeps its own entry and
-its own H4b owner below.
+its own H4b-2 owner below.
 
 ## A column resample is only ever defined given finite inputs, and nothing checks that today
 
@@ -5314,16 +5314,23 @@ observe an individual draw's `compute` fail. Adding a survivor count here would 
 `(Interval(nan, nan), n)`: the identical false claim, with an extra field implying it was
 checked.
 
-**Owner re-assigned to H4b — weights and clusters through the contrast family**
+**Owner re-assigned to H4b-2 — clusters through contrasts**
 (`docs/superpowers/H4-SCOPING.md` § Decomposition), amended by the H4a whole-branch review
-(2026-08-15, `d59316d`). The original owner named below — "whichever slice wires column resample
-into `summarize_step` (task 12/14)" — **was H4a**, and both tasks landed without it. That was a
-deliberate decline, not an oversight: H4a task 14's ledger entry records the choice, and the
-disclosure it took instead is live in two places — `stats.summarize_step`'s docstring, which says
-in terms that "nothing on this path checks that condition", and `reference.md`
-§ Statistical reporting. The two `*_is_a_known_unfixed_gap` tests below still pin it.
-H4b is the successor because it builds the weighted and clustered paired constructions, which is
-where the same unchecked finiteness assumption lands next.
+(2026-08-15, `d59316d`) and again by H4b's split into H4b-1 (weights through contrasts, merged) and
+H4b-2 (clusters through contrasts, not yet built). The original owner named below — "whichever slice
+wires column resample into `summarize_step` (task 12/14)" — **was H4a**, and both tasks landed
+without it. That was a deliberate decline, not an oversight: H4a task 14's ledger entry records the
+choice, and the disclosure it took instead is live in two places — `stats.summarize_step`'s
+docstring, which says in terms that "nothing on this path checks that condition", and `reference.md`
+§ Statistical reporting. The two `*_is_a_known_unfixed_gap` tests below still pin it, unmoved by
+H4b-1. **Still untouched by H4b-1**: this entry is about `summarize_step`'s per-condition column
+resample, not the paired contrast constructions H4b-1 built — the weighted paired forms
+(`weighted_paired_t_over_units`, the weighted closure in `paired_percentile_of_derived`) already gate
+their weight vectors through `checked_weights`/`usable_weight`, the same finite-and-positive check
+`validate` approves the config against, so the unchecked-finiteness gap this entry names does not
+reach them. H4b-2 is the successor because a clustered paired construction is the next place a whole
+weight vector or value column is drawn as a unit, which is where the same unchecked finiteness
+assumption would land.
 
 **Proposed resolution, not attempted here:** whichever slice takes it should validate `values` and
 any weight vector for finiteness
@@ -5489,6 +5496,12 @@ and confirmed to fail before being reverted.
 
 **Finding 2, deferred — owed to whichever slice hardens `report_by` (`H4 Statistics`, per this
 file's existing "A `report_by` whose every level is empty…" entry, which names the same owner).**
+**Live on C1–C3, still untouched by H4b-1**: all three of this analysis's payoff configs declare
+both `statistics.report_by` and a `resample`, so the gap this finding names — a level's own
+recorded-column interval stays `t_over_units` rather than honouring `resample_columns` — sits on
+their own record. `docs/feasibility-llm-growth-studies.md` § Executability on this build's H4b-1
+entry qualifies "no remaining core-side blocker" against exactly this finding rather than treating
+`report_by` as settled.
 `cli.command_run`'s `report_by` level call (`level_summary = summarize_step(...)`) does not pass
 `resample_columns`, so a level's own recorded-column interval stays `t_over_units` even under a
 declared `resample`; `strata` (this task's own thread) reaches only that level's *derived* metrics
@@ -5665,8 +5678,12 @@ resolves somewhere in `reference.md`; only the address is wrong. Filed because `
 ("never by line number"), and a cited section that does not exist is precisely the failure that
 convention exists to prevent.
 
-**Owner: unassigned.** Any slice editing `reference.md` § Statistical reporting can settle which
-reading is right; H4b is next to touch that material.
+**Owner: unassigned, and explicitly declined once more.** H4b-1 touched § Statistical reporting
+directly — minting the weighted-contrast `method` vocabulary, the record shape, and the two weighted
+paired constructions — and did not write § How a metric becomes a number; task 9's own docstring
+inherits a citation of it from `paired_t_over_units` rather than resolving it. Any slice editing
+`reference.md` § Statistical reporting can settle which reading is right; H4b-2 is next to touch
+that material.
 
 ## OPEN — `technical_n` is a whole-roster figure beside a test-partition `n`
 
@@ -6319,7 +6336,7 @@ tables to compare rows across, not one) and the slice's task budget does not hol
 **Owner: H4b-2 — clusters through contrasts**, by name and not "whichever slice ships next": H4b-2 is
 the half that adds the remaining paired percentile construction, so it is where the degenerate sweep
 belongs for all of them at once. It should be built together with the zero-width sweep the contrast
-disclosure entry already defers to H4b.
+disclosure entry already defers to H4b-2.
 
 **Found by:** H4b-1, task 5. **Severity:** Minor — reachable only from a `stratify_by` whose strata
 are near-unique, which `validate` does not refuse.
