@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H7b Part B → H4b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -44,6 +44,17 @@ beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. H4b
 (weighted contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
 execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b.
+
+**H7b Part A (plugin registries and entry points) merged on 2026-08-17.** A plugin installed on the
+machine can register a template, resolver, probe, reader and writer, and `validate` resolves any of
+their names **without importing the package** — verified by probe with a positive control, not by
+reading. It retires no refusal and executes nothing new: `E-DATA-RESOLVER-UNSUPPORTED` stays alive,
+and **Part B** owns the resolver's dispatch, its read-only `io`, attribute projection,
+`provenance.plugin_versions`, `plugin new`, and a credential leak Part A deliberately did not narrow —
+`command_run` computes its credential set long after `resolve_units` with no enclosing `try`, so once
+a resolver runs user code an exception can carry a credential to `main`'s un-redacted printer. The
+measurement is [`H7b-SCOPING-2.md`](docs/superpowers/H7b-SCOPING-2.md), which re-measured its own
+predecessor a day later and found **seven of its conclusions did not survive**.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
@@ -138,6 +149,7 @@ every session.
 | Assuming a documented rule has code behind it | Five § Validation rows described checks with no emit site, no check and no test. **Grep for the code before building on the row**; a row and a code are the same check seen from two ends, and either end can be missing |
 | Reading a temporary refusal as permanent, or the reverse | A `-UNSUPPORTED` suffix is the undocumented build family, retired wholesale and absent from the registry. A *narrow* refusal of a combination is documented, carries rows, and outlives the slice that minted it |
 | Scoping a diagnostic by the helper it calls | `E-TEMPLATE-UNKNOWN` had **two** emit sites; a task scoped by `template_names()`'s single call site missed the second, which went on claiming "no installed template registers" under a § Errors row just rewritten to say otherwise. **§ Errors carries one row per code, not per emit site**, so a diagnostic's unit of work is every site that raises *or* reports it |
+| Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
 | Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` and `apparatus_facts` are the other two, and each is owned — H7b and H7d respectively — where `field_convention` is not) |
 

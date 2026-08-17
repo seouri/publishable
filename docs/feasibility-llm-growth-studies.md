@@ -1037,6 +1037,29 @@ them can reach — none declares `required_env`, and none can declare `requires_
 The two claims above that *are* dated were each verified against the merged build.
 
 
+### Measured on 2026-08-17 against commit `959cc8d165f1f0d904d517526e0ab51c58741df3` — after H7b Part A
+
+H7b **Part A** merged at the commit above. **Nothing in the picture above changes: still zero of nine
+execute, and Part A retires no refusal.** `E-DATA-RESOLVER-UNSUPPORTED` is alive and is **Part B's** to
+retire, together with the resolver dispatch that would make one run.
+
+- **The registries the analysis's plugin needs now exist.** A template, a resolver, a probe, a reader
+  and a writer can each be registered from an installed distribution, and `validate` resolves any of
+  those names **from package metadata, importing nothing** — the property that lets a config be checked
+  on a machine where the plugin is declared but broken.
+- **One message in this area changed and it is worth noting for anyone re-reading older output.**
+  `E-DATA-RESOLVER-UNSUPPORTED` used to say *the plugin registry is not implemented in this build*.
+  Part A implemented it, so the refusal now says what is actually true: **a resolver cannot be
+  dispatched** in this build.
+- **What still blocks all nine, unchanged and re-verified:** the resolver dispatch (Part B),
+  `io.reuse_from` (unbuilt and unowned by any H7 sub-slice), and the apparatus probe (H7d).
+
+**Not re-measured:** the nine configs were not re-run through `validate` for this entry. Part A adds no
+check ahead of `E-DATA-RESOLVER-UNSUPPORTED` that any of them reaches, because none declares an entry
+point and none can until a plugin is installed. The claims above are about the build, and each was
+verified against the merged tree rather than carried from the plan.
+
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
