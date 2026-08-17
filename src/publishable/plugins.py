@@ -28,6 +28,7 @@ from typing import Any, TypeVar
 
 from publishable.artifacts import CORE_SUFFIXES, READERS, WRITERS
 from publishable.errors import ContractError
+from publishable.templates.discovery import PartialLoadError, drain_pending
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -232,3 +233,45 @@ def check_registration(ep: EntryPoint, declared: Sequence[str]) -> None:
         "rather than resolved. Make them agree",
         code="E-PLUGIN-DECORATOR",
     )
+
+
+def load_entry_point(ep: EntryPoint) -> Any:
+    """Import what `ep` points at, containing every way a plugin's top level can fail.
+
+    **The one function in this module that imports anything.** Everything else
+    answers from package metadata, which is the guarantee § Creating a plugin
+    justifies the whole mechanism by; this is what a command calls once it has
+    resolved a name and actually needs the object.
+
+    `SystemExit` gets its own arm because it is a `BaseException` and the broad
+    one below does not see it: a plugin calling `sys.exit()` at module scope, or
+    building an `argparse` parser at import, would otherwise end the command with
+    the plugin's own exit code and no diagnostic at all.
+
+    Whatever the failed import left in the pending registration buffer is drained
+    onto the refusal rather than discarded. A class body finishes running before
+    its own `@register_*` call is reached, so a module that raises after
+    registering still leaves a fully formed class — and a caller that never gets
+    a usable object can still ask that class what credentials it declares. It is
+    drained rather than kept for the next load either way: a registration this
+    import made is not the next one's to inherit.
+
+    The distribution is named rather than the module, because a distribution is
+    what a reader uninstalls or pins.
+    """
+    try:
+        return ep.load()
+    except SystemExit as exc:
+        raise PartialLoadError(
+            f"the entry point `{ep.name}` in `{ep.group}`, from {provider_of(ep)}, called "
+            f"`sys.exit()` while importing and registers nothing usable: SystemExit: {exc.code}",
+            code="E-PLUGIN-LOAD",
+            partial_templates=[cls for _, cls in drain_pending()],
+        ) from exc
+    except Exception as exc:
+        raise PartialLoadError(
+            f"the entry point `{ep.name}` in `{ep.group}`, from {provider_of(ep)}, raised "
+            f"while importing and registers nothing usable: {exc!r}",
+            code="E-PLUGIN-LOAD",
+            partial_templates=[cls for _, cls in drain_pending()],
+        ) from exc

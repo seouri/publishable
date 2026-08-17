@@ -408,3 +408,90 @@ def test_an_object_that_registered_nothing_is_refused_and_says_so(registries):
     message = str(excinfo.value)
     assert "calls no `@register_" in message  # only this branch says this
     assert "declares `" not in message  # and only the other branch says that
+
+
+def test_a_plugin_module_that_raises_is_a_coded_refusal_naming_the_distribution(installed):
+    """A traceback out of a command is the outcome core is contracted never to
+    produce. The distribution is named rather than the module, because a
+    distribution is what a reader uninstalls or pins."""
+    from publishable.errors import ContractError
+    from publishable.plugins import load_entry_point, scan_group
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "boom_module:resolve"}}
+    )
+    (site / "boom_module.py").write_text("raise RuntimeError('kaboom')\n")
+
+    ep = scan_group("publishable.resolvers")["plate_wells"][0]
+    with pytest.raises(ContractError) as excinfo:
+        load_entry_point(ep)
+
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    message = str(excinfo.value)
+    assert "plate_wells" in message
+    assert "dist-one 1.0" in message
+    assert "RuntimeError" in message
+
+
+def test_a_plugin_module_calling_sys_exit_is_contained_too(installed):
+    """`SystemExit` is a `BaseException`, so the broad arm does not see it — the
+    mutation for this is deleting the `except SystemExit` and watching pytest
+    exit rather than report."""
+    from publishable.errors import ContractError
+    from publishable.plugins import load_entry_point, scan_group
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "exiting_module:resolve"}}
+    )
+    (site / "exiting_module.py").write_text("import sys\nsys.exit(3)\n")
+
+    ep = scan_group("publishable.resolvers")["plate_wells"][0]
+    with pytest.raises(ContractError) as excinfo:
+        load_entry_point(ep)
+
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert "SystemExit: 3" in str(excinfo.value)
+
+
+def test_a_class_a_failing_plugin_declared_before_raising_is_carried(installed):
+    """The widened pattern. A class body finishes running before its own
+    decorator is reached, so a module that raises AFTER registering still leaves
+    a fully formed class — carried on the refusal so a caller that never gets a
+    usable object can still read what it declared.
+    """
+    from publishable.plugins import load_entry_point, scan_group
+
+    site = installed("dist-one", "1.0", {"publishable.templates": {"my_assay": "half_module:T"}})
+    (site / "half_module.py").write_text(
+        "from publishable import BaseTemplate, register_template\n"
+        "\n"
+        "\n"
+        "@register_template('my_assay')\n"
+        "class T(BaseTemplate):\n"
+        "    required_env = ['SOME_KEY']\n"
+        "\n"
+        "\n"
+        "raise RuntimeError('after registering')\n"
+    )
+
+    ep = scan_group("publishable.templates")["my_assay"][0]
+    with pytest.raises(Exception) as excinfo:
+        load_entry_point(ep)
+
+    carried = getattr(excinfo.value, "partial_templates", None)
+    assert carried is not None
+    assert [cls.required_env for cls in carried] == [["SOME_KEY"]]
+
+
+def test_a_plugin_module_that_imports_cleanly_hands_back_its_object(installed):
+    """THE HONOURING. Every test above asserts a refusal; without this one a
+    `load_entry_point` that raised unconditionally would pass all three."""
+    from publishable.plugins import load_entry_point, scan_group
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "good_module:resolve"}}
+    )
+    (site / "good_module.py").write_text("def resolve(io, cfg):\n    return ['a unit']\n")
+
+    ep = scan_group("publishable.resolvers")["plate_wells"][0]
+    assert load_entry_point(ep)(None, None) == ["a unit"]
