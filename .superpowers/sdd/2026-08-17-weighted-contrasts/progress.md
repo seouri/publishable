@@ -194,3 +194,17 @@ will handle it" is the maintenance obligation nobody owns.
 reviewer checked the emit's gating, the `weights`-gated expression, and that `command_run` is the
 only executor. This is the same deferral shape the previous batch got wrong, and the difference is
 that it was *verified* this time rather than asserted.
+
+**Fix round 1 — all findings closed** (`92743e6`, `b3f78cb`), confirmed by a scoped re-review that
+verified the load-bearing one **by running**: dropping `confidence=1.0 - level` from the weighted
+corrected call now fails at exactly the probed bound (`2.8239563251976074` against
+`1.4426305905416408`), and the new assertion checks the **bound**, not merely that a keyword was
+threaded. Major 4's repair **survives the row deletion** — § Validation's *Allocation deltas aren't
+computed* now cites only *Clustered deltas aren't computed*, which task 13 does not delete — and a
+sweep of `docs/reference.md`, `src/` and `tests/` found no third end. Suite 2160 passed, 1 skipped,
+2 xfailed. Tasks 9-12 complete.
+
+## Tasks 13-15 dispatched — the batch that changes what the tool refuses
+
+13 retires `E-DATA-WEIGHT-CONTRAST` and carries the `validate`-clean and `run`-through halves the
+plan's correction 1 moved onto it; 14 sweeps the owned prose by claim; 15 writes the dated count.
