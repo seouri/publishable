@@ -14,6 +14,16 @@ from publishable.plugins import (
 )
 
 
+def test_versions_for_names_the_distribution_a_reader_would_pin(installed):
+    """A distribution and its version, because that is what `uv.lock` pins and
+    what a reader uninstalls — not a module path, which pins nothing."""
+    from publishable.plugins import versions_for
+
+    installed("dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "no_one:resolve"}})
+    assert versions_for("publishable.resolvers", "plate_wells") == {"dist-one": "1.0"}
+    assert versions_for("publishable.resolvers", "not_registered") == {}
+
+
 def test_the_groups_core_reads_are_the_five_the_document_declares():
     """Named rather than counted: `reference.md` § Creating a plugin shows one
     `[project.entry-points."publishable.*"]` block per registry."""

@@ -83,6 +83,26 @@ def names(group: str) -> list[str]:
     return list(scan_group(group))
 
 
+def versions_for(group: str, name: str) -> dict[str, str]:
+    """The distributions providing `name` in `group`, as `{name: version}`.
+
+    A distribution rather than a module, for `provider_of`'s reason: a
+    distribution is what a reader uninstalls or pins, and `provenance` exists to
+    be reproduced from. Empty for a name nothing registers, which is the same
+    answer a run using no plugin artifact records — an absence, not a guess.
+
+    Every claimant, not the first: `validate._check_plugin_collisions` refuses a
+    name two distributions claim, so more than one entry here means the record is
+    describing a machine `validate` already refused. Recording both is what makes
+    that visible in the artifact rather than only in the terminal.
+    """
+    return {
+        ep.dist.name: ep.dist.version
+        for ep in scan_group(group).get(name, [])
+        if ep.dist is not None
+    }
+
+
 RESOLVERS: dict[str, Callable[..., Any]] = {}
 """Every resolver a plugin module registered, by the name a config writes.
 

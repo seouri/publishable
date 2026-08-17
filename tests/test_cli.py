@@ -1,7 +1,9 @@
 import hashlib
+import importlib
 import json
 import re
 import subprocess
+import sys
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -9187,3 +9189,52 @@ def test_uv_add_really_installs(tmp_path: Path):
     does not assume. A decorator-level skip reports `skipped` for a stated
     reason instead, and does not pretend an opt-in flag would ever run it.
     """
+
+
+_PLUGIN_VERSIONS_RESOLVER = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="p1")
+    yield Unit(key="p2")
+"""
+
+
+def _install_plate_wells_resolver(installed, tmp_path, module: str) -> None:
+    """One installed distribution whose `publishable.resolvers` entry point
+    points at a real module this writes — the same shape `test_units.py`'s
+    `_install_resolver` uses, duplicated here rather than imported because
+    that helper is private to `test_units.py` and takes a `tmp_path` this
+    module already has its own fixture instance of."""
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(_PLUGIN_VERSIONS_RESOLVER)
+    importlib.invalidate_caches()
+
+
+def test_a_resolver_run_records_the_plugin_version_it_resolved_through(
+    installed, registries, tmp_path, capsys
+):
+    """`provenance.plugin_versions` — compatibility notes, never conflated with
+    `code_hash`, which covers `src/**` and `templates/**` and not a wheel. The
+    control is a table-sourced run in the same test: an empty mapping stays the
+    honest record where no plugin artifact was used, so a version dict populated
+    unconditionally would pass the first half alone."""
+    _install_plate_wells_resolver(installed, tmp_path, "plugin_versions_r30")
+    try:
+        resolver_doc = run_a_project(
+            tmp_path / "resolver-case",
+            capsys=capsys,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+        )
+    finally:
+        sys.modules.pop("plugin_versions_r30", None)
+    table_doc = run_a_project(tmp_path / "table-case", capsys=capsys)
+
+    resolver_run = yaml.safe_load((resolver_doc["run_dir"] / "run.yaml").read_text())
+    table_run = yaml.safe_load((table_doc["run_dir"] / "run.yaml").read_text())
+    assert resolver_run["provenance"]["plugin_versions"] == {"dist-one": "1.0"}
+    assert table_run["provenance"]["plugin_versions"] == {}

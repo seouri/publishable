@@ -658,7 +658,8 @@ provenance:
       parameters_hash: sha256:aa03...
       used: ["step01_load_cohort/cohort.parquet"]
   publishable_version: "0.1.0"
-  plugin_versions: {}
+  plugin_versions: {}                          # {distribution: version} for the resolver this
+                                               #   run resolved through; empty for a table source
 
 layout:                                        # which artifact-tree levels this run's directories
                                                #   actually have — degenerate levels collapse, so a
@@ -719,6 +720,11 @@ results:                                       # scientific; see "Statistical re
   hypotheses:                                  # see "Pre-registration"
     - {id: h1, kind: confirmatory, supported: true}
 ```
+
+`provenance.plugin_versions` is populated only when `data.units.from.resolver` names a plugin — the
+run's own record of which distribution and version it resolved through, never the machine's whole
+installed set. `cohort-pilot` uses a table source, so its `plugin_versions` stays `{}`, which is the
+honest record for a run that used no plugin artifact.
 
 A run with no repeat level still writes `per_repeat`, keyed by the empty string — the one repeat
 has no label because there is no repeat axis to render one from — as soon as some repeat-scoped step

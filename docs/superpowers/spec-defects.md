@@ -6046,6 +6046,13 @@ class-taking callers (`validate._check_versions`, `materialize.materialize_confi
 `Claim.provenance` instead, since `installed` becomes reachable at both for the first time; and
 `provenance.plugin_versions` recording which distribution supplied it. **Owner: unassigned.**
 
+**AMENDED 2026-08-17 (H7b Part B task 30):** one of the three preconditions above is now built —
+`provenance.plugin_versions` records the distribution and version a resolver-sourced run resolved
+through (`plugins.versions_for`, threaded in `cli.command_run`). It records only what a resolver
+declaration named, never an installed template's class, so it does nothing for this gap's own
+case — a config naming an installed *template* still resolves no class. Amended, not closed; owner
+stays unassigned.
+
 ## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
 
 H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
@@ -6097,6 +6104,15 @@ resolver-dispatch task. `template_provenance` → unassigned, with
 **Found by:** H7b Part A tasks 12-15 review; extended by the H7b whole-branch review (finding I4).
 **Severity:** Minor. All six surfaces are populated or computed correctly and read by nothing yet —
 inert rather than misleading, since no config field depends on any of them being read today.
+
+**AMENDED 2026-08-17 (H7b Part B task 30): four of the six now have a production caller.**
+`RESOLVERS`, `load_entry_point`, `check_registration` and `declared_names` are read from
+`units.py`'s resolver dispatch (tasks 24-25) — `RESOLVERS` via `_resolve_resolver`'s scan-then-load,
+`load_entry_point` and `check_registration`/`declared_names` at the same site, checking the
+`@register_resolver` argument against the entry-point key that loaded it. `PROBES` stays with H7d,
+unread by anything Part B built. `registry.template_provenance` stays with the unassigned installed-
+template entry above — Part B's four tasks were the resolver half and never touched template
+loading.
 
 ## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
 

@@ -38,6 +38,7 @@ from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
+from publishable.plugins import versions_for
 from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import (
     cross_levels,
@@ -85,6 +86,7 @@ from publishable.sweep import (
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import (
+    RESOLVER_GROUP,
     ArmPlan,
     HoldoutPlan,
     Unit,
@@ -2617,6 +2619,14 @@ def command_run(config_path: Path) -> int:
             )
             print(drift_c.render())
 
+        # Populated from the declaration this run actually resolved through, not
+        # from the machine's installed set: a run's provenance is what it used.
+        # Empty stays the honest record for a run with no plugin artifact.
+        plugin_versions: dict[str, str] = {}
+        _source = (units_decl or {}).get("from")
+        if isinstance(_source, dict) and isinstance(_source.get("resolver"), str):
+            plugin_versions = versions_for(RESOLVER_GROUP, _source["resolver"])
+
         provenance: dict[str, Any] = {
             "git": {
                 "repo_root": str(git.repo_root),
@@ -2637,7 +2647,7 @@ def command_run(config_path: Path) -> int:
             "input_manifest_hash": manifest_hash(manifest),
             "input_manifest_changed": changed_inputs,
             "publishable_version": importlib.metadata.version("publishable"),
-            "plugin_versions": {},
+            "plugin_versions": plugin_versions,
             # A run over a roster whose identity is not pinned is a run whose `n`
             # means nothing later: `units` and `units_hash` are `None` together
             # exactly when there is no `data.units` declaration to pin.
