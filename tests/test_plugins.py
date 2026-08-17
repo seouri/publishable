@@ -113,3 +113,29 @@ def test_the_scan_imports_nothing(installed):
         assert "loadable_probe" in sys.modules
     finally:
         sys.modules.pop("loadable_probe", None)
+
+
+def test_register_resolver_records_the_name_and_returns_the_function(registries):
+    """The decorator's two obligations. Returning the object unchanged is the
+    half a decorator gets wrong silently: a `None` return leaves the plugin's own
+    module holding `None` under the name it just defined, and its own test suite
+    is where that surfaces."""
+    from publishable.plugins import RESOLVERS, register_resolver
+
+    @register_resolver("plate_wells")
+    def resolve(io, cfg):
+        return ["a unit"]
+
+    assert RESOLVERS["plate_wells"] is resolve
+    assert resolve(None, None) == ["a unit"]  # still callable under its own name
+
+
+def test_a_resolver_is_importable_from_the_one_root():
+    """`reference.md` § The importable surface: everything you write against is
+    imported from `publishable` itself. A plugin importing
+    `publishable.plugins.register_resolver` is not a supported spelling even
+    where it works."""
+    import publishable
+
+    assert "register_resolver" in publishable.__all__
+    assert publishable.register_resolver is not None

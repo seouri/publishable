@@ -939,7 +939,8 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `Apparatus` | construct | not yet built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
 | `Estimate` | construct | built | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
 | `register_template` | decorator | built | One of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
-| `register_resolver` · `register_probe` | decorator | not yet built | Two more of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `register_resolver` | decorator | built | The registry a [`data.units.from.resolver`](#where-units-come-from) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `register_probe` | decorator | not yet built | The registry an [`apparatus_probe`](#the-apparatus-core-can-only-observe) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_writer` · `register_reader` | decorator | not yet built | The registries an artifact suffix is claimed through, in the pair `io.write` and `io.read_upstream` require — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
 

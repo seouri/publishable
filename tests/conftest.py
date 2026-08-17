@@ -127,3 +127,33 @@ def installed(tmp_path: Path, monkeypatch):
         return site
 
     return _install
+
+
+@pytest.fixture
+def registries():
+    """Restore the process-level plugin registries around a test that fills them.
+
+    These mappings are module-global by design — a decorator runs at import and
+    has nowhere else to put what it recorded — so a test that registers a name
+    leaks it into every test after it. Restored by snapshot rather than by
+    unsetting what was seen, which covers a test that replaces an entry as well
+    as one that adds it. A plain fixture requested by name: the suite's one
+    autouse fixture is `conftest`'s environ restore and there may not be a
+    second.
+    """
+    from publishable import artifacts, plugins
+
+    saved = (
+        dict(plugins.RESOLVERS),
+        dict(plugins.PROBES),
+        dict(artifacts.WRITERS),
+        dict(artifacts.READERS),
+    )
+    yield
+    for live, was in zip(
+        (plugins.RESOLVERS, plugins.PROBES, artifacts.WRITERS, artifacts.READERS),
+        saved,
+        strict=True,
+    ):
+        live.clear()
+        live.update(was)

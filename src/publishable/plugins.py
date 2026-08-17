@@ -22,7 +22,11 @@ project's own `templates/` — and the merge is the one place holding all three
 sources at once.
 """
 
+from collections.abc import Callable
 from importlib.metadata import EntryPoint, entry_points
+from typing import Any, TypeVar
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 GROUPS = (
     "publishable.templates",
@@ -65,3 +69,35 @@ def scan_group(group: str) -> dict[str, list[EntryPoint]]:
 def names(group: str) -> list[str]:
     """The keys `group` registers, in name order."""
     return list(scan_group(group))
+
+
+RESOLVERS: dict[str, Callable[..., Any]] = {}
+"""Every resolver a plugin module registered, by the name a config writes.
+
+Module-global because a decorator runs when a plugin is imported and has nowhere
+else to put what it recorded. That is the opposite arrangement from
+`templates/registry.py`'s per-call merge, and for a reason that does not apply
+here: two projects resolved in one process must never see each other's
+`templates/`, but an installed distribution is the same distribution for both.
+"""
+
+PROBES: dict[str, Callable[..., Any]] = {}
+"""Every apparatus probe a plugin module registered. See `RESOLVERS`."""
+
+
+def register_resolver(name: str) -> Callable[[F], F]:
+    """Record `name -> fn` for this process and return `fn` unchanged.
+
+    The entry point is the registration and this argument is a declaration
+    checked against it — `reference.md` § Creating a plugin — so this records
+    what the source says and `check_registration` is what compares the two.
+    Returned unchanged so the plugin's own module keeps a callable under the
+    name it just defined, which is what makes the artifact testable in its own
+    suite.
+    """
+
+    def decorator(fn: F) -> F:
+        RESOLVERS[name] = fn
+        return fn
+
+    return decorator
