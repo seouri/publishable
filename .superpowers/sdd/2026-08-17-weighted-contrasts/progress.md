@@ -167,3 +167,30 @@ previous batch made wrongly, so the reviewer decides whether a discriminating te
 today by direct call; and task 10's pool-guard mutation failed as a `Member.__post_init__`
 `ValueError` rather than an assertion, which pins the invariant rather than the behaviour the test
 is named for.
+
+### Tasks 9-12 — task review: spec compliance PASS, quality PASS WITH FINDINGS, fix round 1 dispatched
+
+Review at `task-9-12-review.md`. **The chain the slice exists to close is complete**, and the
+reviewer verified the load-bearing link **by running**: the corrected bound *moves*, 6.0 → 8.0,
+rather than merely carrying a weights field. No new assertion is one uniform weights would also
+satisfy. Four Majors, none blocking 9-12 on its own.
+
+**The one that matters — Major 1, and it is a timing finding, not a correctness one.** Dropping
+`confidence=1.0 - level` from the **weighted** corrected call leaves the suite silent at 2159; the
+same drop on the **unweighted** call fails eight tests. The α on the weighted branch is unpinned,
+and **task 13 is the commit that makes a weighted no-`resample` config reach that branch through
+`run`** — so an unpinned α would ship live at exactly the commit retiring the refusal. A
+discriminating test exists **today by direct call** (family size 2: correct `[1.443, 14.557]`,
+mutant `[2.824, 13.176]`, both probed). **Ruling: close before task 13, not after.**
+
+**Major 4 is the two-ended-check rule firing inside a single commit.** Task 11 removed a citation of
+*Weighted deltas aren't computed* from its § Errors twin and left the identical citation standing in
+§ Validation's *Allocation deltas aren't computed*. Correct today; **dangling the moment task 13
+deletes that row**, and named nowhere in task 13's brief. **Ruling: repair it with a sentence that
+stays true after the row goes**, rather than adding a step to task 13 — a filing that says "task 13
+will handle it" is the maintenance obligation nobody owns.
+
+**Accepted rather than fixed:** the `weighted_by=None` deferral is **structurally legitimate** — the
+reviewer checked the emit's gating, the `weights`-gated expression, and that `command_run` is the
+only executor. This is the same deferral shape the previous batch got wrong, and the difference is
+that it was *verified* this time rather than asserted.
