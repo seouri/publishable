@@ -403,3 +403,25 @@ than argued with.
 five sibling headings match their own commit's date. **Major 3: `spec-defects.md` is stale in the one
 entry task 14 changed code under** — it names a test task 14 renamed and still conditions on the
 refusal task 14 lifted, missed by a step that amended seven other rows.
+
+**Fix round 1 — all ten findings closed** (`3619001`), confirmed by a scoped re-review that verified
+three **by running**. The one worth recording is **Major 2, because the ruling was checked rather
+than accepted**: the corner was reproduced by direct call, and the decision — that
+`n_paired_clusters` **belongs** beside a null interval, being an intersection-fact like `n_paired`
+rather than a construction-fact — rests on an analogy the reviewer then **tested**: it confirmed by a
+second direct call that `n_paired` **is** written unconditionally beside a null `method`/`ci95` in the
+existing degenerate paths. The analogy is true, not assumed, so the ruling stands. The new test was
+mutation-killed to confirm it pins the shape. And the date now matches its commit's own timestamp,
+with **all six sibling headings re-checked against theirs** — the fix disturbed none of them.
+
+**All 18 tasks complete.** Suite 2199 passed, 1 skipped, 2 xfailed; four gates clean. Whole-branch
+review next.
+
+### The slice's own record on blindness claims, for the next scoping to read
+
+Five mutations were claimed blind across this slice: **one was overturned** by a reviewer with a
+one-line fixture change (batch 2), **four were upheld** — and one of those on **stronger grounds than
+it was given**, the arms proving unreachable together for every input rather than merely every
+fixture. The pre-flight ruling bet that naming a mutation blind *in the plan* is the claim being
+checked before it is trusted; on this evidence the bet paid, but only because each claim was actually
+re-run rather than read.
