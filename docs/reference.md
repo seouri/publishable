@@ -2613,6 +2613,40 @@ results:
                family_size: 4, family: {comparisons: 2, metrics: 2}}
 ```
 
+**Under [`cluster_by`](#clustered-units) a contrast entry carries one more key, and it is a count
+rather than a name.** `n_paired_clusters` is the number of distinct clusters the paired intersection
+falls in — a **scalar sibling of `n_paired`**, on the same argument `n_paired_effective` rests on:
+this record deliberately has no `n` mapping to join, and the cluster count is a fact about the
+intersection `n_paired` counts. It is the count the interval's df was taken from, so a reader can
+check `clusters − 1` against the interval rather than take it on trust.
+
+There is deliberately **no attribute-naming key** beside it. Every clustered contrast records a
+`method` carrying the `_clustered` suffix, so the record already discloses that the cluster was the
+draw — which is the disclosure a weighted contrast could not make, since a weighted *derived* metric
+keeps the unsuffixed spelling and needs `weighted_by` to say so at all. One fact, disclosed once.
+
+```yaml
+results:
+  contrasts:
+    - id: site_sensitivity
+      of: 02_arm=abnormal
+      against: 01_arm=normal
+      step03_screen:
+        prob: {delta: 0.041, basis: units, paired: true,
+               method: paired_t_over_units_clustered,
+               n_paired: 330, n_paired_clusters: 12,
+               ci95: [0.006, 0.076], cohens_d: 0.36,
+               correction: holm, correction_level: 0.0125,
+               family_size: 4, family: {comparisons: 2, metrics: 2}}
+```
+
+The interval, the `method` and the cluster count move together, the same obligation a weighted entry
+carries: a delta whose interval reads the cluster as the draw, beside a `method` that does not say
+so, or beside no cluster count at all, is a declaration accepted whose effect is half delivered.
+`cohens_d` is **not** in that set — *d*z is standardized by the dispersion of the differences and
+[§ Statistical reporting](#statistical-reporting) defines no clustered effect size, so it is the same
+number a clustered run and an unclustered one report.
+
 Whatever core weighted moves together, and `weighted_by` and the effective size travel beside it
 either way — which of the four core weighted is the split
 [§ Statistical reporting](#statistical-reporting) draws

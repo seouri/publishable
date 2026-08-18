@@ -6826,6 +6826,24 @@ def test_the_weighted_contrast_record_keys_are_documented():
     assert "n_paired_effective" in section
 
 
+def test_the_clustered_contrast_record_key_is_documented():
+    """Task 2's ruling, in the document before task 13's code writes it.
+
+    A contrast entry has no `n` mapping for the cluster count to join — § Contrasts
+    argues why — so it takes a scalar sibling of `n_paired`, on the
+    `n_paired_effective` precedent. And it takes a COUNT and no attribute name: the
+    `_clustered` suffix on `method` already discloses the clustering, which is the
+    disclosure a weighted derived contrast could not make and why `weighted_by`
+    exists.
+
+    The control asserts the section was really located: a slicer returning the
+    empty string would fail every `in` and pass every `not in`."""
+    section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert "n_paired_effective" in section  # the control
+    assert "n_paired_clusters" in section
+    assert "clustered_by" not in section
+
+
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to
