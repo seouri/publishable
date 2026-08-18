@@ -104,14 +104,11 @@ def differing_axes(of: "Condition", against: "Condition") -> list[str]:
     so a key present on one side and absent on the other always counts as
     differing rather than being skipped.
 
-    Lives here, not in `cli.py` or `validate.py`, because both call it: `cli`
-    for `confounded`/`differs_on` and the (temporarily) hard-coded `paired`
-    `_comparison_step_blocks` records, `validate` for
-    `E-DATA-ALLOCATION-CONTRAST`'s per-comparison guard in `_check_sweep`. A
-    module either of them already imports is what removes the cross-module
+    Lives in this module rather than in `cli.py` or `validate.py` because both read
+    it, and a module either of them already imports is what removes the cross-module
     private access and the local import either alternative would need — `cli`
-    imports `publishable.validate` at module scope, so `validate` importing
-    `cli` back is a true cycle, and `contrasts` sits below both.
+    imports `publishable.validate` at module scope, so `validate` importing `cli`
+    back is a true cycle, and `contrasts` sits below both.
     """
     ordered_keys = list(of.values) + [k for k in against.values if k not in of.values]
     return [

@@ -892,10 +892,14 @@ def _comparison_step_blocks(
     rather than a mean of differences. `E-DATA-ALLOCATION-CONTRAST` still refuses
     an unpaired comparison at `validate`, and `cli` always validates before
     running, so the unpaired arm is reachable only by direct call until that
-    refusal lifts. **`"paired": True` in both arms' record literals stays a
-    literal, not `is_paired`, on purpose**: deriving it is a later task's change,
-    made in one place rather than smuggled in here where it would be
-    unobservable which commit did it.
+    refusal lifts.
+
+    `paired` is derived per comparison, from `contrasts.crossed_group_axes` — the
+    same expression `validate` refuses a weighted unpaired comparison on, so the
+    two cannot disagree about which comparisons share their units. Two conditions
+    differing on any declared `sweep.groups` axis hold disjoint sets of units
+    whatever `allocation` itself is declared as, and an unpaired entry records
+    `n_of`/`n_against` in place of an `n_paired` its intersection cannot supply.
     """
     # `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses this combination at `validate`, and
     # `cli` always validates before running — so both being set is core's own
@@ -1026,7 +1030,7 @@ def _comparison_step_blocks(
                 metric_block[metric_key] = {
                     "delta": delta,
                     "basis": "units",
-                    "paired": True,
+                    "paired": is_paired,
                     "method": interval.method if interval else None,
                     # `is_derived` is always True on this arm, so the count is
                     # `base_keys` unconditionally — `col_keys` belongs to the
@@ -1176,7 +1180,7 @@ def _comparison_step_blocks(
                             else weighted_mean_of(diffs, col_weights)
                         ),
                         "basis": "units",
-                        "paired": True,
+                        "paired": is_paired,
                         "method": interval.method if interval else None,
                         "n_paired": n_paired,
                         "ci95": [interval.low, interval.high] if interval else None,
@@ -1217,7 +1221,7 @@ def _comparison_step_blocks(
                             else of_mean - against_mean
                         ),
                         "basis": "units",
-                        "paired": True,
+                        "paired": is_paired,
                         "method": interval.method if interval else None,
                         "n_of": len(of_col),
                         "n_against": len(against_col),

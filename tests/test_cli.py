@@ -1,6 +1,5 @@
 import hashlib
 import importlib
-import inspect
 import json
 import re
 import subprocess
@@ -4018,33 +4017,67 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
     assert declared["ci95"] == entry["ci95"]
 
 
-def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
-    """The H4c tripwire, and the reason two PAIRED clustered constructions were
-    enough for H4b-2.
+def test_a_contrast_entrys_paired_flag_is_derived_at_every_branch():
+    """Replaces `test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`,
+    which asserted `inspect.getsource` counts of `'"paired": True'` — the mutation
+    its docstring said it could not be, because `paired` was a literal and there was
+    no runtime state to assert against. H4c gives it that state, so this is the
+    behavioural pin: **both answers in the same assertion**, because a derivation
+    stuck at `True` and one stuck at `False` are two different defects and each
+    passes a test asserting only the other.
 
-    `_comparison_step_blocks` writes `paired` as a literal `True` at four metric
-    sites — the derived and recorded-column branches, each now with a paired arm
-    and an unpaired arm, task 10's own addition — so every comparison surviving
-    `E-DATA-ALLOCATION-CONTRAST` is paired and no unpaired contrast interval is
-    ever asked for. The obvious runtime pin — "fail if `paired` is ever `False`" —
-    is a mutation whose branches cannot differ, because there is no runtime state
-    to assert against. So the LITERAL is what is pinned: the moment a later task
-    (13) makes any site conditional on `is_paired`, this fails and forces whoever
-    does it to confront every site that needs to move together.
+    Its predecessor's scope gap is what the replacement closes: reading one
+    function's source text is defeated by extracting either write into a helper.
+    This reads the record.
 
-    Both counts are asserted, and that is the point: the first alone passes under a
-    fifth branch writing `"paired": is_paired`, and the second alone passes under
-    sites that became conditional without changing in number.
+    The `run`-through half of the same claim lands with the retirement, where a
+    single run carries a cross-arm and a within-arm comparison at once."""
+    unpaired, _ = _unpaired_contrast_call()
+    assert unpaired["s"]["m"]["paired"] is False
+    paired, _ = _clustered_contrast_call()
+    assert paired["s"]["m"]["paired"] is True
 
-    **Scope of the pin**: this reads one function's source text, so it is defeated
-    by extracting either write into a helper — the guarantee it protects is real,
-    but this is not the only way to make the guarantee false and have this test
-    stay green."""
-    from publishable.cli import _comparison_step_blocks
 
-    source = inspect.getsource(_comparison_step_blocks)
-    assert source.count('"paired": True') == 4
-    assert source.count('"paired":') == 4
+def test_a_derived_metrics_unpaired_contrast_also_derives_its_flag():
+    """Both metric branches, not one. `_comparison_step_blocks` wrote the literal at
+    two sites and task 10 added a third, so a derivation applied to the recorded-
+    column arm alone leaves the derived branch claiming `paired: true` over disjoint
+    arms — the false claim this slice exists to remove, and one that no test of the
+    column arm can see.
+
+    The derived branch's other fields are asserted `None` here as the shape they
+    already have; task 15 is what makes that a GUARD rather than an accident of an
+    empty intersection."""
+    block, _ = _unpaired_contrast_call(
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+    )
+    entry = block["s"]["m"]
+    assert entry["paired"] is False
+    assert entry["n_of"] == 5 and entry["n_against"] == 25
+    assert entry["delta"] is None and entry["method"] is None and entry["ci95"] is None
+
+
+def test_differing_axes_docstring_names_no_caller():
+    """The docstring named its two callers and one of them by a claim this slice
+    falsifies — "the (temporarily) hard-coded `paired`". A call-site enumeration is
+    a maintenance obligation nobody owns and a fresh chance to be wrong, so it is
+    DELETED rather than rewritten: a rewrite invents, a deletion cannot.
+
+    Asserted against the surviving text so the deletion cannot be re-seeded as a
+    paraphrase, which is how a deleted claim came back three times on H4b-2 — the
+    check is on the words that carried the claim, plus a control that the docstring
+    still exists."""
+    from publishable.contrasts import differing_axes
+
+    doc = differing_axes.__doc__ or ""
+    assert "declaration order" in doc  # the control
+    assert "temporarily" not in doc
+    assert "hard-coded" not in doc
+    assert "_comparison_step_blocks" not in doc
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])
