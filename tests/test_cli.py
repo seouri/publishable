@@ -1,5 +1,6 @@
 import hashlib
 import importlib
+import inspect
 import json
 import re
 import subprocess
@@ -3134,6 +3135,29 @@ def test_a_comparison_reads_its_own_condition_not_condition_zero():
     assert [(m.where, m.step, m.metric) for m in members] == [("cond:2", "s", "r")]
     assert members[0].delta == pytest.approx(block["s"]["r"]["delta"])
     assert members[0].delta != 0.0
+
+
+def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
+    """The H4c tripwire, and the reason two PAIRED clustered constructions were
+    enough for H4b-2.
+
+    `_comparison_step_blocks` writes `paired` as a literal `True` at both metric
+    branches, so every comparison surviving `E-DATA-ALLOCATION-CONTRAST` is paired
+    and no unpaired contrast interval is ever asked for. The obvious runtime pin —
+    "fail if `paired` is ever `False`" — is a mutation whose two branches cannot
+    differ, because there is no runtime state to assert against. So the LITERAL is
+    what is pinned: the moment H4c makes either site conditional, this fails and
+    forces whoever does it to confront the clustered unpaired constructions, which
+    do not exist.
+
+    Both counts are asserted, and that is the point: the first alone passes under a
+    third branch writing `"paired": is_paired`, and the second alone passes under
+    two sites that both became conditional."""
+    from publishable.cli import _comparison_step_blocks
+
+    source = inspect.getsource(_comparison_step_blocks)
+    assert source.count('"paired": True') == 2
+    assert source.count('"paired":') == 2
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])

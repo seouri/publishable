@@ -8076,6 +8076,29 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_confi
     }
 
 
+def test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal(write_config, tmp_path):
+    """The behavioural half of H4b-2 task 5's H4c tripwire, and the half that
+    survives the literal being refactored.
+
+    H4b-2 builds PAIRED clustered constructions only, which is sufficient exactly
+    while every unpaired comparison is refused before it reaches `cli`. Asserted
+    ALONGSIDE `E-DATA-CLUSTER-CONTRAST` rather than as a total code set, so H4b-2
+    task 14's retirement is a one-line deletion here.
+
+    `validate` collects rather than aborting, so the cluster refusal firing does not
+    make the allocation one unreachable — both are reported over the one
+    comparison, and this asserts both."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
+    doc = _groups_cluster_doc(
+        statistics={
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
+        }
+    )
+    found = _error_codes(write_config(doc))
+    assert "E-DATA-ALLOCATION-CONTRAST" in found
+    assert "E-DATA-CLUSTER-CONTRAST" in found  # deleted by task 14, not narrowed
+
+
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
 #
 # `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in

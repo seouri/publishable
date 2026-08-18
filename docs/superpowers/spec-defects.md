@@ -6399,3 +6399,25 @@ recording no `clustered_by` key.
 claim.
 
 **Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
+
+## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
+
+Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
+metric branches, so no code path produces an unpaired contrast entry and every comparison reaching
+that function survived `E-DATA-ALLOCATION-CONTRAST`. That is why H4b-2 built
+`paired_t_over_units_clustered` and `paired_percentile_over_units_clustered` and no unpaired
+counterparts: they are unreachable, not merely unbuilt.
+
+**The dependency runs the other way for H4c.** The slice that retires
+`E-DATA-ALLOCATION-CONTRAST` must build `welch_t_over_units_clustered` and
+`unpaired_percentile_over_units_clustered` in the same slice, or a clustered cross-arm comparison
+will take a paired construction over an empty intersection. Two tripwires pin it, deliberately
+neither of them the obvious "assert `paired` is never `False`", which is a mutation whose branches
+cannot differ:
+
+- `tests/test_cli.py::test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`
+  fails the moment either literal becomes conditional.
+- `tests/test_validate.py::test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`
+  fails the moment the refusal stops firing for a cross-arm comparison.
+
+**Ruled by:** H4b-2, task 5. **Owner of the obligation:** H4c.
