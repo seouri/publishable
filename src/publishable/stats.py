@@ -260,6 +260,61 @@ def weighted_t_over_units(
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units")
 
 
+def _cr1_variance(
+    values: Sequence[float], keys: Sequence[str], membership: Mapping[str, str]
+) -> tuple[float, int] | None:
+    """The CR1 sandwich variance of the mean, and the cluster count its df reads.
+
+    One expression for the cluster-robust variance, and three callers:
+    `t_over_units_clustered` puts it in a per-condition interval,
+    `paired_t_over_units_clustered` reaches it through that one, and
+    `welch_t_over_units_clustered` combines two of them. A second sandwich is how a
+    paired interval and a per-condition one come to disagree about what
+    cluster-robust means, which is the argument `paired_t_over_units_clustered`'s
+    docstring already makes for delegating rather than hand-rolling — and a Welch
+    form cannot delegate to `t_over_units_clustered` itself, because it needs the
+    variance and the count and that function returns an `Interval`.
+
+    The model core fits is the mean, so the sandwich is the intercept-only case:
+    with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the variance of
+    the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample scaling is the
+    `G/(G−1)` factor**, and dropping it is not a rounding difference — it is the CR0
+    estimator wearing this one's name, biased downward by exactly the factor a small
+    cluster count makes largest. The two literature conventions for CR1 coincide
+    here, since `k` is 1 for a mean.
+
+    `None` below two values or below two clusters: the df every caller derives from
+    the count would be zero, and each caller's own floor is that same refusal
+    reported in its own terms. Returning the count rather than only the variance is
+    what lets a Welch caller give each side `G_s − 1` df without recounting.
+
+    The membership mapping is `units.clusters_of`'s, passed whole rather than
+    pre-resolved, and the count comes from `units.cluster_count_of` — the single
+    counting expression, so no df here can disagree with the `n.clusters` printed
+    beside it. Indexed rather than `.get`-ed: a key the roster doesn't hold is a
+    core defect, and absorbing it into a cluster of its own would raise `G` and
+    narrow the interval. `strict=True` on the zip, because a keys/values length
+    mismatch is a misaligned cluster vector and would produce a plausible number
+    rather than an error.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    mean = sum(values) / n
+    # One residual sum per cluster: what makes this robust is that the residuals
+    # are added up WITHIN a cluster before being squared, so correlated units
+    # reinforce each other instead of counting as independent draws.
+    scores: dict[str, float] = {}
+    for key, value in zip(keys, values, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + (value - mean)
+    meat = sum(s * s for s in scores.values())
+    return (groups / (groups - 1)) * meat / (n * n), groups
+
+
 def t_over_units_clustered(
     values: Sequence[float],
     keys: Sequence[str],
@@ -277,54 +332,22 @@ def t_over_units_clustered(
     df it uses, so widening is not evidence that the cluster count reached the
     critical value; only the number is.
 
-    The model core fits here is the mean, so the sandwich is the intercept-only
-    case: with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the
-    variance of the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample
-    scaling is the `G/(G−1)` factor**, and dropping it is not a rounding
-    difference — it is the CR0 estimator wearing this one's name, biased downward
-    by exactly the factor a small cluster count makes largest.
-
-    Two conventions for CR1 exist in the literature — the `G/(G−1)` of
-    MacKinnon–White, and Stata's `G/(G−1) · (n−1)/(n−k)` — and **they coincide
-    here**: `k`, the number of fitted parameters, is 1 for a mean, so the second
-    factor is `(n−1)/(n−1)`. There is nothing to choose between, which is why this
-    function names neither in its `method` string.
-
     Returns `None` below two clusters, and for the same reason `t_over_units`
     returns `None` below two values: df would be zero. That floor is on the
     CLUSTER count, so 300 cells from one animal get a point and no interval —
     which is the honest answer, one animal being one draw. The `len(values) < 2`
     guard in front of it is `t_over_units`' own floor, kept so the two
-    constructions refuse the same degenerate inputs.
-
-    **The membership mapping is `units.clusters_of`'s**, passed whole rather than
-    pre-resolved to a label vector, and the count comes from
-    `units.cluster_count_of` — the single counting expression, so this df cannot
-    disagree with the `n.clusters` printed beside it or with a fold's partition
-    about what one cluster is. Indexed rather than `.get`-ed for the reason
-    `cluster_count_of` states: a key the roster doesn't hold is a core defect, and
-    absorbing it into a cluster of its own would raise `G` and narrow the interval.
-
-    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
-    keys/values length mismatch is a misaligned cluster vector, and it would
-    produce a plausible number rather than an error.
+    constructions refuse the same degenerate inputs. Both floors, and the sandwich
+    itself, live in `_cr1_variance`.
     """
     n = len(values)
     if n < 2:
         return None
-    groups = cluster_count_of(membership, keys)
-    if groups < 2:
+    got = _cr1_variance(values, keys, membership)
+    if got is None:
         return None
+    variance, groups = got
     mean = sum(values) / n
-    # One residual sum per cluster: what makes this robust is that the residuals
-    # are added up WITHIN a cluster before being squared, so correlated units
-    # reinforce each other instead of counting as independent draws.
-    scores: dict[str, float] = {}
-    for key, value in zip(keys, values, strict=True):
-        label = membership[key]
-        scores[label] = scores.get(label, 0.0) + (value - mean)
-    meat = sum(s * s for s in scores.values())
-    variance = (groups / (groups - 1)) * meat / (n * n)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
     return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
 
@@ -472,6 +495,81 @@ def welch_t_over_units(
     delta = mean_of - mean_against
     half = _t_critical(df, confidence) * math.sqrt(total)
     return Interval(low=delta - half, high=delta + half, method="welch_t_over_units")
+
+
+def welch_t_over_units_clustered(
+    of: Sequence[float],
+    of_labels: Sequence[str],
+    against: Sequence[float],
+    against_labels: Sequence[str],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) Welch *t* on two independent condition means.
+
+    `reference.md` § Statistical reporting's suffix rule: under a declared
+    `cluster_by` each unweighted contrast construction "takes a `_clustered` suffix
+    and reads the cluster as the draw", the *t* forms being cluster-robust (CR1)
+    "over the differenced values when paired and over the arm-level ones when not"
+    — this is the "when not" half. The design it is load-bearing for is
+    § Clustered units' matched case-control: "The contrast stays unpaired, since no
+    unit appears in both arms, but its interval is cluster-robust on the matched
+    set — so the effective `n` is the number of sets rather than the number of
+    subjects, which is the accounting a matched design needs."
+
+    **The df is Welch-Satterthwaite over the two cluster-robust per-side variances,
+    each side contributing `G_s` − 1**, which § Statistical reporting states since
+    H4c and which code could not emit before it did. The substitution the suffix
+    rule describes happens inside each side's own variance and its own df, and
+    combining them is what the unclustered Welch form already does. Two readings
+    are rejected rather than merely unused: `min(G_of, G_against) − 1` discards a
+    side's information and contradicts "df = clusters − 1" on the side it discards,
+    and `G_total − 2` is the **pooled** reading `welch_t_over_units` refuses by
+    construction.
+
+    **A cluster-robust interval that is merely wider is not evidence the cluster
+    count reached the critical value.** Over positively correlated data it comes out
+    wider whatever df it uses — `t_over_units_clustered` says so — so only the
+    number is evidence, and a fixture whose two sides carry the same cluster count
+    cannot see a construction reading one side's.
+
+    `of_labels`/`against_labels` are one cluster label per value, in the same order,
+    per side, rather than the `keys` + `membership` pairs the per-condition form
+    takes: both callers hold two per-side vectors and nothing else, and
+    `correction.UnpairedEvidence` carries exactly that pair. The positional keys
+    synthesized below are a **bijection**, not a proxy — `_cr1_variance` uses a key
+    only to look its label up and to count distinct labels — and the two sides get
+    disjoint synthetic key spaces so neither side's count can read the other's.
+
+    `None` below two values or below two clusters on **either** side, both inherited
+    from `_cr1_variance`: that side's df would be zero. `None` also where both
+    variances are zero, for the reason `welch_t_over_units` gives — the df is then
+    0/0 — which a fixture with values constant within cluster but varying across
+    clusters cannot reach.
+    """
+    of_keys = [f"of{i}" for i in range(len(of))]
+    against_keys = [f"ag{i}" for i in range(len(against))]
+    got_of = _cr1_variance(of, of_keys, dict(zip(of_keys, of_labels, strict=True)))
+    got_against = _cr1_variance(
+        against, against_keys, dict(zip(against_keys, against_labels, strict=True))
+    )
+    if got_of is None or got_against is None:
+        return None
+    var_of, groups_of = got_of
+    var_against, groups_against = got_against
+    total = var_of + var_against
+    if total <= 0.0:
+        return None
+    # Welch-Satterthwaite with each side's df taken from its OWN cluster count —
+    # the substitution the suffix rule makes, applied inside each side's variance
+    # and its df rather than to the combination.
+    df = (
+        total
+        * total
+        / (var_of * var_of / (groups_of - 1) + var_against * var_against / (groups_against - 1))
+    )
+    delta = sum(of) / len(of) - sum(against) / len(against)
+    half = _t_critical(df, confidence) * math.sqrt(total)
+    return Interval(low=delta - half, high=delta + half, method="welch_t_over_units_clustered")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:

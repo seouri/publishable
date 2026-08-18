@@ -10,6 +10,7 @@ from publishable.stats import (
     Interval,
     PairedResample,
     UnitTable,
+    _cr1_variance,
     _percentile_ranks,
     _sample_variance,
     _t_critical,
@@ -38,6 +39,7 @@ from publishable.stats import (
     weighted_t_over_units,
     weighted_t_over_units_clustered,
     welch_t_over_units,
+    welch_t_over_units_clustered,
 )
 
 
@@ -4742,3 +4744,102 @@ def test_the_extracted_draw_pools_leaves_the_paired_draw_where_it_was():
             clusters=dict(zip(keys, labels, strict=True)),
         )
     assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+
+
+_CLUSTERED_OF = [0.0] * 2 + [15.0] * 3 + [30.0] * 4
+_CLUSTERED_OF_LABELS = ["p"] * 2 + ["q"] * 3 + ["r"] * 4
+_CLUSTERED_AGAINST = [2.0] * 2 + [4.0] * 3 + [6.0] * 3 + [8.0] * 4
+_CLUSTERED_AGAINST_LABELS = ["w"] * 2 + ["x"] * 3 + ["y"] * 3 + ["z"] * 4
+
+
+def test_the_unpaired_clustered_t_combines_two_per_side_cluster_dfs():
+    """Fixture B: `of` is 9 units in 3 clusters of 2/3/4 constant within cluster at
+    0/15/30, `against` 12 units in 4 clusters of 2/3/3/4 at 2/4/6/8. Values
+    constant within a cluster make each side's variance entirely BETWEEN-cluster,
+    so CR1 cannot approximate the IID form; the sizes are unequal so no count
+    assertion is forced; and the two cluster counts differ, 3 against 4, so a
+    construction reading one side's count writes a wrong integer.
+
+    Per-side CR1 variances 67.0782 (G = 3) and 1.5880 (G = 4), SE 8.2865,
+    Welch-Satterthwaite df over `G_s` − 1 = 2.0950, half-width 34.1481. Five wrong
+    readings give five other numbers: `min(G) − 1` gives 35.6540, `G_against − 1`
+    gives 26.3714, `G_total − 2` gives 21.3011, `n_of + n_against − 2` gives
+    17.3439, and the IID Welch form on the identical data gives 9.6472. **The
+    correct answer is above one of them and below four**, so an assertion on the
+    number discriminates every failure mode, which an assertion on "is it wider"
+    does not."""
+    interval = welch_t_over_units_clustered(
+        _CLUSTERED_OF,
+        _CLUSTERED_OF_LABELS,
+        _CLUSTERED_AGAINST,
+        _CLUSTERED_AGAINST_LABELS,
+    )
+    assert interval is not None
+    assert interval.method == "welch_t_over_units_clustered"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(12.833333333333332)
+    assert half == pytest.approx(34.14810237373095)
+
+
+def test_the_unpaired_clustered_t_is_not_the_iid_welch_form_on_the_same_data():
+    """The control that must report, and the number a membership-ignoring mutant
+    lands on. The IID Welch form over the identical values gives 9.6472 — three and
+    a half times narrower, at the same centre. **A test asserting the centre alone
+    is blind to clustering entirely**, which is why the centre is asserted only
+    beside the half-width above."""
+    plain = welch_t_over_units(_CLUSTERED_OF, _CLUSTERED_AGAINST)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(9.647234756296374)
+
+
+def test_the_unpaired_clustered_t_refuses_a_side_below_two_clusters():
+    """Both floors, per side: `None` below two values and `None` below two clusters,
+    where that side's df would be zero. The second is the one a singleton-cluster
+    fixture can never see — one unit per cluster makes `G − 1` equal `n − 1`, so
+    the clustered and IID forms coincide exactly and every assertion passes under a
+    mutant ignoring membership. Hence the last case, which is correct and is
+    exactly why no other test here may use that shape."""
+    assert (
+        welch_t_over_units_clustered(
+            _CLUSTERED_OF, ["p"] * 9, _CLUSTERED_AGAINST, _CLUSTERED_AGAINST_LABELS
+        )
+        is None
+    )
+    assert (
+        welch_t_over_units_clustered(
+            _CLUSTERED_OF, _CLUSTERED_OF_LABELS, _CLUSTERED_AGAINST, ["w"] * 12
+        )
+        is None
+    )
+    singletons = welch_t_over_units_clustered(
+        _CLUSTERED_OF,
+        [f"p{i}" for i in range(9)],
+        _CLUSTERED_AGAINST,
+        [f"w{i}" for i in range(12)],
+    )
+    iid = welch_t_over_units(_CLUSTERED_OF, _CLUSTERED_AGAINST)
+    assert singletons is not None and iid is not None
+    assert (singletons.high - singletons.low) == pytest.approx(iid.high - iid.low)
+
+
+def test_the_extracted_cr1_variance_leaves_the_clustered_t_where_it_was():
+    """The extraction is pure code motion and this is the oracle. H4b-2's own 2/4/6
+    fixture through `t_over_units_clustered` must give the half-width it gave
+    before `_cr1_variance` existed — 8.763214143637903, which
+    `tests/test_stats.py`'s paired clustered test already pins independently.
+
+    The `G/(G−1)` finite-sample scaling is what a careless move drops, and dropping
+    it is not a rounding difference: it is the CR0 estimator wearing CR1's name,
+    biased downward by exactly the factor a small cluster count makes largest."""
+    diffs = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    keys = [str(i) for i in range(12)]
+    plain = t_over_units_clustered(diffs, keys, dict(zip(keys, labels, strict=True)))
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(8.763214143637903)
+    got = _cr1_variance(diffs, keys, dict(zip(keys, labels, strict=True)))
+    assert got is not None
+    variance, groups = got
+    assert groups == 3
+    assert variance == pytest.approx((3 / 2) * 398.22222222222223 / (12 * 12))
