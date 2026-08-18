@@ -107,3 +107,38 @@ The plan says a pin whose values are captured afterwards is not one, and it is r
 recorded after the change records the change, not the baseline. **Cost if wrong:** the regression
 pin asserts the new behaviour against itself, which is the "assertion implied by another in the same
 test" shape.
+
+## Batch 1 — tasks 1, 4, 2, 3, 5 — the decisions and documents — complete, review dispatched
+
+Commits `3174e5a` (1), `7a55876` (4), `891518f` (2), `ee80d51` (3), `7efece7` (5), report `ce77241`.
+Suite 2159 → 2163 passed, 1 skipped, 2 xfailed; four gates clean. `E-DATA-CLUSTER-CONTRAST` alive.
+
+**Ruling carried out of task 1:** mint **`E-DATA-WEIGHT-CLUSTER-CONTRAST`** as a documented narrow
+refusal — both a § Errors and a § Validation row, not the `-UNSUPPORTED` build family — and do not
+build the weighted-clustered pair. Identifier verified free by a sweep with a can-fail control.
+**Cost if wrong:** H4c inherits a composition it must build rather than a refusal it may retire.
+
+**Ruling carried out of task 4, and it went the way the ledger's pairwise scan needed:**
+`E-DATA-CLUSTER-DERIVED` is **re-worded and re-owned to H4c by name** — not built — on the measured
+grounds that **the derived branch is unreachable in a clustered run**. That reachability fact is what
+makes task 2's "no `clustered_by` sibling needed" argument hold, so **two tasks rest on it** and the
+reviewer was told to verify it by running rather than by reading. **Cost if wrong:** an unsuffixed
+`method` becomes reachable and task 2's record-shape argument collapses with it.
+
+**Ruling carried out of task 3:** the degenerate-draw refusal is **content-based over the drawable
+item** (key or cluster), documented here and built at task 9. The live filing is **amended, not
+struck** — a strike belongs at task 16, since `spec-defects.md` strikes a gap when it *closes*.
+
+**Two implementer disagreements handed to the reviewer rather than accepted here.** Task 4's
+mutation fails one assertion earlier than predicted and takes three uncited collateral tests with
+it; and **task 2's committed df-clause overreaches beyond the *t* construction to the percentile
+one** — a prose over-claim of the exact shape that produced ten Majors across H4b-1's four batches.
+
+**Operational note, recorded because it nearly cost a silent corruption.** The host hit `ENOSPC`
+mid-task-5 **while a `validate.py` mutation was still applied**, and every write tool failed. The
+implementer did not proceed on an assumption: it confirmed by **reading** that the mutation was
+still in place, reverted it the instant a tool call succeeded, and redid both task-5 mutations from
+scratch against a verified-clean tree. No commit was made while the tree held an unreverted
+mutation. Root cause was ~1.3GB of stale `pytest-of-joon` temp directories. **This is the failure
+mode the revert-by-editing and verify-by-re-running rules exist for** — a `git checkout --` here, or
+a `git status` check instead of a read, would have destroyed or misreported the state.
