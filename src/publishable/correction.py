@@ -58,11 +58,11 @@ class UnpairedEvidence:
         for or handed back, and nothing here comes from outside core.
 
         Both sides are checked. A check reading one side passes any input whose
-        other side happens to align, and the two sides here are deliberately
-        different lengths in every fixture — an unpaired contrast whose arms were
-        the same size would make the pooled and Welch standard errors algebraically
-        identical, so a same-length assumption is wrong about the domain as well as
-        about the code.
+        other side happens to align. Equal per-side sizes make the pooled and
+        Welch standard errors algebraically identical, so a same-length assumption
+        is wrong about the domain as well as about the code — a discriminating
+        fixture needs unequal sides, though that is a property a fixture must
+        choose, not one this type enforces.
         """
         if self.clusters is None:
             return

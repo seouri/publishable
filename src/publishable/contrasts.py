@@ -127,11 +127,11 @@ def crossed_group_axes(of: "Condition", against: "Condition") -> list[str]:
     `groups × grid` design, control-pearson against control-spearman is paired and
     computable while control-pearson against treatment-pearson is not.
 
-    **One expression with two callers, deliberately.** `validate` refuses
-    `weight_by` beside a non-empty answer, and `cli._comparison_step_blocks` derives
-    the `paired` it records from the same answer. Two spellings of one rule drifting
-    apart is a defect this codebase has already shipped, and here the drift would be
-    `validate` refusing a shape `cli` records as paired.
+    **One expression, read wherever a comparison's pairing matters**, rather than a
+    second spelling of the same rule at each site: two spellings of one rule
+    drifting apart is a defect this codebase has already shipped, and here the
+    drift would be a refusal at one site disagreeing with what another site
+    records as paired.
 
     Returns the **list**, not a boolean: `validate`'s message names the axes and
     pluralizes on how many there are, and a boolean would force a second expression

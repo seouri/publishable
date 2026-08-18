@@ -826,8 +826,9 @@ def _comparison_step_blocks(
     but `weighted_by` and `n_paired_effective` still travel beside it, the same
     arrangement a weighted condition gets from `summarize_step`.
 
-    A recorded column takes `paired_t_over_units` over the per-unit
-    differences — `weighted_paired_t_over_units` under a declared weight, or
+    On the paired arm (`is_paired`), a recorded column takes
+    `paired_t_over_units` over the per-unit differences —
+    `weighted_paired_t_over_units` under a declared weight, or
     `paired_t_over_units_clustered` under a declared cluster (the two never
     coexist) — unless `resample_columns` is set **and the pairing has at least
     two units**, when it instead takes `paired_percentile_of_derived` over its
@@ -851,11 +852,13 @@ def _comparison_step_blocks(
     closure cancels on every draw: a zero-width `ci95` at zero beside a
     nonzero point-estimate delta. `cohens_d` is `None` for a derived metric,
     for the reason the worked example carries `cohens_d: null` for `r`. Both
-    constructions read `n_paired` off `stats.paired_keys` — the intersection
-    of the two conditions' completed units, narrowed by `within` when the
-    comparison declares one — and record `correction: null` as their default,
-    which is what the record says under `correction: none`, since nothing is
-    merged over it then.
+    paired constructions read `n_paired` off `stats.paired_keys` — the
+    intersection of the two conditions' completed units, narrowed by `within`
+    when the comparison declares one — and record `correction: null` as their
+    default, which is what the record says under `correction: none`, since
+    nothing is merged over it then. The unpaired arm reads `stats.unpaired_keys`
+    instead, has no intersection to report, and records `n_of`/`n_against` in
+    `n_paired`'s place.
 
     The second return value is the correction family's raw material: one
     `Member` per metric entry, carrying the evidence its interval was read from
@@ -1278,8 +1281,7 @@ def _comparison_step_blocks(
                     )
                 else:
                     # Per side once the sides are disjoint, and Welch's df reads
-                    # both. Two integers that cannot coincide, which is what makes
-                    # them a stronger discriminator than any float here.
+                    # both.
                     metric_block[metric_key]["n_clusters_of"] = cluster_count_of(clusters, of_col)
                     metric_block[metric_key]["n_clusters_against"] = cluster_count_of(
                         clusters, against_col
@@ -1290,14 +1292,17 @@ def _comparison_step_blocks(
                 # separate. `differs_on` names them so a reader knows which.
                 metric_block[metric_key]["confounded"] = True
                 metric_block[metric_key]["differs_on"] = list(differs_on)
-            # `Member` requires exactly one of `pool`/`diffs` wherever there is
-            # an interval to correct: the draws a percentile interval was read
-            # off, or the per-unit differences a *t* interval was computed
-            # from. An entry with no `ci95` is dropped by `family_members`
-            # before either field is ever read — but it does not necessarily
-            # carry neither: a column contrast whose resample ran but produced
-            # too few surviving draws for the confidence level still carries
-            # its (too-short) `pool` alongside a `None` `ci95`, and
+            # `Member` requires exactly one of `pool`/`diffs`/`sides` wherever
+            # there is an interval to correct: the draws a percentile interval
+            # was read off, the per-unit differences a *t* interval was computed
+            # from, or the two independent per-side vectors a Welch interval was
+            # computed from. This function never builds `sides` yet — that is
+            # task 14 — so only `pool`/`diffs` are reachable from here. An entry
+            # with no `ci95` is dropped by `family_members` before any of the
+            # three fields is ever read — but it does not necessarily carry
+            # none: a column contrast whose resample ran but produced too few
+            # surviving draws for the confidence level still carries its
+            # (too-short) `pool` alongside a `None` `ci95`, and
             # `Member.__post_init__` exempts that case rather than requiring
             # `pool`/`diffs` to be `None` too.
             #
@@ -1341,7 +1346,7 @@ def _comparison_step_blocks(
                     declaration_index=0,
                 )
             )
-            # Task 16 owns the per-side warning and its message. Until then, this
+            # Task 16 owns the per-side warning AND its message. Until then, this
             # is a placeholder: the same `base_keys if is_derived else col_keys`
             # count the paired arm already records as `n_paired` (deviation from
             # the brief's literal `len(col_keys) if is_paired else ...`, which
@@ -1349,7 +1354,10 @@ def _comparison_step_blocks(
             # `test_a_derived_key_collision_under_a_cluster_still_carries_the_
             # intersection_facts` and others hit it as `UnboundLocalError`), and
             # the thinner of the two side counts on the unpaired arm, which is
-            # the reading that cannot under-report in the interim.
+            # the reading that cannot under-report in the interim. The message
+            # text below still says `n_paired {reported_n}` on the unpaired arm,
+            # naming a key that entry does not carry — task 16's to reword, not
+            # this task's, since the message itself is explicitly its scope.
             reported_n = (
                 (len(base_keys) if is_derived else len(col_keys))
                 if is_paired

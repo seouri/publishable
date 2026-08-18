@@ -11,7 +11,14 @@ from publishable.correction import (
     family_shape,
     rank_family,
 )
-from publishable.stats import paired_t_over_units, paired_t_over_units_clustered
+from publishable.stats import (
+    interval_at,
+    paired_t_over_units,
+    paired_t_over_units_clustered,
+    weighted_paired_t_over_units,
+    welch_t_over_units,
+    welch_t_over_units_clustered,
+)
 
 
 def _m(where="1", step="s", metric="r", delta=0.1, ci95=(0.0, 0.2), decl=0):
@@ -198,7 +205,14 @@ def test_an_unpaired_clustered_members_corrected_bound_reads_its_own_two_cluster
     construction, whose own df is 8.399133841827005 and whose ratio is therefore a
     visibly different number — so this assertion catches a `clusters` field that was
     threaded onto the member and then dropped by the construction, which is the
-    failure H4b-2 pinned one axis over."""
+    failure H4b-2 pinned one axis over.
+
+    **The centre is asserted too.** Half-width alone does not pin which side is
+    `of` and which is `against`: swapping them in the clustered call leaves
+    `var_of + var_against` unchanged (it is symmetric) and only flips the centre,
+    so a half-width-only assertion is blind to that swap. Batch 3's review caught
+    this arm unpinned — its `of`/`against` swap was found only by a `zip()` length
+    crash from this fixture's 9-vs-12 asymmetry, not by any check of the value."""
     of = (0.0,) * 2 + (15.0,) * 3 + (30.0,) * 4
     against = (2.0,) * 2 + (4.0,) * 3 + (6.0,) * 3 + (8.0,) * 4
     labels = (
@@ -220,6 +234,7 @@ def test_an_unpaired_clustered_members_corrected_bound_reads_its_own_two_cluster
     assert bounds is not None
     half = (bounds[1] - bounds[0]) / 2
     assert half == pytest.approx(34.14810237373095 * 1.4227764722656022)
+    assert (bounds[0] + bounds[1]) / 2 == pytest.approx(12.833333333333332)
 
 
 def test_an_unpaired_percentile_member_reads_a_second_rank_pair_off_its_pool():
@@ -249,34 +264,71 @@ def test_the_five_t_arms_are_each_reached_by_one_member_shape():
     """Five *t* arms, counted rather than carried: two under `sides` and three under
     `diffs`, plus the `pool` fall-through. **An implementer writing six leaves an arm
     no input reaches, and one writing four leaves a cell falling through to a wrong
-    construction** — so every arm is asserted by the construction its `method` names,
-    read off the raw interval each arm rebuilds.
+    construction** — so every arm is asserted against a **direct call of the
+    construction its `method` names**, at the same corrected confidence, rather than
+    by non-`None`-ness and distinctness alone: a distinctness assertion over the six
+    bounds only catches a fall-through that happens to COLLIDE with a neighbour's
+    answer, and a fall-through that changes the number without colliding (dropping
+    `sides.clusters`, say) would leave that assertion green — batch 3's review
+    caught exactly this gap.
 
-    Asserted as a table rather than one arm at a time, because the failure this
-    guards is a cell falling through to a NEIGHBOUR: an unpaired clustered member
-    taking the plain Welch arm gives a plausible number 3.5 times too narrow, and
-    every existing test still passes because nothing else builds that shape."""
+    Both `sides` fixtures are unequal per side (4-vs-3, 3-vs-4): § The discriminating
+    fixtures' constraint 1 — equal per-side sizes make the pooled and Welch standard
+    errors coincide algebraically, which would make a pooled-variance mutant on
+    either `sides` arm invisible here."""
     common = dict(where="c", step="s", metric="m", delta=1.0, declaration_index=0)
     diffs = (1.0, 2.0, 3.0, 4.0)
+    sides_clustered_of = (1.0, 1.0, 5.0, 5.0)
+    sides_clustered_of_labels = ("a", "a", "b", "b")
+    sides_clustered_against = (2.0, 2.0, 8.0)
+    sides_clustered_against_labels = ("c", "c", "d")
+    sides_plain_of = (1.0, 2.0, 3.0)
+    sides_plain_against = (4.0, 5.0, 7.0, 9.0)
+    diffs_clustered_clusters = ("a", "a", "b", "b")
+    diffs_weighted_weights = (1.0, 2.0, 1.0, 2.0)
+    pool = tuple(float(i) for i in range(400))
     shapes = {
         "sides_clustered": dict(
             pool=None,
             diffs=None,
             sides=UnpairedEvidence(
-                of=(1.0, 1.0, 5.0),
-                against=(2.0, 2.0, 8.0),
-                clusters=(("a", "a", "b"), ("c", "c", "d")),
+                of=sides_clustered_of,
+                against=sides_clustered_against,
+                clusters=(sides_clustered_of_labels, sides_clustered_against_labels),
             ),
         ),
         "sides_plain": dict(
             pool=None,
             diffs=None,
-            sides=UnpairedEvidence(of=(1.0, 2.0, 3.0), against=(4.0, 5.0, 7.0)),
+            sides=UnpairedEvidence(of=sides_plain_of, against=sides_plain_against),
         ),
-        "diffs_clustered": dict(pool=None, diffs=diffs, sides=None, clusters=("a", "a", "b", "b")),
-        "diffs_weighted": dict(pool=None, diffs=diffs, sides=None, weights=(1.0, 2.0, 1.0, 2.0)),
+        "diffs_clustered": dict(
+            pool=None, diffs=diffs, sides=None, clusters=diffs_clustered_clusters
+        ),
+        "diffs_weighted": dict(pool=None, diffs=diffs, sides=None, weights=diffs_weighted_weights),
         "diffs_plain": dict(pool=None, diffs=diffs, sides=None),
-        "pool": dict(pool=tuple(float(i) for i in range(400)), diffs=None, sides=None),
+        "pool": dict(pool=pool, diffs=None, sides=None),
+    }
+    # What each arm's `method` names, called directly at the same corrected
+    # confidence `_corrected_bounds(member, 0.025)` uses (1.0 - 0.025 = 0.975) — the
+    # reviewer's own verification, now pinned rather than re-established by hand
+    # each time.
+    expected = {
+        "sides_clustered": welch_t_over_units_clustered(
+            sides_clustered_of,
+            sides_clustered_of_labels,
+            sides_clustered_against,
+            sides_clustered_against_labels,
+            confidence=0.975,
+        ),
+        "sides_plain": welch_t_over_units(sides_plain_of, sides_plain_against, confidence=0.975),
+        "diffs_clustered": paired_t_over_units_clustered(
+            diffs, diffs_clustered_clusters, confidence=0.975
+        ),
+        "diffs_weighted": weighted_paired_t_over_units(
+            diffs, diffs_weighted_weights, confidence=0.975
+        ),
+        "diffs_plain": paired_t_over_units(diffs, confidence=0.975),
     }
     got = {}
     for name, fields in shapes.items():
@@ -284,6 +336,13 @@ def test_the_five_t_arms_are_each_reached_by_one_member_shape():
         got[name] = _corrected_bounds(member, 0.025)
     # Every arm returned a bound, so no shape fell through to the final `None`.
     assert all(v is not None for v in got.values()), got
+    # Each of the five *t* arms is bit-equal to a direct call of the construction
+    # its `method` names — the assertion a distinctness check cannot make, because
+    # it is blind to a fall-through that moves the number without colliding.
+    for name, interval in expected.items():
+        assert got[name] == (interval.low, interval.high), name
+    # The pool arm reads a second rank pair off the same pool `interval_at` would.
+    assert got["pool"] == interval_at(pool, 0.975)
     # And no two arms produced the same bound, so no shape fell through to a
     # neighbour's construction: five distinct *t* answers plus the pool's.
     assert len({tuple(v) for v in got.values() if v is not None}) == 6
