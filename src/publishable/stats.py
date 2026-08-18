@@ -73,7 +73,7 @@ def _t_critical(df: float, confidence: float) -> float:
 
 
 def _sample_variance(values: Sequence[float], mean: float) -> float:
-    """The unbiased sample variance, Σ(v − v̄)² / (n − 1) — the one copy in this module.
+    """The unbiased sample variance, Σ(v − v̄)² / (n − 1).
 
     Extracted for the reason `_t_critical` gives for itself: one expression rather
     than one per construction, because two copies is how two intervals over the
@@ -89,8 +89,10 @@ def _sample_variance(values: Sequence[float], mean: float) -> float:
 
     Undefined below two values — every caller floors above that first, which is
     where the "no dispersion to describe" refusal belongs. `weighted_t_over_units`
-    and `cohens_dz` deliberately do NOT call this: their denominators are
-    `Σw − Σw²/Σw` and a difference vector's own, which are different quantities.
+    deliberately does NOT call this: its denominator is `Σw − Σw²/Σw`, a different
+    quantity. `cohens_dz` also does not call this — its own expression over the
+    difference vector is the same shape, left unwired as a scope choice this
+    extraction did not make.
     """
     return sum((v - mean) ** 2 for v in values) / (len(values) - 1)
 
@@ -265,15 +267,15 @@ def _cr1_variance(
 ) -> tuple[float, int] | None:
     """The CR1 sandwich variance of the mean, and the cluster count its df reads.
 
-    One expression for the cluster-robust variance, and three callers:
-    `t_over_units_clustered` puts it in a per-condition interval,
+    Three callers: `t_over_units_clustered` puts it in a per-condition interval,
     `paired_t_over_units_clustered` reaches it through that one, and
-    `welch_t_over_units_clustered` combines two of them. A second sandwich is how a
-    paired interval and a per-condition one come to disagree about what
-    cluster-robust means, which is the argument `paired_t_over_units_clustered`'s
-    docstring already makes for delegating rather than hand-rolling — and a Welch
-    form cannot delegate to `t_over_units_clustered` itself, because it needs the
-    variance and the count and that function returns an `Interval`.
+    `welch_t_over_units_clustered` combines two of them. A second sandwich among
+    those three is how a paired interval and a per-condition one come to disagree
+    about what cluster-robust means, which is the argument
+    `paired_t_over_units_clustered`'s docstring already makes for delegating
+    rather than hand-rolling — and a Welch form cannot delegate to
+    `t_over_units_clustered` itself, because it needs the variance and the count
+    and that function returns an `Interval`.
 
     The model core fits is the mean, so the sandwich is the intercept-only case:
     with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the variance of
@@ -335,19 +337,15 @@ def t_over_units_clustered(
     Returns `None` below two clusters, and for the same reason `t_over_units`
     returns `None` below two values: df would be zero. That floor is on the
     CLUSTER count, so 300 cells from one animal get a point and no interval —
-    which is the honest answer, one animal being one draw. The `len(values) < 2`
-    guard in front of it is `t_over_units`' own floor, kept so the two
-    constructions refuse the same degenerate inputs. Both floors, and the sandwich
-    itself, live in `_cr1_variance`.
+    which is the honest answer, one animal being one draw. Both floors, and the
+    sandwich itself, live in `_cr1_variance`; this function has no guard of its
+    own to duplicate them with.
     """
-    n = len(values)
-    if n < 2:
-        return None
     got = _cr1_variance(values, keys, membership)
     if got is None:
         return None
     variance, groups = got
-    mean = sum(values) / n
+    mean = sum(values) / len(values)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
     return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
 
@@ -473,9 +471,9 @@ def welch_t_over_units(
     still has a sampling distribution.
 
     Takes two value vectors and nothing else, for the reason
-    `paired_t_over_units_clustered` takes a label vector: `correction.Member`
-    carries them as `UnpairedEvidence`, and both callers hold two per-side vectors
-    with no roster between them.
+    `paired_t_over_units_clustered` takes a label vector: `correction.Member` will
+    carry them as `UnpairedEvidence` (task 11, not yet built), and both callers
+    hold two per-side vectors with no roster between them.
     """
     n_of, n_against = len(of), len(against)
     if n_of < 2 or n_against < 2:
@@ -535,10 +533,11 @@ def welch_t_over_units_clustered(
     `of_labels`/`against_labels` are one cluster label per value, in the same order,
     per side, rather than the `keys` + `membership` pairs the per-condition form
     takes: both callers hold two per-side vectors and nothing else, and
-    `correction.UnpairedEvidence` carries exactly that pair. The positional keys
-    synthesized below are a **bijection**, not a proxy — `_cr1_variance` uses a key
-    only to look its label up and to count distinct labels — and the two sides get
-    disjoint synthetic key spaces so neither side's count can read the other's.
+    `correction.UnpairedEvidence` will carry exactly that pair (task 11, not yet
+    built). The positional keys synthesized below are a **bijection**, not a
+    proxy — `_cr1_variance` uses a key only to look its label up and to count
+    distinct labels — and the two sides get disjoint synthetic key spaces so
+    neither side's count can read the other's.
 
     `None` below two values or below two clusters on **either** side, both inherited
     from `_cr1_variance`: that side's df would be zero. `None` also where both
@@ -1866,6 +1865,14 @@ def unpaired_percentile_of_sides(
             for _ in range(len(group))
             for key in group[rng.randrange(len(group))]
         ]
+        # Table construction is deliberately OUTSIDE the `try`, matching
+        # `paired_percentile_of_derived`'s own placement: a key drawn for one
+        # side that does not index that side's mapping is a caller-space bug —
+        # the two sides' disjoint key spaces make that reachable in a way the
+        # paired form's single shared key list cannot — and it must raise
+        # rather than be silently absorbed into "degenerate draw, continue"
+        # below. Only what `compute_of`/`compute_against` themselves do is
+        # allowed to fail quietly.
         table_of = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn_of])
         table_against = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn_against])
         try:

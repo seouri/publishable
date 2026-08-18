@@ -4692,11 +4692,22 @@ def test_the_unpaired_percentile_refuses_a_side_below_two_keys():
 
 
 def test_the_extracted_draw_pools_leaves_the_paired_draw_where_it_was():
-    """The extraction is pure code motion and this is the oracle. The paired
-    clustered draw over H4b-2's own 2/4/6 fixture must produce the same pool it
-    produced before `_draw_pools` existed — an RNG sequence that changed by one
-    call moves the percentiles without necessarily widening anything, so this
-    asserts the ENDPOINTS rather than the width.
+    """The extraction is pure code motion, and this is the oracle **for its
+    clustered branch**: the paired clustered draw over H4b-2's own 2/4/6 fixture
+    must produce the same pool it produced before `_draw_pools` existed — an RNG
+    sequence that changed by one call moves the percentiles without necessarily
+    widening anything, so this asserts the ENDPOINTS rather than the width.
+
+    **This test does not cover the unclustered branch.** Its own draw here always
+    passes `clusters=`, and its two `raises` arms fail before item order can matter
+    (`keys != sorted(keys)`) or take the clustered path themselves. The
+    unclustered branch's own sequence is pinned by
+    `test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was` and
+    `test_the_unpaired_percentile_draws_each_side_independently` — both of which
+    do move under a reversed unclustered `items` order, where this test's own
+    fixture happens not to (its endpoints survive the reversal here, a
+    coincidence of this particular fixture rather than a property of the
+    extraction).
 
     Both raises move with the body and are re-pinned here: an unsorted `keys` under
     `strata` still raises `ValueError`, and a cluster spanning two strata still
@@ -4858,7 +4869,16 @@ def test_the_unpaired_clustered_percentile_draws_whole_clusters_per_side():
 
     The two sides are asserted separately, because a construction passing
     `of_clusters` to both sides would give the `against` side `of`'s sizes and a
-    single pooled assertion would not notice."""
+    single pooled assertion would not notice.
+
+    **The endpoints below are construction-pinned, not merely captured.**
+    `-4.7272727272727275` = −52/11 and `23.242424242424242` = 767/33 are reachable
+    under a whole-cluster draw over this fixture (`of`: 3 cluster draws with
+    replacement from totals/sizes 0/2, 45/3, 120/4; `against`: 4 from 4/2, 12/3,
+    18/3, 32/4) and are **unreachable** under a unit draw over the same rows,
+    verified by exact-rational enumeration of both draws' achievable differences —
+    the two sets share the same range (−8 … 28), so only the denominators tell
+    them apart."""
     of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
     against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
     of_clusters = dict(zip(sorted(of_rows), _CLUSTERED_OF_LABELS, strict=True))
@@ -4893,7 +4913,13 @@ def test_the_unpaired_clustered_percentile_is_not_the_unclustered_one():
     """The control that must report. The same rows drawn as units give a different
     interval, and the endpoints of both are pinned as literals rather than compared
     only for inequality — `!=` alone passes for any third wrong pair, and it is the
-    weak-discriminator shape this slice bans by name."""
+    weak-discriminator shape this slice bans by name.
+
+    **These endpoints are construction-pinned too, the mirror image of the
+    clustered test's.** `4.0` and `19.833333333333332` = 119/6 are reachable under
+    a unit draw over these same rows and unreachable under the whole-cluster draw
+    above — verified by the same exact-rational enumeration, over the same shared
+    range (−8 … 28)."""
     of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
     against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
     compute, _ = _row_count_recorder()
