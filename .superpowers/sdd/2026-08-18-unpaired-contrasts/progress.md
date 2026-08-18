@@ -115,3 +115,42 @@ fixtures now separate every candidate by **>4%**, with the integer cluster count
 discriminator. The plan author reproduced **every literal in both fixtures** against the shipped
 `_t_critical`. **Cost if wrong:** the whole slice is statistics, and this repo has found sixteen
 checks that could not fail in statistics alone.
+
+## Batch 1 — tasks 1, 2, 3, 21 — the documents and the guarding pin — complete, review dispatched
+
+Commits `056d4a9` (the vocabulary ruled), `aac839f` (the record shape), `24a6241` (§ Allocation's
+example moved to `results.contrasts`, where a config can produce it), `670a625` (the paired-contrast
+regression pin, six cells with their corrected bounds, captured before H4c changes anything).
+Suite 2200 → **2208** passed, 1 skipped, 2 xfailed — delta +8, matching the brief. Four gates clean.
+`E-DATA-ALLOCATION-CONTRAST` alive.
+
+**Ruling carried out of task 1:** four `method` spellings — `welch_t_over_units` and
+`unpaired_percentile_over_units` are **existing § Statistical reporting rows**; their `_clustered`
+suffixes get **no new rows**, the suffix rule licensing them; and the weighted unpaired pair gets **no
+spelling at all**, refused under the newly minted **`E-DATA-WEIGHT-ALLOCATION-CONTRAST`**. The
+unpaired clustered *t* df is **Welch-Satterthwaite over two cluster-robust per-side variances**, each
+contributing `G_s − 1`, with `min(G)−1` and `G_total−2` **named as rejected** so nobody re-derives
+them. **Cost if wrong:** H4d inherits a composition to build rather than a refusal to retire.
+
+**Ruling carried out of task 2:** `n_paired` is **narrowed to paired contrasts** and **absent — not
+null** on an unpaired entry, replaced by `n_of`/`n_against` and `n_clusters_of`/`n_clusters_against`,
+**named in `reference.md` before any code writes them**. `0` is already taken: it means *pairing
+failed* and is live-pinned, so absence is the only free encoding.
+
+**Task 3 applied the spec's own correction rather than the spec.** § Allocation's example metric `r`
+is **derived**, so the repair as the spec wrote it would have shipped a record **this batch's own
+task 2 forbids**. `abs_error` replaced it. That is the plan-outranks-spec / code-outranks-both rule
+working in the direction it is supposed to, one link further down the chain than usual.
+
+**Handed to the reviewer rather than accepted here:** the identifier-free sweep for
+`E-DATA-WEIGHT-ALLOCATION-CONTRAST` **excluded `docs/superpowers/`**, which is either legitimate
+(that tree is evidence, not specification) or the filter-the-output trap wearing a plausible reason.
+And mutation 1 came back **blind as predicted** — the reviewer was told to attempt an overturn, since
+one such claim on H4b-2 fell to a one-line fixture change.
+
+**Process note.** Several `pytest` runs exceeded the harness's 120s foreground timeout and were
+**auto-backgrounded by the tool**, not by choice. Each was allowed to finish before any further edit
+and no mutation was left applied across a transition. Recording it because the foreground rule exists
+to prevent losing track of an applied mutation, and an *involuntary* backgrounding is the same hazard
+arriving without the decision — the mitigation that worked was reading state before editing, not
+avoiding the transition.
