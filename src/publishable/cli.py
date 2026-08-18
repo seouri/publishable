@@ -25,7 +25,7 @@ from publishable.contrasts import (
     resolve_contrasts,
     units_matching,
 )
-from publishable.correction import Member, corrected_fields
+from publishable.correction import Member, UnpairedEvidence, corrected_fields
 from publishable.diagnostics import (
     EXIT_FAILED,
     EXIT_INVOCATION,
@@ -66,6 +66,7 @@ from publishable.scope import Execution, build_plan
 from publishable.secrets import credential_values, load_env
 from publishable.stats import (
     UnitTable,
+    cohens_ds,
     cohens_dz,
     collapse_repeats,
     kish_effective_n,
@@ -81,9 +82,12 @@ from publishable.stats import (
     summarize_step,
     unit_table_from_rows,
     unpaired_keys,
+    unpaired_percentile_of_sides,
     weighted_cohens_dz,
     weighted_mean_of,
     weighted_paired_t_over_units,
+    welch_t_over_units,
+    welch_t_over_units_clustered,
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -968,6 +972,15 @@ def _comparison_step_blocks(
             col_clusters: list[str] | None = None
             of_col: list[str] = of_side_keys
             against_col: list[str] = against_side_keys
+            # Bound here too, beside `col_weights`/`col_clusters` above and for the
+            # same reason: only the unpaired arm below assigns them, and relying on
+            # `corrected_from_pool or is_paired`'s short-circuit to keep them out of
+            # reach at the `Member` call would make an unrelated refactor of that
+            # expression silently load-bearing.
+            of_values: list[float] | None = None
+            against_values: list[float] | None = None
+            of_clusters: dict[str, str] | None = None
+            against_clusters: dict[str, str] | None = None
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
@@ -1206,11 +1219,55 @@ def _comparison_step_blocks(
                     of_values = [of_collapsed[k][metric_key] for k in of_col]
                     against_values = [against_collapsed[k][metric_key] for k in against_col]
                     resampled = None
-                    # Task 14 selects the construction. Until it does, an unpaired
-                    # contrast records its delta and its two counts with no interval
-                    # — a point with no interval, which is the honest shape every
-                    # construction in `stats.py` already returns below its floor.
-                    interval = None
+                    of_clusters = None if clusters is None else {k: clusters[k] for k in of_col}
+                    against_clusters = (
+                        None if clusters is None else {k: clusters[k] for k in against_col}
+                    )
+                    if resample_columns and len(of_col) >= 2 and len(against_col) >= 2:
+                        # The same closure the paired arm uses, and the same
+                        # argument for reusing it: both sides compute the mean of
+                        # the same column, which is one formula rather than the
+                        # shared-closure cancellation a swept axis produces. No
+                        # weight branch, because a weighted unpaired comparison
+                        # raises above.
+                        def _unpaired_column_mean(
+                            table: UnitTable, _name: str = metric_key
+                        ) -> float:
+                            column: list[float] = getattr(table, _name)
+                            return float(sum(column) / len(column))
+
+                        resampled = unpaired_percentile_of_sides(
+                            of_collapsed,
+                            against_collapsed,
+                            of_col,
+                            against_col,
+                            _unpaired_column_mean,
+                            _unpaired_column_mean,
+                            seed,
+                            draws=draws,
+                            strata=strata,
+                            # One spelling per declaration. The construction is ONE
+                            # function serving two `method` strings, so the string is
+                            # the caller's to pass — the asymmetry with the *t* arm
+                            # below, where each spelling is its own function.
+                            method=(
+                                "unpaired_percentile_over_units_clustered"
+                                if clusters is not None
+                                else "unpaired_percentile_over_units"
+                            ),
+                            of_clusters=of_clusters,
+                            against_clusters=against_clusters,
+                        )
+                        interval = resampled.interval
+                    elif of_clusters is not None and against_clusters is not None:
+                        interval = welch_t_over_units_clustered(
+                            of_values,
+                            [of_clusters[k] for k in of_col],
+                            against_values,
+                            [against_clusters[k] for k in against_col],
+                        )
+                    else:
+                        interval = welch_t_over_units(of_values, against_values)
                     of_mean = mean_of(of_values)
                     against_mean = mean_of(against_values)
                     metric_block[metric_key] = {
@@ -1229,7 +1286,14 @@ def _comparison_step_blocks(
                         "n_of": len(of_col),
                         "n_against": len(against_col),
                         "ci95": [interval.low, interval.high] if interval else None,
-                        "cohens_d": None,
+                        # *d*s over the pooled within-condition sd — § Statistical
+                        # reporting: unpaired contrasts report *d*s and it pools
+                        # where `welch_t_over_units` deliberately doesn't. Keyed on
+                        # `is_paired`, not on which interval arm ran, the same way
+                        # `cohens_dz` survives the resample switch above: computed
+                        # from the local vectors rather than from anything the
+                        # `Member` carries.
+                        "cohens_d": cohens_ds(of_values, against_values),
                         "correction": None,
                     }
             # The three facts a weight adds to a contrast entry, and they move
@@ -1337,6 +1401,36 @@ def _comparison_step_blocks(
                     # disagree about which evidence this member carries.
                     clusters=(
                         None if corrected_from_pool or col_clusters is None else tuple(col_clusters)
+                    ),
+                    # The single decision, read once for all four fields now:
+                    # "the same decision, read once for all three fields, so
+                    # `pool`, `weights` and `clusters` cannot disagree" extends to
+                    # a fourth. An unpaired contrast never carries `diffs` (above)
+                    # and never reaches here under `corrected_from_pool` — a
+                    # resampled unpaired column carries the POOL instead, the same
+                    # `corrected_from_pool` decision the paired arm reads.
+                    # The single decision, read once for all four fields now:
+                    # "the same decision, read once for all three fields, so
+                    # `pool`, `weights` and `clusters` cannot disagree" extends to
+                    # a fourth. An unpaired contrast never carries `diffs` (above)
+                    # and never reaches here under `corrected_from_pool` — a
+                    # resampled unpaired column carries the POOL instead, the same
+                    # `corrected_from_pool` decision the paired arm reads.
+                    sides=(
+                        None
+                        if corrected_from_pool or is_paired
+                        else UnpairedEvidence(
+                            of=tuple(of_values or ()),
+                            against=tuple(against_values or ()),
+                            clusters=(
+                                None
+                                if of_clusters is None or against_clusters is None
+                                else (
+                                    tuple(of_clusters[k] for k in of_col),
+                                    tuple(against_clusters[k] for k in against_col),
+                                )
+                            ),
+                        )
                     ),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates

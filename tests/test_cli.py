@@ -3189,6 +3189,15 @@ def _clustered_contrast_call(**extra):
 _UNPAIRED_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
 _UNPAIRED_AGAINST = [5.0] * 12 + [15.0] * 12 + [10.0]
 
+# Hoisted to a module constant (task 14) so this and task 10's cluster-count
+# test share one fixture rather than two spellings that could drift: the `of`
+# side gets 3 clusters (2/2/1) and `against` gets 4 (7/7/7/4) — two integers
+# that cannot coincide, which is the documented "both 3" failure closed by
+# construction.
+_UNPAIRED_CLUSTERS = {f"t{i:02d}": f"g{i // 2}" for i in range(5)} | {
+    f"c{i:02d}": f"h{i // 7}" for i in range(25)
+}
+
 
 def _unpaired_contrast_call(**extra):
     """`_comparison_step_blocks` over fixture A, two disjoint arms.
@@ -3343,15 +3352,121 @@ def test_an_unpaired_clustered_contrast_records_two_cluster_counts_and_no_paired
     `cluster_count_of` is the single counting expression, the one `attrition`'s
     `n.clusters` and every clustered df read; `len(set(...))` here would be a second
     authority for one number."""
-    of_keys = [f"t{i:02d}" for i in range(5)]
-    against_keys = [f"c{i:02d}" for i in range(25)]
-    clusters = {k: f"g{i // 2}" for i, k in enumerate(of_keys)}  # 3 clusters: 2/2/1
-    clusters |= {k: f"h{i // 7}" for i, k in enumerate(against_keys)}  # 4: 7/7/7/4
-    block, _ = _unpaired_contrast_call(clusters=clusters)
+    block, _ = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
     entry = block["s"]["m"]
     assert entry["n_clusters_of"] == 3
     assert entry["n_clusters_against"] == 4
     assert "n_paired_clusters" not in entry
+
+
+@pytest.mark.parametrize(
+    "clustered,resampled,expected",
+    [
+        (False, False, "welch_t_over_units"),
+        (False, True, "unpaired_percentile_over_units"),
+        (True, False, "welch_t_over_units_clustered"),
+        (True, True, "unpaired_percentile_over_units_clustered"),
+    ],
+)
+def test_every_reachable_unpaired_contrast_cell_writes_its_own_method(
+    clustered, resampled, expected
+):
+    """Every reachable combination of `cluster_by` and a declared `resample` on an
+    unpaired comparison, and the `method` § Statistical reporting defines or licenses
+    for each. The two weighted cells are absent by construction —
+    `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses them at `validate` and
+    `_comparison_step_blocks` raises on them — so this is a four-cell table over two
+    independent declarations rather than a six-cell one with cells missing.
+
+    Asserted as a table because the failure this guards is a cell FALLING THROUGH to
+    a neighbour's `method`: an implementer writing two arms leaves two cells
+    publishing a string naming a construction the run did not use, and every
+    existing test still passes since nothing else builds those fixtures."""
+    block, _ = _unpaired_contrast_call(
+        resample_columns=resampled,
+        clusters=_UNPAIRED_CLUSTERS if clustered else None,
+    )
+    assert block["s"]["m"]["method"] == expected
+
+
+def test_an_unpaired_column_contrast_takes_the_welch_t():
+    """Fixture A through the record. Delta 10, and the half-width 3.039125537798091
+    at df 96/7 — **the number is the assertion**, because a Welch interval that
+    coincides with a pooled one proves nothing, and the pooled reading on this data
+    gives 4.7221 while `min(n) − 1` gives 3.9265 and the total-df reading 2.8969.
+
+    All three facts move together, which is the obligation H4b-1 pinned after a
+    per-side key passed under a hardcoded constant: the interval, the `method` and
+    the two counts."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["method"] == "welch_t_over_units"
+    assert entry["delta"] == pytest.approx(10.0)
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(3.039125537798091)
+    assert entry["n_of"] == 5 and entry["n_against"] == 25
+
+
+def test_an_unpaired_column_contrast_reports_cohens_ds_not_dz():
+    """§ Statistical reporting: unpaired contrasts report *d*s over the pooled
+    within-condition sd, and *d*s pools where `welch_t_over_units` deliberately
+    doesn't. On fixture A the pooled sd is 4.705619740571601, so *d*s is
+    2.1251185925162073 — while standardizing by the interval's own Welch
+    denominator would give 7.0710678118654755, a factor of 3.33.
+
+    **The literal is the assertion, not `is not None`.** A *d* is a number readers
+    compare across papers, and every wrong denominator here still returns a
+    plausible float."""
+    block, _ = _unpaired_contrast_call()
+    assert block["s"]["m"]["cohens_d"] == pytest.approx(2.1251185925162073)
+
+
+def test_an_unpaired_contrast_member_carries_two_sides_and_no_diffs():
+    """The member is what the correction family rebuilds from, so an unpaired raw
+    interval whose member carried no per-side vectors would get no corrected bound
+    at all — `thin: True` over a member that was never thin. Asserted beside
+    `diffs is None` and `pool is None`, because `_corrected_bounds` tests `sides`
+    first and a member carrying two kinds is refused rather than resolved.
+
+    Under a declared `resample` the member carries the POOL instead and `sides` is
+    `None`, the same single `corrected_from_pool` decision the paired arm reads once
+    for all its fields — asserted here so the two cannot disagree."""
+    _, members = _unpaired_contrast_call()
+    assert len(members) == 1
+    assert members[0].sides is not None
+    assert members[0].sides.of == tuple(_UNPAIRED_OF)
+    assert members[0].sides.against == tuple(_UNPAIRED_AGAINST)
+    assert members[0].sides.clusters is None
+    assert members[0].diffs is None and members[0].pool is None
+    _, clustered = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
+    assert clustered[0].sides is not None
+    assert clustered[0].sides.clusters is not None
+    assert len(clustered[0].sides.clusters[0]) == 5
+    assert len(clustered[0].sides.clusters[1]) == 25
+    _, resampled = _unpaired_contrast_call(resample_columns=True)
+    assert resampled[0].sides is None
+    assert resampled[0].pool is not None
+
+
+def test_an_unpaired_clustered_contrast_records_its_two_counts_and_a_cluster_robust_interval():
+    """The three facts a cluster adds to an unpaired entry, moving together: the
+    interval reads the cluster as the draw, the `method` says so, and the two
+    counts say how many clusters each side has. **A cluster-robust interval that is
+    merely wider is not evidence** — over positively correlated data it comes out
+    wider whatever df it uses — so the two integer counts carry the discrimination
+    a float assertion could be argued about, and they cannot coincide: 3 against 4."""
+    block, _ = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
+    entry = block["s"]["m"]
+    assert entry["method"] == "welch_t_over_units_clustered"
+    assert entry["n_clusters_of"] == 3
+    assert entry["n_clusters_against"] == 4
+    unclustered, _ = _unpaired_contrast_call()
+    assert entry["ci95"] != unclustered["s"]["m"]["ci95"]
+    # Captured from this test's first green run. Wider than the unclustered
+    # Welch half-width (3.039125537798091) and distinct from every one of
+    # fixture A's mutant half-widths (4.7221, 3.9265, 2.8969) — this fixture is
+    # fixture A's values with a 3/4 cluster split, not fixture B, so the number
+    # is new.
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(7.523292784674521)
 
 
 def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
