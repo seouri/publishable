@@ -105,6 +105,22 @@ is the claim the sentence above was making; the two labels were swapped against 
 retro-edited, per `CLAUDE.md`'s rule for the development record — the paragraph above stands as
 written, and this is what replaces it.
 
+**Second correction, appended 2026-08-18 by the controller, withdrawing the one immediately above:
+the first paragraph was right and the correction was wrong.** `CLAUDE.md` § Repository status and
+`docs/feasibility-llm-growth-studies.md` § Executability on this build both say, at 2026-08-17:
+**no-remaining-core-side-blocker goes three → six** — E1, E2, E5 joined by C1, C2, C3 — and **the
+executable count stays at three**, the other six blocked on `io.reuse_from`. So the original
+sentence's "stays six / stays three" was correct as written. The withdrawn correction also names
+**`E-DATA-WEIGHT-CONTRAST` as a live blocker for three configs, and H4b-1 retired it** — the same
+paragraph it cites says so.
+
+Recorded rather than deleted because the shape is worth keeping: a **correction that introduced a
+worse error than the one it corrected**, and the second error was a claim about *code state* (a
+retired refusal still refusing) rather than a swapped label. This is `CLAUDE.md`'s *prefer deleting a
+claim to rewriting it* reaching the development record — and it is the second time on this slice that
+rewriting a claim re-seeded it. Both counts are, as all three paragraphs agree, **unchanged by this
+batch**.
+
 ## Fix round 1 — batch 3 review, `task-b3-review.md`
 
 **Major 1 — the df-provenance clause batch 1 deleted from `docs/reference.md` had come back at three

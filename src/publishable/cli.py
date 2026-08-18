@@ -1162,7 +1162,7 @@ def _comparison_step_blocks(
             #
             # Over the keys the difference was actually computed over, never the
             # roster-wide mapping: a ragged column's clusters are its own, and a
-            # count over the roster would claim a df the interval never used.
+            # count over the roster would describe units the delta never saw.
             if clusters is not None:
                 # The `is_derived` arm is unreachable under a declared cluster —
                 # `summarize_step` raises `E-DATA-CLUSTER-DERIVED` and the whole

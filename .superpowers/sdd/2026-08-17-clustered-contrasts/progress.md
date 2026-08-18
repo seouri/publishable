@@ -316,3 +316,30 @@ these comments as its spec. **A claim deleted from a document propagates back th
 written from the same intuition**, which is why deleting it in one place is not closing it; the
 repo's own habit row says prefer deleting to rewriting, and this is the case where rewriting would
 have re-seeded it a third time.
+
+**Fix round 1 — four of six closed by the implementer; the controller closed the other two.** The
+scoped re-review found both still open, and both are worth recording rather than just fixing.
+
+**Major 1 had a fourth site, and a grep could not have found it.** The three targeted sites were
+genuinely fixed, and the § Contrasts citation now points at a sentence that section contains. But an
+untouched comment carried the same claim **as a paraphrase** — "a count over the roster would claim a
+df the interval never used" — invisible to a literal search for the original wording. The reviewer
+proved its own sweep could fail (four hits in `reference.md` for a string absent from `cli.py`) and
+said plainly that **reading, not the grep, is what caught it**. Closed by the controller: the clause
+now says the count would *describe units the delta never saw*, which is true of both forms.
+
+**Minor 2's fix introduced a worse error than the one it corrected, and that is the finding.** The
+original sentence — "the no-remaining-core-side-blocker count stays six and the executable count
+stays three" — **was correct**. The appended correction claimed it was backwards, and additionally
+named **`E-DATA-WEIGHT-CONTRAST` as a live blocker for three configs**, which H4b-1 retired — as the
+very paragraph it cites says. So a swapped-label correction became a false claim about **code state**.
+Closed by appending a **second** correction withdrawing the first, rather than deleting either: the
+sequence is the evidence.
+
+**Ruling: this is the third time on this slice that rewriting a claim re-seeded it** — the df clause
+returned through comments after being deleted from a document, and now a correction has manufactured
+a defect the original text did not have. `CLAUDE.md`'s *prefer deleting a claim to rewriting it*
+applies to the development record too, not only to code comments. **Cost if wrong:** nothing, since
+both fixes are additive and the counts were never in doubt against the two dated sources.
+
+Suite 2196 passed, 1 skipped, 2 xfailed; four gates clean. Batch 3 complete.
