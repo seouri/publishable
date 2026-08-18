@@ -2587,7 +2587,7 @@ It names unit attributes and their levels — the same attributes [`report_by`](
 
 **A `within` contrast joins the correction family, and a `report_by` stratum does not.** That is the whole difference between the two, and it is the honest one: describing a subgroup costs nothing, *testing* one is a comparison a reader can act on, and six declared subgroup contrasts widen the correction by six. Subgroup multiplicity is the best-known way to turn a null result into a finding, so it is priced rather than free — which is also why a subgroup claim has to be declared before the run to be confirmatory at all.
 
-`limits.min_reported_n` applies to a `within` contrast's `n_paired`, since a stratified paired comparison is where a small denominator is easiest to miss and most disclosive.
+`limits.min_reported_n` applies to a `within` contrast's realized denominator — `n_paired` where the contrast is paired, and `n_of` and `n_against` separately where it is not, warning where **either** side is below the floor. A stratified comparison is where a small denominator is easiest to miss and most disclosive, and the disclosive quantity is a thin denominator anywhere: a five-unit arm compared against a five-hundred-unit one is exactly what the limit exists to catch, and a rule reading only one side or only a total would pass it.
 
 **Everything about how a contrast is computed is a rule that already exists.** Pairing is derived from which axes the two conditions differ on, by [the same table](#allocation-within-subjects-or-between-subjects) `vs_baseline` uses — so two arms of one parameter axis under `allocation: within` are paired unit by unit, and two levels of a group axis are not. A contrast crossing two axes is marked `confounded: true` for the same reason. Declared contrasts join the [correction family](#sweeps-and-repeats) alongside baseline comparisons, because a reader shown both is exposed to both.
 
@@ -2607,7 +2607,7 @@ results:
                family_size: 7, family: {comparisons: 7, metrics: 1}}
 ```
 
-**`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
+**`n_paired` is the intersection, and a paired contrast has to record it.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
 
 **Under [`weight_by`](#weighted-samples) a contrast entry carries two more keys**, and they are the
 same two facts a weighted per-condition block carries, arranged for a record that has no `n` mapping
@@ -2684,6 +2684,26 @@ so, or beside no cluster count at all, is a declaration accepted whose effect is
 `cohens_d` is **not** in that set — *d*z is standardized by the dispersion of the differences and
 [§ Statistical reporting](#statistical-reporting) defines no clustered effect size, so it is the same
 number a clustered run and an unclustered one report.
+
+**An unpaired contrast records no `n_paired` at all, and two scalar siblings in its place.** Its intersection is [empty by construction](#allocation-within-subjects-or-between-subjects) — that is what a group axis means — so `n_paired: 0` would be arithmetically true and descriptively false, and it would spend on a design where pairing is not the concept the same `0` this section already spends on a pairing that failed. `n_paired` is therefore **absent — not null** — and `n_of` and `n_against` carry the two sides' completed counts, mirroring the entry's own `of:`/`against:` keys. Under [`cluster_by`](#clustered-units) `n_paired_clusters` is absent for the same reason and `n_clusters_of`/`n_clusters_against` replace it: a cluster count is per side once the sides are disjoint, and Welch's df reads both. There is no unpaired counterpart to `n_paired_effective`, because [`E-DATA-WEIGHT-ALLOCATION-CONTRAST`](#errors-validate-reports) refuses the only composition that would produce one.
+
+```yaml
+results:
+  contrasts:
+    - id: arm_effect
+      of: 02_arm=treatment
+      against: 01_arm=control
+      step03_screen:
+        prob: {delta: 0.041, basis: units, paired: false,
+               method: welch_t_over_units_clustered,
+               n_of: 116, n_against: 112,
+               n_clusters_of: 9, n_clusters_against: 8,
+               ci95: [0.002, 0.080], cohens_d: 0.31,
+               correction: holm, correction_level: 0.0125,
+               family_size: 4, family: {comparisons: 2, metrics: 2}}
+```
+
+The interval, the `method` and the two counts move together, the same obligation a weighted or a clustered entry carries: a delta whose interval assumes neither shared units nor equal variances, beside a `method` that does not say so, or beside no per-side counts at all, is a design honoured whose record is half delivered. `cohens_d` here is *d*s, over the pooled within-condition standard deviation, which is [§ Statistical reporting](#statistical-reporting)'s own split. A **derived** metric's unpaired contrast is suppressed on the same shape and for a second, independent reason: no per-side draw exists for a recomputed metric, so `delta`, `method` and `ci95` are all `null` with the per-side counts beside them, exactly as [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) describes for a declared cluster.
 
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 
