@@ -3467,8 +3467,7 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
     imbalance is visible only to a reader who crosses it against the arms list
     by hand — the silently-wrong class. The repo's own precedent is to refuse
     the COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-CLUSTER-CONTRAST`, `E-DATA-ALLOCATION-CONTRAST`,
-    `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
 
     **The `fold` half closes a defect that is live at this commit**, not a
     hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
@@ -3988,12 +3987,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
     # `summarize_step` gives every `basis: units` column a cluster-robust
-    # interval. What a clustered run may *not* yet do is publish a contrast
-    # (`_check_sweep` refuses that combination under `E-DATA-CLUSTER-CONTRAST`)
-    # or resample a derived metric (`stats.summarize_step` raises
-    # `E-DATA-CLUSTER-DERIVED` at run time, that one not being knowable from a
-    # declaration at all). Both refuse a combination rather than a
-    # declaration, which is why neither is here.
+    # interval. What a clustered run may *not* yet do is resample a derived
+    # metric (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run
+    # time, not being knowable from a declaration at all), which refuses a
+    # combination rather than a declaration and is why it is not here.
     #
     # `weight_by` is checked by `_check_weight_by`; `attrition` computes
     # Kish's effective size from it, and `summarize_step` weights every
@@ -4989,10 +4986,10 @@ def _check_sweep(
     # would be invisible. Refused rather than approximated, on the precedent
     # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
     #
-    # Reads the resolved family rather than the declaration, the same way its
-    # sibling guard does — a `sweep.baseline` with no axis beside it publishes no
-    # delta, and neither guard should refuse a design that never reaches a
-    # comparison. It refuses a COMBINATION rather than a declaration, so it
+    # Reads the resolved family rather than the declaration: a `sweep.baseline`
+    # with no axis beside it publishes no delta, and this guard should not
+    # refuse a design that never reaches a comparison. It refuses a COMBINATION
+    # rather than a declaration, so it
     # carries a § Validation row and is not one of the `NOT BUILT` declarations
     # § The one config file counts: both `weight_by` and `cluster_by` are built,
     # and a run declaring both publishes `weighted_t_over_units_clustered` per
@@ -5032,15 +5029,15 @@ def _check_sweep(
     # true, "n_paired": 0, "ci95": null}` for every metric, with a `paired: true`
     # that is false and nothing saying so.
     #
-    # **Unlike `E-DATA-CLUSTER-CONTRAST` above, this guard does not fire on
-    # `comparisons > 0`.** A cluster affects every contrast alike, but a group
-    # axis does not: in a `groups × grid`
+    # **This guard reads each resolved comparison individually rather than
+    # firing on `comparisons > 0`,** because a group axis does not affect
+    # every contrast in the family alike: in a `groups × grid`
     # design, control-pearson vs. control-spearman shares the same arm's units
     # and is paired and computable, while control-pearson vs. treatment-pearson
     # is not. Firing on the resolved family's size alone would refuse the first
     # comparison along with the second and make "each arm analyzed several
-    # ways" unexpressible. So this reads each resolved comparison individually:
-    # `contrasts.differing_axes` gives the axes two conditions disagree on, and
+    # ways" unexpressible. `contrasts.differing_axes` gives the axes two
+    # conditions disagree on, and
     # intersecting that with either side's `selectors` — the group axes a
     # condition actually carries a value for — is what tells a cross-arm
     # comparison from a within-arm one. Imported at module scope, the same as

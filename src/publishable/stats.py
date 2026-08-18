@@ -1988,9 +1988,9 @@ def summarize_step(
     its recorded columns. **Dropped, not published with `ci95: null`** — that state
     already means "no resample callable, or no seed", and reusing it would
     reintroduce the ambiguity `resample_draws`' `0`-versus-`null` distinction
-    exists to remove. H4 Statistics lifts this with the clustered contrast family
-    (`E-DATA-CLUSTER-CONTRAST`), which is the same missing construction one level
-    over.
+    exists to remove. What is still missing is a clustered draw for a
+    *recomputed* metric — the same construction one level over that H4b-2 built
+    for a recorded contrast.
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as
