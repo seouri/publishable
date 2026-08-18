@@ -343,3 +343,32 @@ applies to the development record too, not only to code comments. **Cost if wron
 both fixes are additive and the counts were never in doubt against the two dated sources.
 
 Suite 2196 passed, 1 skipped, 2 xfailed; four gates clean. Batch 3 complete.
+
+## Batch 4 — tasks 14, 15, 16, 17, 18 — `E-DATA-CLUSTER-CONTRAST` retired — complete, review dispatched
+
+Commits `9799cc6` (retirement, and a clustered comparison validates and runs), `4c82aa1` (surviving
+citations), `9ad5ab1` (every filing naming H4b-2, discharged or re-owned by name), `dcb7ed0` (the
+regression pins and the summary-`Estimate` boundary), `1d4c84c` (the dated re-measurement).
+Suite 2196 → 2195 at task 14 (+2 new, −3 deleted, the retirement's one-line-per-test shape) → **2198**
+after task 17's three. Four gates clean at every commit.
+
+**Reported figures: zero configs unblocked; no-remaining-core-side-blocker stays six; executable stays
+three.** Net on refusals: one retired, one re-owned, one minted.
+
+**Flagged to the reviewer before it read anything: the measurement's date looks wrong.** The report and
+the new § Executability heading both say **2026-08-17**, and today is **2026-08-18** — the implementer
+was told so explicitly. A misdated build fact is worse than an undated one, because it reads as
+verified. The reviewer was told to check it against the commit's own timestamp.
+
+**Four implementer findings handed to the reviewer.** Two brief snippets did not run against current
+code (`against: "method=pearson"` does not match the label grammar; `cfg.analysis.method` should be
+`cfg.parameters.analysis.method`), and task 17's suggested fixture is **blind to the reversal mutation
+on an even unit count by parity symmetry** — a replacement was built. Two mutations are claimed
+**structurally blind**, one because `E-DATA-WEIGHT-CLUSTER-CONTRAST` makes the two arms mutually
+exclusive, so the arm order is **dead code**. And a module-level name collision the implementer's own
+draft introduced **silently broke an unrelated pre-existing test**, caught by running the whole file
+rather than the new tests — which is the argument for the full-suite rule stated as a positive for once.
+
+Both blindness claims go to the reviewer to attempt an overturn: batch 2's fell to a one-line fixture
+change, batch 3's survived. **The record on this slice is one overturned, one upheld**, which is why
+neither is accepted on the implementer's word.
