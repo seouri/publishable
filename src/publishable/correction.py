@@ -15,6 +15,8 @@ from publishable.stats import (
     paired_t_over_units,
     paired_t_over_units_clustered,
     weighted_paired_t_over_units,
+    welch_t_over_units,
+    welch_t_over_units_clustered,
 )
 
 ALPHA = 0.05
@@ -325,13 +327,16 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     `paired_t_over_units` over them, `weighted_paired_t_over_units` when the
     member also carries `weights`, or `paired_t_over_units_clustered` when it
     carries `clusters` instead — exact at any α either way, and the two
-    modifiers never coexist. A member carrying a draw pool reads a second rank
-    pair off it. A derived metric always carries a
+    modifiers never coexist. A member carrying two independent per-side value
+    vectors (`sides`) instead re-runs `welch_t_over_units`, or
+    `welch_t_over_units_clustered` when `sides.clusters` is set — the unpaired
+    counterpart of the same choice. A member carrying a draw pool reads a
+    second rank pair off it. A derived metric always carries a
     pool; a recorded column carries differences by default and **carries a pool
     instead under a declared `statistics.resample`**, because its raw interval
     was then a percentile and a *t* corrected bound would be its counterpart in
     name only — narrower or wider than the truth by construction rather than by
-    evidence. `Member.__post_init__` enforces exactly one of the two, so this
+    evidence. `Member.__post_init__` enforces exactly one of the three, so this
     order is a preference among impossible-to-have-both fields rather than a
     tie-break.
 
@@ -339,6 +344,25 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     the raw interval, and a corrected interval narrower than its raw one is
     precisely the number a reader cannot tell is wrong.
     """
+    if member.sides is not None:
+        # WHICH Welch construction rebuilds the bound is decided by whether the
+        # evidence carries per-side cluster labels — the same evidence at a smaller α
+        # either way. An unpaired clustered raw interval with an unclustered
+        # corrected counterpart is narrower by construction rather than by evidence
+        # and no reader of `run.yaml` could detect it, which is the fault the
+        # exactly-one rule refuses one axis over.
+        if member.sides.clusters is not None:
+            of_labels, against_labels = member.sides.clusters
+            got = welch_t_over_units_clustered(
+                member.sides.of,
+                of_labels,
+                member.sides.against,
+                against_labels,
+                confidence=1.0 - level,
+            )
+        else:
+            got = welch_t_over_units(member.sides.of, member.sides.against, confidence=1.0 - level)
+        return None if got is None else (got.low, got.high)
     if member.diffs is not None:
         # WHICH t construction rebuilds the bound is decided by the modifier the
         # member carries — the same evidence at a smaller α either way. A

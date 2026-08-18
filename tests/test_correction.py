@@ -155,6 +155,140 @@ def test_a_member_with_no_interval_may_carry_sides_and_is_not_corrected():
     assert family_members([thin, fat]) == [fat]  # the presence that must report
 
 
+_CB_OF = (17.0, 19.0, 20.0, 21.0, 23.0)
+_CB_AGAINST = (5.0,) * 12 + (15.0,) * 12 + (10.0,)
+
+
+def test_an_unpaired_members_corrected_bound_is_the_welch_form_at_a_smaller_alpha():
+    """The corrected interval must be the SAME construction at a smaller α or it is
+    a counterpart in name only. Fixture A: raw half-width 3.039125537798091 at df
+    96/7, and Bonferroni over a family of 2 is α = 0.025, so the corrected
+    half-width is that times `t(96/7, 0.9875) / t(96/7, 0.975)` =
+    1.1706821500146336 — 3.5578…
+
+    **The ratio is the assertion, at the entry's OWN df**, not the presence of a
+    wider interval: a corrected bound built at an unpaired-IID df where a clustered
+    one belongs, or at a paired df, is also wider. The clustered fixture below gives
+    a ratio of 1.4227764722656022 at df 2.095031, and the two differ by 21 %, which
+    is what makes each assertion discriminating."""
+    member = Member(
+        where="c",
+        step="s",
+        metric="m",
+        delta=10.0,
+        ci95=(10.0 - 3.039125537798091, 10.0 + 3.039125537798091),
+        pool=None,
+        diffs=None,
+        sides=UnpairedEvidence(of=_CB_OF, against=_CB_AGAINST),
+        declaration_index=0,
+    )
+    bounds = _corrected_bounds(member, 0.025)
+    assert bounds is not None
+    half = (bounds[1] - bounds[0]) / 2
+    assert half == pytest.approx(3.039125537798091 * 1.1706821500146336)
+    assert (bounds[0] + bounds[1]) / 2 == pytest.approx(10.0)
+
+
+def test_an_unpaired_clustered_members_corrected_bound_reads_its_own_two_cluster_counts():
+    """Fixture B: raw half-width 34.14810237373095 at df 2.0950313633473936, so the
+    corrected half-width at α = 0.025 is that times 1.4227764722656022 — 48.5814…
+
+    **The 21 % gap from the IID ratio is the point.** A corrected bound built from
+    the two value vectors while ignoring the label vectors gives the IID Welch
+    construction, whose own df is 8.399133841827005 and whose ratio is therefore a
+    visibly different number — so this assertion catches a `clusters` field that was
+    threaded onto the member and then dropped by the construction, which is the
+    failure H4b-2 pinned one axis over."""
+    of = (0.0,) * 2 + (15.0,) * 3 + (30.0,) * 4
+    against = (2.0,) * 2 + (4.0,) * 3 + (6.0,) * 3 + (8.0,) * 4
+    labels = (
+        ("p",) * 2 + ("q",) * 3 + ("r",) * 4,
+        ("w",) * 2 + ("x",) * 3 + ("y",) * 3 + ("z",) * 4,
+    )
+    member = Member(
+        where="c",
+        step="s",
+        metric="m",
+        delta=12.833333333333332,
+        ci95=(12.833333333333332 - 34.14810237373095, 12.833333333333332 + 34.14810237373095),
+        pool=None,
+        diffs=None,
+        sides=UnpairedEvidence(of=of, against=against, clusters=labels),
+        declaration_index=0,
+    )
+    bounds = _corrected_bounds(member, 0.025)
+    assert bounds is not None
+    half = (bounds[1] - bounds[0]) / 2
+    assert half == pytest.approx(34.14810237373095 * 1.4227764722656022)
+
+
+def test_an_unpaired_percentile_member_reads_a_second_rank_pair_off_its_pool():
+    """An unpaired percentile's evidence is a pool of resampled differences,
+    structurally identical to a paired one's — so `pool` needs no change and this is
+    the arm that must NOT have grown a fourth branch. Asserted as `corrected ⊇ raw`
+    off the same pool, which is a property of the arithmetic rather than of two RNG
+    calls agreeing."""
+    pool = tuple(float(i) for i in range(400))
+    member = Member(
+        where="c",
+        step="s",
+        metric="m",
+        delta=200.0,
+        ci95=(10.0, 389.0),
+        pool=pool,
+        diffs=None,
+        sides=None,
+        declaration_index=0,
+    )
+    bounds = _corrected_bounds(member, 0.025)
+    assert bounds is not None
+    assert bounds[0] < 10.0 and bounds[1] > 389.0
+
+
+def test_the_five_t_arms_are_each_reached_by_one_member_shape():
+    """Five *t* arms, counted rather than carried: two under `sides` and three under
+    `diffs`, plus the `pool` fall-through. **An implementer writing six leaves an arm
+    no input reaches, and one writing four leaves a cell falling through to a wrong
+    construction** — so every arm is asserted by the construction its `method` names,
+    read off the raw interval each arm rebuilds.
+
+    Asserted as a table rather than one arm at a time, because the failure this
+    guards is a cell falling through to a NEIGHBOUR: an unpaired clustered member
+    taking the plain Welch arm gives a plausible number 3.5 times too narrow, and
+    every existing test still passes because nothing else builds that shape."""
+    common = dict(where="c", step="s", metric="m", delta=1.0, declaration_index=0)
+    diffs = (1.0, 2.0, 3.0, 4.0)
+    shapes = {
+        "sides_clustered": dict(
+            pool=None,
+            diffs=None,
+            sides=UnpairedEvidence(
+                of=(1.0, 1.0, 5.0),
+                against=(2.0, 2.0, 8.0),
+                clusters=(("a", "a", "b"), ("c", "c", "d")),
+            ),
+        ),
+        "sides_plain": dict(
+            pool=None,
+            diffs=None,
+            sides=UnpairedEvidence(of=(1.0, 2.0, 3.0), against=(4.0, 5.0, 7.0)),
+        ),
+        "diffs_clustered": dict(pool=None, diffs=diffs, sides=None, clusters=("a", "a", "b", "b")),
+        "diffs_weighted": dict(pool=None, diffs=diffs, sides=None, weights=(1.0, 2.0, 1.0, 2.0)),
+        "diffs_plain": dict(pool=None, diffs=diffs, sides=None),
+        "pool": dict(pool=tuple(float(i) for i in range(400)), diffs=None, sides=None),
+    }
+    got = {}
+    for name, fields in shapes.items():
+        member = Member(ci95=(0.0, 2.0), **common, **fields)
+        got[name] = _corrected_bounds(member, 0.025)
+    # Every arm returned a bound, so no shape fell through to the final `None`.
+    assert all(v is not None for v in got.values()), got
+    # And no two arms produced the same bound, so no shape fell through to a
+    # neighbour's construction: five distinct *t* answers plus the pool's.
+    assert len({tuple(v) for v in got.values() if v is not None}) == 6
+
+
 def test_a_member_with_no_interval_is_not_in_the_family():
     """Counted-iff-corrected: a metric reported without an interval is not a
     comparison a reader can read as significant, so it neither takes a slot nor
