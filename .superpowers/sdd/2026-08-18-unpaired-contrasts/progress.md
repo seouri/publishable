@@ -296,3 +296,32 @@ silently** — a robustness change smuggled into a prose fix round is how scope 
 
 **And a brief mislabelling, corrected here so it does not propagate:** `26.371…` is **`G_against−1`**,
 not `G_total−2`; `G_total−2` is `21.301…`.
+
+**Fix round 1 — all eight findings closed** (`cf301e8`), confirmed by a scoped re-review that treated
+the two **behavioural** items as suspects rather than as claims, and settled both **by running**.
+
+**The removed guard was genuinely unreachable, not merely unfalsifiable** — and the distinction was
+the point of asking. `_cr1_variance` performs the identical `len(values) < 2` check **first**, and
+every path to the post-guard code is gated behind `got is not None`. Probed with `[]`, `[5.0]` and a
+valid two-element case. **Ruling upheld:** a code change inside a prose fix round is allowed only when
+it is verified behaviour-preserving, and this one was.
+
+**And the safety argument in the new comment was made to happen, both halves.** The paired form does
+place `unit_table_from_rows` outside its `try` the same way — read. And moving it **inside** produces
+exactly the failure the comment warns of: **no `KeyError` at all**, a valid non-`None` interval with
+the correct `method`, failing only on a row-count-variance assertion with `seen_of` collapsed to
+`{9}` — **plausible and silently wrong** rather than a crash. That is `CLAUDE.md`'s "if a comment says
+this cannot happen, make it happen" answered in the affirmative for once, and it is why the placement
+was documented rather than filed.
+
+The withdrawal was a **pure append** — `--numstat` shows 154 insertions, **0 deletions**, with the
+original wrong claim left standing under a `WITHDRAWN` note. Checked with `--numstat` specifically
+because on the previous slice an "append" deleted a line and orphaned a sentence head.
+
+Suite 2227 passed, 1 skipped, 2 xfailed. Batch 2 complete.
+
+## Batch 3 dispatched — tasks 9, 10, 11, 12, 13(+17a)
+
+The refusal for the composition H4c will not build, the unpaired key path and its per-side record
+keys, `Member`'s **third evidence kind**, `_corrected_bounds`' unpaired arms, and the derived `paired`
+that removes the last hard-coded claim in the contrast record.
