@@ -4843,3 +4843,108 @@ def test_the_extracted_cr1_variance_leaves_the_clustered_t_where_it_was():
     variance, groups = got
     assert groups == 3
     assert variance == pytest.approx((3 / 2) * 398.22222222222223 / (12 * 12))
+
+
+def test_the_unpaired_clustered_percentile_draws_whole_clusters_per_side():
+    """Fixture B through the percentile form. `of` holds clusters of 2/3/4, so a
+    replicate drawing 3 clusters with replacement pools between 6 and 12 rows; a
+    mutant drawing UNITS returns a fixed 9. `against` holds 2/3/3/4 and varies
+    between 8 and 16 against a fixed 12.
+
+    **The varying row count is the assertion**, not the interval: equal cluster
+    sizes would make "a replicate's pooled row count varies" invisible and a
+    unit-drawing mutant would never be seen, which is why fixture B's clusters are
+    unequal in size within each side as well as unequal in count between them.
+
+    The two sides are asserted separately, because a construction passing
+    `of_clusters` to both sides would give the `against` side `of`'s sizes and a
+    single pooled assertion would not notice."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    of_clusters = dict(zip(sorted(of_rows), _CLUSTERED_OF_LABELS, strict=True))
+    against_clusters = dict(zip(sorted(against_rows), _CLUSTERED_AGAINST_LABELS, strict=True))
+    compute_of, seen_of = _row_count_recorder()
+    compute_against, seen_against = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute_of,
+        compute_against,
+        seed=7,
+        draws=400,
+        method="unpaired_percentile_over_units_clustered",
+        of_clusters=of_clusters,
+        against_clusters=against_clusters,
+    )
+    assert got.interval is not None
+    assert got.interval.method == "unpaired_percentile_over_units_clustered"
+    assert len(set(seen_of)) > 1  # a unit draw would give exactly {9}
+    assert min(seen_of) >= 6 and max(seen_of) <= 12
+    assert len(set(seen_against)) > 1  # a unit draw would give exactly {12}
+    assert min(seen_against) >= 8 and max(seen_against) <= 16
+    assert [got.interval.low, got.interval.high] == pytest.approx(
+        [-4.7272727272727275, 23.242424242424242]
+    )
+
+
+def test_the_unpaired_clustered_percentile_is_not_the_unclustered_one():
+    """The control that must report. The same rows drawn as units give a different
+    interval, and the endpoints of both are pinned as literals rather than compared
+    only for inequality — `!=` alone passes for any third wrong pair, and it is the
+    weak-discriminator shape this slice bans by name."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    unclustered = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert unclustered.interval is not None
+    assert unclustered.interval.method == "unpaired_percentile_over_units"
+    assert [unclustered.interval.low, unclustered.interval.high] == pytest.approx(
+        [4.0, 19.833333333333332]
+    )
+
+
+def test_the_unpaired_clustered_percentile_is_invariant_to_relabelling():
+    """`_draw_pools` orders clusters by their own sorted contents rather than by
+    label, so a relabelled roster draws the identical sequence — the invariance
+    `percentile_over_units_clustered` keeps and the one a `sorted(by_cluster)` over
+    LABELS would silently break. Asserted on the endpoints, which is the only place
+    a changed draw sequence shows."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    renamed = {"p": "zz", "q": "aa", "r": "mm"}
+    first, second = [], []
+    for labels in (_CLUSTERED_OF_LABELS, [renamed[x] for x in _CLUSTERED_OF_LABELS]):
+        compute, _ = _row_count_recorder()
+        other, _ = _row_count_recorder()
+        got = unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            sorted(of_rows),
+            sorted(against_rows),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            method="unpaired_percentile_over_units_clustered",
+            of_clusters=dict(zip(sorted(of_rows), labels, strict=True)),
+            against_clusters=dict(
+                zip(sorted(against_rows), _CLUSTERED_AGAINST_LABELS, strict=True)
+            ),
+        )
+        assert got.interval is not None
+        (first if labels is _CLUSTERED_OF_LABELS else second).append(
+            [got.interval.low, got.interval.high]
+        )
+    assert first == second
