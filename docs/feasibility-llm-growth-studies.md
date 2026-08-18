@@ -1206,6 +1206,32 @@ reason Part B's entry gives.
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2159 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
 
+### Measured on 2026-08-17 against commit `dcb7ed0145851122270a1bc2c82bcedc1d4e18cf` — after H4b-2
+
+H4b-2 retires `E-DATA-CLUSTER-CONTRAST` and mints `E-DATA-WEIGHT-CLUSTER-CONTRAST`. **It unblocks
+zero configs, and both counts stand unchanged: six with no remaining core-side blocker, three
+executable.** No config in this analysis declares `data.units.cluster_by` — measured on the file
+above, two hits and both `cluster_by: null` — so the refusal H4b-2 retires is one no experiment here
+hits, and a retired refusal is not an execution in any case.
+
+**The newly minted refusal reaches none of the nine either.** `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+requires both `weight_by` and `cluster_by` beside a comparison; C1, C2 and C3 declare the first and
+none of the nine declares the second.
+
+**What H4b-2 changes for a config that *did* declare a cluster**, stated as specification rather than
+as a measurement of these nine: a clustered comparison's delta takes
+`paired_t_over_units_clustered` or `paired_percentile_over_units_clustered`, its `method` says which,
+and `n_paired_clusters` travels beside `n_paired`. And one live defect closes for configs that
+declare **no** cluster at all: a contrast draw whose every stratum's rows are identical now reports
+`ci95: null` rather than a zero-width interval, which is reachable from a near-unique
+`resample.stratify_by` — all three C configs declare `stratify_by: [consensus_label,
+count_stratum]`, whose strata are not near-unique on the roster this analysis describes, so it is a
+closed hazard rather than a changed number for them.
+
+**Unchanged and still outstanding**, carried from the H4b-1 entry rather than re-derived: E3, E4, E6,
+C1, C2 and C3 remain blocked on `io.reuse_from`, which is unbuilt and unowned and invisible to
+`validate`; and all three C configs still meet a `report_by` level's recorded-column interval staying
+`t_over_units` under a declared `resample`, which H4b-2 declined in writing and re-owned to H4c.
 
 ## Cost and execution summary
 
