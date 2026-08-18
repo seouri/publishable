@@ -213,3 +213,37 @@ second ENOSPC-or-background near-miss in two batches**, and both were recovered 
 read to establish state, revert by edit, verify by re-running. The reviewer was asked to confirm the
 recovery was complete rather than to take the report's word for it, since task 6's mutation results
 straddle the gap.
+
+### Batch 2 — task review: spec compliance PASS, quality PASS with reservations, five Majors
+
+Review at `task-b2-review.md`. **The statistics and the discriminators are real** — the reviewer
+recomputed the correct half-width independently, ran three mutations on the full unfiltered suite
+with each failure attributed, and **confirmed the incident recovery was complete** by re-running the
+one mutation whose result straddled the gap (fails exactly one test at exactly `5.971123930019732`).
+**Every reservation is in a claim *about* the code, none in the code.**
+
+**Major 1 is a false claim hiding a real behaviour change.** "The same refusal the per-condition
+percentile forms already make" is false — `percentile_over_units([5.0]*8)` still returns
+`Interval(5, 5)`, verified by running. So a constant column now gets `ci95: [5, 5]` per condition and
+`null` on the delta, and the document **asserts the asymmetry away instead of disclosing it**.
+**Ruling: disclose it.** An asymmetry stated is a decision; an asymmetry claimed absent is a defect.
+
+**Major 3 is inherited, and it is the comment-as-safety-argument row.** The sorted-`keys` guard
+H4b-1 added carries **false grounds**: with the guard disabled, shuffled `keys` under `strata` draw
+an **identical** sequence, because `pools.sort()` makes the result content-determined. The claim is
+restated in a test and the comment has drifted ~40 lines from the guard it explains. **Ruling: fix
+the grounds, not the guard — and if the guard buys nothing, say so and remove it.** A true guard
+with a false reason is the shape `CLAUDE.md` says to make happen rather than believe.
+
+**Major 4 reverses one of this slice's own blindness claims.** Mutation 4 was recorded blind; the
+reviewer ran it and found unsorted `keys` with **no strata and no clusters** legal and drawing a
+different sequence, catchable by a **one-line fixture change**. Recorded because the ledger's
+pre-flight scan ruled that naming a mutation blind *in the plan* is the claim being checked before
+it is trusted — **this is that check failing, in the direction the rule exists to catch.** A
+mutation recorded blind that a one-line fixture catches is worse than one not attempted, because it
+reads as verified.
+
+**Major 2 is a fix that went to the symptom.** The diagnosis was right — the prescribed message
+never contains `weight_by`, which lives in the `path` argument — but the remedy put `path` **into**
+the message, making it the only one of `validate.py`'s 137 emits to restate its own path, rendering
+with visible duplication. The test still never asserts `f.path`.
