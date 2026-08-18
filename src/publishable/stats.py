@@ -432,6 +432,58 @@ def weighted_paired_t_over_units(
     return Interval(low=plain.low, high=plain.high, method="weighted_paired_t_over_units")
 
 
+def paired_t_over_units_clustered(
+    diffs: Sequence[float], labels: Sequence[str], confidence: float = 0.95
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the per-unit differences, df = clusters − 1.
+
+    `reference.md` § Statistical reporting: under a declared `cluster_by` each
+    unweighted contrast construction "takes a `_clustered` suffix and reads the
+    cluster as the draw", the *t* forms being "cluster-robust (CR1) with df =
+    clusters − 1, over the differenced values when paired". This is that form, and
+    the contrast's interval stays its own construction over the paired
+    intersection rather than a difference of the two sides' intervals —
+    `paired_t_over_units`' argument, unchanged by the clustering.
+
+    **The df is the construction**, not a detail of it: a cluster-robust interval
+    over positively correlated differences comes out wider than
+    `paired_t_over_units` whatever df it uses, so widening is not evidence the
+    cluster count reached the critical value. Only the number is.
+
+    Delegates to `t_over_units_clustered` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units` and
+    `weighted_paired_t_over_units` to `weighted_t_over_units`. That is not
+    tidiness: it is what makes the `G/(G−1)` scaling, the df, the two floors and
+    the relabelling invariance properties of ONE construction rather than of two
+    that can drift apart. A hand-rolled sandwich here is how a paired interval and
+    a per-condition one come to disagree about what cluster-robust means.
+
+    **`labels` is one cluster label per difference, in the same order**, rather
+    than the `keys` + `membership` pair the per-condition form takes. Both callers
+    hold a per-difference vector and nothing else: `correction.Member` carries
+    `clusters` as a modifier on `diffs` for the same reason it carries `weights`
+    that way, and a mapping plus a key list would be two fields on a frozen
+    dataclass for one fact. The positional keys synthesized below are a
+    **bijection**, not a proxy for the real unit keys: `t_over_units_clustered`
+    uses a key for exactly one thing — looking its label up, and counting the
+    distinct labels through `units.cluster_count_of` — so distinct synthetic keys
+    carrying these labels are the same input to it, digit for digit. The real unit
+    keys are unrecoverable here and are also unused.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    diffs/labels length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+
+    Floors are inherited whole: `None` below two differences, and `None` below two
+    clusters, where df would be zero.
+    """
+    keys = [str(i) for i in range(len(diffs))]
+    plain = t_over_units_clustered(diffs, keys, dict(zip(keys, labels, strict=True)), confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="paired_t_over_units_clustered")
+
+
 def cohens_dz(diffs: Sequence[float]) -> float | None:
     """The mean of the per-unit differences over their standard deviation.
 

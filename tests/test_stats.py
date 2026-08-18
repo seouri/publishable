@@ -23,6 +23,7 @@ from publishable.stats import (
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
+    paired_t_over_units_clustered,
     percentile_of_derived,
     percentile_over_units,
     percentile_over_units_clustered,
@@ -1450,6 +1451,60 @@ def test_the_weighted_sandwich_reduces_to_the_unweighted_one_at_equal_weights():
     assert weighted.low == plain.low
     assert weighted.high == plain.high
     assert weighted.method == "weighted_t_over_units_clustered"
+
+
+_CLUSTERED_DIFFS = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+_CLUSTERED_LABELS = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+
+
+def test_the_paired_clustered_t_is_cr1_over_the_differences():
+    """12 per-unit differences in 3 clusters of 2/4/6 — `1.0 ×2`, `5.0 ×4`,
+    `9.0 ×6`. Mean 76/12 = 6.3333…; per-cluster residual sums −10.6667, −5.3333,
+    +16.0, so the meat is 398.2222, V = (3/2)·398.2222/144 and the half-width is
+    t(0.975, df 2) = 4.302653 times its root.
+
+    **The delta is the same number under every reading** — clustering moves the
+    variance, not the point estimate — so the half-width is the whole assertion.
+    Four wrong readings give four other numbers, none of them adjacent: the same
+    meat at df 11 gives 4.4827, the IID variance at df 2 gives 3.8678, a cluster
+    count of 4 gives 6.1110, and the unclustered form gives 1.9786. The correct
+    answer is the extreme of no single dimension, which is what makes an assertion
+    on the number discriminate all four rather than merely detect "wider"."""
+    interval = paired_t_over_units_clustered(_CLUSTERED_DIFFS, _CLUSTERED_LABELS)
+    assert interval is not None
+    assert interval.method == "paired_t_over_units_clustered"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(6.333333333333333)
+    assert half == pytest.approx(8.763214143637903)
+
+
+def test_the_paired_clustered_t_is_not_the_unclustered_one_on_the_same_differences():
+    """The control that must report, and the number a membership-ignoring mutant
+    lands on. The same differences through `paired_t_over_units` give 1.9786 — a
+    factor of four narrower, and the same centre, which is why a test asserting the
+    centre alone is blind to clustering entirely."""
+    plain = paired_t_over_units(_CLUSTERED_DIFFS)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(1.9785385229565593)
+    assert plain.method == "paired_t_over_units"
+
+
+def test_the_paired_clustered_t_refuses_the_degenerate_inputs_its_sibling_refuses():
+    """Both floors are inherited rather than restated, which is the point of
+    delegating: `None` below two differences, and `None` below two clusters, where
+    df would be zero. The second is the one a singleton-cluster fixture can never
+    see — one unit per cluster makes `clusters − 1` equal `n_paired − 1`, so the
+    clustered and unclustered forms coincide exactly and a mutant ignoring
+    membership passes. Hence the third case: 12 singleton clusters return an
+    interval identical to the unclustered one, which is correct and is exactly why
+    no other test here may use that shape."""
+    assert paired_t_over_units_clustered([1.0], ["a"]) is None
+    assert paired_t_over_units_clustered([1.0, 5.0, 9.0], ["a", "a", "a"]) is None
+    singletons = paired_t_over_units_clustered(_CLUSTERED_DIFFS, [f"c{i}" for i in range(12)])
+    plain = paired_t_over_units(_CLUSTERED_DIFFS)
+    assert singletons is not None and plain is not None
+    assert (singletons.high - singletons.low) == pytest.approx(plain.high - plain.low)
 
 
 def test_the_weighted_clustered_interval_is_the_weighted_cr1_sandwich():
