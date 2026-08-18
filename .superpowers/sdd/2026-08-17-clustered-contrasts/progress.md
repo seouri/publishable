@@ -172,3 +172,17 @@ an unsuffixed-`method` path nobody is watching.
 sentence generalizes a df provenance over both clustered constructions, and the percentile one is a
 **resampling draw with no df**. It sits in the normative document every construction task reads, so
 a false claim there propagates into the tasks that read it. Deleted rather than rewritten.
+
+**Fix round 1 — all six findings closed** (`8f4b694`), confirmed by a scoped re-review that verified
+the load-bearing ones **by running**: the prescribed mutation still fails the surviving test on the
+full unfiltered suite at 86 rather than 87 — **exactly the deleted duplicate's delta**, which is the
+deletion proving it lost no coverage rather than being asserted to. The narrowed § Contrasts
+quantifier was re-checked against all three code sites it depends on, and the `spec-defects.md`
+correction is **appended** and names **task 14** by name. Suite 2162 passed, 1 skipped, 2 xfailed —
+one below batch 1's close, the deleted near-duplicate. Batch 1 complete.
+
+## Batch 2 dispatched — tasks 6, 7, 8, 9: the constructions and the refusals
+
+The first code in this slice: `paired_t_over_units_clustered`, `clusters` on
+`paired_percentile_of_derived`, `E-DATA-WEIGHT-CLUSTER-CONTRAST` with the de-hedged sentence, and
+the content-based degenerate refusal over all four draw shapes.
