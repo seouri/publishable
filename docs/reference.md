@@ -2617,7 +2617,7 @@ Whatever core weighted moves together, and `weighted_by` and the effective size 
 either way — which of the four core weighted is the split
 [§ Statistical reporting](#statistical-reporting) draws
 between a recorded column and a derived metric. A weighted delta beside an unweighted interval, an
-unweighted `cohens_d` beside a weighted one, or an `n_paired` with no effective size beside it, is a
+unweighted `cohens_d`, or an `n_paired` with no effective size beside it, is a
 declaration accepted whose effect is half delivered — the same obligation a weighted per-condition
 block carries, with one more part because a contrast reports an effect size a condition does not.
 

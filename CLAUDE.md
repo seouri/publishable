@@ -67,8 +67,9 @@ qualifications stay attached to that number: the plugin must exist and be instal
 apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
 regardless of what a template declares — filed, owned by H7d). Six stayed blocked on two causes neither
 of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
-for C1–C3, **which H4b-1 has since retired** — see the entry below. Also closed: `hash_index` was broken for every source, table and glob included, not
-only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
+for C1–C3, **which H4b-1 has since retired** — see the entry below, where C1–C3 stay non-executable on
+`io.reuse_from` alone. Also closed: `hash_index` was broken for every source, table and glob included,
+not only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
 Part A left open — a resolver's raise now becomes a redacted diagnostic at both `validate` and `run`,
 except a `KeyboardInterrupt`, which is deliberately re-raised as a traceback carrying no message so
 Ctrl-C still stops the command.
