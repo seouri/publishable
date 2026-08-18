@@ -420,3 +420,138 @@ That is a specification-integrity payoff, not an execution payoff, and it must b
 | Interactions, dose-response orderings, differences-in-differences | **Refused.** Contrasts do not nest |
 
 **Task count is 22.**
+
+---
+
+## Corrections against the code
+
+Appended 2026-08-18 by the author of
+[`docs/superpowers/plans/2026-08-18-unpaired-contrasts.md`](plans/2026-08-18-unpaired-contrasts.md),
+measured against `main` at **`e40a219`**. **Nothing above this heading is edited** — a spec records
+what was decided when it was written, and a correction says what it replaces rather than overwriting
+it. Each entry names what it was verified by.
+
+**Two confirmations first, because they are what the rest rests on.** The baseline this document pins
+to `051600c` — `uv run pytest -q` → **2200 passed, 1 skipped, 2 xfailed** — was re-measured in the
+foreground at `e40a219` and is unchanged, alongside `ruff format --check` at **80 files** and `mypy`
+at **45 source files**. And **every literal in § The discriminating fixtures was recomputed against
+the shipped `stats._t_critical`** and reproduced exactly: fixture A's five half-widths, its pooled sd
+and both *d*s values; fixture B's two per-side CR1 variances, its SE, its df and all six half-widths;
+and both Bonferroni ratios, `1.1706821500146336` and `1.4227764722656022`. Verified by direct
+computation, not by reading.
+
+### 1. `W-STATS-CONTRAST-THIN` has a second emit site, and its message goes false
+
+**Replaces decision 6's scope.** Decision 6 quotes § Validation's *"the comparison's realized
+`n_paired` is below it"* and rules the run-side reading per side. **There is a second emit, at
+`validate`**, in `_check_stats`' per-declared-contrast loop, and its message asserts *"The run counts
+`n_paired` over the two sides' completed units, which attrition can only make smaller"*. That
+sentence becomes **false** of an unpaired contrast the moment decision 5 lands, and the site cannot
+evaluate the pairing — it reads roster units matching the `within` stratum before any condition
+exists. § Validation's row already names **both** points, so the row is right and the message is what
+drifted — the same shape as § Allocation's example being wrong while the § Errors row was right.
+**Owned by the plan's task 16**, which deletes the key name rather than rewriting the sentence.
+Verified by reading `validate._check_stats` and by `grep -n 'n_paired' src/publishable/validate.py`.
+
+### 2. `welch_t_over_units_clustered` cannot "follow" `t_over_units_clustered`
+
+**Replaces `H4c-SCOPING.md` § 3's row**, carried into this document's decision 4 by implication.
+`t_over_units_clustered` returns an `Interval`; a Welch form needs each side's **variance and cluster
+count**, recoverable from an `Interval` only by inverting `_t_critical`. So the CR1 machinery must be
+**extracted** into a private `_cr1_variance(values, keys, membership) -> tuple[float, int] | None`
+first, with `t_over_units_clustered` rewired to it. The scoping's intent is honoured exactly — one CR1
+expression, three callers, no second sandwich — but it is an extraction rather than a call. Verified
+by reading `t_over_units_clustered`.
+
+### 3. § Allocation's example metric is derived, so task 3's repair as written contradicts decision 8
+
+**Narrows task 3.** The block task 3 re-authors shows `r` on `step03_analyze` with a real `delta` and
+`ci95`. `r` is **derived by `aggregate(units)`** in the shared worked example — `CLAUDE.md` § The
+worked example says so and gives that as the reason `cohens_d` is `null` throughout — and decision 8
+suppresses a derived metric's unpaired contrast. So re-authoring the block while keeping `r` would
+ship a record this document's own decision 8 forbids. **The metric becomes `abs_error`**, the worked
+example's recorded column, with `delta: 0.041` and `ci95: [0.012, 0.070]` carried unchanged and the
+two per-side counts summing to the worked example's 228 completed units. Verified by reading
+`reference.md` § Allocation and § Statistical reporting's *"with `abs_error` recorded per patient"*.
+
+### 4. `_corrected_bounds`' arm count is five *t* arms and six return paths
+
+**Clarifies decision 2 rather than replacing it.** Decision 2 says *"three arms to **five** — two
+under `sides`, three under `diffs` — five, counted rather than carried"*, and `H4c-SCOPING.md` § 3
+says *"becomes six-way"*. Both are right about different things: today's function has **three *t*
+arms plus a `pool` fall-through**, four return paths, and after this slice it has **five *t* arms plus
+the same `pool` arm**, six return paths. The `pool` arm is unchanged and serves the unpaired
+percentile too, exactly as decision 2 says. **The plan states both numbers**, because an implementer
+reading "five" alone may invent a sixth *t* arm and one reading "six-way" may collapse to four.
+Verified by reading `_corrected_bounds`.
+
+### 5. Decision 7's shared predicate is assigned to no task, and task 9 needs it first
+
+**Assigns it.** Decision 7 rules the pairing predicate is *"ONE named function in `contrasts.py`
+beside `differing_axes`, called by `cli`'s derivation and by `validate`'s new guard"*, and no
+numbered task mints it. Task 9's guard is ordered **before** task 13's derivation, so **task 9 mints
+`contrasts.crossed_group_axes(of, against) -> list[str]`** and task 13 is its second caller. It
+returns the list rather than a boolean, so `validate`'s message keeps its own plural and join.
+Verified by reading `validate._check_sweep`'s inlined expression and this document's § Task
+decomposition.
+
+### 6. Four edits in `cli._comparison_step_blocks` that no numbered task owns
+
+**Adds owners.** Each is a real edit the decomposition does not name:
+
+- **`cohens_ds`'s wiring.** Task 5 builds it and nothing calls it. The record computes
+  `cohens_dz(diffs)` today and an unpaired contrast has no `diffs` at all. **Owner: task 14**, beside
+  the `method` selection, because both key on the same derived `is_paired` answer.
+- **The `Member(...)` construction site.** `corrected_from_pool = is_derived or resample_columns`
+  sets `diffs=tuple(diffs)` when false, which for an unpaired *t* would be a `diffs` that does not
+  exist. **Owner: task 14**, extending the existing single-decision property to four fields.
+- **The `if weights is not None:` block.** It computes `n_paired_effective` over
+  `base_keys if is_derived else col_keys`, and `col_keys` is unbound on an unpaired arm. **Owner:
+  task 10**, by a `ValueError` mirroring the existing `E-DATA-WEIGHT-CLUSTER-CONTRAST` bookkeeping
+  guard — which is also what makes `Member`'s *"never beside `sides`"* and `cli`'s bookkeeping one
+  claim from two ends.
+- **`n_clusters_of`/`n_clusters_against`'s emit.** The `if clusters is not None:` block writes
+  `n_paired_clusters` unconditionally. **Owner: task 10**, on `H4c-SCOPING.md` § 3's own ground that
+  the key path and the record shape are one task's two halves.
+
+Verified by reading `_comparison_step_blocks` in full.
+
+### 7. `PairedResample`'s docstring claims "paired", and the unpaired construction reuses the type
+
+**Rules the open question.** `PairedResample`'s docstring opens *"A paired percentile interval and the
+pool it was read from."* Task 6's construction needs that shape. **Ruled: reuse the type and narrow
+the docstring by deleting the word `paired`** — renaming it is a cross-cutting edit this document
+never scoped, and a deletion cannot invent where a rewrite can. Verified by reading `stats.py`.
+
+### 8. The degenerate-draw rule across two independent draws is undefined
+
+**Rules it.** `paired_percentile_of_derived` returns no interval where every drawable thing in every
+stratum carries the same pair of rows, because its single draw is then a constant. With **two**
+independent draws, one constant side still leaves the difference varying. **Ruled: refuse only where
+BOTH sides cannot vary.** A copied `all(...)` check applied per side with an implicit "either" would
+null intervals that are correct — the reverse of the defect H4b-2 closed, and just as invisible.
+Verified by reading `paired_percentile_of_derived`'s content-based guard.
+
+### 9. Two fixture facts that would have produced unfailable checks
+
+- **`tests/test_validate.py`'s `_groups_cluster_*` fixture has per-arm cluster counts of 3 and 3.**
+  Its sites are A(c0,c1,t0) B(c2,c3,t1,t2) C(c4,c5,c6) D(t3,t4), so `control` touches A, B, C and
+  `treatment` touches A, B, D. § 6's second pin uses that fixture, and § The discriminating fixtures
+  names *"a cluster fixture where correct and buggy cluster counts were both 3"* as a documented
+  unfailable shape. **The plan's task 18 builds its own roster at 3 and 4** for the run-side count
+  assertion and leaves `_groups_cluster_*` untouched, since its own tests assert a documented arm/site
+  crossing. Verified by reading `_GROUPS_CLUSTER_ARMS` and `_GROUPS_CLUSTER_SITES`.
+- **Two `tests/test_correction.py` assertions match on the words `"both"` and `"neither"`** in
+  `Member.__post_init__`'s exactly-one message. Decision 2's counted-over-three rule changes both.
+  **Owner: task 11**, as a deliberate edit rather than a surprise failure. Verified by
+  `grep -n 'pytest.raises(ValueError' tests/test_correction.py`.
+
+### 10. Two mutations this document's traps table did not name, both blind
+
+**Adds to § The traps.** Decision 2 makes `pool`, `diffs` and `sides` mutually exclusive, which makes
+**`_corrected_bounds`' arm ORDER unobservable**: reordering the branches cannot change any answer,
+because no member can reach two of them. That is true of today's `pool`/`diffs` order as well as of
+the new `sides` arm, **and the fixture that would discriminate cannot be built** — it needs a member
+carrying two kinds, which `__post_init__` raises on. The order's real protection is that refusal, and
+the plan says so in tasks 12 and 21 rather than prescribing a mutation that would pass. Verified by
+reading `Member.__post_init__` and `_corrected_bounds` together.
