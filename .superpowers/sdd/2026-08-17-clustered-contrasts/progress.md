@@ -186,3 +186,30 @@ one below batch 1's close, the deleted near-duplicate. Batch 1 complete.
 The first code in this slice: `paired_t_over_units_clustered`, `clusters` on
 `paired_percentile_of_derived`, `E-DATA-WEIGHT-CLUSTER-CONTRAST` with the de-hedged sentence, and
 the content-based degenerate refusal over all four draw shapes.
+
+## Batch 2 — tasks 6, 7, 8, 9 — the constructions and the refusals — complete, review dispatched
+
+Commits `5b9f04d` (`paired_t_over_units_clustered`, CR1 over the per-unit differences), `377fceb`
+(the paired percentile draw takes whole clusters, within their strata), `ac17ece`
+(`E-DATA-WEIGHT-CLUSTER-CONTRAST` and the de-hedged sentence), `69c91f6` (a paired draw that cannot
+vary reports no interval rather than a zero-width one). Suite 2162 → **2178** passed, 1 skipped,
+2 xfailed — deltas of +3, +4, +4, +5 matching the briefs exactly. Four gates clean.
+
+**§ Statistical reporting's `_clustered` suffix rule now has code behind it** for the first time; it
+has specified a construction that did not exist since the section was written.
+
+**Three brief/code disagreements, all handed to the reviewer:** task 7's literal regression test
+**double-counts draws** when one closure serves both `compute_of` and `compute_against` (fixed by
+splitting into two closures); task 8's prescribed message **never contains the literal `weight_by`**
+— it lives in the separate `path` argument the test does not check, so the assertion as briefed
+could not fail on the message at all; and task 9's own edit **orphaned a citation** quoting the old
+`spec-defects.md` heading, closed in the same commit.
+
+**Incident, recorded because the recovery is the point.** The implementer backgrounded one test run
+during task 6 and stopped with a mutation still applied. On being resumed it **read** the file to
+confirm the state, reverted **by editing back**, cleared `__pycache__`, and confirmed with a full
+foreground run before resuming — then ran every later mutation in the foreground. **This is the
+second ENOSPC-or-background near-miss in two batches**, and both were recovered by the same rule:
+read to establish state, revert by edit, verify by re-running. The reviewer was asked to confirm the
+recovery was complete rather than to take the report's word for it, since task 6's mutation results
+straddle the gap.
