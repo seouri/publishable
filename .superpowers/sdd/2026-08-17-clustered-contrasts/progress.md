@@ -142,3 +142,33 @@ scratch against a verified-clean tree. No commit was made while the tree held an
 mutation. Root cause was ~1.3GB of stale `pytest-of-joon` temp directories. **This is the failure
 mode the revert-by-editing and verify-by-re-running rules exist for** — a `git checkout --` here, or
 a `git status` check instead of a read, would have destroyed or misreported the state.
+
+### Batch 1 — task review: both verdicts pass with findings; two Majors; fix round 1 dispatched
+
+Review at `task-b1-review.md`. Every mutation the reviewer re-ran **discriminates**, including one
+the brief asserted only from its description, and **both implementer disagreements are accurate** —
+task 4's mutation reproduced exactly, one assertion earlier than predicted, with exactly the three
+collateral tests it named.
+
+**Major 2 is the proxy failure `CLAUDE.md` devotes a section to, and it falsifies the grounds of a
+ruling this batch's order was built around.** Task 4 reasoned from `aggregated` and concluded about
+a **predicate**: `_comparison_step_blocks` iterates `aggregated` but computes `is_derived` from
+`derived_by_key`, and a name in **both** takes the derived branch. `summarize_step`'s
+`E-STEP-KEY-COLLISION` raise precedes its cluster guard, `command_run` assigns the two maps before
+the call, and the `except ContractError` retry never clears them. The reviewer **verified by
+running**: a direct call with a shared name yields `method: 'paired_percentile_over_units'` —
+**unsuffixed, the exact case task 2's argument says cannot exist** — carrying `ci95: [0.6, 0.6]`,
+which is task 3's zero-width shape into the bargain.
+
+**Ruling: the disposition stands, the grounds do not.** `E-DATA-CLUSTER-DERIVED` stays re-owned to
+H4c and unbuilt — that was ruled on cost, not on reachability. What changes is the *argument*: the
+filing's grounds and § Contrasts' "Every clustered contrast…" quantifier are both narrowed to what
+is true, and the corner is recorded as unreachable end to end **only while `E-DATA-CLUSTER-CONTRAST`
+stands** — which makes it a thing **task 14 must re-check when it retires that refusal**, stated
+there rather than left to be rediscovered. **Cost if wrong:** task 14 ships a retirement that opens
+an unsuffixed-`method` path nobody is watching.
+
+**Major 1 is the df-clause the implementer flagged and deferred; the deferral is refused.** The
+sentence generalizes a df provenance over both clustered constructions, and the percentile one is a
+**resampling draw with no df**. It sits in the normative document every construction task reads, so
+a false claim there propagates into the tasks that read it. Deleted rather than rewritten.
