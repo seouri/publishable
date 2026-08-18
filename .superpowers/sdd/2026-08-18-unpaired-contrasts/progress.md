@@ -356,3 +356,41 @@ hardcoded test count, and **two where a mutation's predicted magnitude or its na
 test did not match what was measured** — the implementer says the qualitative "this mutation is
 caught" claim held both times. The reviewer was asked the sharper question: **whether a wrong
 predicted magnitude means the mutation is hitting something other than what the brief thought.**
+
+### Batch 3 — task review: spec compliance PASS, quality PASS WITH FINDINGS, two Majors
+
+Review at `task-b3-review.md`. **The code is correct** — the reviewer's own summary — and it
+established that by running rather than reading: every illegal `Member` combination built in-process
+and confirmed to raise, so `sides` is a genuine third **kind**; all six `_corrected_bounds` return
+paths reachable and **bit-equal to a direct call of the construction each names**; the unpaired
+corrected bound **moves** with α (3.03913 → 3.55785); and **batch 1's six-cell guard pin still
+discriminates at its own α and df** under a paired-clustered-to-unclustered mutation.
+
+**Both Majors are stated guarantees that are false, and both were prescribed by the briefs.**
+
+**Major 1 is the test-name-claims-the-guarantee row, caught by running.** `test_the_five_t_arms_…`
+claims each arm is asserted "by the construction its `method` names" and that it catches an unpaired
+clustered member taking the plain Welch arm. Task 12's mutation 1 leaves it **green** — 1 failure out
+of 2251, and not this test. The body asserts non-`None` plus distinctness, which catches
+**collisions**, not collision-free fall-through. Its `sides` fixtures are also **3-vs-3**, the equal
+per-side geometry **the spec's own constraint 1 forbids**, and the shape under which a Welch interval
+coincides with a pooled one.
+
+**Major 2 is a mutation caught by a crash rather than by an assertion.** The clustered `sides` arm's
+**centre** is unpinned: mutation 4 fails through a `zip()` `ValueError` arising from fixture B's
+9-vs-12 asymmetry. **Change the fixture geometry and the mutation goes silent.** One line fixes it.
+**Ruling: the qualitative "this mutation is caught" claim is not sufficient here**, against the
+implementer's disagreement 5 — what caught it was fixture arithmetic, not the property under test.
+The brief's own reasoning ("tuples DO move, so it discriminates") is wrong. On the implementer's
+disagreement 4 the opposite ruling holds: the brief's magnitude is an arithmetic slip, the mutation
+fails on the intended assertion, and qualitative **is** enough. **The two look identical in a report
+and differ entirely in what they license.**
+
+**And task 9's mutation is now 126 failures, not 90** — the earlier figure was measured **before
+tasks 10-13 gave the predicate its second caller**. This is the blindness-expiry rule running in the
+opposite direction: a mutation's blast radius is measured against a suite, and the suite moves under
+it. Both directions have now been observed on this slice.
+
+**A caller enumeration was re-introduced in `crossed_group_axes`' docstring, one function away from
+the one task 13 deleted in the same batch.** Recorded because deleting a forbidden pattern and adding
+another instance of it in the same file is the pattern worth naming, not the instance.
