@@ -255,3 +255,44 @@ pre-flight ruling exists to catch.
 `PairedResample` reused with the word "paired" deleted from its docstring. Extractions are where
 `CLAUDE.md`'s traps concentrate: a mutation applied to the extracted body rather than the call site,
 and a monkeypatch left aimed at a name the code no longer calls. The reviewer was pointed at both.
+
+### Batch 2 — task review: spec compliance PASS, quality PASS WITH RESERVATIONS, three Majors
+
+Review at `task-b2-review.md`. **No behavioural defect — the reviewer could not provoke a wrong
+number**, and it verified that the hard way: every fixture literal recomputed in a script importing
+`scipy` directly and **never importing `publishable`**. Fixture A's SE √2, df 96/7,
+`3.039125537798091` and all four mutants; fixture B's per-side variances at G = 3/4, SE
+`8.286504224543332`, df `2.0950313633473936`, half-width **`34.14810237373095`**. **No test passes
+under either rejected clustered reading.** All three Majors are in prose and in the mutation record.
+
+**Both mutation questions answered, and they went opposite ways — which is why they were sent
+together.** Task 7's mutation 4: the **implementer's reading is right**, the literal reading also
+fails (`17.34…` against `34.15`), so both branches discriminate and it is **not** the cannot-differ
+trap — a **brief defect**. Task 6's mutation 2: **the blindness claim is overturned**, and the reason
+is the one worth carrying — **it was true when it was measured and false at HEAD**, because task 8
+added the clustered tests that see it. **Mis-fixtured, not blind.** A blindness claim, like a build
+fact, has an expiry: it is measured against a suite, and the suite moves.
+
+The reviewer also answered the discriminating-fixture question directly: **a clustered fixture
+discriminates** (variable-length per-side draws defeat a split at `len(of_keys)`); **strata alone do
+not** (per-side totals stay 5 and 25, so the split reconstructs both draws bit-for-bit).
+
+**Major 1 is a brief that prescribed a false claim, shipped verbatim.** `_sample_variance` is
+documented as "the one copy in this module" while `cohens_dz` computes the identical expression —
+verified **bit-identical** by running — and their denominators are documented as "different
+quantities" when only the input vector differs. **A brief prescribing a false claim does not make it
+true.**
+
+**Major 3 is the oracle's docstring over-claiming.** Task 6's mutation 4 names two tests that do not
+fail; the extraction oracle's only draw-reading assertion is **clustered**, so it cannot see the
+unclustered half of the body it was extracted from. Task 4's equivalent mutation was run as a control
+and **is** sound, so this is an instance rather than a pattern.
+
+**Filed rather than fixed inside a fix round:** the two tests that catch mutation 2 fail via an
+**uncaught `KeyError` at `stats.py:1865`**, because `unit_table_from_rows` sits **outside** the `try`.
+A test that fails by crashing pins something different from one that fails by assertion. The
+implementer was told to say whether the placement is deliberate and to **file it rather than fix it
+silently** — a robustness change smuggled into a prose fix round is how scope escapes review.
+
+**And a brief mislabelling, corrected here so it does not propagate:** `26.371…` is **`G_against−1`**,
+not `G_total−2`; `G_total−2` is `21.301…`.
