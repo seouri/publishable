@@ -15,9 +15,68 @@ from publishable.stats import (
     paired_t_over_units,
     paired_t_over_units_clustered,
     weighted_paired_t_over_units,
+    welch_t_over_units,
+    welch_t_over_units_clustered,
 )
 
 ALPHA = 0.05
+
+
+@dataclass(frozen=True)
+class UnpairedEvidence:
+    """Two per-side value vectors, and their two per-side cluster labels if any.
+
+    The evidence a Welch interval is built from, and the one kind that is neither a
+    draw pool nor a difference vector: `welch_t_over_units` takes two independent
+    samples and `welch_t_over_units_clustered` takes two more label vectors beside
+    them. A percentile unpaired interval is NOT here — its evidence is a pool of
+    resampled differences, structurally identical to a paired one's, so
+    `interval_at` already serves it and `Member.pool` needs no change.
+
+    **`clusters` lives here rather than on `Member`, and that is the whole reason
+    this type exists.** A modifier's length invariant belongs to the object that
+    defines the vectors it aligns against: a flat per-side label pair beside
+    `Member.sides` would be one field with two admissible shapes, and a
+    construction reading it would align it against whichever vector came first —
+    the misaligned-vector class that produces a plausible number rather than an
+    error. One field on `Member` is also what lets the exactly-one rule stay one
+    expression.
+
+    Tuples so a member cannot be mutated into the record by accident, the same
+    reason `pool` and `diffs` are tuples. Neither may reach `run.yaml`.
+    """
+
+    of: tuple[float, ...]
+    against: tuple[float, ...]
+    clusters: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+
+    def __post_init__(self) -> None:
+        """One label per value, per side, in the same order.
+
+        `cli`'s bookkeeping to get right, so `ValueError` rather than
+        `ContractError`: the latter is reserved for something a user's code asked
+        for or handed back, and nothing here comes from outside core.
+
+        Both sides are checked. A check reading one side passes any input whose
+        other side happens to align. Equal per-side sizes make the pooled and
+        Welch standard errors algebraically identical, so a same-length assumption
+        is wrong about the domain as well as about the code — a discriminating
+        fixture needs unequal sides, though that is a property a fixture must
+        choose, not one this type enforces.
+        """
+        if self.clusters is None:
+            return
+        of_labels, against_labels = self.clusters
+        if len(of_labels) != len(self.of):
+            raise ValueError(
+                "UnpairedEvidence clusters must give one label per value on the of "
+                f"side, not {len(of_labels)} against {len(self.of)}"
+            )
+        if len(against_labels) != len(self.against):
+            raise ValueError(
+                "UnpairedEvidence clusters must give one label per value on the "
+                f"against side, not {len(against_labels)} against {len(self.against)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -26,29 +85,35 @@ class Member:
 
     `pool` and `diffs` are how the corrected interval is built from the *same*
     evidence as the raw one — the stored draws for a percentile interval, the
-    stored per-unit differences for a *t* one. Exactly one of them is set.
+    stored per-unit differences for a *t* one. **`sides` is the third: two
+    independent per-side value vectors, the evidence a Welch interval is built
+    from** — neither a pool nor a difference vector, since an unpaired contrast
+    has no per-unit differences to store. Exactly one of the three is set.
     **A recorded column carries `diffs` by default and `pool` under a declared
     `statistics.resample`**, which is what makes a percentile raw interval and a
     percentile corrected one the same construction; a reader meeting
     `diffs=None` on a column contrast is meeting that, not an omission. Cohen's
     *dz* is computed at the call site from its own list and does not travel here.
-    Neither may reach `run.yaml`: they are tuples so a member cannot be mutated
-    into the record by accident. `pool` must already be sorted ascending —
-    `interval_at` reads fixed ranks off it and does not sort.
+    None of the three may reach `run.yaml`: they are tuples (or a frozen
+    dataclass of tuples) so a member cannot be mutated into the record by
+    accident. `pool` must already be sorted ascending — `interval_at` reads
+    fixed ranks off it and does not sort.
 
     `weights`, when set, is the weight vector a weighted column contrast's
     `diffs` were weighted by, one weight per difference and in the same order —
     a modifier on that evidence rather than a third kind of it, so it travels
-    alongside `diffs` and never alongside `pool`. `None` is the default and the
-    shape every construction predating this field still builds.
+    alongside `diffs` and never alongside `pool` or `sides`. `None` is the
+    default and the shape every construction predating this field still builds.
 
     `clusters`, when set, is one cluster label per difference, in the same order
     as `diffs` — a modifier on that evidence for the same reason `weights` is
-    one, and never alongside `weights`: the two declarations never coexist
-    (`E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses the combination at `validate`), so
-    a member carrying both would be core's own bookkeeping error rather than a
-    config to resolve. `None` is the default and the shape every construction
-    predating this field still builds.
+    one, and never alongside `weights` or `sides`: the two declarations never
+    coexist (`E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses the combination at
+    `validate`), so a member carrying both would be core's own bookkeeping error
+    rather than a config to resolve. Per-side cluster membership for `sides`
+    lives inside `UnpairedEvidence` instead, where the two label vectors can be
+    checked against the two value vectors they each belong to. `None` is the
+    default and the shape every construction predating this field still builds.
     """
 
     where: str
@@ -61,12 +126,13 @@ class Member:
     declaration_index: int
     weights: tuple[Any, ...] | None = None
     clusters: tuple[str, ...] | None = None
+    sides: UnpairedEvidence | None = None
 
     def __post_init__(self) -> None:
-        """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
-        correct — never both, never neither. A member with no interval at all
-        (`ci95=None`, excluded by `family_members` before either field is ever
-        read) is exempt: it carries neither.
+        """Exactly one of `pool`/`diffs`/`sides` is set whenever there is a
+        `ci95` to correct — never two, never none. A member with no interval at
+        all (`ci95=None`, excluded by `family_members` before any of the three
+        fields is ever read) is exempt: it may still carry one.
 
         This is `cli.py`'s bookkeeping error to make, not a plugin author's
         declaration to violate, so it raises plain `ValueError` rather than
@@ -74,31 +140,44 @@ class Member:
         asked for or handed back that its own declarations don't allow, and
         nothing here comes from outside core.
 
-        Both set would let `_corrected_bounds` silently take the `diffs`
-        branch and build a *t* interval as the corrected counterpart of a
-        *percentile* raw one — narrower or wider than the truth by construction,
-        not by evidence, which is the exact failure this slice exists to
-        prevent. Neither set would make `_corrected_bounds` return `None` for
-        a reason that has nothing to do with the pool being too small, so
-        `thin: True` would fire over a member that was never thin.
+        Two set would let `_corrected_bounds` take one branch and build a
+        corrected interval from evidence the raw one was not read from —
+        narrower or wider than the truth by construction, not by evidence,
+        which is the exact failure this rule exists to prevent. None set would
+        make `_corrected_bounds` return `None` for a reason that has nothing to
+        do with the pool being too small, so `thin: True` would fire over a
+        member that was never thin.
 
         **`weights` and `clusters` are both modifiers on `diffs`, not a third
         kind of evidence**, so neither enters the exactly-one rule and both are
-        checked separately. A weighted column contrast's raw interval is
-        `weighted_paired_t_over_units` over those differences, and a clustered
-        one's is `paired_t_over_units_clustered`; either way the corrected bound
-        has to be the same construction at a smaller α or it is a counterpart in
-        name only. Beside `pool` either would be applied twice — a percentile
-        pool is already built from weighted or clustered draws — and at a
-        different length either is a misaligned vector, the failure class that
-        produces a plausible number rather than an error. The two modifiers also
-        never coexist: `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses a weighted
-        clustered comparison at `validate`, so a member carrying both is `cli`'s
+        checked separately, and neither may accompany `sides`. A weighted
+        column contrast's raw interval is `weighted_paired_t_over_units` over
+        those differences, and a clustered one's is
+        `paired_t_over_units_clustered`; either way the corrected bound has to
+        be the same construction at a smaller α or it is a counterpart in name
+        only. Beside `pool` either would be applied twice — a percentile pool
+        is already built from weighted or clustered draws — and at a different
+        length either is a misaligned vector, the failure class that produces a
+        plausible number rather than an error. Beside `sides` neither can even
+        be aligned: `weights` refuses because
+        `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses a weighted unpaired
+        comparison at `validate`, and `clusters` refuses because unpaired
+        cluster membership is per side and lives inside `UnpairedEvidence`,
+        which a flat label vector could not say which side it belongs to. The
+        two modifiers also never coexist with each other:
+        `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses a weighted clustered
+        comparison at `validate`, so a member carrying both is `cli`'s
         bookkeeping error, not a plugin author's. All of this is `cli`'s
         bookkeeping to get right, so it all raises `ValueError` for the reason
         the rule above does.
         """
         if self.weights is not None:
+            if self.sides is not None:
+                raise ValueError(
+                    "Member weights may not accompany sides; "
+                    "E-DATA-WEIGHT-ALLOCATION-CONTRAST refuses a weighted unpaired "
+                    "comparison at validate"
+                )
             if self.pool is not None:
                 raise ValueError(
                     "Member weights modify diffs, not a pool; a percentile pool is "
@@ -111,6 +190,11 @@ class Member:
                     f"{'no diffs' if self.diffs is None else len(self.diffs)}"
                 )
         if self.clusters is not None:
+            if self.sides is not None:
+                raise ValueError(
+                    "Member clusters may not accompany sides; unpaired cluster "
+                    "membership is per side and lives inside UnpairedEvidence"
+                )
             if self.pool is not None:
                 raise ValueError(
                     "Member clusters modify diffs, not a pool; a clustered percentile "
@@ -129,10 +213,29 @@ class Member:
                 )
         if self.ci95 is None:
             return
-        if (self.pool is None) == (self.diffs is None):
+        # Counted over the three rather than a second equality beside the first:
+        # `(pool is None) == (diffs is None)` does not generalize, and a reader
+        # adding a second equality would admit a member carrying two kinds. Two set
+        # would let `_corrected_bounds` take one branch and build a corrected
+        # interval from evidence the raw one was not read from — narrower or wider
+        # than the truth by construction rather than by evidence, which is the exact
+        # failure this rule exists to prevent. None set would make
+        # `_corrected_bounds` return `None` for a reason that has nothing to do with
+        # a pool being too small, so `thin: True` would fire over a member that was
+        # never thin.
+        present = [
+            name
+            for name, value in (
+                ("pool", self.pool),
+                ("diffs", self.diffs),
+                ("sides", self.sides),
+            )
+            if value is not None
+        ]
+        if len(present) != 1:
             raise ValueError(
-                "Member requires exactly one of pool/diffs, not "
-                f"{'both' if self.pool is not None else 'neither'}"
+                "Member requires exactly one of pool/diffs/sides, not "
+                + (", ".join(present) if present else "none of the three")
             )
 
 
@@ -224,13 +327,16 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     `paired_t_over_units` over them, `weighted_paired_t_over_units` when the
     member also carries `weights`, or `paired_t_over_units_clustered` when it
     carries `clusters` instead — exact at any α either way, and the two
-    modifiers never coexist. A member carrying a draw pool reads a second rank
-    pair off it. A derived metric always carries a
+    modifiers never coexist. A member carrying two independent per-side value
+    vectors (`sides`) instead re-runs `welch_t_over_units`, or
+    `welch_t_over_units_clustered` when `sides.clusters` is set — the unpaired
+    counterpart of the same choice. A member carrying a draw pool reads a
+    second rank pair off it. A derived metric always carries a
     pool; a recorded column carries differences by default and **carries a pool
     instead under a declared `statistics.resample`**, because its raw interval
     was then a percentile and a *t* corrected bound would be its counterpart in
     name only — narrower or wider than the truth by construction rather than by
-    evidence. `Member.__post_init__` enforces exactly one of the two, so this
+    evidence. `Member.__post_init__` enforces exactly one of the three, so this
     order is a preference among impossible-to-have-both fields rather than a
     tie-break.
 
@@ -238,6 +344,25 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     the raw interval, and a corrected interval narrower than its raw one is
     precisely the number a reader cannot tell is wrong.
     """
+    if member.sides is not None:
+        # WHICH Welch construction rebuilds the bound is decided by whether the
+        # evidence carries per-side cluster labels — the same evidence at a smaller α
+        # either way. An unpaired clustered raw interval with an unclustered
+        # corrected counterpart is narrower by construction rather than by evidence
+        # and no reader of `run.yaml` could detect it, which is the fault the
+        # exactly-one rule refuses one axis over.
+        if member.sides.clusters is not None:
+            of_labels, against_labels = member.sides.clusters
+            got = welch_t_over_units_clustered(
+                member.sides.of,
+                of_labels,
+                member.sides.against,
+                against_labels,
+                confidence=1.0 - level,
+            )
+        else:
+            got = welch_t_over_units(member.sides.of, member.sides.against, confidence=1.0 - level)
+        return None if got is None else (got.low, got.high)
     if member.diffs is not None:
         # WHICH t construction rebuilds the bound is decided by the modifier the
         # member carries — the same evidence at a smaller α either way. A

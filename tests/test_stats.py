@@ -10,8 +10,11 @@ from publishable.stats import (
     Interval,
     PairedResample,
     UnitTable,
+    _cr1_variance,
     _percentile_ranks,
+    _sample_variance,
     _t_critical,
+    cohens_ds,
     cohens_dz,
     collapse_repeats,
     handed_to,
@@ -32,8 +35,12 @@ from publishable.stats import (
     summarize_step,
     t_over_units,
     t_over_units_clustered,
+    unpaired_keys,
+    unpaired_percentile_of_sides,
     weighted_t_over_units,
     weighted_t_over_units_clustered,
+    welch_t_over_units,
+    welch_t_over_units_clustered,
 )
 
 
@@ -538,6 +545,30 @@ def test_an_empty_allowed_set_yields_no_pairing():
     assert paired_keys(of, against, None) == ["u1"]
 
 
+def test_unpaired_keys_gives_each_side_its_own_completed_set():
+    """`paired_keys` is the intersection and it is the wrong set for a contrast
+    whose two sides are disjoint. Each side gets its own completed units, sorted for
+    the same reason `paired_keys` sorts — a draw over these keys must be row-order
+    invariant.
+
+    The fixture is genuinely disjoint AND has one shared key, which is the case a
+    naive `set(of) - set(against)` would get wrong: sharing a key is not what makes
+    a comparison paired, the group axis is, and this function does not decide that."""
+    of = {"a": {"m": 1.0}, "b": {"m": 2.0}, "s": {"m": 3.0}}
+    against = {"c": {"m": 4.0}, "s": {"m": 5.0}}
+    assert unpaired_keys(of, against, None) == (["a", "b", "s"], ["c", "s"])
+
+
+def test_unpaired_keys_narrows_both_sides_by_the_stratum():
+    """`within` narrows each side, the same narrowing `paired_keys` applies to the
+    intersection. Asserted on both sides, because a function narrowing only `of`
+    passes any test that reads one side."""
+    of = {"a": {"m": 1.0}, "b": {"m": 2.0}}
+    against = {"c": {"m": 3.0}, "d": {"m": 4.0}}
+    assert unpaired_keys(of, against, {"a", "c"}) == (["a"], ["c"])
+    assert unpaired_keys(of, against, set()) == ([], [])
+
+
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():
     collapsed = {f"p{i}": {"pred": float(i)} for i in range(10)}
     out = summarize_step(collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0})
@@ -1017,6 +1048,84 @@ def test_fewer_than_two_values_has_no_interval(values):
 def test_zero_variance_yields_a_degenerate_but_real_interval():
     iv = t_over_units([5.0, 5.0, 5.0])
     assert iv is not None and iv.low == iv.high == 5.0
+
+
+_WELCH_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
+_WELCH_AGAINST = [5.0] * 12 + [15.0] * 12 + [10.0]
+
+
+def test_the_welch_t_assumes_neither_shared_units_nor_equal_variances():
+    """Fixture A: `of` is 5 units at mean 20 with s² 5, `against` is 25 units at
+    mean 10 with s² 25 — so s²/n is exactly 1 on each side and BOTH sides
+    contribute comparably to the Welch variance. That balance is the whole design
+    of the fixture: where one side dominates, Welch-Satterthwaite's df is driven
+    onto `min(df_of, df_against)` and a `min(n) − 1` mutant becomes invisible. The
+    spec's own first draft did exactly that — correct 17.2405 against the mutant's
+    17.2614, 0.1 % apart.
+
+    Delta 10, SE √2, df 96/7. Four wrong readings give four other half-widths and
+    none is adjacent: the pooled variance at df 28 gives 4.7221, the Welch variance
+    at `min(n) − 1` gives 3.9265, at `max(n) − 1` gives 2.9188, and at
+    `n_of + n_against − 2` gives 2.8969. The tightest is 4.7 % from correct, which
+    no rounding produces.
+
+    **A Welch interval that coincides with a pooled one proves nothing** — equal
+    per-side sizes make the two standard errors algebraically identical — so the
+    unequal sizes here are load-bearing rather than incidental."""
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    assert interval.method == "welch_t_over_units"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(10.0)
+    assert half == pytest.approx(3.039125537798091)
+
+
+def test_the_welch_t_is_not_the_pooled_t_on_the_same_two_sides():
+    """The control that must report, and the number a pooled mutant lands on. The
+    pooled standard error on the same data is
+    √(((4·5) + (24·25)) / 28 · (1/5 + 1/25)) and at df 28 gives a half-width of
+    4.7221 — 55 % wider. A test asserting only that an interval came back, or only
+    that it brackets the delta, passes under either construction."""
+    pooled_variance = ((5 - 1) * 5.0 + (25 - 1) * 25.0) / (5 + 25 - 2)
+    pooled_se = math.sqrt(pooled_variance * (1 / 5 + 1 / 25))
+    assert _t_critical(28, 0.95) * pooled_se == pytest.approx(4.722138614325821)
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    assert (interval.high - interval.low) / 2 != pytest.approx(4.722138614325821)
+
+
+def test_the_welch_t_refuses_the_degenerate_inputs_its_siblings_refuse():
+    """`None` below two values on EITHER side — df would be zero on that side and
+    there is no dispersion to describe, which is `t_over_units`' own floor read
+    across two samples. `None` also where both sides are constant: the combined
+    variance is then exactly zero and Welch-Satterthwaite's df is 0/0, so the
+    honest answer is a point with no interval rather than a `ZeroDivisionError`.
+
+    One side constant is NOT refused — the other side still has dispersion and the
+    difference of two means still has a sampling distribution — which is the
+    asymmetry a copied `or` guard would get wrong."""
+    assert welch_t_over_units([1.0], [1.0, 2.0, 3.0]) is None
+    assert welch_t_over_units([1.0, 2.0, 3.0], [1.0]) is None
+    assert welch_t_over_units([2.0, 2.0, 2.0], [1.0, 1.0, 1.0]) is None
+    one_side_flat = welch_t_over_units([2.0, 2.0, 2.0], [1.0, 2.0, 3.0])
+    assert one_side_flat is not None
+    assert one_side_flat.high > one_side_flat.low
+
+
+def test_the_extracted_sample_variance_leaves_t_over_units_where_it_was():
+    """The extraction is pure code motion and this is the oracle that says so.
+    `t_over_units` over `_WELCH_AGAINST` must give the same half-width it gave
+    before `_sample_variance` existed — mean 10, s² 25, n 25, so
+    t(0.975, 24)·√(25/25) = 2.0638985616280205.
+
+    Pinned here rather than trusted, because a `(n - 1)` that became `n` in the
+    move would narrow every unweighted interval in the package by a few per cent
+    and nothing else in this module would notice."""
+    plain = t_over_units(_WELCH_AGAINST)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(2.0638985616280205)
+    assert _sample_variance(_WELCH_AGAINST, 10.0) == pytest.approx(25.0)
 
 
 def test_a_weighted_interval_is_wider_than_the_unweighted_one():
@@ -1967,6 +2076,43 @@ def test_cohens_dz_is_none_when_every_difference_is_identical():
     assert cohens_dz([2.0, 2.0, 2.0]) is None
 
 
+def test_cohens_ds_pools_the_two_within_condition_variances():
+    """Fixture A: mean 20 over 5 units with s² 5 against mean 10 over 25 units with
+    s² 25. The pooled variance is ((4·5) + (24·25)) / 28 = 22.142857…, so the
+    pooled sd is 4.705619740571601 and *d*s is 10 / that = 2.1251185925162073.
+
+    **The discriminating alternative is the interval's own denominator.**
+    `welch_t_over_units` on this data has SE √2, and 10/√2 is 7.0710678118654755 —
+    a factor of 3.33 out. § Statistical reporting states that asymmetry
+    deliberately, and this assertion is what makes it checkable rather than
+    merely written down.
+
+    An unweighted equal-size fixture could not tell the two apart at all, which is
+    why this shares fixture A rather than inventing a tidier one."""
+    assert cohens_ds(_WELCH_OF, _WELCH_AGAINST) == pytest.approx(2.1251185925162073)
+
+
+def test_cohens_ds_is_not_standardized_by_the_welch_denominator():
+    """The control that must report, and the number the wrong denominator lands on.
+    Asserted as a literal rather than as an inequality: `!=` alone passes for any
+    third wrong number, and a *d* is a number readers compare across papers."""
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    welch_se = (interval.high - interval.low) / 2 / _t_critical(96 / 7, 0.95)
+    assert 10.0 / welch_se == pytest.approx(7.0710678118654755)
+    assert cohens_ds(_WELCH_OF, _WELCH_AGAINST) != pytest.approx(7.0710678118654755)
+
+
+def test_cohens_ds_refuses_what_cohens_dz_refuses():
+    """`None` below two values on either side, and `None` at zero dispersion — the
+    two refusals `cohens_dz` carries, kept so the pair refuses the same inputs. A
+    *d* over a denominator that has rounded away is the same invention
+    `t_over_units` already declines below two values."""
+    assert cohens_ds([1.0], [1.0, 2.0, 3.0]) is None
+    assert cohens_ds([1.0, 2.0, 3.0], [1.0]) is None
+    assert cohens_ds([2.0, 2.0, 2.0], [1.0, 1.0, 1.0]) is None
+
+
 def test_iteration_yields_one_row_per_unit():
     t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
     assert [r["unit"] for r in t] == ["u1", "u2"]
@@ -2890,6 +3036,20 @@ def test_interval_at_refuses_a_pool_too_small_for_the_level():
     assert min_honest_draws(1.0 - 0.00125) > 2000
     assert interval_at(pool, 1.0 - 0.00125) is None
     assert interval_at(pool, 0.95) is not None
+
+
+def test_interval_at_refuses_an_unsorted_pool_rather_than_reading_two_positions():
+    """The filing H4b-2 restored and H4c claims. `interval_at` reads fixed ranks off
+    a pool, so an unsorted one returns two arbitrary values that look exactly like an
+    interval — and this slice added a construction returning a pool, which is the
+    seam that made the precondition worth asserting rather than documenting.
+
+    The sorted control must report, because an assertion that fires on every input
+    would pass the negative case too."""
+    ordered = [float(i) for i in range(400)]
+    assert interval_at(ordered, 0.95) is not None  # the control
+    with pytest.raises(AssertionError, match="sorted"):
+        interval_at(list(reversed(ordered)), 0.95)
 
 
 def test_the_paired_resample_carries_the_pool_it_read_its_interval_from():
@@ -4398,3 +4558,458 @@ def test_a_paired_draw_that_can_vary_still_reports():
     )
     assert got.interval is not None
     assert got.interval.high > got.interval.low
+
+
+def _side_rows(values, prefix):
+    return {f"{prefix}{i:02d}": {"m": v} for i, v in enumerate(values)}
+
+
+def _row_count_recorder():
+    """A compute closure that records the row count of every table it is handed.
+
+    The percentile discriminator is the per-replicate DRAW SIZE, and § The two
+    discriminating fixtures requires it be asserted rather than inferred from the
+    interval — which only works if the construction admits an observable. This is
+    that observable: the closure returns the column mean, so the draw proceeds
+    normally, and the sizes accumulate in a list the test reads afterwards."""
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(table))
+        column = table.m
+        return float(sum(column) / len(column))
+
+    return compute, seen
+
+
+def test_the_unpaired_percentile_draws_each_side_independently():
+    """Fixture A through the percentile form. An independent per-side draw takes
+    exactly 5 rows from `of` and exactly 25 from `against` on EVERY replicate; a
+    mutant drawing once from the pooled 30 and splitting, or drawing `min(n)` for
+    both, returns different sizes.
+
+    **The draw size is asserted, not inferred from the interval.** An interval
+    assertion cannot tell a pooled draw from an independent one — both produce a
+    plausible number centred near 10 — and `is not None` is a uselessly weak
+    discriminator on this slice, where a suppressed contrast, a thin side and a
+    degenerate draw all return `None` too.
+
+    The endpoints are pinned as literals beside the sizes, captured from this
+    test's first green run in the same commit, so a later change cannot move the
+    draw while keeping the counts right."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute_of, seen_of = _row_count_recorder()
+    compute_against, seen_against = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute_of,
+        compute_against,
+        seed=7,
+        draws=400,
+    )
+    assert set(seen_of) == {5}
+    assert set(seen_against) == {25}
+    assert len(seen_of) == 400 and len(seen_against) == 400
+    assert got.draws_used == 400
+    assert got.interval is not None
+    assert got.interval.method == "unpaired_percentile_over_units"
+    assert got.pool == sorted(got.pool)
+    assert [got.interval.low, got.interval.high] == pytest.approx([7.400000000000002, 12.8])
+
+
+def test_the_unpaired_percentile_pool_is_the_evidence_a_corrected_bound_reads():
+    """`interval_at` reads fixed ranks off a pool and does not sort, so a pool
+    returned unsorted gives a corrected interval built from two arbitrary
+    positions. Both return paths here sort, and the too-thin path sorts a partial
+    pool for the same reason.
+
+    Asserted through `interval_at` rather than on the list alone, because the
+    property that matters is that a SECOND rank pair off the same pool is wider,
+    not merely that a list is ordered."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert got.interval is not None
+    tighter = interval_at(got.pool, 0.975)
+    assert tighter is not None
+    assert tighter[0] <= got.interval.low and tighter[1] >= got.interval.high
+
+
+def test_the_unpaired_percentile_refuses_only_when_both_sides_cannot_vary():
+    """The AND rule, and it is the one a copied check gets wrong. Two constant
+    sides make every replicate reproduce the same difference, so both percentile
+    ranks land on it and the interval has zero width while looking exactly like a
+    narrow one — the shape § Statistical reporting refuses in those terms. One
+    constant side does NOT refuse: the other still varies, so the difference has a
+    real sampling distribution, and an `or` here would null an interval that is
+    fine.
+
+    The one-sided case asserts a POSITIVE width rather than `is not None`, because
+    a degenerate draw and a suppressed contrast both return `None` and only a width
+    separates a real interval from either."""
+    flat_of = _side_rows([3.0] * 5, "a")
+    flat_against = _side_rows([1.0] * 25, "b")
+    varied_against = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    both_flat = unpaired_percentile_of_sides(
+        flat_of,
+        flat_against,
+        sorted(flat_of),
+        sorted(flat_against),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert both_flat.interval is None
+    assert both_flat.draws_used == 0
+    assert both_flat.pool == []
+    one_flat = unpaired_percentile_of_sides(
+        flat_of,
+        varied_against,
+        sorted(flat_of),
+        sorted(varied_against),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert one_flat.interval is not None
+    assert one_flat.interval.high > one_flat.interval.low
+
+
+def test_the_unpaired_percentile_refuses_a_side_below_two_keys():
+    """`None` below two keys on either side, the floor every construction in this
+    module shares. Asserted on both sides, because a guard reading `of_keys` alone
+    passes the first case and fails nothing."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    assert (
+        unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            ["a00"],
+            sorted(against_rows),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+        ).interval
+        is None
+    )
+    assert (
+        unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            sorted(of_rows),
+            ["b00"],
+            compute,
+            other,
+            seed=7,
+            draws=400,
+        ).interval
+        is None
+    )
+
+
+def test_the_extracted_draw_pools_leaves_the_paired_draw_where_it_was():
+    """The extraction is pure code motion, and this is the oracle **for its
+    clustered branch**: the paired clustered draw over H4b-2's own 2/4/6 fixture
+    must produce the same pool it produced before `_draw_pools` existed — an RNG
+    sequence that changed by one call moves the percentiles without necessarily
+    widening anything, so this asserts the ENDPOINTS rather than the width.
+
+    **This test does not cover the unclustered branch.** Its own draw here always
+    passes `clusters=`, and its two `raises` arms fail before item order can matter
+    (`keys != sorted(keys)`) or take the clustered path themselves. The
+    unclustered branch's own sequence is pinned by
+    `test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was` and
+    `test_the_unpaired_percentile_draws_each_side_independently` — both of which
+    do move under a reversed unclustered `items` order, where this test's own
+    fixture happens not to (its endpoints survive the reversal here, a
+    coincidence of this particular fixture rather than a property of the
+    extraction).
+
+    Both raises move with the body and are re-pinned here: an unsorted `keys` under
+    `strata` still raises `ValueError`, and a cluster spanning two strata still
+    raises `E-STATS-RESAMPLE-STRATIFY-VARIES`."""
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    of = {k: {"m": v} for k, v in zip(keys, values, strict=True)}
+    against = {k: {"m": 0.0} for k in keys}
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        other,
+        seed=7,
+        draws=400,
+        clusters=dict(zip(keys, labels, strict=True)),
+    )
+    assert got.interval is not None
+    assert [got.interval.low, got.interval.high] == pytest.approx([1.0, 8.0])
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            of,
+            against,
+            list(reversed(keys)),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            strata={k: "s" for k in keys},
+        )
+    with pytest.raises(ContractError) as exc:
+        paired_percentile_of_derived(
+            of,
+            against,
+            keys,
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            strata={k: ("x" if k == "u00" else "y") for k in keys},
+            clusters=dict(zip(keys, labels, strict=True)),
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+
+
+_CLUSTERED_OF = [0.0] * 2 + [15.0] * 3 + [30.0] * 4
+_CLUSTERED_OF_LABELS = ["p"] * 2 + ["q"] * 3 + ["r"] * 4
+_CLUSTERED_AGAINST = [2.0] * 2 + [4.0] * 3 + [6.0] * 3 + [8.0] * 4
+_CLUSTERED_AGAINST_LABELS = ["w"] * 2 + ["x"] * 3 + ["y"] * 3 + ["z"] * 4
+
+
+def test_the_unpaired_clustered_t_combines_two_per_side_cluster_dfs():
+    """Fixture B: `of` is 9 units in 3 clusters of 2/3/4 constant within cluster at
+    0/15/30, `against` 12 units in 4 clusters of 2/3/3/4 at 2/4/6/8. Values
+    constant within a cluster make each side's variance entirely BETWEEN-cluster,
+    so CR1 cannot approximate the IID form; the sizes are unequal so no count
+    assertion is forced; and the two cluster counts differ, 3 against 4, so a
+    construction reading one side's count writes a wrong integer.
+
+    Per-side CR1 variances 67.0782 (G = 3) and 1.5880 (G = 4), SE 8.2865,
+    Welch-Satterthwaite df over `G_s` − 1 = 2.0950, half-width 34.1481. Five wrong
+    readings give five other numbers: `min(G) − 1` gives 35.6540, `G_against − 1`
+    gives 26.3714, `G_total − 2` gives 21.3011, `n_of + n_against − 2` gives
+    17.3439, and the IID Welch form on the identical data gives 9.6472. **The
+    correct answer is above one of them and below four**, so an assertion on the
+    number discriminates every failure mode, which an assertion on "is it wider"
+    does not."""
+    interval = welch_t_over_units_clustered(
+        _CLUSTERED_OF,
+        _CLUSTERED_OF_LABELS,
+        _CLUSTERED_AGAINST,
+        _CLUSTERED_AGAINST_LABELS,
+    )
+    assert interval is not None
+    assert interval.method == "welch_t_over_units_clustered"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(12.833333333333332)
+    assert half == pytest.approx(34.14810237373095)
+
+
+def test_the_unpaired_clustered_t_is_not_the_iid_welch_form_on_the_same_data():
+    """The control that must report, and the number a membership-ignoring mutant
+    lands on. The IID Welch form over the identical values gives 9.6472 — three and
+    a half times narrower, at the same centre. **A test asserting the centre alone
+    is blind to clustering entirely**, which is why the centre is asserted only
+    beside the half-width above."""
+    plain = welch_t_over_units(_CLUSTERED_OF, _CLUSTERED_AGAINST)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(9.647234756296374)
+
+
+def test_the_unpaired_clustered_t_refuses_a_side_below_two_clusters():
+    """Both floors, per side: `None` below two values and `None` below two clusters,
+    where that side's df would be zero. The second is the one a singleton-cluster
+    fixture can never see — one unit per cluster makes `G − 1` equal `n − 1`, so
+    the clustered and IID forms coincide exactly and every assertion passes under a
+    mutant ignoring membership. Hence the last case, which is correct and is
+    exactly why no other test here may use that shape."""
+    assert (
+        welch_t_over_units_clustered(
+            _CLUSTERED_OF, ["p"] * 9, _CLUSTERED_AGAINST, _CLUSTERED_AGAINST_LABELS
+        )
+        is None
+    )
+    assert (
+        welch_t_over_units_clustered(
+            _CLUSTERED_OF, _CLUSTERED_OF_LABELS, _CLUSTERED_AGAINST, ["w"] * 12
+        )
+        is None
+    )
+    singletons = welch_t_over_units_clustered(
+        _CLUSTERED_OF,
+        [f"p{i}" for i in range(9)],
+        _CLUSTERED_AGAINST,
+        [f"w{i}" for i in range(12)],
+    )
+    iid = welch_t_over_units(_CLUSTERED_OF, _CLUSTERED_AGAINST)
+    assert singletons is not None and iid is not None
+    assert (singletons.high - singletons.low) == pytest.approx(iid.high - iid.low)
+
+
+def test_the_extracted_cr1_variance_leaves_the_clustered_t_where_it_was():
+    """The extraction is pure code motion and this is the oracle. H4b-2's own 2/4/6
+    fixture through `t_over_units_clustered` must give the half-width it gave
+    before `_cr1_variance` existed — 8.763214143637903, which
+    `tests/test_stats.py`'s paired clustered test already pins independently.
+
+    The `G/(G−1)` finite-sample scaling is what a careless move drops, and dropping
+    it is not a rounding difference: it is the CR0 estimator wearing CR1's name,
+    biased downward by exactly the factor a small cluster count makes largest."""
+    diffs = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    keys = [str(i) for i in range(12)]
+    plain = t_over_units_clustered(diffs, keys, dict(zip(keys, labels, strict=True)))
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(8.763214143637903)
+    got = _cr1_variance(diffs, keys, dict(zip(keys, labels, strict=True)))
+    assert got is not None
+    variance, groups = got
+    assert groups == 3
+    assert variance == pytest.approx((3 / 2) * 398.22222222222223 / (12 * 12))
+
+
+def test_the_unpaired_clustered_percentile_draws_whole_clusters_per_side():
+    """Fixture B through the percentile form. `of` holds clusters of 2/3/4, so a
+    replicate drawing 3 clusters with replacement pools between 6 and 12 rows; a
+    mutant drawing UNITS returns a fixed 9. `against` holds 2/3/3/4 and varies
+    between 8 and 16 against a fixed 12.
+
+    **The varying row count is the assertion**, not the interval: equal cluster
+    sizes would make "a replicate's pooled row count varies" invisible and a
+    unit-drawing mutant would never be seen, which is why fixture B's clusters are
+    unequal in size within each side as well as unequal in count between them.
+
+    The two sides are asserted separately, because a construction passing
+    `of_clusters` to both sides would give the `against` side `of`'s sizes and a
+    single pooled assertion would not notice.
+
+    **The endpoints below are construction-pinned, not merely captured.**
+    `-4.7272727272727275` = −52/11 and `23.242424242424242` = 767/33 are reachable
+    under a whole-cluster draw over this fixture (`of`: 3 cluster draws with
+    replacement from totals/sizes 0/2, 45/3, 120/4; `against`: 4 from 4/2, 12/3,
+    18/3, 32/4) and are **unreachable** under a unit draw over the same rows,
+    verified by exact-rational enumeration of both draws' achievable differences —
+    the two sets share the same range (−8 … 28), so only the denominators tell
+    them apart."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    of_clusters = dict(zip(sorted(of_rows), _CLUSTERED_OF_LABELS, strict=True))
+    against_clusters = dict(zip(sorted(against_rows), _CLUSTERED_AGAINST_LABELS, strict=True))
+    compute_of, seen_of = _row_count_recorder()
+    compute_against, seen_against = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute_of,
+        compute_against,
+        seed=7,
+        draws=400,
+        method="unpaired_percentile_over_units_clustered",
+        of_clusters=of_clusters,
+        against_clusters=against_clusters,
+    )
+    assert got.interval is not None
+    assert got.interval.method == "unpaired_percentile_over_units_clustered"
+    assert len(set(seen_of)) > 1  # a unit draw would give exactly {9}
+    assert min(seen_of) >= 6 and max(seen_of) <= 12
+    assert len(set(seen_against)) > 1  # a unit draw would give exactly {12}
+    assert min(seen_against) >= 8 and max(seen_against) <= 16
+    assert [got.interval.low, got.interval.high] == pytest.approx(
+        [-4.7272727272727275, 23.242424242424242]
+    )
+
+
+def test_the_unpaired_clustered_percentile_is_not_the_unclustered_one():
+    """The control that must report. The same rows drawn as units give a different
+    interval, and the endpoints of both are pinned as literals rather than compared
+    only for inequality — `!=` alone passes for any third wrong pair, and it is the
+    weak-discriminator shape this slice bans by name.
+
+    **These endpoints are construction-pinned too, the mirror image of the
+    clustered test's.** `4.0` and `19.833333333333332` = 119/6 are reachable under
+    a unit draw over these same rows and unreachable under the whole-cluster draw
+    above — verified by the same exact-rational enumeration, over the same shared
+    range (−8 … 28)."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    unclustered = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert unclustered.interval is not None
+    assert unclustered.interval.method == "unpaired_percentile_over_units"
+    assert [unclustered.interval.low, unclustered.interval.high] == pytest.approx(
+        [4.0, 19.833333333333332]
+    )
+
+
+def test_the_unpaired_clustered_percentile_is_invariant_to_relabelling():
+    """`_draw_pools` orders clusters by their own sorted contents rather than by
+    label, so a relabelled roster draws the identical sequence — the invariance
+    `percentile_over_units_clustered` keeps and the one a `sorted(by_cluster)` over
+    LABELS would silently break. Asserted on the endpoints, which is the only place
+    a changed draw sequence shows."""
+    of_rows = {f"of{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_OF)}
+    against_rows = {f"ag{i:02d}": {"m": v} for i, v in enumerate(_CLUSTERED_AGAINST)}
+    renamed = {"p": "zz", "q": "aa", "r": "mm"}
+    first, second = [], []
+    for labels in (_CLUSTERED_OF_LABELS, [renamed[x] for x in _CLUSTERED_OF_LABELS]):
+        compute, _ = _row_count_recorder()
+        other, _ = _row_count_recorder()
+        got = unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            sorted(of_rows),
+            sorted(against_rows),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            method="unpaired_percentile_over_units_clustered",
+            of_clusters=dict(zip(sorted(of_rows), labels, strict=True)),
+            against_clusters=dict(
+                zip(sorted(against_rows), _CLUSTERED_AGAINST_LABELS, strict=True)
+            ),
+        )
+        assert got.interval is not None
+        (first if labels is _CLUSTERED_OF_LABELS else second).append(
+            [got.interval.low, got.interval.high]
+        )
+    assert first == second

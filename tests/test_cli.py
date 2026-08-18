@@ -1,6 +1,5 @@
 import hashlib
 import importlib
-import inspect
 import json
 import re
 import subprocess
@@ -1456,11 +1455,12 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
 
 
 # `groups × cluster_by`, end to end — task 19 Step 3's review addition. Step 3
-# itself stayed at `validate` level (correctly, at the time: the addendum's
-# correction forced no `baseline`/`statistics.contrasts` beside the axis, since
-# either would draw `E-DATA-ALLOCATION-CONTRAST` instead of validating — task
-# 14 has since retired the sibling cluster-contrast refusal this comment
-# originally named alongside it), but validating clean is exactly what lets
+# itself stayed at `validate` level, and this test carries no
+# `baseline`/`statistics.contrasts` beside the axis because its own subject is
+# per-arm cluster counting through `report_by`, not a cross-arm comparison —
+# `E-DATA-ALLOCATION-CONTRAST` (a cross-arm comparison beside this design) and
+# `E-DATA-CLUSTER-CONTRAST` (a clustered one) are both retired now, so neither
+# constrains this fixture any longer. Validating clean is exactly what lets
 # the same combination execute — nothing before this pinned that it actually
 # does.
 #
@@ -3159,6 +3159,7 @@ def _clustered_contrast_call(**extra):
     keys = [f"u{i:02d}" for i in range(12)]
     values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
     roster = UnitList([Unit(key=k) for k in keys])
+    comparison = extra.pop("_comparison", None) or Comparison(id="c", of=1, against=0)
     # `extra` OVERRIDES rather than adding, so a caller can pass `clusters=None`
     # or `resample_columns=True` without colliding with the defaults below.
     kwargs = dict(
@@ -3184,7 +3185,394 @@ def _clustered_contrast_call(**extra):
         clusters=dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)),
     )
     kwargs.update(extra)
-    return _comparison_step_blocks(Comparison(id="c", of=1, against=0), **kwargs)
+    return _comparison_step_blocks(comparison, **kwargs)
+
+
+_UNPAIRED_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
+_UNPAIRED_AGAINST = [5.0] * 12 + [15.0] * 12 + [10.0]
+
+# Hoisted to a module constant (task 14) so this and task 10's cluster-count
+# test share one fixture rather than two spellings that could drift: the `of`
+# side gets 3 clusters (2/2/1) and `against` gets 4 (7/7/7/4) — two integers
+# that cannot coincide, which is the documented "both 3" failure closed by
+# construction.
+_UNPAIRED_CLUSTERS = {f"t{i:02d}": f"g{i // 2}" for i in range(5)} | {
+    f"c{i:02d}": f"h{i // 7}" for i in range(25)
+}
+
+
+def _unpaired_contrast_call(**extra):
+    """`_comparison_step_blocks` over fixture A, two disjoint arms.
+
+    `of` is 5 units at mean 20 with s² 5, `against` 25 units at mean 10 with s² 25 —
+    so s²/n is exactly 1 on each side and both contribute comparably to the Welch
+    variance, which is what keeps a `min(n) − 1` df mutant visible. Delta 10, Welch
+    SE √2, df 96/7, half-width 3.039125537798091.
+
+    The two conditions differ on `arm`, which both declare as a `selector`, so
+    `crossed_group_axes` returns `["arm"]` and the comparison is unpaired. **The two
+    sides' collapsed tables share no key**, which is what a group axis means."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(len(_UNPAIRED_OF))]
+    against_keys = [f"c{i:02d}" for i in range(len(_UNPAIRED_AGAINST))]
+    roster = UnitList([Unit(key=k) for k in of_keys + against_keys])
+    comparison = extra.pop("_comparison", None) or Comparison(
+        id="arm_effect", of=1, against=0, declared=True
+    )
+    kwargs = dict(
+        roster=roster,
+        aggregated={1: {"s": {"m": 20.0}}, 0: {"s": {"m": 10.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(of_keys, _UNPAIRED_OF, strict=True)},
+            (0, "s"): {k: {"m": v} for k, v in zip(against_keys, _UNPAIRED_AGAINST, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=control",
+                values={"arm": "control"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1,
+                label="arm=treatment",
+                values={"arm": "treatment"},
+                selectors=frozenset({"arm"}),
+            ),
+        },
+        resample_columns=False,
+    )
+    kwargs.update(extra)
+    return _comparison_step_blocks(comparison, **kwargs)
+
+
+def test_an_unpaired_contrast_records_its_two_side_counts_and_no_n_paired():
+    """Decision 5, and it is the first conditional write of `n_paired` in this
+    codebase. § Contrasts defines `n_paired` as the intersection, and an unpaired
+    contrast's intersection is empty by construction — so `n_paired: 0` would be
+    arithmetically true and descriptively false, and it would spend on a design
+    where pairing is not the concept the same `0` § Contrasts already spends on a
+    pairing that FAILED.
+
+    **Absent, not null**, the shape `weighted_by` and `n_paired_effective` already
+    use. Asserted beside the two presences, because a control asserting only
+    absences passes identically if nothing ran."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 5
+    assert entry["n_against"] == 25
+    assert "n_paired" not in entry
+    assert "n_paired_effective" not in entry
+
+
+def test_an_unpaired_contrasts_delta_is_a_difference_of_two_side_means():
+    """`paired_keys` does not apply, so the point estimate cannot be the mean of a
+    difference vector — there are no per-unit differences to take. It is the
+    difference of the two sides' own means over the units each side completed.
+
+    Asserted as a POSITIVE literal rather than `is not None`: over disjoint arms
+    every construction in this module returns `None`, so a null assertion cannot
+    tell a computed delta from a failed one — which is why this slice bans that
+    shape. 20 − 10 = 10 exactly, and the two side means are asserted separately so a
+    delta that came from the wrong side's mean is attributable."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["delta"] == pytest.approx(10.0)
+    assert entry["basis"] == "units"
+
+
+def test_an_unpaired_contrast_narrows_both_sides_by_its_within_stratum():
+    """`within` narrows each side, and it must narrow BOTH: a narrowing applied to
+    one side gives a delta computed over a stratum on one side and a whole arm on
+    the other, which is a number no reader could detect is wrong.
+
+    The stratum keeps 3 of 5 `of` units and 2 of 25 `against` units, so the two
+    counts move by different amounts — a fixture narrowing both sides equally could
+    not tell a per-side narrowing from a shared one."""
+    from publishable.contrasts import Comparison
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    keep = set(of_keys[:3]) | set(against_keys[:2])
+    roster = UnitList(
+        [
+            Unit(key=k, attributes={"site": "north" if k in keep else "south"})
+            for k in of_keys + against_keys
+        ]
+    )
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 3
+    assert entry["n_against"] == 2
+
+
+def test_a_weighted_unpaired_comparison_is_a_core_defect_here_not_a_silent_choice():
+    """`E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses the combination at `validate`
+    and `cli` always validates before running, so reaching this function with both
+    is a bookkeeping error rather than a config — the same standing the
+    weight-cluster guard beside it has, and `ValueError` for the same reason
+    `Member.__post_init__` gives: nothing here came from outside core.
+
+    Raised rather than resolved by ignoring the weight: silently publishing an
+    unweighted cross-arm delta beside a `weighted_by` marker is a declaration
+    accepted whose effect is not delivered, and no reader of `run.yaml` could tell."""
+    with pytest.raises(ValueError, match="E-DATA-WEIGHT-ALLOCATION-CONTRAST"):
+        _unpaired_contrast_call(
+            weights={f"t{i:02d}": 1.0 for i in range(5)} | {f"c{i:02d}": 1.0 for i in range(25)},
+            weighted_by="sampling_weight",
+        )
+
+
+def test_an_unpaired_clustered_contrast_records_two_cluster_counts_and_no_paired_one():
+    """§ Contrasts: `n_paired_clusters` counts the clusters the paired intersection
+    falls in, so it has nothing to count here. `n_clusters_of` and
+    `n_clusters_against` replace it — **two integers that cannot coincide on this
+    fixture**, 3 against 4, which is what makes them the strongest discriminator
+    available: a construction reading one side's count, or a pooled count of 7,
+    writes a wrong integer into the record even where a float assertion might be
+    argued about.
+
+    `cluster_count_of` is the single counting expression, the one `attrition`'s
+    `n.clusters` and every clustered df read; `len(set(...))` here would be a second
+    authority for one number."""
+    block, _ = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
+    entry = block["s"]["m"]
+    assert entry["n_clusters_of"] == 3
+    assert entry["n_clusters_against"] == 4
+    assert "n_paired_clusters" not in entry
+
+
+@pytest.mark.parametrize(
+    "clustered,resampled,expected",
+    [
+        (False, False, "welch_t_over_units"),
+        (False, True, "unpaired_percentile_over_units"),
+        (True, False, "welch_t_over_units_clustered"),
+        (True, True, "unpaired_percentile_over_units_clustered"),
+    ],
+)
+def test_every_reachable_unpaired_contrast_cell_writes_its_own_method(
+    clustered, resampled, expected
+):
+    """Every reachable combination of `cluster_by` and a declared `resample` on an
+    unpaired comparison, and the `method` § Statistical reporting defines or licenses
+    for each. The two weighted cells are absent by construction —
+    `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses them at `validate` and
+    `_comparison_step_blocks` raises on them — so this is a four-cell table over two
+    independent declarations rather than a six-cell one with cells missing.
+
+    Asserted as a table because the failure this guards is a cell FALLING THROUGH to
+    a neighbour's `method`: an implementer writing two arms leaves two cells
+    publishing a string naming a construction the run did not use, and every
+    existing test still passes since nothing else builds those fixtures."""
+    block, _ = _unpaired_contrast_call(
+        resample_columns=resampled,
+        clusters=_UNPAIRED_CLUSTERS if clustered else None,
+    )
+    assert block["s"]["m"]["method"] == expected
+
+
+def test_an_unpaired_column_contrast_takes_the_welch_t():
+    """Fixture A through the record. Delta 10, and the half-width 3.039125537798091
+    at df 96/7 — **the number is the assertion**, because a Welch interval that
+    coincides with a pooled one proves nothing, and the pooled reading on this data
+    gives 4.7221 while `min(n) − 1` gives 3.9265 and the total-df reading 2.8969.
+
+    All three facts move together, which is the obligation H4b-1 pinned after a
+    per-side key passed under a hardcoded constant: the interval, the `method` and
+    the two counts."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["method"] == "welch_t_over_units"
+    assert entry["delta"] == pytest.approx(10.0)
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(3.039125537798091)
+    assert entry["n_of"] == 5 and entry["n_against"] == 25
+
+
+def test_an_unpaired_column_contrast_reports_cohens_ds_not_dz():
+    """§ Statistical reporting: unpaired contrasts report *d*s over the pooled
+    within-condition sd, and *d*s pools where `welch_t_over_units` deliberately
+    doesn't. On fixture A the pooled sd is 4.705619740571601, so *d*s is
+    2.1251185925162073 — while standardizing by the interval's own Welch
+    denominator would give 7.0710678118654755, a factor of 3.33.
+
+    **The literal is the assertion, not `is not None`.** A *d* is a number readers
+    compare across papers, and every wrong denominator here still returns a
+    plausible float."""
+    block, _ = _unpaired_contrast_call()
+    assert block["s"]["m"]["cohens_d"] == pytest.approx(2.1251185925162073)
+
+
+def test_an_unpaired_contrast_member_carries_two_sides_and_no_diffs():
+    """The member is what the correction family rebuilds from, so an unpaired raw
+    interval whose member carried no per-side vectors would get no corrected bound
+    at all — `thin: True` over a member that was never thin. Asserted beside
+    `diffs is None` and `pool is None`, because `_corrected_bounds` tests `sides`
+    first and a member carrying two kinds is refused rather than resolved.
+
+    Under a declared `resample` the member carries the POOL instead and `sides` is
+    `None`, the same single `corrected_from_pool` decision the paired arm reads once
+    for all its fields — asserted here so the two cannot disagree."""
+    _, members = _unpaired_contrast_call()
+    assert len(members) == 1
+    assert members[0].sides is not None
+    assert members[0].sides.of == tuple(_UNPAIRED_OF)
+    assert members[0].sides.against == tuple(_UNPAIRED_AGAINST)
+    assert members[0].sides.clusters is None
+    assert members[0].diffs is None and members[0].pool is None
+    _, clustered = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
+    assert clustered[0].sides is not None
+    assert clustered[0].sides.clusters is not None
+    assert len(clustered[0].sides.clusters[0]) == 5
+    assert len(clustered[0].sides.clusters[1]) == 25
+    _, resampled = _unpaired_contrast_call(resample_columns=True)
+    assert resampled[0].sides is None
+    assert resampled[0].pool is not None
+
+
+def test_an_unpaired_clustered_contrast_records_its_two_counts_and_a_cluster_robust_interval():
+    """The three facts a cluster adds to an unpaired entry, moving together: the
+    interval reads the cluster as the draw, the `method` says so, and the two
+    counts say how many clusters each side has. **A cluster-robust interval that is
+    merely wider is not evidence** — over positively correlated data it comes out
+    wider whatever df it uses — so the two integer counts carry the discrimination
+    a float assertion could be argued about, and they cannot coincide: 3 against 4."""
+    block, _ = _unpaired_contrast_call(clusters=_UNPAIRED_CLUSTERS)
+    entry = block["s"]["m"]
+    assert entry["method"] == "welch_t_over_units_clustered"
+    assert entry["n_clusters_of"] == 3
+    assert entry["n_clusters_against"] == 4
+    unclustered, _ = _unpaired_contrast_call()
+    assert entry["ci95"] != unclustered["s"]["m"]["ci95"]
+    # Captured from this test's first green run. Wider than the unclustered
+    # Welch half-width (3.039125537798091) and distinct from every one of
+    # fixture A's mutant half-widths (4.7221, 3.9265, 2.8969) — this fixture is
+    # fixture A's values with a 3/4 cluster split, not fixture B, so the number
+    # is new.
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(7.523292784674521)
+
+
+def test_an_unpaired_within_contrast_warns_when_either_side_is_thin():
+    """Decision 6. § Validation's row keys the warning on the comparison's realized
+    denominator, and an unpaired contrast has two — so the rule reading "either" is
+    the one that preserves the row's own reason: the disclosive quantity is a thin
+    denominator ANYWHERE, and a five-unit arm against a five-hundred-unit one is
+    exactly what the limit exists to catch.
+
+    The fixture is asymmetric on purpose: `of` keeps 3 units and `against` keeps 20,
+    with a floor of 10, so only ONE side is below it. A rule reading a total (23) or
+    the larger side would not warn at all, and a fixture where both sides were thin
+    could not tell those readings from this one."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    keep = set(of_keys[:3]) | set(against_keys[:20])
+    roster = UnitList(
+        [
+            Unit(key=k, attributes={"site": "north" if k in keep else "south"})
+            for k in of_keys + against_keys
+        ]
+    )
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=10,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    assert block["s"]["m"]["n_of"] == 3 and block["s"]["m"]["n_against"] == 20
+    thin = [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"]
+    assert len(thin) == 1
+    assert "n_of 3" in thin[0].message
+    assert "n_against" not in thin[0].message
+
+
+def test_an_unpaired_contrast_with_two_healthy_sides_does_not_warn():
+    """The control that must not report, paired with a presence: a check firing on
+    every unpaired contrast would pass the test above too. Both sides clear the
+    floor, and the entry is asserted present so the absence is not the absence of a
+    contrast."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    roster = UnitList([Unit(key=k, attributes={"site": "north"}) for k in of_keys + against_keys])
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=3,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    assert block["s"]["m"]["n_of"] == 5  # the presence that must report
+    assert [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"] == []
+
+
+def test_an_unpaired_contrast_with_no_within_does_not_warn_even_when_thin():
+    """Mutation 4's discriminator, added because task 16's brief flags this fixture
+    is BLIND on the fixtures above: both healthy-sides tests above also pass under a
+    guard with `comp.within is not None` removed, since neither side is thin there.
+    A comparison with no `within` and a floor above its `n` is what actually
+    separates the two readings — `within` is a documented rule with three sources
+    (§ Contrasts, § The one config file's comment, § Validation), and this is its
+    test."""
+    from publishable.diagnostics import Collector
+
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(min_reported_n=20, findings=findings)
+    assert block["s"]["m"]["n_of"] == 5 and block["s"]["m"]["n_against"] == 25
+    assert [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"] == []
+
+
+def test_a_paired_within_contrast_still_warns_on_its_intersection():
+    """The regression half. One expression serves both readings, so the paired
+    reading must be unchanged: `n_paired` against the floor, named in the message.
+    A rule restructured for two sides that stopped reading the intersection would
+    silence every warning this code has ever emitted."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    roster = UnitList([Unit(key=k, attributes={"site": "north"}) for k in keys])
+    findings = Collector()
+    _clustered_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=20,
+        _comparison=Comparison(id="c", of=1, against=0, within={"site": "north"}),
+    )
+    thin = [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"]
+    assert len(thin) == 1
+    assert "n_paired 12" in thin[0].message
 
 
 def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
@@ -3425,6 +3813,218 @@ def test_an_unclustered_contrast_entry_grows_no_cluster_count():
         resample_columns=False,
     )
     assert "n_paired_clusters" not in block["s"]["m"]
+
+
+_H4C_BASELINE = {
+    # Captured at `e40a219`, before any H4c behaviour changed, by calling
+    # `_clustered_contrast_call` and `correction.corrected_for` directly. Every
+    # cell is (method, ci95, cohens_d, ci95_corrected at bonferroni over a family
+    # of 2). The delta is 6.333333333333333 in every cell and is asserted once.
+    "plain_t": (
+        "paired_t_over_units",
+        [4.354794810376774, 8.311871856289892],
+        2.0338284916219784,
+        [4.002316360103361, 8.664350306563305],
+    ),
+    "plain_percentile": (
+        "paired_percentile_over_units",
+        [4.666666666666667, 8.0],
+        2.0338284916219784,
+        [4.333333333333333, 8.0],
+    ),
+    "clustered_t": (
+        "paired_t_over_units_clustered",
+        [-2.42988081030457, 15.096547476971235],
+        2.0338284916219784,
+        [-6.3050984446171165, 18.971765111283784],
+    ),
+    "clustered_percentile": (
+        "paired_percentile_over_units_clustered",
+        [1.0, 8.0],
+        2.0338284916219784,
+        [1.0, 9.0],
+    ),
+    "weighted_t": (
+        "weighted_paired_t_over_units",
+        [4.205411474977312, 8.461255191689354],
+        2.0235305596718636,
+        [3.8161416371442236, 8.850525029522442],
+    ),
+    "weighted_percentile": (
+        "weighted_paired_percentile_over_units",
+        [4.555555555555555, 7.888888888888889],
+        2.0235305596718636,
+        [4.368421052631579, 8.058823529411764],
+    ),
+}
+
+_H4C_WEIGHTS = {f"u{i:02d}": 1 + i % 2 for i in range(12)}
+
+_H4C_CELLS = {
+    "plain_t": dict(clusters=None),
+    "plain_percentile": dict(clusters=None, resample_columns=True),
+    "clustered_t": {},
+    "clustered_percentile": dict(resample_columns=True),
+    "weighted_t": dict(clusters=None, weights=_H4C_WEIGHTS, weighted_by="w"),
+    "weighted_percentile": dict(
+        clusters=None, weights=_H4C_WEIGHTS, weighted_by="w", resample_columns=True
+    ),
+}
+
+
+@pytest.mark.parametrize("cell", sorted(_H4C_BASELINE))
+def test_every_paired_contrast_cell_is_unmoved_across_this_branch(cell):
+    """H4c derives `paired` at both metric branches and grows `_corrected_bounds`
+    by two arms. Both are changes that can move a PAIRED contrast without moving
+    anything a reader of one entry would notice, so all six reachable paired cells
+    are pinned at once — `paired_t_over_units`, `paired_percentile_over_units`, and
+    the weighted and clustered forms of each.
+
+    **The corrected bound is pinned beside the raw one, and that is the half a
+    raw-only pin misses**: an arm inserted above the `diffs` branch in
+    `_corrected_bounds` leaves every `ci95` untouched and every `ci95_corrected`
+    wrong, and no reader of `run.yaml` could tell.
+
+    Every literal was captured at `e40a219` before any H4c behaviour changed. If
+    one of these fails, the fix is in `stats.py`, `correction.py` or `cli.py` —
+    never in the expected value."""
+    from publishable.correction import corrected_for
+
+    method, ci95, cohens_d, corrected = _H4C_BASELINE[cell]
+    block, members = _clustered_contrast_call(**_H4C_CELLS[cell])
+    entry = block["s"]["m"]
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    assert entry["paired"] is True
+    assert entry["n_paired"] == 12
+    assert entry["method"] == method
+    assert entry["ci95"] == pytest.approx(ci95)
+    assert entry["cohens_d"] == pytest.approx(cohens_d)
+    fields = corrected_for(members, "bonferroni", 2, {"comparisons": 1, "metrics": 2})
+    assert list(fields) == [("cond:1", "s", "m")]
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == pytest.approx(corrected)
+
+
+def test_a_paired_contrast_entry_still_grows_no_unpaired_key():
+    """The absent-not-null obligation read in the other direction. H4c makes
+    `n_paired` conditional for the first time in this codebase, and the failure
+    mode of a conditional write is writing BOTH shapes: `n_paired: 12` beside
+    `n_of: 12`, which decision 5 rejects as the worst of both.
+
+    Asserted beside a presence that must report, because a control asserting only
+    absences passes identically if nothing ran."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["n_paired"] == 12  # the presence that must report
+    assert entry["n_paired_clusters"] == 3
+    for absent in ("n_of", "n_against", "n_clusters_of", "n_clusters_against"):
+        assert absent not in entry
+
+
+def test_an_unpaired_pass_leaves_a_summary_estimate_alone(tmp_path, capsys):
+    """The boundary this slice OWES rather than merely respects. An `Estimate`
+    returned by a `summary` step is `reported: true`, outside the correction family
+    and never recomputed — and it is the documented route
+    `E-DATA-ALLOCATION-CONTRAST`'s own message offers before task 18 deletes it, so
+    retiring that message must not have moved it. A pass that walks every metric
+    block to decide pairing must not reach it.
+
+    The contrast beside it is asserted in the same record, because a control
+    asserting only absences passes identically if nothing ran."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="score",
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITH_N_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    reported = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert reported["reported"] is True
+    assert reported["method"] == "mixed model, REML"
+    for absent in ("paired", "n_paired", "n_of", "n_against", "correction"):
+        assert absent not in reported
+    # The presences that must report: `aggregate_returns` gives this run BOTH a
+    # recorded column (`pred`) and a derived metric (`score`), so the two contrast
+    # branches are both exercised beside the untouched `Estimate`.
+    block = next(c["vs_baseline"] for c in run["results"]["conditions"] if c.get("vs_baseline"))[
+        "step01_summarize_units"
+    ]
+    assert block["pred"]["paired"] is True
+    assert block["pred"]["method"] == "paired_t_over_units"
+    assert block["score"]["paired"] is True
+    assert block["score"]["method"] == "paired_percentile_over_units"
+    assert block["pred"]["n_paired"] == 40
+
+
+def test_an_unpaired_contrast_beside_report_by_and_a_summary_estimate_leaves_both_alone(
+    tmp_path, capsys
+):
+    """Task 22's whole-branch corner (c). Neither `statistics.report_by` nor a
+    `summary`-step `Estimate` joins the correction family, and neither is a
+    contrast — so an unpaired (cross-arm) comparison declared in the same run
+    must grow no unpaired key on either of them, and the contrast's own family
+    size must not move for a `report_by` stratum having two levels.
+
+    Verified through a real run rather than assumed: a `report_by` level's
+    block is a per-condition breakdown of a RECORDED metric, never a
+    comparison, so it never had `paired`/`n_of`/`n_against`/`method` in a
+    contrast's sense to begin with — this test is what confirms an unpaired
+    contrast elsewhere in the same run does not change that."""
+    control_keys = [f"c{i}" for i in range(4)]
+    treatment_keys = [f"t{i}" for i in range(4)]
+    rows = "\n".join(f"{k},control,siteA" for k in control_keys[:2])
+    rows += "\n" + "\n".join(f"{k},control,siteB" for k in control_keys[2:])
+    rows += "\n" + "\n".join(f"{k},treatment,siteA" for k in treatment_keys[:2])
+    rows += "\n" + "\n".join(f"{k},treatment,siteB" for k in treatment_keys[2:])
+    roster_csv = f"patient_id,arm,site\n{rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_METHOD_VARYING_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "site"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "report_by": ["site"],
+            "contrasts": [{"id": "across_arms", "of": "arm=treatment", "against": "arm=control"}],
+        },
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITH_N_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    # The summary Estimate, untouched.
+    reported = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert reported["reported"] is True
+    for absent in ("paired", "n_paired", "n_of", "n_against", "correction"):
+        assert absent not in reported
+
+    # Every `report_by` level, on both conditions, grew no unpaired key.
+    for condition in run["results"]["conditions"]:
+        by_site = condition["aggregated"]["step01_summarize_units"]["by"]["site"]
+        for level in ("siteA", "siteB"):
+            level_block = by_site[level]["pred"]
+            for absent in ("paired", "n_of", "n_against", "n_paired", "correction"):
+                assert absent not in level_block or level_block[absent] is None
+            assert level_block["method"] == "t_over_units"
+
+    # The contrast's own family size: one comparison, one metric — unmoved by
+    # `report_by` declaring two levels beside it.
+    entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert entry["paired"] is False
+    assert entry["family"] == {"comparisons": 1, "metrics": 1}
+    assert entry["family_size"] == 1
 
 
 def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over():
@@ -3703,32 +4303,67 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
     assert declared["ci95"] == entry["ci95"]
 
 
-def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
-    """The H4c tripwire, and the reason two PAIRED clustered constructions were
-    enough for H4b-2.
+def test_a_contrast_entrys_paired_flag_is_derived_at_every_branch():
+    """Replaces `test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`,
+    which asserted `inspect.getsource` counts of `'"paired": True'` — the mutation
+    its docstring said it could not be, because `paired` was a literal and there was
+    no runtime state to assert against. H4c gives it that state, so this is the
+    behavioural pin: **both answers in the same assertion**, because a derivation
+    stuck at `True` and one stuck at `False` are two different defects and each
+    passes a test asserting only the other.
 
-    `_comparison_step_blocks` writes `paired` as a literal `True` at both metric
-    branches, so every comparison surviving `E-DATA-ALLOCATION-CONTRAST` is paired
-    and no unpaired contrast interval is ever asked for. The obvious runtime pin —
-    "fail if `paired` is ever `False`" — is a mutation whose two branches cannot
-    differ, because there is no runtime state to assert against. So the LITERAL is
-    what is pinned: the moment H4c makes either site conditional, this fails and
-    forces whoever does it to confront the clustered unpaired constructions, which
-    do not exist.
+    Its predecessor's scope gap is what the replacement closes: reading one
+    function's source text is defeated by extracting either write into a helper.
+    This reads the record.
 
-    Both counts are asserted, and that is the point: the first alone passes under a
-    third branch writing `"paired": is_paired`, and the second alone passes under
-    two sites that both became conditional.
+    The `run`-through half of the same claim lands with the retirement, where a
+    single run carries a cross-arm and a within-arm comparison at once."""
+    unpaired, _ = _unpaired_contrast_call()
+    assert unpaired["s"]["m"]["paired"] is False
+    paired, _ = _clustered_contrast_call()
+    assert paired["s"]["m"]["paired"] is True
 
-    **Scope of the pin**: this reads one function's source text, so it is defeated
-    by extracting either write into a helper — the guarantee it protects is real,
-    but this is not the only way to make the guarantee false and have this test
-    stay green."""
-    from publishable.cli import _comparison_step_blocks
 
-    source = inspect.getsource(_comparison_step_blocks)
-    assert source.count('"paired": True') == 2
-    assert source.count('"paired":') == 2
+def test_a_derived_metrics_unpaired_contrast_also_derives_its_flag():
+    """Both metric branches, not one. `_comparison_step_blocks` wrote the literal at
+    two sites and task 10 added a third, so a derivation applied to the recorded-
+    column arm alone leaves the derived branch claiming `paired: true` over disjoint
+    arms — the false claim this slice exists to remove, and one that no test of the
+    column arm can see.
+
+    The derived branch's other fields are asserted `None` here as the shape they
+    already have; task 15 is what makes that a GUARD rather than an accident of an
+    empty intersection."""
+    block, _ = _unpaired_contrast_call(
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+    )
+    entry = block["s"]["m"]
+    assert entry["paired"] is False
+    assert entry["n_of"] == 5 and entry["n_against"] == 25
+    assert entry["delta"] is None and entry["method"] is None and entry["ci95"] is None
+
+
+def test_differing_axes_docstring_names_no_caller():
+    """The docstring named its two callers and one of them by a claim this slice
+    falsifies — "the (temporarily) hard-coded `paired`". A call-site enumeration is
+    a maintenance obligation nobody owns and a fresh chance to be wrong, so it is
+    DELETED rather than rewritten: a rewrite invents, a deletion cannot.
+
+    Asserted against the surviving text so the deletion cannot be re-seeded as a
+    paraphrase, which is how a deleted claim came back three times on H4b-2 — the
+    check is on the words that carried the claim, plus a control that the docstring
+    still exists."""
+    from publishable.contrasts import differing_axes
+
+    doc = differing_axes.__doc__ or ""
+    assert "declaration order" in doc  # the control
+    assert "temporarily" not in doc
+    assert "hard-coded" not in doc
+    assert "_comparison_step_blocks" not in doc
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])
@@ -4038,6 +4673,431 @@ def test_a_derived_contrast_over_an_empty_stratum_reports_no_delta(tmp_path, cap
     assert entry["n_paired"] == 0
     assert entry["delta"] is None
     assert entry["ci95"] is None
+
+
+def test_the_derived_suppression_reads_the_pairing_answer_not_an_empty_intersection():
+    """The guard's ground, and the assertion that separates it from its proxy. An
+    empty `base_keys` is ALSO empty when two genuinely PAIRED conditions share no
+    completed units — a defect to report, not a design to honour — so a guard keyed
+    on the intersection's size would suppress both and say nothing about either.
+
+    Two comparisons, one of each kind, through one direct call each: the unpaired one
+    is suppressed and records `n_of`/`n_against`, and the paired-but-disjoint one is
+    NOT suppressed and records `n_paired: 0` beside its own nulls — which is
+    `test_a_derived_contrast_over_an_empty_stratum_reports_no_delta`'s documented
+    shape, and the live proof that `0` means pairing FAILED.
+
+    This is the test a `not base_keys` guard cannot pass, and no other test in this
+    slice discriminates the two."""
+    from publishable.sweep import Condition
+
+    unpaired, _ = _unpaired_contrast_call(
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+    )
+    entry = unpaired["s"]["m"]
+    assert entry["paired"] is False
+    assert entry["n_of"] == 5 and entry["n_against"] == 25
+    assert "n_paired" not in entry
+    # The paired-but-disjoint control: same empty intersection, opposite answer.
+    paired_disjoint, _ = _unpaired_contrast_call(
+        conditions_by_index={
+            0: Condition(index=0, label="m=pearson", values={"analysis.method": "pearson"}),
+            1: Condition(index=1, label="m=spearman", values={"analysis.method": "spearman"}),
+        },
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+    )
+    control = paired_disjoint["s"]["m"]
+    assert control["paired"] is True
+    assert control["n_paired"] == 0
+    assert control["delta"] is None
+
+
+def test_the_derived_suppression_fires_even_when_the_intersection_is_not_empty():
+    """The mutation-discriminating fixture the guard's OTHER two direct-call tests
+    cannot be: on `_unpaired_contrast_call`'s own roster the two sides' collapsed
+    tables are disjoint by construction (`between` allocation genuinely partitions
+    the roster), so `paired_delta_of_derived`'s own `if not keys: return None`
+    floor already returns `None` whether or not the guard's `is_paired` term is
+    there — `test_the_derived_suppression_reads_the_pairing_answer_not_an_empty_
+    intersection` and a real `run` both measured green under `and is_paired`
+    deleted, which means neither discriminates the removal.
+
+    This fixture makes the two conditions' collapsed tables share every key —
+    unreachable through `validate` (a `between`-allocated group axis always
+    partitions the roster), but directly callable, and it is what isolates
+    `is_paired` from `bool(base_keys)`: the intersection here is the WHOLE
+    roster, so a guard reading only `bool(base_keys)` fires and computes a real,
+    non-null delta over it, while the correct guard — reading `is_paired` — does
+    not, because these two conditions differ on the declared `arm` axis."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(10)]
+    roster = UnitList([Unit(key=k) for k in keys])
+    collapsed = {k: {"m": 1.0} for k in keys}
+    block, _ = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0, declared=True),
+        roster=roster,
+        aggregated={1: {"s": {"m": 20.0}}, 0: {"s": {"m": 10.0}}},
+        collapsed_by_key={(1, "s"): collapsed, (0, "s"): collapsed},
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'c'",
+        where_id="contrast:c",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=control",
+                values={"arm": "control"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1,
+                label="arm=treatment",
+                values={"arm": "treatment"},
+                selectors=frozenset({"arm"}),
+            ),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["m"]
+    assert entry["paired"] is False
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert entry["ci95"] is None
+    assert "n_paired" not in entry
+    assert entry["n_of"] == 10 and entry["n_against"] == 10
+
+
+_UNPAIRED_RUN_CONTROL_KEYS = [f"c{i}" for i in range(4)]
+_UNPAIRED_RUN_TREATMENT_KEYS = [f"t{i}" for i in range(4)]
+
+
+def _unpaired_run_roster_csv() -> str:
+    rows = "\n".join(f"{k},control" for k in _UNPAIRED_RUN_CONTROL_KEYS)
+    rows += "\n" + "\n".join(f"{k},treatment" for k in _UNPAIRED_RUN_TREATMENT_KEYS)
+    return f"patient_id,arm\n{rows}\n"
+
+
+def test_one_run_records_both_pairings_and_the_method_that_goes_with_each(tmp_path, capsys):
+    """Task 17a's `run`-through half, and the pin that replaces
+    `test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`'s
+    source-text counts with the behaviour they stood in for. **Both answers in one
+    run**: a declared cross-arm contrast records `paired: false` beside a `welch_*`
+    or `unpaired_*` `method`, and a within-arm comparison in the same run still
+    records `true`.
+
+    One run rather than two, because the claim is that the derivation answers PER
+    COMPARISON. Two runs would pin two configs and say nothing about a `groups ×
+    grid` design, which is the design § Allocation walks through twice and the only
+    one this slice makes analyzable end to end.
+
+    This is the first end-to-end `run` of an unpaired contrast in this repository."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=_unpaired_run_roster_csv(),
+        _starter_step=_METHOD_VARYING_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={
+            "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+            "grid": {"analysis.method": ["pearson", "spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "across_arms",
+                    "of": "arm=treatment__method=pearson",
+                    "against": "arm=control__method=pearson",
+                },
+                {
+                    "id": "within_control",
+                    "of": "arm=control__method=spearman",
+                    "against": "arm=control__method=pearson",
+                },
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    across = next(c for c in contrasts if c["id"] == "across_arms")
+    within = next(c for c in contrasts if c["id"] == "within_control")
+    across_entry = next(iter(across["step01_summarize_units"].values()))
+    assert across_entry["paired"] is False
+    assert across_entry["method"].startswith(("welch_", "unpaired_"))
+    assert "n_paired" not in across_entry
+    assert across_entry["n_of"] > 0 and across_entry["n_against"] > 0
+    within_entry = next(iter(within["step01_summarize_units"].values()))
+    assert within_entry["paired"] is True
+    assert within_entry["method"].startswith("paired_")
+    assert within_entry["n_paired"] > 0
+
+
+def test_an_unpaired_contrast_joins_the_correction_family_beside_a_paired_one(tmp_path, capsys):
+    """Task 22's whole-branch corner (b). `family_shape` counts comparisons ×
+    metrics and `rank_family` ranks on the point estimate over half the raw
+    interval's width — a run holding both an unpaired and a paired contrast
+    ranks them together for the first time, and this confirms the ranking and
+    every `ci95_corrected` by hand, the same way H4b-2's own whole-branch
+    review confirmed its bound: a corrected half-width must equal the raw one
+    times `t(df, 1 - level) / t(df, 0.95)` at the entry's own df.
+
+    Same design as `test_one_run_records_both_pairings_and_the_method_that_
+    goes_with_each` above: `across_arms` is unpaired (Welch, no df exposed by
+    the entry itself) and `within_control` is paired (`paired_t_over_units`,
+    df = `n_paired` - 1 = 3). Both share one family (`family_size: 2`), and
+    `within_control`'s larger point-estimate-over-half-width ratio ranks it
+    first (`correction_level: 0.025 = 0.05/2`), leaving `across_arms` last
+    (`correction_level: 0.05`, so its corrected bound equals its raw one
+    exactly — the same level as the raw interval)."""
+    from publishable.stats import _t_critical
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=_unpaired_run_roster_csv(),
+        _starter_step=_METHOD_VARYING_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={
+            "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+            "grid": {"analysis.method": ["pearson", "spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "across_arms",
+                    "of": "arm=treatment__method=pearson",
+                    "against": "arm=control__method=pearson",
+                },
+                {
+                    "id": "within_control",
+                    "of": "arm=control__method=spearman",
+                    "against": "arm=control__method=pearson",
+                },
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    across = next(c for c in contrasts if c["id"] == "across_arms")["step01_summarize_units"][
+        "pred"
+    ]
+    within = next(c for c in contrasts if c["id"] == "within_control")["step01_summarize_units"][
+        "pred"
+    ]
+
+    # Both entries are one family, ranked together.
+    assert across["family_size"] == 2 and within["family_size"] == 2
+    assert across["family"] == {"comparisons": 2, "metrics": 1}
+    assert within["family"] == {"comparisons": 2, "metrics": 1}
+
+    # The ranking: within_control's ratio (delta over half the raw width) is
+    # larger, so it is ranked first and gets the smaller Holm level.
+    within_half = (within["ci95"][1] - within["ci95"][0]) / 2
+    across_half = (across["ci95"][1] - across["ci95"][0]) / 2
+    within_ratio = abs(within["delta"]) / within_half
+    across_ratio = abs(across["delta"]) / across_half if across_half else 0.0
+    assert within_ratio > across_ratio
+    assert within["correction_level"] == pytest.approx(0.025)
+    assert across["correction_level"] == pytest.approx(0.05)
+
+    # `across_arms` sits last in the ranking, at the family's own raw level —
+    # its corrected bound equals its raw one exactly.
+    assert across["ci95_corrected"] == pytest.approx(across["ci95"])
+
+    # `within_control`'s corrected half-width, verified by the ratio method at
+    # its own df (`n_paired` - 1 = 3).
+    df = within["n_paired"] - 1
+    raw_t = _t_critical(df, 0.95)
+    corrected_t = _t_critical(df, 1 - within["correction_level"])
+    predicted_half = within_half * corrected_t / raw_t
+    corrected_half = (within["ci95_corrected"][1] - within["ci95_corrected"][0]) / 2
+    assert corrected_half == pytest.approx(predicted_half)
+
+
+def test_a_clustered_cross_arm_contrast_runs_and_records_a_cluster_robust_interval(
+    tmp_path, capsys
+):
+    """Task 17b's run-side half. The converted pin's fixture is a CLUSTERED cross-arm
+    contrast, which is what forced `welch_t_over_units_clustered` and
+    `unpaired_percentile_over_units_clustered` into this slice — so the conversion is
+    honest only once the entry's `method` carries the `_clustered` suffix through a
+    real run.
+
+    The two per-side cluster counts are asserted beside it, because they are integers
+    that cannot coincide on this roster and a `method` string alone does not say the
+    draw happened. Per-arm cluster counts of 3 and 4, per `docs/superpowers/spec-
+    defects.md`'s documented "both 3" unfailable-fixture shape — built as this test's
+    own roster rather than reusing `tests/test_validate.py`'s `_groups_cluster_*`,
+    whose sites are 3-and-3."""
+    control_keys = [f"c{i}" for i in range(7)]
+    treatment_keys = [f"t{i}" for i in range(5)]
+    sites = {k: f"g{i // 3}" for i, k in enumerate(control_keys)}  # 3 clusters: 3/3/1
+    sites |= {k: f"h{min(i, 3)}" for i, k in enumerate(treatment_keys)}  # 4 clusters: 2/1/1/1
+    rows = "\n".join(f"{k},control,{sites[k]}" for k in control_keys)
+    rows += "\n" + "\n".join(f"{k},treatment,{sites[k]}" for k in treatment_keys)
+    roster_csv = f"patient_id,arm,site\n{rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_METHOD_VARYING_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "across_arms", "of": "arm=treatment", "against": "arm=control"}]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    across = next(c for c in contrasts if c["id"] == "across_arms")
+    entry = next(iter(across["step01_summarize_units"].values()))
+    assert entry["paired"] is False
+    assert entry["method"] == "welch_t_over_units_clustered"
+    assert entry["n_clusters_of"] == 4
+    assert entry["n_clusters_against"] == 3
+    # Captured from this test's first green run, on this roster and step.
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(4.548314238705341)
+
+
+def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_run(tmp_path, capsys):
+    """Decision 8, and it is verified by `run` rather than by direct call for a
+    measured reason: on H4b-2 the neighbouring corner survived four task batches and
+    two direct-call pins because every probe hand-built `derived_by_key` and
+    `resample_fns_by_key`, and only an end-to-end run reached the state the code
+    branches on. **That corner was given four wrong grounds in four commits.**
+
+    A derived metric's unpaired contrast has nothing to compute — no per-side derived
+    draw exists among the constructions this slice builds — so `delta`, `method` and
+    `ci95` are all `null` with the two side counts beside them, the shape
+    `E-DATA-CLUSTER-DERIVED` already uses and § Contrasts licenses.
+
+    **The two counts are the presences that must report.** A test asserting only the
+    three nulls passes identically if the whole entry were missing, and `is None` is
+    the weakest possible discriminator on this slice — a suppressed contrast, a thin
+    side and a degenerate draw all produce it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=_unpaired_run_roster_csv(),
+        aggregate_returns="score",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "across_arms", "of": "arm=treatment", "against": "arm=control"}]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    across = next(c for c in contrasts if c["id"] == "across_arms")
+    entry = across["step01_summarize_units"]["score"]
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert entry["ci95"] is None
+    assert entry["n_of"] == 4 and entry["n_against"] == 4
+
+
+def test_an_unpaired_derived_key_collision_end_to_end(tmp_path, capsys):
+    """Task 22's whole-branch corner (a): H4b-2's Critical one axis over. That
+    review found a derived key colliding with a recorded column's name
+    publishing an *unclustered* contrast interval with `validate` reporting
+    zero errors, reachable only through an end-to-end `run` because every
+    direct-call probe hand-built `derived_by_key`/`resample_fns_by_key`. Task
+    15's guard is what should close the identical shape one axis over — an
+    UNPAIRED (cross-arm) comparison rather than a clustered one — and this test
+    is built in the same commit as the retirement, which is exactly the
+    arrangement that hid the original corner, so it is not optional.
+
+    `aggregate_returns="pred"` collides with `_AGGREGATE_STEP`'s own recorded
+    column, so `command_run` builds a resample closure for the colliding key
+    before `summarize_step` raises `E-STEP-KEY-COLLISION`, and the retry that
+    follows never clears `derived_by_key`/`resample_fns_by_key`. This confirms
+    the CORRECT behaviour end to end: the contrast publishes three nulls and
+    the two side counts, and — the property this corner's history says must be
+    checked and not assumed — the recorded column's own per-condition interval
+    is untouched.
+
+    **Measured, not assumed: this test does NOT discriminate the guard's
+    `and is_paired` clause the way the direct-call collision test does.**
+    Removing it and re-running this test leaves it GREEN, checked directly —
+    because a real unpaired comparison's two arms are disjoint by construction
+    under `between` allocation, so `base_keys` here is empty regardless of the
+    guard, and `paired_delta_of_derived`'s own `if not keys: return None` floor
+    produces the identical three nulls whether or not `is_paired` gates entry
+    to that branch. The guard's necessity for THIS ground is pinned instead by
+    `test_the_derived_suppression_fires_even_when_the_intersection_is_not_empty`,
+    whose fabricated fixture makes `base_keys` non-empty despite being
+    unpaired — a state no real `validate`-passing run can reach, which is why
+    a direct call is what proves it rather than a run. This test's job is
+    narrower and still real: confirming the correct record shape reaches
+    `run.yaml` through the actual collision path, the same property H4b-2's
+    Critical was about."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="pred",
+        roster_csv=_unpaired_run_roster_csv(),
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "across_arms", "of": "arm=treatment", "against": "arm=control"}]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    across = next(c for c in contrasts if c["id"] == "across_arms")
+    entry = across["step01_summarize_units"]["pred"]
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert entry["ci95"] is None
+    assert entry["n_of"] == 4 and entry["n_against"] == 4
+    # The recorded column's own per-condition interval, untouched by the
+    # suppression: each arm's own `pred` still carries a real `t_over_units`
+    # interval from its own 4 units, not a casualty of the collision.
+    for condition in run["results"]["conditions"]:
+        pred = condition["aggregated"]["step01_summarize_units"]["pred"]
+        assert pred["method"] == "t_over_units"
+        assert pred["ci95"] is not None
 
 
 def _declared_contrast_run(tmp_path, capsys, monkeypatch, **kwargs):
@@ -7402,6 +8462,17 @@ def _section_text(heading: str) -> str:
     return "\n".join(lines[start:])
 
 
+def test_expansion_modes_says_a_cross_arm_contrast_is_computed():
+    """§ Expansion modes' control-arm paragraph claimed core refuses the arm-versus-arm
+    delta. It computes it. Asserted on the section text with a control, because this
+    is the sentence a reader deciding whether to express a control arm as a contrast
+    actually reads."""
+    section = _section_text("### Expansion modes")
+    assert "statistics.contrasts" in section  # the control
+    assert "no unpaired construction exists" not in section
+    assert "E-DATA-ALLOCATION-CONTRAST" not in section
+
+
 def test_the_weighted_contrast_record_keys_are_documented():
     """Task 3's ruling, in the document before any code writes it. `n_paired` is a
     scalar and § Contrasts argues why a contrast has no `n` mapping to join, so
@@ -10709,14 +11780,14 @@ def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, 
     assert entry["ci95_corrected"] is not None
 
 
-def test_the_allocation_refusal_row_states_its_own_reading():
-    """A § Errors row states its own family-reading property directly, rather
-    than by contrast with a sibling row — the weighted-contrast refusal's row
-    is retired, so a row that argued "unlike that one" would now be a dangling
-    reference, and this repo's rule is to delete a claim rather than rewrite it
-    into a second one. The cluster-contrast row this test once located beside
-    the allocation row is retired as of task 14: a clustered comparison now
-    validates and runs, so there is no longer a sibling row to check here.
+def test_the_weight_allocation_refusal_row_states_its_own_reading():
+    """Task 18's conversion: `E-DATA-ALLOCATION-CONTRAST`'s own row is deleted
+    (the refusal is retired), so `_row("E-DATA-ALLOCATION-CONTRAST")` would now
+    raise `StopIteration` rather than find a stale row. `E-DATA-WEIGHT-
+    ALLOCATION-CONTRAST` is what remains, and task 9 wrote its row with a `per
+    comparison` clause for exactly this reason — a § Errors row stating its own
+    family-reading property directly, rather than by contrast with a sibling
+    row, so a later deletion elsewhere cannot leave it a dangling reference.
 
     Located by the row's own final cell, which is what tells a row from a
     citation."""
@@ -10725,7 +11796,7 @@ def test_the_allocation_refusal_row_states_its_own_reading():
     def _row(code: str) -> str:
         return next(line for line in lines if line.rstrip().endswith(f"| `{code}` |"))
 
-    allocation = _row("E-DATA-ALLOCATION-CONTRAST")
+    allocation = _row("E-DATA-WEIGHT-ALLOCATION-CONTRAST")
     assert "per comparison" in allocation  # the control
     assert "E-DATA-WEIGHT-CONTRAST" not in allocation
 
@@ -10909,31 +11980,6 @@ def test_a_weighted_report_by_level_mints_no_member_and_no_delta():
     assert out is not None
     assert set(out[1]["step03_screen"]) == {"prob", "auroc"}
     assert len(members) == 2
-
-
-def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
-    """Fix round 1, M4. § Validation's *Allocation deltas aren't computed* row
-    cited *Weighted deltas aren't computed* by name — the identical dangling
-    citation task 11 removed from its § Errors twin, `E-DATA-ALLOCATION-
-    CONTRAST`'s row, in the same commit. Task 13 deletes *Weighted deltas
-    aren't computed*, so the § Validation row would have gone on citing a row
-    that no longer exists.
-
-    Task 14 went on to delete *Clustered deltas aren't computed* itself — the
-    row this test's docstring once said stayed — and re-worded the citation
-    into a direct statement of the property rather than a citation of any row
-    at all, the same repair `E-DATA-WEIGHT-CONTRAST`'s retirement got. So this
-    row now names no sibling row, of either kind.
-
-    Located by heading rather than by row-relative position, so a later
-    insertion above this row cannot make the assertion pass by accident."""
-    lines = REFERENCE_MD.read_text().split("\n")
-    allocation = next(
-        line for line in lines if line.startswith("| Allocation deltas aren't computed")
-    )
-    assert "per comparison" in allocation  # the control
-    assert "Weighted deltas aren't computed" not in allocation
-    assert "Clustered deltas aren't computed" not in allocation
 
 
 _LINEAR_DIFF_STEP = """\

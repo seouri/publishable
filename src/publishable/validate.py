@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.contrasts import crossed_group_axes, resolve_contrasts, units_matching
 from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
@@ -3467,7 +3467,7 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
     imbalance is visible only to a reader who crosses it against the arms list
     by hand — the silently-wrong class. The repo's own precedent is to refuse
     the COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+    `E-DATA-WEIGHT-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
 
     **The `fold` half closes a defect that is live at this commit**, not a
     hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
@@ -3979,10 +3979,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
     # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
     # to its own arm, and `cli.py` writes `allocation.json` and
-    # `provenance.allocation_hash`. What an allocated run may *not* yet do is
-    # publish a cross-arm contrast: `_check_sweep` refuses that combination
-    # under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a combination rather
-    # than of a declaration, so it lives there rather than here.
+    # `provenance.allocation_hash`.
     #
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
@@ -4676,9 +4673,9 @@ def _check_sweep(
         # `experimental-designs.md` § Mistakes core prevents' *two identical
         # measurements reported as two arms*, verbatim. Where the axis declares
         # two or more levels, the other levels' product rows cross the single
-        # baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code —
-        # but that refusal is temporary, and at one level there is no cross-arm
-        # comparison for it to read at all, which is where the run was green.
+        # baseline — a comparison that now computes rather than being refused —
+        # but at one level there is no cross-arm comparison at all, which is
+        # where the run was green.
         #
         # The guard is keyed on the PATH, never on the value, so both shapes reach
         # here and the message states both: a value naming a declared level is
@@ -4698,10 +4695,9 @@ def _check_sweep(
             "all. Drop the level from the baseline, which then expands over the axis and "
             "gives every arm its own reference. Where the axis declares two or more "
             "levels, the comparison a designated arm was reaching for is a "
-            "`statistics.contrasts` entry naming "
-            "both conditions — whose delta this build refuses over disjoint arms "
-            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist, "
-            "leaving a `summary`-step `Estimate` or two runs joined in a `study`",
+            "`statistics.contrasts` entry naming both conditions, which core computes — "
+            "the baseline is refused because the arms of a group axis are peers, not "
+            "because the comparison itself is unavailable",
         )
 
     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []
@@ -5015,71 +5011,72 @@ def _check_sweep(
         )
 
     # A contrast whose two conditions were assigned to different arms of a
-    # `sweep.groups` axis. `reference.md` § Allocation's pairing table: parameter
-    # axes only under `allocation: between` share the same arm's units and are
-    # "paired within that arm", but two conditions that differ on *any* `groups`
-    # axis hold disjoint sets of units — unpaired, "by construction". No
-    # construction in this build computes an unpaired interval:
-    # `paired_t_over_units` takes a list of per-unit *differences* and nothing
-    # else, and `grep -rn 'unpaired_\|welch_' src/` returns nothing to call — no
-    # `welch_t_over_units`, no `unpaired_percentile_over_units`. Reached, the
-    # delta would be computed over `stats.paired_keys`' intersection of two
-    # disjoint arms — empty by construction — so every downstream construction
-    # returns `None`, and the record would carry `{"delta": null, "paired":
-    # true, "n_paired": 0, "ci95": null}` for every metric, with a `paired: true`
-    # that is false and nothing saying so.
+    # `sweep.groups` axis is unpaired — `reference.md` § Allocation's pairing
+    # table: parameter axes only under `allocation: between` share the same
+    # arm's units and are "paired within that arm", but two conditions that
+    # differ on *any* `groups` axis hold disjoint sets of units "by
+    # construction". `welch_t_over_units[_clustered]` and
+    # `unpaired_percentile_over_units[_clustered]` compute that interval now
+    # (H4c), so this loop no longer refuses the combination itself — it exists
+    # for the one construction that still does not exist: a WEIGHTED unpaired
+    # delta, refused below as `E-DATA-WEIGHT-ALLOCATION-CONTRAST`.
     #
     # **This guard reads each resolved comparison individually rather than
     # firing on `comparisons > 0`,** because a group axis does not affect
     # every contrast in the family alike: in a `groups × grid`
     # design, control-pearson vs. control-spearman shares the same arm's units
-    # and is paired and computable, while control-pearson vs. treatment-pearson
-    # is not. Firing on the resolved family's size alone would refuse the first
-    # comparison along with the second and make "each arm analyzed several
-    # ways" unexpressible. `contrasts.differing_axes` gives the axes two
-    # conditions disagree on, and
-    # intersecting that with either side's `selectors` — the group axes a
-    # condition actually carries a value for — is what tells a cross-arm
-    # comparison from a within-arm one. Imported at module scope, the same as
-    # its sibling's helpers, rather than gated on `allocation`: the axis
-    # being a declared `groups` axis is what makes the two sides disjoint,
-    # whatever `allocation` itself is declared as (or left undeclared, the
-    # `within` default) — a config missing that declaration entirely still
-    # co-reports `E-DATA-ALLOCATION-WITHIN-ARMS`.
-    #
-    # Temporary, and narrowly so: H4 Statistics owns the unpaired estimator
-    # family and lifts this the moment it exists. Like its sibling it
-    # refuses a *combination* rather than a declaration, so it carries a row in
-    # § Validation's registry and is not one of the `NOT BUILT` declarations §
-    # The one config file counts.
+    # and is paired, while control-pearson vs. treatment-pearson is unpaired.
+    # A guard firing on the resolved family's size alone would refuse (or
+    # exempt) the first comparison along with the second and make "each arm
+    # analyzed several ways" unexpressible. `contrasts.crossed_group_axes`
+    # gives the group axes two conditions disagree on and is the same
+    # predicate `cli`'s own pairing derivation reads, so the two cannot
+    # disagree about which comparisons are unpaired. Imported at module
+    # scope, the same as its sibling's helpers, rather than gated on
+    # `allocation`: the axis being a declared `groups` axis is what makes the
+    # two sides disjoint, whatever `allocation` itself is declared as (or left
+    # undeclared, the `within` default) — a config missing that declaration
+    # entirely still co-reports `E-DATA-ALLOCATION-WITHIN-ARMS`.
     conditions_by_index = {cond.index: cond for cond in conditions}
     for comp in resolved_contrasts:
         of_cond = conditions_by_index.get(comp.of)
         against_cond = conditions_by_index.get(comp.against)
         if of_cond is None or against_cond is None:
             continue
-        differing = differing_axes(of_cond, against_cond)
-        group_selectors = of_cond.selectors | against_cond.selectors
-        group_axes = [axis for axis in differing if axis in group_selectors]
+        group_axes = crossed_group_axes(of_cond, against_cond)
         if not group_axes:
             continue
         plural = "" if len(group_axes) == 1 else "s"
-        c.error(
-            "E-DATA-ALLOCATION-CONTRAST",
-            "sweep.groups",
-            f"condition {comp.of} ({of_cond.label!r}) and condition {comp.against} "
-            f"({against_cond.label!r}) differ on group axis{plural} "
-            f"{', '.join(group_axes)} — a declared `groups` axis means the two "
-            "conditions hold disjoint sets of units, and no construction in this build "
-            "computes an unpaired interval: `paired_t_over_units` takes per-unit "
-            "differences and nothing else, and there is no `welch_t_over_units` or "
-            "`unpaired_percentile_over_units` to call. The delta would be computed over "
-            "an empty pairing and published as `null` beside a `paired: true` that is "
-            "false. Express the difference as an `Estimate` returned by a `summary` "
-            "step, which core records as reported rather than recomputing, or run the "
-            "two arms as separate runs and join them in a `study`. This will be honored "
-            "once the unpaired estimators exist",
-        )
+        # A weighted unpaired contrast has no construction and will not get one.
+        # `weight_by` beside a cross-arm comparison needs Kish's effective size PER
+        # SIDE — two df inputs where the paired form needed one — and the two
+        # readings coincide in any fixture not built to separate them, so the wrong
+        # choice would be invisible. Refused rather than approximated, on the
+        # precedent `E-DATA-WEIGHT-CLUSTER-CONTRAST` set. Standing, not temporary:
+        # it refuses a COMBINATION rather than a declaration, so it carries a
+        # § Validation row and a § Errors row and is not one of the `NOT BUILT`
+        # declarations § The one config file counts.
+        #
+        # Inside this loop rather than beside the `comparisons > 0` guards above,
+        # because it is the same per-comparison reading its neighbour is: a
+        # `groups × grid` design's within-arm comparisons are paired and weightable,
+        # and a guard firing on the declaration would refuse a design core computes
+        # correctly today.
+        if isinstance(weight_by, str) and weight_by:
+            c.error(
+                "E-DATA-WEIGHT-ALLOCATION-CONTRAST",
+                "data.units.weight_by",
+                f"is declared beside a comparison whose two conditions "
+                f"({of_cond.label!r} and {against_cond.label!r}) differ on group "
+                f"axis{plural} {', '.join(group_axes)}, and no construction computes "
+                "a weighted unpaired delta: a Welch *t* on two weighted means takes "
+                "its df from Kish's effective size per side, two inputs where the "
+                "paired form needed one, and the two readings coincide in any sample "
+                "not built to separate them. Drop `weight_by` and the cross-arm delta "
+                "is computed unweighted, keep it and compare within an arm, or express "
+                "the weighted difference as an `Estimate` returned by a `summary` step, "
+                "which core records as reported rather than recomputing",
+            )
 
     if comparisons > 0 and (correction or "holm") == "none":
         c.warn(
@@ -5334,8 +5331,8 @@ def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None 
                         f"statistics.contrasts[{i}].within",
                         f"selects {stratum}, which {len(matched)} of {len(roster)} units "
                         f"match, below limits.min_reported_n ({floor}). The run counts "
-                        f"`n_paired` over the two sides' completed units, which attrition "
-                        f"can only make smaller",
+                        f"this comparison's own denominator over the two sides' completed "
+                        f"units, which attrition can only make smaller",
                     )
 
 

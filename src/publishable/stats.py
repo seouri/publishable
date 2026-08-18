@@ -43,7 +43,7 @@ class Interval:
 
 @dataclass(frozen=True)
 class PairedResample:
-    """A paired percentile interval and the pool it was read from.
+    """A percentile interval and the pool it was read from.
 
     The pool travels so a caller can build the *corrected* interval at a
     smaller α off the same draws (`interval_at`). It is deliberately not a
@@ -72,6 +72,31 @@ def _t_critical(df: float, confidence: float) -> float:
     return float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=df))
 
 
+def _sample_variance(values: Sequence[float], mean: float) -> float:
+    """The unbiased sample variance, Σ(v − v̄)² / (n − 1).
+
+    Extracted for the reason `_t_critical` gives for itself: one expression rather
+    than one per construction, because two copies is how two intervals over the
+    same data come to disagree about what the dispersion *is*, and a drift there is
+    invisible in every output that isn't compared against the other.
+    `welch_t_over_units` puts this in an interval and `cohens_ds` pools two of them
+    into a standardizer, and § Statistical reporting's *d*s-pools-where-Welch-doesn't
+    asymmetry is only readable if both rest on the same quantity.
+
+    Takes the mean rather than recomputing it: every caller already holds one, and
+    a variance centred on a different mean than the point estimate is the failure
+    `_weighted_mean` exists to prevent one level over.
+
+    Undefined below two values — every caller floors above that first, which is
+    where the "no dispersion to describe" refusal belongs. `weighted_t_over_units`
+    deliberately does NOT call this: its denominator is `Σw − Σw²/Σw`, a different
+    quantity. `cohens_dz` also does not call this — its own expression over the
+    difference vector is the same shape, left unwired as a scope choice this
+    extraction did not make.
+    """
+    return sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+
+
 def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval | None:
     """Student's t on the per-unit values, df = completed units − 1.
 
@@ -82,7 +107,7 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     if n < 2:
         return None
     mean = sum(values) / n
-    variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+    variance = _sample_variance(values, mean)
     sem = math.sqrt(variance) / math.sqrt(n)
     half = _t_critical(n - 1, confidence) * sem
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
@@ -237,6 +262,61 @@ def weighted_t_over_units(
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units")
 
 
+def _cr1_variance(
+    values: Sequence[float], keys: Sequence[str], membership: Mapping[str, str]
+) -> tuple[float, int] | None:
+    """The CR1 sandwich variance of the mean, and the cluster count its df reads.
+
+    Three callers: `t_over_units_clustered` puts it in a per-condition interval,
+    `paired_t_over_units_clustered` reaches it through that one, and
+    `welch_t_over_units_clustered` combines two of them. A second sandwich among
+    those three is how a paired interval and a per-condition one come to disagree
+    about what cluster-robust means, which is the argument
+    `paired_t_over_units_clustered`'s docstring already makes for delegating
+    rather than hand-rolling — and a Welch form cannot delegate to
+    `t_over_units_clustered` itself, because it needs the variance and the count
+    and that function returns an `Interval`.
+
+    The model core fits is the mean, so the sandwich is the intercept-only case:
+    with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the variance of
+    the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample scaling is the
+    `G/(G−1)` factor**, and dropping it is not a rounding difference — it is the CR0
+    estimator wearing this one's name, biased downward by exactly the factor a small
+    cluster count makes largest. The two literature conventions for CR1 coincide
+    here, since `k` is 1 for a mean.
+
+    `None` below two values or below two clusters: the df every caller derives from
+    the count would be zero, and each caller's own floor is that same refusal
+    reported in its own terms. Returning the count rather than only the variance is
+    what lets a Welch caller give each side `G_s − 1` df without recounting.
+
+    The membership mapping is `units.clusters_of`'s, passed whole rather than
+    pre-resolved, and the count comes from `units.cluster_count_of` — the single
+    counting expression, so no df here can disagree with the `n.clusters` printed
+    beside it. Indexed rather than `.get`-ed: a key the roster doesn't hold is a
+    core defect, and absorbing it into a cluster of its own would raise `G` and
+    narrow the interval. `strict=True` on the zip, because a keys/values length
+    mismatch is a misaligned cluster vector and would produce a plausible number
+    rather than an error.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    mean = sum(values) / n
+    # One residual sum per cluster: what makes this robust is that the residuals
+    # are added up WITHIN a cluster before being squared, so correlated units
+    # reinforce each other instead of counting as independent draws.
+    scores: dict[str, float] = {}
+    for key, value in zip(keys, values, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + (value - mean)
+    meat = sum(s * s for s in scores.values())
+    return (groups / (groups - 1)) * meat / (n * n), groups
+
+
 def t_over_units_clustered(
     values: Sequence[float],
     keys: Sequence[str],
@@ -254,54 +334,18 @@ def t_over_units_clustered(
     df it uses, so widening is not evidence that the cluster count reached the
     critical value; only the number is.
 
-    The model core fits here is the mean, so the sandwich is the intercept-only
-    case: with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the
-    variance of the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample
-    scaling is the `G/(G−1)` factor**, and dropping it is not a rounding
-    difference — it is the CR0 estimator wearing this one's name, biased downward
-    by exactly the factor a small cluster count makes largest.
-
-    Two conventions for CR1 exist in the literature — the `G/(G−1)` of
-    MacKinnon–White, and Stata's `G/(G−1) · (n−1)/(n−k)` — and **they coincide
-    here**: `k`, the number of fitted parameters, is 1 for a mean, so the second
-    factor is `(n−1)/(n−1)`. There is nothing to choose between, which is why this
-    function names neither in its `method` string.
-
     Returns `None` below two clusters, and for the same reason `t_over_units`
     returns `None` below two values: df would be zero. That floor is on the
     CLUSTER count, so 300 cells from one animal get a point and no interval —
-    which is the honest answer, one animal being one draw. The `len(values) < 2`
-    guard in front of it is `t_over_units`' own floor, kept so the two
-    constructions refuse the same degenerate inputs.
-
-    **The membership mapping is `units.clusters_of`'s**, passed whole rather than
-    pre-resolved to a label vector, and the count comes from
-    `units.cluster_count_of` — the single counting expression, so this df cannot
-    disagree with the `n.clusters` printed beside it or with a fold's partition
-    about what one cluster is. Indexed rather than `.get`-ed for the reason
-    `cluster_count_of` states: a key the roster doesn't hold is a core defect, and
-    absorbing it into a cluster of its own would raise `G` and narrow the interval.
-
-    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
-    keys/values length mismatch is a misaligned cluster vector, and it would
-    produce a plausible number rather than an error.
+    which is the honest answer, one animal being one draw. Both floors, and the
+    sandwich itself, live in `_cr1_variance`; this function has no guard of its
+    own to duplicate them with.
     """
-    n = len(values)
-    if n < 2:
+    got = _cr1_variance(values, keys, membership)
+    if got is None:
         return None
-    groups = cluster_count_of(membership, keys)
-    if groups < 2:
-        return None
-    mean = sum(values) / n
-    # One residual sum per cluster: what makes this robust is that the residuals
-    # are added up WITHIN a cluster before being squared, so correlated units
-    # reinforce each other instead of counting as independent draws.
-    scores: dict[str, float] = {}
-    for key, value in zip(keys, values, strict=True):
-        label = membership[key]
-        scores[label] = scores.get(label, 0.0) + (value - mean)
-    meat = sum(s * s for s in scores.values())
-    variance = (groups / (groups - 1)) * meat / (n * n)
+    variance, groups = got
+    mean = sum(values) / len(values)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
     return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
 
@@ -388,6 +432,143 @@ def weighted_t_over_units_clustered(
     variance = (groups / (groups - 1)) * meat / (total * total)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units_clustered")
+
+
+def welch_t_over_units(
+    of: Sequence[float], against: Sequence[float], confidence: float = 0.95
+) -> Interval | None:
+    """Welch's *t* on two independent condition means, df from Welch-Satterthwaite.
+
+    `reference.md` § Statistical reporting: "The unpaired counterpart of the first:
+    unequal variances are assumed rather than pooled, because two arms need be
+    neither the same size nor the same spread." The contrast's interval is its own
+    construction over the two sides, never a difference of the two sides' own
+    intervals — `paired_t_over_units`' argument, unchanged by the sides being
+    disjoint.
+
+    **There is no pooling anywhere in this construction**, and that is the whole
+    content of the row. Pooling the two variances gives a plausible number that is
+    wrong in a direction unequal spreads decide, and at equal per-side sizes the
+    pooled and Welch standard errors are algebraically IDENTICAL — so a fixture
+    with equal arms cannot tell the two apart, and no test of this function may use
+    one.
+
+    **The df is the construction, not a detail of it.** Welch-Satterthwaite over
+    the two per-side variances-of-the-mean is what makes the interval honest about
+    two spreads; `n_of + n_against − 2` is the pooled reading this row refuses, and
+    `min(n) − 1` throws a side's information away. `cohens_ds` pools where this
+    deliberately doesn't, and § Statistical reporting states that asymmetry is not
+    an inconsistency: an interval is an inference and gets the assumption-light
+    construction, while *d* is a descriptive standardization whose conventional
+    denominator *is* the pooled one.
+
+    Returns `None` below two values on either side, matching `t_over_units`' floor
+    read across two samples: df would be zero on that side and there is no
+    dispersion to describe. Reporting a point with no interval is honest; inventing
+    one is not. Returns `None` where BOTH sides are constant, because the combined
+    variance is then exactly zero and the df is 0/0 — one side constant is not
+    refused, since the other still has dispersion and the difference of two means
+    still has a sampling distribution.
+
+    Takes two value vectors and nothing else, for the reason
+    `paired_t_over_units_clustered` takes a label vector: `correction.Member` will
+    carry them as `UnpairedEvidence` (task 11, not yet built), and both callers
+    hold two per-side vectors with no roster between them.
+    """
+    n_of, n_against = len(of), len(against)
+    if n_of < 2 or n_against < 2:
+        return None
+    mean_of = sum(of) / n_of
+    mean_against = sum(against) / n_against
+    # The variance OF THE MEAN on each side, s²/n — what Welch adds rather than
+    # pools, and what Welch-Satterthwaite's df is a function of.
+    var_of = _sample_variance(of, mean_of) / n_of
+    var_against = _sample_variance(against, mean_against) / n_against
+    total = var_of + var_against
+    if total <= 0.0:
+        return None
+    df = (
+        total * total / (var_of * var_of / (n_of - 1) + var_against * var_against / (n_against - 1))
+    )
+    delta = mean_of - mean_against
+    half = _t_critical(df, confidence) * math.sqrt(total)
+    return Interval(low=delta - half, high=delta + half, method="welch_t_over_units")
+
+
+def welch_t_over_units_clustered(
+    of: Sequence[float],
+    of_labels: Sequence[str],
+    against: Sequence[float],
+    against_labels: Sequence[str],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) Welch *t* on two independent condition means.
+
+    `reference.md` § Statistical reporting's suffix rule: under a declared
+    `cluster_by` each unweighted contrast construction "takes a `_clustered` suffix
+    and reads the cluster as the draw", the *t* forms being cluster-robust (CR1)
+    "over the differenced values when paired and over the arm-level ones when not"
+    — this is the "when not" half. The design it is load-bearing for is
+    § Clustered units' matched case-control: "The contrast stays unpaired, since no
+    unit appears in both arms, but its interval is cluster-robust on the matched
+    set — so the effective `n` is the number of sets rather than the number of
+    subjects, which is the accounting a matched design needs."
+
+    **The df is Welch-Satterthwaite over the two cluster-robust per-side variances,
+    each side contributing `G_s` − 1**, which § Statistical reporting states since
+    H4c and which code could not emit before it did. The substitution the suffix
+    rule describes happens inside each side's own variance and its own df, and
+    combining them is what the unclustered Welch form already does. Two readings
+    are rejected rather than merely unused: `min(G_of, G_against) − 1` discards a
+    side's information and contradicts "df = clusters − 1" on the side it discards,
+    and `G_total − 2` is the **pooled** reading `welch_t_over_units` refuses by
+    construction.
+
+    **A cluster-robust interval that is merely wider is not evidence the cluster
+    count reached the critical value.** Over positively correlated data it comes out
+    wider whatever df it uses — `t_over_units_clustered` says so — so only the
+    number is evidence, and a fixture whose two sides carry the same cluster count
+    cannot see a construction reading one side's.
+
+    `of_labels`/`against_labels` are one cluster label per value, in the same order,
+    per side, rather than the `keys` + `membership` pairs the per-condition form
+    takes: both callers hold two per-side vectors and nothing else, and
+    `correction.UnpairedEvidence` will carry exactly that pair (task 11, not yet
+    built). The positional keys synthesized below are a **bijection**, not a
+    proxy — `_cr1_variance` uses a key only to look its label up and to count
+    distinct labels — and the two sides get disjoint synthetic key spaces so
+    neither side's count can read the other's.
+
+    `None` below two values or below two clusters on **either** side, both inherited
+    from `_cr1_variance`: that side's df would be zero. `None` also where both
+    variances are zero, for the reason `welch_t_over_units` gives — the df is then
+    0/0 — which a fixture with values constant within cluster but varying across
+    clusters cannot reach.
+    """
+    of_keys = [f"of{i}" for i in range(len(of))]
+    against_keys = [f"ag{i}" for i in range(len(against))]
+    got_of = _cr1_variance(of, of_keys, dict(zip(of_keys, of_labels, strict=True)))
+    got_against = _cr1_variance(
+        against, against_keys, dict(zip(against_keys, against_labels, strict=True))
+    )
+    if got_of is None or got_against is None:
+        return None
+    var_of, groups_of = got_of
+    var_against, groups_against = got_against
+    total = var_of + var_against
+    if total <= 0.0:
+        return None
+    # Welch-Satterthwaite with each side's df taken from its OWN cluster count —
+    # the substitution the suffix rule makes, applied inside each side's variance
+    # and its df rather than to the combination.
+    df = (
+        total
+        * total
+        / (var_of * var_of / (groups_of - 1) + var_against * var_against / (groups_against - 1))
+    )
+    delta = sum(of) / len(of) - sum(against) / len(against)
+    half = _t_critical(df, confidence) * math.sqrt(total)
+    return Interval(low=delta - half, high=delta + half, method="welch_t_over_units_clustered")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
@@ -547,6 +728,41 @@ def weighted_cohens_dz(diffs: Sequence[float], weights: Sequence[Any]) -> float 
     return mean / sd if sd > 0 else None
 
 
+def cohens_ds(of: Sequence[float], against: Sequence[float]) -> float | None:
+    """The difference of two condition means over the pooled within-condition sd.
+
+    `reference.md` § Statistical reporting: "paired contrasts report *d*z … and
+    unpaired ones report *d*s, over the pooled within-condition standard
+    deviation. They are different quantities from the same data and the one that
+    applies follows from `paired`, which is derived rather than declared."
+
+    **The denominator pools where `welch_t_over_units`' deliberately does not**, and
+    § Statistical reporting says in terms that this is not an inconsistency: an
+    interval is an inference and gets the assumption-light construction, while *d*
+    is a descriptive standardization whose conventional denominator *is* the pooled
+    one, and a *d* against a Welch-style denominator is a number no reader could
+    compare to another paper's. So this function does not read the interval beside
+    it, and must not be tidied into doing so.
+
+    Reported only for a per-unit mean, exactly as `cohens_dz` is: a derived metric
+    has no per-unit value to difference, which is why the worked example carries
+    `cohens_d: null` for `r`.
+
+    `None` below two values on either side and `None` at zero dispersion, the two
+    refusals `cohens_dz` carries, kept so the family refuses the same inputs.
+    """
+    if len(of) < 2 or len(against) < 2:
+        return None
+    mean_of = sum(of) / len(of)
+    mean_against = sum(against) / len(against)
+    pooled = (
+        (len(of) - 1) * _sample_variance(of, mean_of)
+        + (len(against) - 1) * _sample_variance(against, mean_against)
+    ) / (len(of) + len(against) - 2)
+    sd = math.sqrt(pooled)
+    return (mean_of - mean_against) / sd if sd > 0 else None
+
+
 def resample_seed(digest: str) -> int:
     """From the design digest, never `parameters_hash`.
 
@@ -586,7 +802,17 @@ def interval_at(pool: Sequence[float], confidence: float) -> tuple[float, float]
     `None` below `min_honest_draws(confidence)`: a correction that pushes the
     level past what the pool can support has no honest interval to report, and
     the caller records `ci95_corrected: null` rather than a too-narrow number.
+
+    **`pool` must already be sorted ascending.** This function reads fixed
+    ranks off it and does not sort — `correction.Member`'s own docstring states
+    the precondition, and every construction in this module that returns a
+    pool sorts it before returning. An unsorted pool would still return two
+    values that look exactly like an interval, silently.
     """
+    assert list(pool) == sorted(pool), (
+        "interval_at reads fixed ranks off a sorted pool and does not sort; an "
+        "unsorted pool gives two arbitrary positions"
+    )
     if len(pool) < min_honest_draws(confidence):
         return None
     lo, hi = _percentile_ranks(len(pool), confidence)
@@ -1292,6 +1518,108 @@ def _drawable_content(
     )
 
 
+def _draw_pools(
+    keys: list[str],
+    strata: dict[str, str] | None,
+    clusters: dict[str, str] | None,
+) -> list[list[list[str]]]:
+    """One draw shape, for a percentile construction's two callers.
+
+    A list of stratum groups, each holding the DRAWABLE things that stratum
+    owns, each of those a list of keys. A unit is the drawable thing by
+    default; a whole cluster is, once `clusters` is given (`reference.md`
+    § Clustered units: "`resample` resamples clusters, not rows"), which is
+    the same move `percentile_over_units_clustered` makes one level up.
+    Written as one shape rather than four branches because the
+    clustered/unstratified and stratified/unclustered paths must not drift
+    apart — and it is RNG-IDENTICAL to the two branches it replaces: with no
+    clusters and no strata it is one group of `n` single-key items, so
+    `randrange(n)` is called `n` times in the same order; with strata the
+    group order and the per-group counts are today's, each key merely
+    wrapped.
+
+    Two callers: `paired_percentile_of_derived` draws one key list and
+    applies it to both sides; `unpaired_percentile_of_sides` calls this once
+    per side, independently. Both trust the `strata` × `clusters`
+    composition rule, the relabelling invariance and the sorted-keys caller
+    contract to be the same for either — a second copy is how one of them is
+    fixed in one place and not the other.
+    """
+    if clusters is None:
+        # `keys` order preserved rather than sorted — the unstratified draw
+        # indexed `keys` directly, and sorting here would move an unsorted
+        # caller's draw sequence.
+        items = [[key] for key in keys]
+    else:
+        by_cluster: dict[str, list[str]] = {}
+        for key in keys:
+            # Indexed, not `.get`-ed, the discipline `t_over_units_clustered`
+            # states: a key the roster doesn't hold is a core defect, and a
+            # cluster of its own for it would raise the count the interval rests
+            # on.
+            by_cluster.setdefault(clusters[key], []).append(key)
+        # Ordered by their own sorted contents rather than by label, so a
+        # relabelled roster draws the identical sequence —
+        # `percentile_over_units_clustered`'s own invariance, for the same
+        # reason.
+        items = sorted(sorted(group) for group in by_cluster.values())
+    pools: list[list[list[str]]]
+    if strata is None:
+        pools = [items]
+    else:
+        # **`keys` must already be sorted ascending when `strata` is given.**
+        # This is a caller-contract assertion, not a correctness requirement:
+        # `pools = [sorted(group) for group in grouped.values()]` followed by
+        # `pools.sort()` below makes the whole partition a pure function of
+        # CONTENT, so the relabelling invariance holds regardless of the order
+        # `keys` arrives in or the order strata are first encountered while
+        # walking it — verified by running with this check disabled, a shuffled
+        # `keys` list under `strata` draws the identical sequence a sorted one
+        # does. What the check buys instead is the same discipline
+        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
+        # than trusting its caller): this function trusts `paired_keys`, which
+        # returns its intersection sorted, so a caller that has stopped doing
+        # that is a bookkeeping regression worth raising on rather than
+        # correcting quietly and never being told about.
+        if keys != sorted(keys):
+            raise ValueError(
+                "a percentile draw requires keys sorted ascending when strata "
+                "is given, matching the contract this module's key functions "
+                "already satisfy — not because the result would otherwise "
+                "differ, but because a caller that has stopped supplying a "
+                "sorted list is a regression worth raising on rather than "
+                "correcting silently"
+            )
+        grouped: dict[str, list[list[str]]] = {}
+        for item in items:
+            rendered = strata[item[0]]
+            for key in item:
+                # A stratum must be CONSTANT within a drawable thing. With no
+                # clusters an item is one key and this cannot fire; with
+                # clusters it is the composition of two declarations rather than
+                # a third rule, and it is the same fault
+                # `percentile_over_units_clustered` raises under the same code —
+                # § Errors carries one row per code covering every emit site.
+                if strata[key] != rendered:
+                    # Only reachable when `clusters` was given: with no clusters
+                    # every item is a single key, and `strata[item[0]] == rendered`
+                    # trivially, so this branch can never fire for `item`'s one key.
+                    assert clusters is not None
+                    raise ContractError(
+                        f"cluster {clusters[key]!r} carries stratum values "
+                        f"{rendered!r} and {strata[key]!r}. A resample draws "
+                        "whole clusters, so a cluster cannot be drawn within one "
+                        "stratum while carrying two; stratify on an attribute "
+                        "that is constant within a cluster, or drop `cluster_by` "
+                        "if the units really are independent",
+                        code="E-STATS-RESAMPLE-STRATIFY-VARIES",
+                    )
+            grouped.setdefault(rendered, []).append(item)
+        pools = [sorted(group) for group in grouped.values()]
+        pools.sort()
+    return pools
+
+
 def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
@@ -1383,89 +1711,7 @@ def paired_percentile_of_derived(
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
-    # ONE uniform draw shape: a list of stratum groups, each holding the DRAWABLE
-    # things that stratum owns, each of those a list of keys. A unit is the
-    # drawable thing by default; a whole cluster is, once `clusters` is given
-    # (`reference.md` § Clustered units: "`resample` resamples clusters, not
-    # rows"), which is the same move `percentile_over_units_clustered` makes one
-    # level up. Written as one shape rather than four branches because the
-    # clustered/unclustered and stratified/unstratified paths must not drift
-    # apart — and it is RNG-IDENTICAL to the two branches it replaces: with no
-    # clusters and no strata it is one group of `n` single-key items, so
-    # `randrange(n)` is called `n` times in the same order; with strata the group
-    # order and the per-group counts are today's, each key merely wrapped.
-    if clusters is None:
-        # `keys` order preserved rather than sorted — the unstratified draw
-        # indexed `keys` directly, and sorting here would move an unsorted
-        # caller's draw sequence.
-        items = [[key] for key in keys]
-    else:
-        by_cluster: dict[str, list[str]] = {}
-        for key in keys:
-            # Indexed, not `.get`-ed, the discipline `t_over_units_clustered`
-            # states: a key the roster doesn't hold is a core defect, and a
-            # cluster of its own for it would raise the count the interval rests
-            # on.
-            by_cluster.setdefault(clusters[key], []).append(key)
-        # Ordered by their own sorted contents rather than by label, so a
-        # relabelled roster draws the identical sequence —
-        # `percentile_over_units_clustered`'s own invariance, for the same
-        # reason.
-        items = sorted(sorted(group) for group in by_cluster.values())
-    pools: list[list[list[str]]]
-    if strata is None:
-        pools = [items]
-    else:
-        # **`keys` must already be sorted ascending when `strata` is given.**
-        # This is a caller-contract assertion, not a correctness requirement:
-        # `pools = [sorted(group) for group in grouped.values()]` followed by
-        # `pools.sort()` below makes the whole partition a pure function of
-        # CONTENT, so the relabelling invariance holds regardless of the order
-        # `keys` arrives in or the order strata are first encountered while
-        # walking it — verified by running with this check disabled, a shuffled
-        # `keys` list under `strata` draws the identical sequence a sorted one
-        # does. What the check buys instead is the same discipline
-        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
-        # than trusting its caller): this function trusts `paired_keys`, which
-        # returns its intersection sorted, so a caller that has stopped doing
-        # that is a bookkeeping regression worth raising on rather than
-        # correcting quietly and never being told about.
-        if keys != sorted(keys):
-            raise ValueError(
-                "paired_percentile_of_derived requires keys sorted ascending "
-                "when strata is given, matching the contract `paired_keys` "
-                "already satisfies — not because the result would otherwise "
-                "differ, but because a caller that has stopped supplying a "
-                "sorted list is a regression worth raising on rather than "
-                "correcting silently"
-            )
-        grouped: dict[str, list[list[str]]] = {}
-        for item in items:
-            rendered = strata[item[0]]
-            for key in item:
-                # A stratum must be CONSTANT within a drawable thing. With no
-                # clusters an item is one key and this cannot fire; with
-                # clusters it is the composition of two declarations rather than
-                # a third rule, and it is the same fault
-                # `percentile_over_units_clustered` raises under the same code —
-                # § Errors carries one row per code covering every emit site.
-                if strata[key] != rendered:
-                    # Only reachable when `clusters` was given: with no clusters
-                    # every item is a single key, and `strata[item[0]] == rendered`
-                    # trivially, so this branch can never fire for `item`'s one key.
-                    assert clusters is not None
-                    raise ContractError(
-                        f"cluster {clusters[key]!r} carries stratum values "
-                        f"{rendered!r} and {strata[key]!r}. A resample draws "
-                        "whole clusters, so a cluster cannot be drawn within one "
-                        "stratum while carrying two; stratify on an attribute "
-                        "that is constant within a cluster, or drop `cluster_by` "
-                        "if the units really are independent",
-                        code="E-STATS-RESAMPLE-STRATIFY-VARIES",
-                    )
-            grouped.setdefault(rendered, []).append(item)
-        pools = [sorted(group) for group in grouped.values()]
-        pools.sort()
+    pools = _draw_pools(keys, strata, clusters)
     # Content-based, not count-based, and applied whether or not `strata` or
     # `clusters` were given. If every drawable thing within a stratum carries the
     # same pair of rows (a stratum holding one of them trivially so), drawing any
@@ -1505,6 +1751,146 @@ def paired_percentile_of_derived(
         # returned — and `float("high")` raises `ValueError`, caught here.
         # Narrowing this to a closed set that drops `ValueError` reopens that
         # path; see the pin in tests/test_stats.py.
+        except Exception:
+            continue
+        if a is None or b is None:
+            continue
+        diff = float(a) - float(b)
+        if math.isnan(diff):
+            continue
+        values.append(diff)
+    if len(values) < min_honest_draws(confidence):
+        return PairedResample(interval=None, draws_used=len(values), pool=sorted(values))
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return PairedResample(
+        interval=Interval(low=values[lo], high=values[hi], method=method),
+        draws_used=len(values),
+        pool=values,
+    )
+
+
+def _side_content(
+    item: Sequence[str], rows: Mapping[str, Mapping[str, float]]
+) -> tuple[tuple[tuple[str, float], ...], ...]:
+    """What a drawable thing contributes to ONE side's draw, as a comparable value.
+
+    `_drawable_content`'s single-sided counterpart: the row each of its keys
+    carries, sorted, so two things with the same rows in a different key order are
+    the same contribution. The keys are deliberately not in the value, for the
+    reason that function gives — a draw that replaces one key with another carrying
+    an identical row produces an identical table.
+
+    Separate rather than a parameter on `_drawable_content`, because the unpaired
+    draw's two sides hold DIFFERENT key sets and a signature taking both mappings
+    could only be given one side's keys with the other's rows.
+    """
+    return tuple(sorted(tuple(sorted(rows[key].items())) for key in item))
+
+
+def unpaired_percentile_of_sides(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    of_keys: list[str],
+    against_keys: list[str],
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
+    method: str = "unpaired_percentile_over_units",
+    of_clusters: dict[str, str] | None = None,
+    against_clusters: dict[str, str] | None = None,
+) -> PairedResample:
+    """Percentiles of the difference, resampling within each side independently.
+
+    `reference.md` § Statistical reporting: "The percentiles of the difference,
+    resampling within each side independently. The unpaired counterpart of the
+    second."
+
+    **This is a separate construction from `paired_percentile_of_derived` and not a
+    `method` string over it.** That function draws ONE key list and applies it to
+    both sides, and its docstring argues at length that drawing each side
+    independently "would resample the two conditions apart and destroy the
+    pairing" — which is exactly the arrangement this function's own definition
+    requires, because the two sides here hold disjoint units and there is no
+    pairing to destroy. Two spellings of two different constructions, not one
+    construction serving two names.
+
+    Two computes, not one, for `paired_percentile_of_derived`'s own reason: a
+    contrast's two sides can hold their `cfg` fixed on every axis except the one
+    being compared, and `aggregate(units, cfg)` is evaluated once per side with
+    that side's own `cfg`.
+
+    `method` names the `Interval` the caller gets back rather than being derived
+    from a parameter here: one construction serves the plain and the `_clustered`
+    spelling, and the arithmetic that picks between them lives in the caller.
+
+    `strata` resamples within each stratum, per side. `of_clusters`/
+    `against_clusters` make the drawable thing a whole cluster within its own side
+    — `reference.md` § Statistical reporting: "the percentile forms resample whole
+    clusters", the "jointly across both sides" qualifier being the paired case's.
+    Two mappings rather than one, because the two sides' key sets are disjoint and
+    a single mapping would be indexed with keys it does not hold. Both compose with
+    `strata` through `_draw_pools`, which is where every one of those rules lives.
+
+    **The degenerate refusal is per side and it is AND.** Where every drawable thing
+    in every stratum of BOTH sides carries the same row, every replicate reproduces
+    the same difference, both percentile ranks land on it, and the interval has zero
+    width while looking exactly like a narrow one — which § Statistical reporting
+    refuses in those terms. Where only one side cannot vary the difference still
+    can, so there is a real interval to report and refusing it would be the same
+    defect in the opposite direction. Content, not count: two clusters per stratum
+    carrying identical rows clear any count floor and are still degenerate.
+
+    `PairedResample(interval=None, draws_used=0, pool=[])` below two keys on either
+    side, the floor every construction here shares. The pool is sorted on both
+    return paths, because `interval_at` reads fixed ranks off it and does not sort.
+    """
+    if len(of_keys) < 2 or len(against_keys) < 2:
+        return PairedResample(interval=None, draws_used=0, pool=[])
+    rng = random.Random(seed)
+    of_pools = _draw_pools(of_keys, strata, of_clusters)
+    against_pools = _draw_pools(against_keys, strata, against_clusters)
+    if all(len({_side_content(item, of) for item in group}) <= 1 for group in of_pools) and all(
+        len({_side_content(item, against) for item in group}) <= 1 for group in against_pools
+    ):
+        return PairedResample(interval=None, draws_used=0, pool=[])
+    values: list[float] = []
+    for _ in range(draws):
+        # TWO draws per replicate, `of` first and `against` second, each over its
+        # own side's pools — which is what "resampling within each side
+        # independently" means, and the one thing this construction does that
+        # `paired_percentile_of_derived` refuses to do.
+        drawn_of = [
+            key
+            for group in of_pools
+            for _ in range(len(group))
+            for key in group[rng.randrange(len(group))]
+        ]
+        drawn_against = [
+            key
+            for group in against_pools
+            for _ in range(len(group))
+            for key in group[rng.randrange(len(group))]
+        ]
+        # Table construction is deliberately OUTSIDE the `try`, matching
+        # `paired_percentile_of_derived`'s own placement: a key drawn for one
+        # side that does not index that side's mapping is a caller-space bug —
+        # the two sides' disjoint key spaces make that reachable in a way the
+        # paired form's single shared key list cannot — and it must raise
+        # rather than be silently absorbed into "degenerate draw, continue"
+        # below. Only what `compute_of`/`compute_against` themselves do is
+        # allowed to fail quietly.
+        table_of = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn_of])
+        table_against = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn_against])
+        try:
+            a = compute_of(table_of)
+            b = compute_against(table_against)
+        # A degenerate draw, not a fault; see `percentile_of_derived`. Also the same
+        # containment for a template returning a non-numeric metric, which reaches
+        # `cli.py`'s resample closure and raises `ValueError` from `float()`.
         except Exception:
             continue
         if a is None or b is None:
@@ -1683,6 +2069,42 @@ def paired_keys(
     if allowed is not None:
         keys &= allowed
     return sorted(keys)
+
+
+def unpaired_keys(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    allowed: set[str] | None,
+) -> tuple[list[str], list[str]]:
+    """Each side's own completed units, narrowed by a `within` stratum if given.
+
+    `paired_keys`' counterpart for a contrast whose two conditions differ on a
+    declared `sweep.groups` axis: the two sides hold disjoint sets of units, so
+    there is no intersection to take and no per-unit difference to contribute. What
+    replaces the intersection is two sets, and what replaces the mean of a
+    difference vector is a difference of two means.
+
+    **This function does not decide whether a comparison is paired** —
+    `contrasts.crossed_group_axes` does — and it deliberately does not subtract the
+    two sides from each other. Two sides sharing a key is not what makes a
+    comparison paired, the group axis is, and a set difference here would silently
+    drop a unit from a roster whose arms overlap for a reason this function cannot
+    see.
+
+    Sorted, for the reason `paired_keys` sorts: a resample over these keys must be
+    row-order invariant, and `unpaired_percentile_of_sides` asserts a sorted-keys
+    caller contract when `strata` is given.
+
+    `allowed` narrows **both** sides. A narrowing applied to one would compute a
+    delta over a stratum on one side and a whole arm on the other, which is exactly
+    the number no reader could detect is wrong.
+    """
+    of_keys = set(of)
+    against_keys = set(against)
+    if allowed is not None:
+        of_keys &= allowed
+        against_keys &= allowed
+    return sorted(of_keys), sorted(against_keys)
 
 
 def _is_anonymous_level(level: "RepeatLevel") -> bool:

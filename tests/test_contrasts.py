@@ -1,6 +1,11 @@
 import pytest
 
-from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.contrasts import (
+    crossed_group_axes,
+    differing_axes,
+    resolve_contrasts,
+    units_matching,
+)
 from publishable.sweep import Condition, expand
 from publishable.units import Unit, UnitList
 
@@ -332,3 +337,65 @@ def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
         }
     )
     assert len(resolve_contrasts({}, conditions)) == 2
+
+
+def test_crossed_group_axes_is_empty_for_a_within_arm_comparison():
+    """The predicate `validate` refuses on and `cli` derives `paired` from, and it
+    must be ONE expression: a `validate` that refused a shape `cli` recorded as
+    paired is the drift this function exists to prevent.
+
+    Two conditions differing only on a parameter axis share their arm's units, so
+    the list is empty — which is what "paired" means here, whatever `allocation`
+    itself is declared as. `selectors` is what distinguishes a group path from a
+    parameter path, and it is carried on the condition rather than re-derived."""
+    of = Condition(
+        index=1,
+        label="arm=control__method=spearman",
+        values={"arm": "control", "analysis.method": "spearman"},
+        selectors=frozenset({"arm"}),
+    )
+    against = Condition(
+        index=0,
+        label="arm=control__method=pearson",
+        values={"arm": "control", "analysis.method": "pearson"},
+        selectors=frozenset({"arm"}),
+    )
+    assert crossed_group_axes(of, against) == []
+    assert differing_axes(of, against) == ["analysis.method"]  # the control
+
+
+def test_crossed_group_axes_names_the_group_axes_in_declaration_order():
+    """A cross-arm comparison, and the list rather than a boolean: `validate`'s
+    message names the axes and pluralizes on how many, so a boolean would force a
+    second expression to recompute them.
+
+    Order is the sweep's declaration order, inherited from `differing_axes`, which
+    is what makes the emitted message stable across runs rather than set-ordered."""
+    of = Condition(
+        index=1,
+        label="arm=treatment__site=north",
+        values={"arm": "treatment", "site": "north"},
+        selectors=frozenset({"arm", "site"}),
+    )
+    against = Condition(
+        index=0,
+        label="arm=control__site=south",
+        values={"arm": "control", "site": "south"},
+        selectors=frozenset({"arm", "site"}),
+    )
+    assert crossed_group_axes(of, against) == ["arm", "site"]
+
+
+def test_crossed_group_axes_ignores_a_parameter_axis_named_like_a_selector():
+    """A path only crosses arms if it is a DECLARED group axis, which `selectors`
+    is the authority on. A condition differing on a path neither side declares as a
+    selector is paired, and reading `values` alone would call it unpaired — the
+    "answering with a proxy" substitution one axis over.
+
+    The asymmetric case is asserted too: `selectors` is the union of both sides',
+    so a path one side declares and the other does not still counts."""
+    of = Condition(index=1, values={"arm": "treatment"}, label="a", selectors=frozenset())
+    against = Condition(index=0, values={"arm": "control"}, label="b", selectors=frozenset())
+    assert crossed_group_axes(of, against) == []
+    half = Condition(index=2, values={"arm": "treatment"}, label="c", selectors=frozenset({"arm"}))
+    assert crossed_group_axes(half, against) == ["arm"]

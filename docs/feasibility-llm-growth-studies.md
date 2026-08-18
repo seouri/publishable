@@ -1275,6 +1275,50 @@ C1, C2 and C3 remain blocked on `io.reuse_from`, which is unbuilt and unowned an
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2198 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
 
+### Measured on 2026-08-18 against commit `6b9bf119a9706aeb34be7e10a4311280e1b9e5d9` — after H4c
+
+H4c retires `E-DATA-ALLOCATION-CONTRAST` and mints `E-DATA-WEIGHT-ALLOCATION-CONTRAST`. **H4c unblocks
+zero configs, and both counts stay unmoved: six with no remaining core-side blocker, three
+executable.** Neither number changes.
+
+**The measurement, with a control that can fail.** Both refusals fire only on a resolved comparison
+whose two conditions differ on a declared `sweep.groups` axis — the group-axis machinery H4b-2's own
+entry above already measured as untouched by any of the nine. Re-run at this commit rather than
+carried: `grep -c 'allocation: within' docs/feasibility-llm-growth-studies.md` → 3 (two config blocks
+and one prose sentence); `grep -c 'allocation: between' docs/feasibility-llm-growth-studies.md` → 1,
+**read** and confirmed to be the prose sentence above ("The machinery built most recently unblocks
+none of them") listing fields no config in this analysis declares, not a config's own
+`data.units.allocation`; `grep -n 'groups:'
+docs/feasibility-llm-growth-studies.md` → two hits, both `groups: []`. No config here declares a
+group axis, so neither the retired refusal nor the minted one has anything to reach.
+
+**The refusal row.** `E-DATA-ALLOCATION-CONTRAST` retired, `E-DATA-WEIGHT-ALLOCATION-CONTRAST` minted,
+net zero — and no config hits either, the same measurement above states from the other direction.
+**The can-fail control**, on a minimal fixture rather than the nine-config transplant (which has
+nothing to add here, since none of the nine touches `sweep.groups` at all): a `data.units.allocation:
+between` design over a two-level `sweep.groups` axis, declaring a cross-arm `statistics.contrasts`
+entry with no `weight_by`, now validates with an exact empty error set where it used to draw
+`E-DATA-ALLOCATION-CONTRAST` alone — confirmed by this repo's own
+`tests/test_validate.py::test_a_contrast_beside_groups_and_cluster_by_now_validates_clean`. The same
+shape with `weight_by` declared instead of `cluster_by` draws exactly
+`{E-DATA-WEIGHT-ALLOCATION-CONTRAST}` —
+`tests/test_validate.py::test_a_weighted_cross_arm_contrast_draws_the_weight_allocation_refusal`. A
+measurement that could not fail either way would not be one.
+
+**The sentence that must not be roundable: a retired-refusal count is not an executable-run count.**
+Both review verdicts on H4b-1 faulted exactly that conflation, and a *correction* to a report on
+H4b-2 inverted the same two numbers and named a **retired** refusal as live — this entry states the
+six and the three in those words, unmoved, rather than letting "H4c retires a refusal" round up to
+"H4c unblocks a config."
+
+**Unchanged and still outstanding**, carried from the H4b-2 entry rather than re-derived: E3, E4, E6,
+C1, C2 and C3 remain blocked on `io.reuse_from`; all three C configs still meet a `report_by` level's
+recorded-column interval staying `t_over_units` under a declared `resample`, re-declined in writing
+by H4c (`docs/superpowers/spec-defects.md`) and owned by **H4d**, terminally.
+
+Full local `pytest`/`ruff`/`mypy` gates at this commit: 2272 passed + 1 skipped + 2 xfailed, ruff and
+mypy both clean.
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.

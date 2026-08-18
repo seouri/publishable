@@ -6688,6 +6688,35 @@ def test_a_thin_contrast_stratum_warns_before_the_run(write_config, tmp_path):
     assert "2 of 12 units" in message
 
 
+def test_the_validate_time_thin_warning_names_no_key_it_cannot_promise(write_config, tmp_path):
+    """The validate-side emit's message asserted "The run counts `n_paired` over
+    the two sides' completed units", which is false of an unpaired contrast — the
+    run counts `n_of` and `n_against` there. This check cannot tell the two apart:
+    it reads the roster units matching the stratum, before any condition exists.
+
+    So the false half is DELETED rather than rewritten into a conditional it
+    cannot evaluate — a rewrite invents and a deletion cannot — and the surviving
+    claim, that attrition can only make the denominator smaller, is true of both
+    readings. The stratum and the count stay asserted, because they are what the
+    warning is for.
+
+    Fixture copied from `test_a_thin_contrast_stratum_warns_before_the_run`, which
+    asserts `"2 of 12 units"` in this same message."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=2)),
+            "limits": {"min_reported_n": 10},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {"contrasts": _contrast_within("rare")},
+        }
+    )
+    message = messages_by_code(path)["W-STATS-CONTRAST-THIN"]
+    assert "units match" in message  # the control
+    assert "attrition can only make" in message
+    assert "n_paired" not in message
+
+
 def test_a_populated_contrast_stratum_does_not_warn(write_config, tmp_path):
     """Exactly at the floor is not below it — the same boundary
     `W-STATS-REPORTBY-THIN`'s `m` level pins. Without this, a check that dropped
@@ -7880,29 +7909,33 @@ def test_the_cluster_warning_is_skipped_without_a_roster():
     assert not c.findings
 
 
-# --- a contrast whose two sides differ on a group axis has no unpaired ------
-# construction ----------------------------------------------------------------
+# --- a contrast whose two sides differ on a group axis now computes an ------
+# unpaired interval, and only a WEIGHTED one is still refused -----------------
 #
-# `E-DATA-ALLOCATION-CONTRAST` refuses a *combination* a resolved comparison
-# family can carry, not a declaration. It reads each resolved comparison
-# individually rather than the family's size, because a group axis does not
-# affect every contrast alike — a `groups × grid` design's within-arm
-# comparisons (control-pearson vs. control-spearman) are paired and computable,
+# `E-DATA-ALLOCATION-CONTRAST` is retired (task 18): a cross-arm comparison now
+# reaches `welch_t_over_units[_clustered]` or the unpaired percentile forms
+# instead of being refused. `E-DATA-WEIGHT-ALLOCATION-CONTRAST` (task 9) is
+# what remains — it refuses a *combination* a resolved comparison family can
+# carry (a declared `weight_by` beside a cross-arm comparison, for which no
+# construction exists), not a declaration, and it reads each resolved
+# comparison individually rather than the family's size, because a group axis
+# does not affect every contrast alike — a `groups × grid` design's within-arm
+# comparisons (control-pearson vs. control-spearman) are paired regardless,
 # sharing the same arm's units, while its cross-arm ones (control-pearson vs.
-# treatment-pearson) are not, so the guard has to read each resolved comparison
-# on its own rather than the family's size.
+# treatment-pearson) are unpaired, so the guard has to read each resolved
+# comparison on its own rather than the family's size.
 
 
 def test_a_group_axis_with_no_comparison_is_untouched(write_config):
     """The first control: a declared `groups` axis with no baseline and no
     `statistics.contrasts` resolves no comparison at all — `resolve_contrasts`
-    returns nothing to compare, so there is no unpaired delta for this guard to
-    prevent and it must draw nothing new. This is the plain groups-axis config
-    already exercised elsewhere in this file (`E-DATA-ALLOCATION-WITHIN-ARMS`,
-    since no `allocation` is declared beside the axis), and its finding set is
-    the exact one it has today — asserted here as a whole set, not a
-    membership check, so a change that adds `E-DATA-ALLOCATION-CONTRAST` to it
-    would be caught."""
+    returns nothing to compare, so there is no unpaired delta and no weight to
+    read, and this guard must draw nothing new. This is the plain groups-axis
+    config already exercised elsewhere in this file
+    (`E-DATA-ALLOCATION-WITHIN-ARMS`, since no `allocation` is declared beside
+    the axis), and its finding set is the exact one it has today — asserted
+    here as a whole set, not a membership check, so a change that adds
+    `E-DATA-WEIGHT-ALLOCATION-CONTRAST` to it would be caught."""
     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
     assert codes(write_config({"sweep": {"groups": axis}})) == {
         "E-DATA-ALLOCATION-WITHIN-ARMS",
@@ -7927,30 +7960,27 @@ def test_a_within_allocation_contrast_is_untouched(write_config):
     assert codes(path) == set()
 
 
-def test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not(
+def test_a_generated_cross_arm_comparison_now_validates_clean(
     write_config,
 ):
-    """The third control, and the one the guard exists for: a `groups × grid`
-    design whose baseline fixes the group axis to one arm (`control`) rather
-    than per-cell. That baseline is itself refused (`E-SWEEP-BASELINE-GROUP`),
-    and deliberately so — it is the *only* declaration that makes a generated
-    `vs_baseline` cross arms, since every other baseline expands over the group
-    axis and targets each condition's own cell. `validate` collects rather than
-    stops, so the per-comparison guard still runs here and is what this test
-    reads; the route that carries this code alone is the declared contrast in
-    the test below. `sweep.expand` then renders one baseline row and
+    """Task 18's conversion: a `groups × grid` design whose baseline fixes the
+    group axis to one arm (`control`) rather than per-cell. That baseline is
+    itself refused (`E-SWEEP-BASELINE-GROUP`), and deliberately so — it is the
+    *only* declaration that makes a generated `vs_baseline` cross arms, since
+    every other baseline expands over the group axis and targets each
+    condition's own cell. `sweep.expand` then renders one baseline row and
     `contrasts.resolve_contrasts` compares every other condition against it —
     including the `treatment` ones, which is what makes the baseline-generated
     route (not just a declared `statistics.contrasts` entry) produce a
     cross-arm comparison.
 
-    Four conditions result: `control/spearman` and `control/kendall`, each
-    differing from the `control/pearson` baseline on `analysis.method` alone
-    (same arm, paired, untouched), and `treatment/spearman` and
-    `treatment/kendall`, each differing on `arm` too (cross-arm, disjoint
-    units, refused). The count discriminates the guard from a
-    `comparisons > 0` one: four resolved comparisons, and the code fires on
-    exactly the two that actually cross arms — not zero, and not four."""
+    That cross-arm comparison used to draw `E-DATA-ALLOCATION-CONTRAST`
+    (retired in task 18); it now computes an unpaired interval instead, so this
+    design's only remaining errors are the baseline refusal itself and the
+    allocation warning every config declaring a `groups` axis with no
+    `allocation` earns — asserted as the exact set, which is what proves the
+    cross-arm comparisons stopped reporting anything new rather than merely
+    stopped reporting THIS code."""
     path = write_config(
         {
             "sweep": {
@@ -7960,28 +7990,21 @@ def test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_n
             }
         }
     )
-    c = Collector()
-    validate_config(path, c)
-    found = [f for f in c.findings if f.code == "E-DATA-ALLOCATION-CONTRAST"]
-    assert len(found) == 2
-    named = {f.message for f in found}
-    assert any("'arm=treatment__method=spearman'" in m for m in named)
-    assert any("'arm=treatment__method=kendall'" in m for m in named)
-    # Neither within-arm comparison is named by any finding.
-    assert not any("'arm=control__method=spearman'" in m for m in named)
-    assert not any("'arm=control__method=kendall'" in m for m in named)
-    for message in named:
-        assert "differ on group axis arm" in message
+    assert _error_codes(path) == {"E-SWEEP-BASELINE-GROUP", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
-def test_a_declared_contrast_across_arms_is_refused(write_config):
-    """The other source of a comparison: a `statistics.contrasts` entry naming
-    two conditions on either side of a `groups` axis directly, with no baseline
-    involved at all. This is the declared-contrast branch the generated one
-    above does not exercise — `resolve_contrasts` reaches it through the
-    `statistics.contrasts` loop rather than through a baseline match, so a
-    mutation that only breaks the baseline-generated path would still fail
-    this test."""
+def test_a_declared_contrast_across_arms_now_validates_clean(write_config):
+    """Task 18's conversion of the other source of a comparison: a
+    `statistics.contrasts` entry naming two conditions on either side of a
+    `groups` axis directly, with no baseline involved at all. This is the
+    declared-contrast branch the generated one above does not exercise —
+    `resolve_contrasts` reaches it through the `statistics.contrasts` loop
+    rather than through a baseline match, so a mutation that only breaks the
+    baseline-generated path would still fail this test. It used to draw
+    `E-DATA-ALLOCATION-CONTRAST`; that refusal is retired, and the cross-arm
+    contrast now computes, so this design's only remaining error is the
+    allocation warning every config declaring a `groups` axis with no
+    `allocation` earns."""
     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
     path = write_config(
         {
@@ -7991,13 +8014,7 @@ def test_a_declared_contrast_across_arms_is_refused(write_config):
             },
         }
     )
-    c = Collector()
-    validate_config(path, c)
-    found = [f for f in c.findings if f.code == "E-DATA-ALLOCATION-CONTRAST"]
-    assert len(found) == 1
-    assert "'arm=treatment'" in found[0].message
-    assert "'arm=control'" in found[0].message
-    assert "differ on group axis arm" in found[0].message
+    assert _error_codes(path) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 # --- `groups × cluster_by` — task 19 Step 3 ------------------------------------
@@ -8084,25 +8101,24 @@ def test_groups_and_cluster_by_compose_with_no_comparison(write_config, tmp_path
     assert _error_codes(write_config(_groups_cluster_doc())) == set()
 
 
-def test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal(
-    write_config, tmp_path
-):
-    """The can-fail control for the clean composition above: adding a declared
-    `statistics.contrasts` entry across the two arms to the SAME fixture must
-    draw `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two sides are disjoint
-    arms), asserted as the exact set — the combination of a `groups` axis and
-    `cluster_by` is itself legal, which this pins alongside the refusal it does
-    draw. `E-DATA-CLUSTER-CONTRAST` is gone as of task 14: a clustered
-    comparison now validates on its own, so this design's only remaining
-    finding is the cross-arm one.
+def test_a_contrast_beside_groups_and_cluster_by_now_validates_clean(write_config, tmp_path):
+    """Task 17b's conversion, replacing what used to be the can-fail control for
+    the clean composition above: adding a declared `statistics.contrasts` entry
+    across the two arms to the SAME fixture used to draw
+    `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two sides are disjoint arms).
+    That refusal is retired (task 18): a cross-arm contrast beside `cluster_by`
+    now COMPUTES, through `welch_t_over_units_clustered` or its percentile
+    counterpart, so this design validates fully clean — asserted as the exact
+    empty set, which is what proves nothing else in this fixture newly reports
+    either. `E-DATA-CLUSTER-CONTRAST` was already gone as of task 14.
 
-    This is also H4b-2 task 5's behavioural tripwire (fix round 1, Minor 1/2):
-    it is the shape a declared cross-arm contrast beside `cluster_by` takes,
-    and it is the one this repo's two-shape claim needs — a *generated*
-    cross-arm comparison earning the same allocation refusal is pinned
-    separately by
-    `test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not`
-    and `test_a_declared_contrast_across_arms_is_refused`, neither of which
+    This is also H4b-2 task 5's behavioural tripwire (fix round 1, Minor 1/2),
+    one axis over: it is the shape a declared cross-arm contrast beside
+    `cluster_by` takes, and it is the one this repo's two-shape claim needs — a
+    *generated* cross-arm comparison taking the same route is pinned separately
+    by
+    `test_a_generated_cross_arm_comparison_now_validates_clean`
+    and `test_a_declared_contrast_across_arms_now_validates_clean`, neither of which
     declares `cluster_by`. A prior test duplicating this fixture under a name
     that quantified over both shapes was deleted rather than kept beside it —
     it discriminated nothing this one does not."""
@@ -8112,7 +8128,136 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal(
             "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
         }
     )
-    assert _error_codes(write_config(doc)) == {"E-DATA-ALLOCATION-CONTRAST"}
+    assert _error_codes(write_config(doc)) == set()
+
+
+def _groups_weight_csv() -> str:
+    """`_groups_cluster_csv`'s roster with a weight column instead of a cluster one.
+
+    A separate builder rather than a column added to that one: its own tests assert
+    a documented arm/site crossing, and a roster that grew a column would be a
+    second fixture wearing the first one's name."""
+    rows = ["patient_id,arm,sampling_weight"]
+    for arm, keys in _GROUPS_CLUSTER_ARMS.items():
+        for key in keys:
+            rows.append(f"{key},{arm},{2 if arm == 'control' else 3}")
+    return "\n".join(rows) + "\n"
+
+
+def _groups_weight_doc(**extra) -> dict:
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm", "sampling_weight"],
+            "weight_by": "sampling_weight",
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_groups_and_weight_by_compose_with_no_comparison(write_config, tmp_path):
+    """The can-fail control, and it must come first: the combination ITSELF is
+    legal, so a refusal that fired here would be refusing a declaration rather than
+    a combination. A `between` + `by_attribute` + `weight_by` config over a roster
+    whose arms carry different weights validates fully clean."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    assert _error_codes(write_config(_groups_weight_doc())) == set()
+
+
+def test_a_weighted_cross_arm_contrast_draws_the_weight_allocation_refusal(write_config, tmp_path):
+    """`E-DATA-WEIGHT-ALLOCATION-CONTRAST`. A Welch *t* on two weighted means needs
+    Kish's effective size PER SIDE — two df inputs where the paired form needed one,
+    on the dimension where a wrong choice hides best — so the composition is refused
+    rather than approximated, on the precedent `E-DATA-WEIGHT-CLUSTER-CONTRAST` set.
+
+    Asserted as the exact set of one, task 9's promised flip: `E-DATA-ALLOCATION-
+    CONTRAST` is retired (task 18), so an unweighted cross-arm comparison beside
+    this one would now compute rather than being refused, and this code is the
+    only thing left for a weighted one to draw."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        statistics={
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
+        }
+    )
+    assert _error_codes(write_config(doc)) == {"E-DATA-WEIGHT-ALLOCATION-CONTRAST"}
+
+
+def test_a_weighted_within_arm_contrast_draws_neither_refusal(write_config, tmp_path):
+    """The refusal is per comparison, not per config. A `groups × grid` design whose
+    declared contrast stays inside one arm shares that arm's units, so it is paired
+    and weightable — `weighted_paired_t_over_units` is exactly the construction it
+    gets — and a guard firing on `weight_by` beside a group axis would refuse a
+    design core computes correctly today.
+
+    This is the assertion that separates the two readings, and without it a guard
+    keyed on the declaration rather than on the comparison passes every other test
+    in this file."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        sweep={
+            "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+            "grid": {"analysis.method": ["pearson", "spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "within_control",
+                    "of": "arm=control__method=spearman",
+                    "against": "arm=control__method=pearson",
+                }
+            ]
+        },
+    )
+    assert "E-DATA-WEIGHT-ALLOCATION-CONTRAST" not in _error_codes(write_config(doc))
+
+
+def test_a_weighted_clustered_cross_arm_contrast_draws_both_composition_refusals(
+    write_config, tmp_path
+):
+    """Two independent compositions, both refused, and `validate` collects rather
+    than aborting — so the finding set carries both. `E-DATA-WEIGHT-CLUSTER-
+    CONTRAST` fires on an unpaired comparison too, which H4c-SCOPING probed and
+    which is why H4c inherits that composition as a standing refusal rather
+    than as work. `E-DATA-ALLOCATION-CONTRAST` is retired (task 18): an
+    unweighted cross-arm comparison here would compute rather than being
+    refused, so it no longer joins these two."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        statistics={
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
+        }
+    )
+    doc["data.units"]["cluster_by"] = "arm"
+    found = _error_codes(write_config(doc))
+    assert "E-DATA-WEIGHT-ALLOCATION-CONTRAST" in found
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" in found
+
+
+def test_the_weight_allocation_refusal_has_both_of_its_rows():
+    """A refusal of a COMBINATION carries a § Validation row and a § Errors row —
+    the two ends of one check — which is what distinguishes it from a
+    `-UNSUPPORTED` build-family code and what decides that it outlives H4c. The
+    twin of `test_the_weight_cluster_refusal_has_both_of_its_rows` in
+    `tests/test_cli.py`, moved here beside the guard's own tests.
+
+    Each row is located by what it is rather than by position: the § Errors row by
+    its final cell, the § Validation row by the code it names."""
+    reference_md = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+    lines = reference_md.read_text().split("\n")
+    errors_row = next(
+        line for line in lines if line.rstrip().endswith("| `E-DATA-WEIGHT-ALLOCATION-CONTRAST` |")
+    )
+    assert "weight_by" in errors_row
+    validation_row = next(
+        line for line in lines if line.startswith("| Weighted unpaired deltas aren't computed |")
+    )
+    assert "group axis" in validation_row
 
 
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
@@ -8919,9 +9064,8 @@ def test_the_one_level_control_arm_baseline_reports_where_it_once_validated_clea
     Driven before this refusal existed, `validate` reported **zero findings** and
     `run` exited 0 while `conditions/00_baseline` and `conditions/01_arm=control`
     came out byte-identical at every file — the same 8 units handed to both, on
-    all five seed repeats. Nothing else in the suite reaches that config: at two
-    levels `E-DATA-ALLOCATION-CONTRAST` masks it, and at one level there is no
-    cross-arm comparison for that code to read.
+    all five seed repeats. Nothing else in the suite reaches that config: at one
+    level there is no cross-arm comparison at all.
 
     `test_by_attribute_assignment_is_accepted` is the control that must stay
     silent — the same fixture without the baseline, whose finding set is empty —
@@ -8948,10 +9092,10 @@ def test_a_baseline_may_not_fix_a_group_level(write_config):
     byte-identical at every file, across all five seed repeats, with `validate`
     reporting zero findings and `run` exiting 0 — `experimental-designs.md`
     § Mistakes core prevents' *two identical measurements reported as two arms*,
-    verbatim. At two or more levels `E-DATA-ALLOCATION-CONTRAST` fires beside
-    it, which is why the one-level shape below is asserted as its own exact set:
-    that refusal is temporary (it lifts with the unpaired estimator family) and
-    at one level it reaches nothing.
+    verbatim. At two or more levels the cross-arm comparison the baseline
+    generates now computes an unpaired interval rather than being refused,
+    which is why the one-level shape below is asserted as its own exact set:
+    at one level there is no cross-arm comparison to reach at all.
 
     A group level is still not a parameter path, so `_path_resolves` must not
     ask `parameter_spec` about it — this reports the level, never
@@ -8995,13 +9139,13 @@ def test_a_baseline_may_not_fix_a_group_level(write_config):
     assert "arm" in message
     assert "twice" in message
 
-    # And at two levels, where the temporary cross-arm refusal fires beside it.
+    # And at two levels, where the cross-arm comparison the baseline generates
+    # now computes rather than being refused, so no third code joins these two.
     assert _error_codes(
         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
     ) == {
         "E-SWEEP-BASELINE-GROUP",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
-        "E-DATA-ALLOCATION-CONTRAST",
     }
 
     # Control 1: a parameter-path baseline beside the same axis is legal.
@@ -9036,7 +9180,6 @@ def test_a_baseline_may_not_fix_a_group_level(write_config):
         "E-SWEEP-BASELINE-GROUP",
         "E-SWEEP-PATH-UNKNOWN",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
-        "E-DATA-ALLOCATION-CONTRAST",
     }
 
     # Control 4: `ablate` takes the sibling code alone, and the parameter-axis
@@ -9070,9 +9213,26 @@ def test_a_baseline_may_not_fix_a_group_level(write_config):
     ) == {
         "E-SWEEP-ABLATE-BASELINE-GROUP",
         "E-SWEEP-ABLATE-CROSSED",
-        "E-DATA-ALLOCATION-CONTRAST",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
     }
+
+
+def test_the_baseline_group_refusal_rests_on_the_peers_rule_alone(write_config):
+    """`E-SWEEP-BASELINE-GROUP` is PERMANENT and its message promised the cross-arm
+    delta "until the unpaired estimators exist" — a temporary clause inside a
+    permanent refusal, and one that is now simply false. The refusal rests on the
+    peers rule: the arms of a group axis are peers and a baseline designating one of
+    them is not a reference the expansion can give.
+
+    Asserted on the surviving text plus the absence of the temporary clause, so a
+    rewrite cannot re-seed it as a paraphrase. The control is the peers claim, which
+    must be present."""
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    path = write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
+    message = messages_by_code(path)["E-SWEEP-BASELINE-GROUP"]
+    assert "peers" in message  # the control
+    assert "unpaired" not in message
+    assert "until" not in message
 
 
 def test_two_group_axes_may_not_share_a_name(write_config):
@@ -9267,15 +9427,13 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
     beside the declared `cohort` axis, so `E-DATA-ALLOCATION-WITHIN-ARMS` fires
     alongside every one of them.
 
-    The second control also carries `E-DATA-ALLOCATION-CONTRAST`: its baseline
-    fixes `cohort` to `derivation` and leaves `analysis.method` free, so
-    `sweep.expand` renders one per-cell baseline per method value **within
-    `derivation` alone** — `validation`'s two conditions have no baseline of
-    their own and are compared against `derivation`'s, a cross-cohort,
-    disjoint-units comparison for each. That is the generated route to that
-    code, and it is reachable only from a baseline fixing a group level, which
-    is exactly why it is co-reported with the sibling refusal here rather than
-    standing alone."""
+    The second control's baseline fixes `cohort` to `derivation` and leaves
+    `analysis.method` free, so `sweep.expand` renders one per-cell baseline per
+    method value **within `derivation` alone** — `validation`'s two conditions
+    have no baseline of their own and are compared against `derivation`'s, a
+    cross-cohort, disjoint-units comparison for each. That comparison now
+    computes an unpaired interval rather than being refused, so this control's
+    exact set carries only the sibling refusal and the allocation warning."""
     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
     assert _error_codes(
         write_config(
@@ -9317,7 +9475,6 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
     ) == {
         "E-SWEEP-BASELINE-GROUP",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
-        "E-DATA-ALLOCATION-CONTRAST",
     }
 
 
