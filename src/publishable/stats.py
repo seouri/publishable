@@ -72,6 +72,29 @@ def _t_critical(df: float, confidence: float) -> float:
     return float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=df))
 
 
+def _sample_variance(values: Sequence[float], mean: float) -> float:
+    """The unbiased sample variance, Σ(v − v̄)² / (n − 1) — the one copy in this module.
+
+    Extracted for the reason `_t_critical` gives for itself: one expression rather
+    than one per construction, because two copies is how two intervals over the
+    same data come to disagree about what the dispersion *is*, and a drift there is
+    invisible in every output that isn't compared against the other.
+    `welch_t_over_units` puts this in an interval and `cohens_ds` pools two of them
+    into a standardizer, and § Statistical reporting's *d*s-pools-where-Welch-doesn't
+    asymmetry is only readable if both rest on the same quantity.
+
+    Takes the mean rather than recomputing it: every caller already holds one, and
+    a variance centred on a different mean than the point estimate is the failure
+    `_weighted_mean` exists to prevent one level over.
+
+    Undefined below two values — every caller floors above that first, which is
+    where the "no dispersion to describe" refusal belongs. `weighted_t_over_units`
+    and `cohens_dz` deliberately do NOT call this: their denominators are
+    `Σw − Σw²/Σw` and a difference vector's own, which are different quantities.
+    """
+    return sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+
+
 def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval | None:
     """Student's t on the per-unit values, df = completed units − 1.
 
@@ -82,7 +105,7 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     if n < 2:
         return None
     mean = sum(values) / n
-    variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+    variance = _sample_variance(values, mean)
     sem = math.sqrt(variance) / math.sqrt(n)
     half = _t_critical(n - 1, confidence) * sem
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
@@ -388,6 +411,67 @@ def weighted_t_over_units_clustered(
     variance = (groups / (groups - 1)) * meat / (total * total)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units_clustered")
+
+
+def welch_t_over_units(
+    of: Sequence[float], against: Sequence[float], confidence: float = 0.95
+) -> Interval | None:
+    """Welch's *t* on two independent condition means, df from Welch-Satterthwaite.
+
+    `reference.md` § Statistical reporting: "The unpaired counterpart of the first:
+    unequal variances are assumed rather than pooled, because two arms need be
+    neither the same size nor the same spread." The contrast's interval is its own
+    construction over the two sides, never a difference of the two sides' own
+    intervals — `paired_t_over_units`' argument, unchanged by the sides being
+    disjoint.
+
+    **There is no pooling anywhere in this construction**, and that is the whole
+    content of the row. Pooling the two variances gives a plausible number that is
+    wrong in a direction unequal spreads decide, and at equal per-side sizes the
+    pooled and Welch standard errors are algebraically IDENTICAL — so a fixture
+    with equal arms cannot tell the two apart, and no test of this function may use
+    one.
+
+    **The df is the construction, not a detail of it.** Welch-Satterthwaite over
+    the two per-side variances-of-the-mean is what makes the interval honest about
+    two spreads; `n_of + n_against − 2` is the pooled reading this row refuses, and
+    `min(n) − 1` throws a side's information away. `cohens_ds` pools where this
+    deliberately doesn't, and § Statistical reporting states that asymmetry is not
+    an inconsistency: an interval is an inference and gets the assumption-light
+    construction, while *d* is a descriptive standardization whose conventional
+    denominator *is* the pooled one.
+
+    Returns `None` below two values on either side, matching `t_over_units`' floor
+    read across two samples: df would be zero on that side and there is no
+    dispersion to describe. Reporting a point with no interval is honest; inventing
+    one is not. Returns `None` where BOTH sides are constant, because the combined
+    variance is then exactly zero and the df is 0/0 — one side constant is not
+    refused, since the other still has dispersion and the difference of two means
+    still has a sampling distribution.
+
+    Takes two value vectors and nothing else, for the reason
+    `paired_t_over_units_clustered` takes a label vector: `correction.Member`
+    carries them as `UnpairedEvidence`, and both callers hold two per-side vectors
+    with no roster between them.
+    """
+    n_of, n_against = len(of), len(against)
+    if n_of < 2 or n_against < 2:
+        return None
+    mean_of = sum(of) / n_of
+    mean_against = sum(against) / n_against
+    # The variance OF THE MEAN on each side, s²/n — what Welch adds rather than
+    # pools, and what Welch-Satterthwaite's df is a function of.
+    var_of = _sample_variance(of, mean_of) / n_of
+    var_against = _sample_variance(against, mean_against) / n_against
+    total = var_of + var_against
+    if total <= 0.0:
+        return None
+    df = (
+        total * total / (var_of * var_of / (n_of - 1) + var_against * var_against / (n_against - 1))
+    )
+    delta = mean_of - mean_against
+    half = _t_critical(df, confidence) * math.sqrt(total)
+    return Interval(low=delta - half, high=delta + half, method="welch_t_over_units")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:

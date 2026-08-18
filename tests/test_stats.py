@@ -11,6 +11,7 @@ from publishable.stats import (
     PairedResample,
     UnitTable,
     _percentile_ranks,
+    _sample_variance,
     _t_critical,
     cohens_dz,
     collapse_repeats,
@@ -34,6 +35,7 @@ from publishable.stats import (
     t_over_units_clustered,
     weighted_t_over_units,
     weighted_t_over_units_clustered,
+    welch_t_over_units,
 )
 
 
@@ -1017,6 +1019,84 @@ def test_fewer_than_two_values_has_no_interval(values):
 def test_zero_variance_yields_a_degenerate_but_real_interval():
     iv = t_over_units([5.0, 5.0, 5.0])
     assert iv is not None and iv.low == iv.high == 5.0
+
+
+_WELCH_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
+_WELCH_AGAINST = [5.0] * 12 + [15.0] * 12 + [10.0]
+
+
+def test_the_welch_t_assumes_neither_shared_units_nor_equal_variances():
+    """Fixture A: `of` is 5 units at mean 20 with s² 5, `against` is 25 units at
+    mean 10 with s² 25 — so s²/n is exactly 1 on each side and BOTH sides
+    contribute comparably to the Welch variance. That balance is the whole design
+    of the fixture: where one side dominates, Welch-Satterthwaite's df is driven
+    onto `min(df_of, df_against)` and a `min(n) − 1` mutant becomes invisible. The
+    spec's own first draft did exactly that — correct 17.2405 against the mutant's
+    17.2614, 0.1 % apart.
+
+    Delta 10, SE √2, df 96/7. Four wrong readings give four other half-widths and
+    none is adjacent: the pooled variance at df 28 gives 4.7221, the Welch variance
+    at `min(n) − 1` gives 3.9265, at `max(n) − 1` gives 2.9188, and at
+    `n_of + n_against − 2` gives 2.8969. The tightest is 4.7 % from correct, which
+    no rounding produces.
+
+    **A Welch interval that coincides with a pooled one proves nothing** — equal
+    per-side sizes make the two standard errors algebraically identical — so the
+    unequal sizes here are load-bearing rather than incidental."""
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    assert interval.method == "welch_t_over_units"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(10.0)
+    assert half == pytest.approx(3.039125537798091)
+
+
+def test_the_welch_t_is_not_the_pooled_t_on_the_same_two_sides():
+    """The control that must report, and the number a pooled mutant lands on. The
+    pooled standard error on the same data is
+    √(((4·5) + (24·25)) / 28 · (1/5 + 1/25)) and at df 28 gives a half-width of
+    4.7221 — 55 % wider. A test asserting only that an interval came back, or only
+    that it brackets the delta, passes under either construction."""
+    pooled_variance = ((5 - 1) * 5.0 + (25 - 1) * 25.0) / (5 + 25 - 2)
+    pooled_se = math.sqrt(pooled_variance * (1 / 5 + 1 / 25))
+    assert _t_critical(28, 0.95) * pooled_se == pytest.approx(4.722138614325821)
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    assert (interval.high - interval.low) / 2 != pytest.approx(4.722138614325821)
+
+
+def test_the_welch_t_refuses_the_degenerate_inputs_its_siblings_refuse():
+    """`None` below two values on EITHER side — df would be zero on that side and
+    there is no dispersion to describe, which is `t_over_units`' own floor read
+    across two samples. `None` also where both sides are constant: the combined
+    variance is then exactly zero and Welch-Satterthwaite's df is 0/0, so the
+    honest answer is a point with no interval rather than a `ZeroDivisionError`.
+
+    One side constant is NOT refused — the other side still has dispersion and the
+    difference of two means still has a sampling distribution — which is the
+    asymmetry a copied `or` guard would get wrong."""
+    assert welch_t_over_units([1.0], [1.0, 2.0, 3.0]) is None
+    assert welch_t_over_units([1.0, 2.0, 3.0], [1.0]) is None
+    assert welch_t_over_units([2.0, 2.0, 2.0], [1.0, 1.0, 1.0]) is None
+    one_side_flat = welch_t_over_units([2.0, 2.0, 2.0], [1.0, 2.0, 3.0])
+    assert one_side_flat is not None
+    assert one_side_flat.high > one_side_flat.low
+
+
+def test_the_extracted_sample_variance_leaves_t_over_units_where_it_was():
+    """The extraction is pure code motion and this is the oracle that says so.
+    `t_over_units` over `_WELCH_AGAINST` must give the same half-width it gave
+    before `_sample_variance` existed — mean 10, s² 25, n 25, so
+    t(0.975, 24)·√(25/25) = 2.0638985616280205.
+
+    Pinned here rather than trusted, because a `(n - 1)` that became `n` in the
+    move would narrow every unweighted interval in the package by a few per cent
+    and nothing else in this module would notice."""
+    plain = t_over_units(_WELCH_AGAINST)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(2.0638985616280205)
+    assert _sample_variance(_WELCH_AGAINST, 10.0) == pytest.approx(25.0)
 
 
 def test_a_weighted_interval_is_wider_than_the_unweighted_one():
