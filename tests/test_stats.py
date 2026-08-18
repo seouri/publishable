@@ -1507,6 +1507,142 @@ def test_the_paired_clustered_t_refuses_the_degenerate_inputs_its_sibling_refuse
     assert (singletons.high - singletons.low) == pytest.approx(plain.high - plain.low)
 
 
+def _paired_cluster_fixture() -> tuple[dict, dict, list[str], dict[str, str]]:
+    """12 keys in 3 clusters of 2/4/6, `of` minus `against` giving 1.0/5.0/9.0.
+
+    Unequal sizes are load-bearing twice over: they make a replicate's pooled row
+    count VARY (6 to 18) where a unit-drawing mutant returns a fixed 12, and they
+    keep the correct and buggy cluster counts different. Equal sizes make both
+    discriminators invisible."""
+    keys = [f"u{i:02d}" for i in range(12)]
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    of = {k: {"m": v} for k, v in zip(keys, values, strict=True)}
+    against = {k: {"m": 0.0} for k in keys}
+    return of, against, keys, dict(zip(keys, labels, strict=True))
+
+
+def test_the_paired_clustered_percentile_draws_whole_clusters():
+    """`reference.md` § Statistical reporting: under `cluster_by` "the percentile
+    forms resample whole clusters — jointly across both sides when paired".
+
+    The row count is asserted directly rather than inferred from the interval,
+    because it is the discriminator a mutant drawing UNITS cannot fake: three
+    clusters drawn with replacement from sizes 2/4/6 pool between 6 and 18 rows,
+    and every count is one of the sums those sizes can make. A unit-drawing mutant
+    returns exactly 12 every time.
+
+    The `method` is the caller's string, as it is for the two spellings this
+    construction already emits."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(list(table.unit)))
+        return sum(table.m) / len(table.m)
+
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        compute,
+        seed=11,
+        draws=400,
+        method="paired_percentile_over_units_clustered",
+        clusters=clusters,
+    )
+    assert got.interval is not None
+    assert got.interval.method == "paired_percentile_over_units_clustered"
+    reachable = {2, 4, 6}
+    assert set(seen) != {12}
+    assert min(seen) == 6 and max(seen) == 18
+    assert all(
+        count in {x + y + z for x in reachable for y in reachable for z in reachable}
+        for count in seen
+    )
+
+
+def test_the_paired_clustered_percentile_draws_a_cluster_within_its_stratum():
+    """`stratify_by` says what an independent draw is, `cluster_by` says the draw
+    IS a cluster, and composed, a cluster is drawn within its own stratum — the
+    equality `percentile_over_units_clustered` already keeps one level up.
+
+    Stratum `A` holds the two small clusters (2 and 4 units) and stratum `B` the
+    one large one (6). Each stratum contributes as many clusters as it holds, so
+    every replicate pools 6 rows from `B` and between 4 and 8 from `A`: the row
+    count is confined to {10, 12, 14, 16}, which an unstratified clustered draw
+    (6 to 18, and 18 is reachable) is not."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    strata = {k: ("A" if clusters[k] in {"a", "b"} else "B") for k in keys}
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(list(table.unit)))
+        return sum(table.m) / len(table.m)
+
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        compute,
+        seed=11,
+        draws=400,
+        strata=strata,
+        method="paired_percentile_over_units_clustered",
+        clusters=clusters,
+    )
+    assert got.interval is not None
+    assert set(seen) <= {10, 12, 14, 16}
+    assert len(set(seen)) > 1  # the control: the draw really varies
+
+
+def test_a_cluster_carrying_two_stratum_values_is_refused_on_a_contrast_draw_too():
+    """The same fault `percentile_over_units_clustered` raises per condition, at
+    the same code — § Errors carries one row per code covering every emit site, so
+    this needs no new identifier. A cluster is indivisible, so one carrying two
+    stratum values can be dealt to neither."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    strata = {k: ("A" if k < "u06" else "B") for k in keys}
+    strata[keys[7]] = "A"  # inside cluster `c`, whose other units are `B`
+    with pytest.raises(ContractError) as exc:
+        paired_percentile_of_derived(
+            of,
+            against,
+            keys,
+            lambda t: sum(t.m) / len(t.m),
+            lambda t: sum(t.m) / len(t.m),
+            seed=11,
+            draws=400,
+            strata=strata,
+            clusters=clusters,
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+
+
+def test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was():
+    """The regression the uniform draw shape owes. With `clusters=None` and no
+    strata the drawn key list must be `[keys[rng.randrange(n)] for _ in range(n)]`
+    against a fresh `random.Random(seed)` — same count of `randrange` calls, same
+    bounds, same order. Asserted against a recomputed sequence rather than against
+    a captured constant, so it pins the RNG contract instead of one seed's output."""
+    of, against, keys, _ = _paired_cluster_fixture()
+    drawn: list[list[str]] = []
+
+    def compute_of(table):
+        drawn.append(list(table.unit))
+        return sum(table.m) / len(table.m)
+
+    def compute_against(table):
+        return sum(table.m) / len(table.m)
+
+    paired_percentile_of_derived(of, against, keys, compute_of, compute_against, seed=5, draws=200)
+    rng = random.Random(5)
+    expected = [[keys[rng.randrange(12)] for _ in range(12)] for _ in range(200)]
+    assert drawn == expected
+
+
 def test_the_weighted_clustered_interval_is_the_weighted_cr1_sandwich():
     """Computed as exact rationals away from this module, then rendered:
 
