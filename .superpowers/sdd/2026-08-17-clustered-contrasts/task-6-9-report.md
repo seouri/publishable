@@ -114,3 +114,123 @@ composition, and degenerate-refusal siting in task 9 all matched the spec's pres
 - `E-DATA-CLUSTER-CONTRAST` remains alive as specified; task 14 is not part of this batch.
 - No sentence in any touched file claims this batch unblocks any config; the no-remaining-core-side
   blocker count and executable count were not touched.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-17-clustered-contrasts/task-b2-review.md`. Spec compliance
+passed outright; quality passed with reservations, all in claims *about* the code. Commit:
+`e5e0f17`. Final suite after these fixes: **2179 passed, 1 skipped, 2 xfailed**, all four gates
+clean.
+
+### Major 1 — a normative sentence claimed a refusal the per-condition forms do not make
+
+`docs/reference.md`'s "That is the same refusal the per-condition percentile forms already make for
+their own draws" (§ Statistical reporting) is false: `percentile_over_units([5.0]*8)` unstratified
+still returns `Interval(5, 5)`. Verified by running the exact call before editing anything. Fixed by
+deleting the false uniformity claim and adding a paragraph disclosing the asymmetry directly: the
+clustered per-condition form and the stratified per-condition form both make the identical
+content-based refusal, but the plain unstratified/unclustered per-condition draw does not and never
+has, so within one run a constant column can carry `ci95: [x, x]` per condition beside `ci95: null`
+on a delta comparing two such conditions. Verified after the edit that the paragraph makes no claim
+the running code contradicts.
+
+### Major 2 — the fix went to the symptom; the test doesn't test what broke
+
+Reverted `validate.py`'s `E-DATA-WEIGHT-CLUSTER-CONTRAST` message to the brief's original
+continuation form (opens lowercase, no restated `path`). Verified by rendering the diagnostic through
+`Collector.render()`: the message now reads as a single continuation of the path line, matching house
+style, with no visible duplication. Added a `paths_by_code` test helper (mirroring the existing
+`messages_by_code`) to `tests/test_validate.py` and changed
+`test_a_weighted_clustered_comparison_draws_its_own_refusal` to assert
+`paths_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"] == "data.units.weight_by"` — the field that
+actually carries the identity — rather than asserting `"weight_by" in message`. Ran the full suite:
+2179 passed.
+
+### Major 3 — the sorted-`keys` guard's stated grounds are false
+
+Probed by temporarily disabling the `ValueError` guard (`if False and keys != sorted(keys):`) and
+running a shuffled `keys` list under `strata` against the sorted one: **the draw sequences were
+identical**, because `pools = [sorted(group) ...]` followed by `pools.sort()` makes the whole
+partition a pure function of content, independent of `keys`' incoming order or the first-occurrence
+order the old comment claimed the invariance depended on. Reverted the probe immediately after
+confirming. Fixed by:
+- Rewriting the guard's justification to state the true grounds: the guard is a caller-contract
+  assertion (matching `percentile_of_derived`'s own discipline of enforcing rather than silently
+  correcting a caller's sortedness contract), not a requirement the relabelling invariance needs.
+- Moving the comment from ~40 lines above the guard (between `rng = random.Random(seed)` and the
+  `items` construction) to sit directly beside the `if keys != sorted(keys):` raise it explains.
+- Correcting the identical false restatement in `tests/test_stats.py`'s
+  `test_an_unsorted_key_list_with_strata_is_a_core_defect` docstring.
+
+The guard itself is kept (removing it was not asked for and the review did not call for it), now with
+a docstring that says plainly what it buys: nothing for correctness, a caught caller regression
+instead. Ran the full suite after the edit: 2179 passed, no test relies on the false claim.
+
+### Major 4 — mutation 4 was recorded blind and is not
+
+Probed (guard/mutation applied only in a scratch run, reverted before continuing): with `clusters=None`
+and no `strata`, an unsorted `keys` list is legal (the `ValueError` only fires under `strata`) and
+produces a *different* draw sequence from the sorted one. Fixed
+`test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was` by reversing the fixture's
+`keys` (`keys = keys[::-1]`) instead of using the sorted order `_paired_cluster_fixture()` returns,
+and documented why in the docstring. Re-ran mutation 4
+(`items = sorted([key] for key in keys)`) against the full unfiltered suite in the foreground:
+**1 failed, 2178 passed** — the test now fails exactly where the review said it would. Reverted the
+mutation by editing the file back, cleared `__pycache__`, and confirmed with a full clean run (2179
+passed) before moving on.
+
+### Major 5 — task 9's residue on `spec-defects.md`
+
+Fixed in the same commit as directed by the adjudication (Major 5 folded into disagreement 3's
+paragraph, not reverted). Changed:
+- The parent entry's heading: struck the now-false "…and `paired_percentile_of_derived` never got
+  the zero-width sweep" clause with a note that this half closed in H4b-2 task 9 (strikethrough
+  convention, matching this file's own house style for closed claims elsewhere).
+- The re-owning paragraph's citation, correcting the inverted "closes … content-based degenerate
+  refusal" clause and restoring the clustered/unclustered dimension it had dropped.
+- Finding 2's body: struck "carries none of the content-based degenerate refusals its three siblings
+  now have" and "The paired construction has no such check", replacing both with what is true at
+  HEAD — the check exists, over `_drawable_content`, covering all four shapes as one expression.
+- The closing "Why this is deferred" paragraph's final sentence ("the sweep should finish rather than
+  stop at three"), struck and replaced with a closure note.
+
+### Minors
+
+- **Minor 1** (loose `{10, 12, 14, 16}` assertion): tightened to `{10, 12, 14}` (16 is unreachable —
+  stratum `B`'s one cluster of 6 always contributes exactly 6, stratum `A` draws 2 clusters with
+  replacement from sizes {2, 4} giving {4, 6, 8}, so totals are {10, 12, 14} only) and corrected the
+  docstring to say so, with the arithmetic spelled out. Verified in isolation: test passes.
+- **Minor 2** (two forward-dangling citations, unrecorded): appended a correction to the plan
+  (`docs/superpowers/plans/2026-08-17-clustered-contrasts.md`, task 15's table), per the
+  development-record convention of appending rather than retro-editing, naming both sites
+  (`docs/reference.md:515` and `src/publishable/validate.py`'s weight-cluster guard comment) so task
+  15's sweep will catch them; also rewrote both citations themselves to state their reading directly
+  rather than pointing at a sibling block task 14 removes.
+- **Minor 3** (unreported brief/code contradiction on temporariness): recording it now — task 8's
+  brief step 3 asked the § Errors row to state "its temporariness", while the brief's own header and
+  design decision 3 rule the code **outlives** this slice. I followed the correct half (no
+  temporariness clause is in the shipped row) but did not flag the contradiction in the original
+  report. Flagged here.
+- **Minor 4** (sorted-keys guard untested with `clusters`): added
+  `test_an_unsorted_key_list_with_strata_and_clusters_is_a_core_defect_too` to `tests/test_stats.py`,
+  pinning that the guard fires identically whether or not `clusters` is also given.
+- **Minor 5** (the original report's "matched verbatim" overreach): correcting it here — task 7's
+  core draw-shape implementation is **not** verbatim the brief's prescribed block:
+  `src/publishable/stats.py` carries an `assert clusters is not None` and a three-line comment
+  explaining it that the brief's code block does not contain. Both are correct (mypy needs the
+  assert to narrow `clusters[key]`'s type, and the "can never fire" claim holds: with `clusters=None`
+  every item is a single key, so `strata[item[0]] == rendered` trivially) — this is not a defect, it
+  is the original report's prose overstating the match.
+- **Minor 6** (slice name/count in a normative row): removed "H4b-2 builds the two unweighted paired
+  clustered constructions" from `docs/reference.md:515`'s § Errors row in favor of "The two unweighted
+  paired clustered constructions exist in this build," matching that section's own "in this build"
+  idiom rather than naming a slice with a count.
+
+### Mutations run this round (all full unfiltered suite, foreground, reverted by editing the file back)
+
+| # | Change | Result |
+|---|---|---|
+| Major 3 probe | `if False and keys != sorted(keys):` in `paired_percentile_of_derived`, then compared a shuffled vs. sorted `keys` list under `strata` at seed 7 | Draw sequences **identical** — confirms the false grounds; reverted immediately |
+| Major 4 re-run | `items = sorted([key] for key in keys)` in the unclustered branch, against the now-unsorted fixture | **1 failed** (`test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was`), 2178 passed — discriminates as predicted; reverted, confirmed clean at 2179 |
+
+All findings closed. Nothing left open from this round.
