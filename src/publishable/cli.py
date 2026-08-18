@@ -1379,10 +1379,9 @@ def _comparison_step_blocks(
             # there is an interval to correct: the draws a percentile interval
             # was read off, the per-unit differences a *t* interval was computed
             # from, or the two independent per-side vectors a Welch interval was
-            # computed from. This function never builds `sides` yet — that is
-            # task 14 — so only `pool`/`diffs` are reachable from here. An entry
-            # with no `ci95` is dropped by `family_members` before any of the
-            # three fields is ever read — but it does not necessarily carry
+            # computed from. An entry with no `ci95` is dropped by
+            # `family_members` before any of the three fields is ever read — but
+            # it does not necessarily carry
             # none: a column contrast whose resample ran but produced too few
             # surviving draws for the confidence level still carries its
             # (too-short) `pool` alongside a `None` `ci95`, and
@@ -1421,13 +1420,6 @@ def _comparison_step_blocks(
                     clusters=(
                         None if corrected_from_pool or col_clusters is None else tuple(col_clusters)
                     ),
-                    # The single decision, read once for all four fields now:
-                    # "the same decision, read once for all three fields, so
-                    # `pool`, `weights` and `clusters` cannot disagree" extends to
-                    # a fourth. An unpaired contrast never carries `diffs` (above)
-                    # and never reaches here under `corrected_from_pool` — a
-                    # resampled unpaired column carries the POOL instead, the same
-                    # `corrected_from_pool` decision the paired arm reads.
                     # The single decision, read once for all four fields now:
                     # "the same decision, read once for all three fields, so
                     # `pool`, `weights` and `clusters` cannot disagree" extends to

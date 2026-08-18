@@ -424,3 +424,36 @@ The `method` and `cohens_d` selection across the reachable cells; the thin warni
 sites; **the retirement of `E-DATA-ALLOCATION-CONTRAST`** with the derived suppression guard and the
 converted pin as one commit; the surviving-citation sweep; the five inherited filings; and the dated
 re-measurement.
+
+## Batch 4 and the whole-branch review — MERGE
+
+Batch 4 commits `66b57c2` (the four unpaired cells), `6e45eb5` (`W-STATS-CONTRAST-THIN` per side at
+both emit sites), `05aeba8` (**the suppression guard, `E-DATA-ALLOCATION-CONTRAST` retired, and the
+end-to-end run**, one commit), `6b9bf11` (the sweep), `87d1706` (the five inherited filings),
+`ad1bb34` (the dated re-measurement), report `2e6786c`. Suite 2252 → **2275** passed, 1 skipped,
+2 xfailed.
+
+**Whole-branch review: MERGE.** Two findings, both comments, both fixed in the review itself.
+
+**The Major is the same corner, given a FIFTH wrong ground.** A comment asserted *"This function
+never builds `sides` yet — that is task 14 — so only `pool`/`diffs` are reachable from here"* — false
+at HEAD, since the same function builds `sides` fifty lines later. It is a **negative reachability
+guarantee** about the exact corner H4b-2 gave four wrong grounds in four commits, and it would tell a
+reader tracing `_corrected_bounds`' `sides` arm that the arm is dead code. It also leaked a plan-task
+number into production source. **Deleted, not rewritten.** The second finding was a seven-line
+comment duplicated verbatim, which `ruff format` does not collapse, so no gate caught it.
+
+**What the review established by running, and it is the strongest end-to-end evidence any slice here
+has produced.** Every spec fixture literal reproduces exactly against shipped code — both
+half-widths, `cohens_ds`, and **both Bonferroni ratios** (1.1706821500146336 and 1.4227764722656022,
+21% apart), which pins the corrected bound to the unpaired construction **at its own α and df**. Its
+own `groups × grid` run with `cluster_by` and per-arm cluster counts 4/3, carrying cross-arm **and**
+within-arm contrasts in one family, produced a `run.yaml` with `n_paired` **absent — not null,
+asserted on the raw text** — keys written **in place** rather than appended, and `paired: false`
+beside `paired: true` in one family with Holm ranking preserved. Re-run under `bonferroni`, the
+inverted ratio implies a **df of 3.735** — non-integer Welch-Satterthwaite, decisively not
+`n_of + n_against − 2` and not any rejected reading. **Decision 4's df rule confirmed through a real
+run**, not a direct call.
+
+**Flagged as required post-merge work rather than filed:** `CLAUDE.md` has no H4c entry, and both the
+"Order of the slices that remain" line and H4b-2's forward-reference go stale on merge.
