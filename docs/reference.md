@@ -2613,10 +2613,13 @@ results:
                family_size: 4, family: {comparisons: 2, metrics: 2}}
 ```
 
-All four move together or none of them does: a weighted delta beside an unweighted interval, an
-unweighted `cohens_d`, or an `n_paired` with no effective size beside it, is a declaration accepted
-whose effect is half delivered — the same three-way obligation a weighted per-condition block
-carries, with one more part because a contrast reports an effect size a condition does not.
+Whatever core weighted moves together, and `weighted_by` and the effective size travel beside it
+either way — which of the four core weighted is the split
+[§ Statistical reporting](#statistical-reporting) draws
+between a recorded column and a derived metric. A weighted delta beside an unweighted interval, an
+unweighted `cohens_d` beside a weighted one, or an `n_paired` with no effective size beside it, is a
+declaration accepted whose effect is half delivered — the same obligation a weighted per-condition
+block carries, with one more part because a contrast reports an effect size a condition does not.
 
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 
