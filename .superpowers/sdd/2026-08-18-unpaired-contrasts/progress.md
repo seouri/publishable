@@ -325,3 +325,34 @@ Suite 2227 passed, 1 skipped, 2 xfailed. Batch 2 complete.
 The refusal for the composition H4c will not build, the unpaired key path and its per-side record
 keys, `Member`'s **third evidence kind**, `_corrected_bounds`' unpaired arms, and the derived `paired`
 that removes the last hard-coded claim in the contrast record.
+
+## Batch 3 — tasks 9-13(+17a) — the wiring — complete, review dispatched
+
+Commits `9218516` (task 9), `730551c` (the unpaired key path and per-side keys), `3900661`
+(`Member`'s third evidence kind), `f39b40b` (`_corrected_bounds`' two Welch arms), `4c91108`
+(`paired` derived at all three sites, the source-text pin replaced by a behavioural one), report
+`908d273`. Suite 2235 → **2252** passed, 1 skipped, 2 xfailed. Four gates clean.
+`E-DATA-ALLOCATION-CONTRAST` alive; everything by **direct call**.
+
+**The last hard-coded claim in the contrast record is gone** — `paired` is derived.
+
+**An intervention, recorded because it is the failure mode the rules exist for.** The first batch-3
+implementer stalled three times constructing waits on its own test runs, and **left a mutation
+applied**: `crossed_group_axes`' body reduced to bare `differing_axes(of, against)` — **exactly the
+defect its own docstring warns against**, since reading `values` alone calls every differing path a
+group axis. I established the state myself (suite green at 2235, nothing committed), **reverted by
+editing the file back** to the intersection form `cli.py`'s own comment specifies, verified by
+re-running, and committed task 9. A fresh implementer took 10-13.
+
+**Ruling: the successor's first job was to determine whether that mutation discriminates**, because a
+pin that a live mutation passes is worthless and I could not tell from a green suite whether the
+mutation had ever been measured. It came back at **90 failures** — strongly discriminating. **Cost if
+wrong:** none realized; the check cost one suite run and removed the only doubt about a commit made
+under recovery rather than under review.
+
+**Five brief/code disagreements**, two forcing real deviations (an `UnboundLocalError` in a
+`min_reported_n` placeholder; a `ruff` F821 false-reachability flag in a ternary), one a stale
+hardcoded test count, and **two where a mutation's predicted magnitude or its named discriminating
+test did not match what was measured** — the implementer says the qualitative "this mutation is
+caught" claim held both times. The reviewer was asked the sharper question: **whether a wrong
+predicted magnitude means the mutation is hitting something other than what the brief thought.**
