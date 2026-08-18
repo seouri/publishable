@@ -477,3 +477,160 @@ def test_a_pool_too_small_for_the_level_reports_no_interval_and_says_so():
     assert entry["correction_level"] == pytest.approx(0.05 / 40)
     assert entry["ci95_corrected"] is None
     assert entry["thin"] is True
+
+
+def test_a_member_may_carry_weights_alongside_its_differences():
+    """Decision 4. A weighted column contrast with no `resample` declared has a
+    weighted raw *t* interval, and `_corrected_bounds` rebuilds the corrected one
+    from the same evidence — so the weights have to travel with the differences
+    they weighted. Anything else publishes a weighted raw beside an unweighted
+    corrected, which is the fault `__post_init__`'s docstring names for the
+    pool/diffs mix one axis over."""
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=8.0,
+        ci95=(4.0, 12.0),
+        pool=None,
+        diffs=(1.0, 2.0, 3.0, 9.0, 10.0, 11.0),
+        weights=(1, 1, 1, 3, 3, 3),
+        declaration_index=0,
+    )
+    assert member.weights == (1, 1, 1, 3, 3, 3)
+
+
+def test_weights_beside_a_pool_is_refused():
+    """A percentile pool is already built from weighted draws, so weights there
+    would be applied twice. The exactly-one-of `pool`/`diffs` invariant is
+    untouched: this is a second, separate rule about which evidence `weights` can
+    modify, which is why it names `pool` in its own message."""
+    with pytest.raises(ValueError) as excinfo:
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=8.0,
+            ci95=(4.0, 12.0),
+            pool=(1.0, 2.0, 3.0),
+            diffs=None,
+            weights=(1, 1, 1),
+            declaration_index=0,
+        )
+    assert "pool" in str(excinfo.value)
+
+
+def test_weights_of_a_different_length_than_the_differences_is_refused():
+    """A misaligned weight vector is the whole failure class this wiring guards
+    against — it produces a plausible number rather than an error, which is what
+    `stats._weighted_mean`'s `strict=True` zip refuses one level down. Caught at
+    construction so the fault names the bookkeeping rather than surfacing as a
+    `zip` error inside a corrected bound."""
+    with pytest.raises(ValueError) as excinfo:
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=8.0,
+            ci95=(4.0, 12.0),
+            pool=None,
+            diffs=(1.0, 2.0, 3.0),
+            weights=(1, 1),
+            declaration_index=0,
+        )
+    assert "length" in str(excinfo.value)
+
+
+def test_a_member_with_no_weights_is_unchanged():
+    """The neighbouring shape, and the reason the field is defaulted: every
+    existing construction site and every existing test builds a `Member` without
+    it, and none of them moved."""
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=(0.5, 1.5),
+        pool=None,
+        diffs=(1.0, 2.0),
+        declaration_index=0,
+    )
+    assert member.weights is None
+
+
+def test_weights_are_checked_even_when_ci95_is_none():
+    """The weights checks run before the `ci95 is None` early return,
+    deliberately: the existing rule's exemption is about *evidence being
+    absent*, not about alignment being optional.
+    `test_a_member_with_no_interval_is_not_in_the_family` builds exactly this
+    member shape (`ci95=None`, `diffs=None`) without weights; adding a
+    misaligned `weights` here must still be refused."""
+    with pytest.raises(ValueError) as excinfo:
+        Member(
+            where="1",
+            step="s",
+            metric="n_units",
+            delta=3.0,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            weights=(1, 1),
+            declaration_index=1,
+        )
+    assert "length" in str(excinfo.value)
+
+
+def test_a_corrected_bound_over_weighted_differences_is_weighted_too():
+    """Decision 4, made observable. `_corrected_bounds` rebuilds the corrected
+    interval from the same evidence as the raw one — so weighted differences get a
+    weighted construction at the smaller α, not an unweighted counterpart of a
+    weighted raw interval.
+
+    Two members, identical but for the weights, at a family size of one so the
+    level is α itself and the corrected bound is the raw one's own construction.
+    The centres are exact: 8.0 weighted, 6.0 unweighted.
+
+    A second check, at family size **two**, pins the α itself rather than only
+    the construction: at family size one, `1.0 - level` is `0.95`, the default
+    `confidence` `weighted_paired_t_over_units` would fall back to even with
+    `confidence=1.0 - level` dropped from the call — so that first check alone
+    cannot tell a threaded α from a silently-defaulted one. At family size two
+    the bonferroni level is `0.05 / 2`, so `confidence=0.975`, a value nothing
+    defaults to. The exact bound at that level, verified directly against the
+    weighted construction: `[1.4426305905416408, 14.55736940945836]`."""
+    diffs = (1.0, 2.0, 3.0, 9.0, 10.0, 11.0)
+    common = dict(step="s", metric="m", ci95=(4.0, 12.0), pool=None, declaration_index=0)
+    weighted = Member(where="cond:1", delta=8.0, diffs=diffs, weights=(1, 1, 1, 3, 3, 3), **common)
+    plain = Member(where="cond:2", delta=6.0, diffs=diffs, **common)
+    got_w = corrected_for([weighted], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    got_p = corrected_for([plain], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    low_w, high_w = got_w[("cond:1", "s", "m")]["ci95_corrected"]
+    low_p, high_p = got_p[("cond:2", "s", "m")]["ci95_corrected"]
+    assert (low_w + high_w) / 2 == pytest.approx(8.0)
+    assert (low_p + high_p) / 2 == pytest.approx(6.0)
+
+    got_w2 = corrected_for([weighted], "bonferroni", 2, {"comparisons": 1, "metrics": 1})
+    low_w2, high_w2 = got_w2[("cond:1", "s", "m")]["ci95_corrected"]
+    assert low_w2 == pytest.approx(1.4426305905416408)
+    assert high_w2 == pytest.approx(14.55736940945836)
+
+
+def test_a_pool_carrying_member_is_unaffected_by_the_weights_branch():
+    """The payoff path's own corrected bound, pinned as unchanged. A column
+    contrast under a declared `resample` carries the POOL, whose draws task 7's
+    closure already weighted, so `interval_at` reads a second rank pair off
+    weighted evidence and nothing more is needed. `Member` refuses weights beside a
+    pool, so this is the shape that must keep working untouched."""
+    pool = tuple(float(i) for i in range(200))
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=100.0,
+        ci95=(5.0, 195.0),
+        pool=pool,
+        diffs=None,
+        declaration_index=0,
+    )
+    got = corrected_for([member], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
+    assert got[("cond:1", "s", "m")]["ci95_corrected"] is not None

@@ -63,6 +63,7 @@ from publishable.stats import (
     UnitTable,
     cohens_dz,
     collapse_repeats,
+    kish_effective_n,
     mean_of,
     min_honest_draws,
     paired_delta_of_derived,
@@ -73,6 +74,9 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     unit_table_from_rows,
+    weighted_cohens_dz,
+    weighted_mean_of,
+    weighted_paired_t_over_units,
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -775,17 +779,46 @@ def _comparison_step_blocks(
     where_id: str,
     conditions_by_index: dict[int, "Condition"],
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
 
+    `weights` is `command_run`'s roster-wide `{unit key: weight}` mapping, or
+    `None` when `data.units.weight_by` is undeclared, and `strata` its resolved
+    `statistics.resample.stratify_by` mapping. Both are defaulted rather than
+    required: the direct call sites in the test suite would otherwise take an edit
+    with no behavioural content, and "no weight declared" and "this caller has not
+    been taught about weights" are the same fact. `strata` reaches both percentile
+    branches, because a declaration honoured for a derived metric and dropped for
+    a recorded column would be the asymmetry § Weighted samples' pairing of
+    `weight_by` with `resample.stratify_by` exists to rule out.
+
+    Under a declared weight, a recorded column's `delta` is the weighted mean of
+    the differences and `cohens_d` is `weighted_cohens_dz(diffs, col_weights)` —
+    `col_weights` being the intersection's own weights, in `col_keys` order, so
+    the point estimate and the effect size can't disagree about which units were
+    weighted. A resampled column's interval additionally gets `method =
+    "weighted_paired_percentile_over_units"` in place of the unweighted spelling.
+    The entry also carries `weighted_by` (the attribute name) and
+    `n_paired_effective` (Kish's size over that same intersection) — § Contrasts
+    requires all four to move together. A derived metric is never weighted by
+    core (the weight column reaches `aggregate` as a unit attribute instead, so a
+    template weights its own metric if it needs to), which is why its `method`
+    and `cohens_d: None` stay the unweighted spellings under a declared weight —
+    but `weighted_by` and `n_paired_effective` still travel beside it, the same
+    arrangement a weighted condition gets from `summarize_step`.
+
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
-    is set **and the pairing has at least two units**, when it instead takes
-    `paired_percentile_of_derived` over its own column mean, the same
-    construction a derived metric uses, while `cohens_d`
-    keeps computing from the local `diffs` list regardless. A derived metric — one
+    differences — `weighted_paired_t_over_units` instead, under a declared
+    weight — unless `resample_columns` is set **and the pairing has at least
+    two units**, when it instead takes `paired_percentile_of_derived` over its
+    own column mean (weighted inside the closure when a weight is declared),
+    the same construction a derived metric uses. A derived
+    metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
     over `base_keys`: the point estimate is `aggregate` evaluated on each side
@@ -875,6 +908,12 @@ def _comparison_step_blocks(
         # real name, would be the first entry of every contrast block.
         for metric_key in sorted((set(of_summary) & set(against_summary)) - {"by"}):
             is_derived = metric_key in of_derived or metric_key in against_derived
+            # Bound here, before either branch, so the name is always defined —
+            # the derived branch never assigns it, and relying on
+            # `corrected_from_pool`'s short-circuit below to keep it out of reach
+            # there would make an unrelated refactor of that expression silently
+            # load-bearing.
+            col_weights: list[Any] | None = None
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
@@ -910,6 +949,7 @@ def _comparison_step_blocks(
                             compute_against,
                             seed,
                             draws=draws,
+                            strata=strata,
                         )
                         interval = resampled.interval
                 metric_block[metric_key] = {
@@ -932,6 +972,12 @@ def _comparison_step_blocks(
                     of_collapsed[k][metric_key] - against_collapsed[k][metric_key] for k in col_keys
                 ]
                 n_paired = len(col_keys)
+                # The intersection's OWN weights, in `col_keys` order, so nothing
+                # downstream can weight a unit the difference beside it did not
+                # come from. `None` when no weight is declared, which is what
+                # keeps every unweighted construction on exactly the arithmetic it
+                # had.
+                col_weights = None if weights is None else [weights[k] for k in col_keys]
                 resampled = None
                 if resample_columns and n_paired >= 2:
                     # `col_keys`, NOT `base_keys`. The derived branch above uses
@@ -951,9 +997,39 @@ def _comparison_step_blocks(
                     # shared-closure cancellation `paired_percentile_of_derived`
                     # warns about — that one is about a SWEPT AXIS changing which
                     # formula `aggregate` runs, and a column mean is one formula.
-                    def _column_mean(table: UnitTable, _name: str = metric_key) -> float:
+                    #
+                    # **The weights live in the CLOSURE, not in the
+                    # construction.** `paired_percentile_of_derived` is shared
+                    # with the derived branch, which core does not weight
+                    # (§ Weighted samples hands that weight column to `aggregate`
+                    # as a unit attribute), so a `weights` parameter there would
+                    # weight the wrong half. The closure can reach them because
+                    # the construction keeps the real unit key inside every draw:
+                    # each row is `{"unit": k, **of[k]}`, and a bootstrap draw
+                    # duplicates units on purpose, so the vector is built from the
+                    # DRAWN keys rather than from the roster — a vector filtered
+                    # or ordered differently weights the wrong unit, which is
+                    # `summarize_step`'s own discipline one level over.
+                    def _column_mean(
+                        table: UnitTable,
+                        _name: str = metric_key,
+                        _weights: dict[str, Any] | None = weights,
+                    ) -> float:
                         column: list[float] = getattr(table, _name)
-                        return float(sum(column) / len(column))
+                        if _weights is None:
+                            return float(sum(column) / len(column))
+                        drawn = [_weights[k] for k in table.unit]
+                        got = weighted_mean_of([float(v) for v in column], drawn)
+                        if got is None:
+                            # An empty column — the identical input on which the
+                            # unweighted branch above raises `ZeroDivisionError`,
+                            # and which `paired_percentile_of_derived` catches as a
+                            # degenerate draw either way. Raised rather than
+                            # coerced to a number, so the two branches refuse the
+                            # same input; a fabricated 0.0 here would enter the
+                            # pool as a real draw.
+                            raise ValueError("a weighted column contrast drew an empty table")
+                        return got
 
                     resampled = paired_percentile_of_derived(
                         of_collapsed,
@@ -963,17 +1039,38 @@ def _comparison_step_blocks(
                         _column_mean,
                         seed,
                         draws=draws,
+                        strata=strata,
+                        method=(
+                            "paired_percentile_over_units"
+                            if weights is None
+                            else "weighted_paired_percentile_over_units"
+                        ),
                     )
                     interval = resampled.interval
                 else:
-                    interval = paired_t_over_units(diffs)
+                    # The general case, and it is off the payoff path: a config
+                    # declaring `resample` never reaches here. Weighted when a
+                    # weight is declared, because the delta above already is —
+                    # `weighted_paired_t_over_units` takes its df from Kish's
+                    # effective size over this intersection, which is the
+                    # `n_paired_effective` recorded beside it.
+                    interval = (
+                        paired_t_over_units(diffs)
+                        if col_weights is None
+                        else weighted_paired_t_over_units(diffs, col_weights)
+                    )
                 metric_block[metric_key] = {
-                    # The mean of the per-unit differences over `col_keys` — the
-                    # same unit set the interval is drawn from, and identical to
-                    # the difference of the two column means over that set, so
-                    # the point estimate and the pool cannot drift onto
-                    # different rosters.
-                    "delta": mean_of(diffs),
+                    # The (weighted, when `col_weights` is not `None`) mean of
+                    # the per-unit differences over `col_keys` — the same unit
+                    # set the interval is drawn from, and identical to the
+                    # difference of the two column means over that set, so the
+                    # point estimate and the pool cannot drift onto different
+                    # rosters.
+                    "delta": (
+                        mean_of(diffs)
+                        if col_weights is None
+                        else weighted_mean_of(diffs, col_weights)
+                    ),
                     "basis": "units",
                     "paired": True,
                     "method": interval.method if interval else None,
@@ -983,9 +1080,31 @@ def _comparison_step_blocks(
                     # value, which a column has and a derived metric does not,
                     # and it is computed from the local `diffs` list rather than
                     # from anything the `Member` carries.
-                    "cohens_d": cohens_dz(diffs),
+                    "cohens_d": (
+                        cohens_dz(diffs)
+                        if col_weights is None
+                        else weighted_cohens_dz(diffs, col_weights)
+                    ),
                     "correction": None,
                 }
+            # The three facts a weight adds to a contrast entry, and they move
+            # together with the delta and the interval: § Contrasts requires it,
+            # and a weighted delta beside an unweighted effect size or an
+            # `n_paired` with no effective size beside it is a declaration
+            # accepted whose effect is half delivered. Absent — not null — when no
+            # weight is declared, the same absent-not-null shape `weighted_by`
+            # already has per condition.
+            #
+            # **Kish is over the PAIRED INTERSECTION**, not over the roster-wide
+            # mapping `weights` holds: under a declared `holdout` the collapsed
+            # table is the test partition alone, and the size reported beside an
+            # interval has to be the size the interval was computed at. Summing
+            # the mapping is the natural implementation and the wrong one.
+            if weights is not None:
+                metric_block[metric_key]["weighted_by"] = weighted_by
+                metric_block[metric_key]["n_paired_effective"] = kish_effective_n(
+                    [weights[k] for k in (base_keys if is_derived else col_keys)]
+                )
             if confounded:
                 # Marked, not merely reported: a delta mixing two axes is the
                 # factorial main-effects problem, which core refuses to
@@ -1021,6 +1140,14 @@ def _comparison_step_blocks(
                     ci95=(interval.low, interval.high) if interval else None,
                     pool=tuple(resampled.pool) if corrected_from_pool and resampled else None,
                     diffs=None if corrected_from_pool else tuple(diffs),
+                    # Only where `diffs` is: a pool is already drawn from weighted
+                    # values, so weights beside one would be applied twice, and
+                    # `Member.__post_init__` refuses that rather than letting it
+                    # through. `corrected_from_pool` is the single decision, read
+                    # once for both fields, so the two cannot disagree.
+                    weights=(
+                        None if corrected_from_pool or col_weights is None else tuple(col_weights)
+                    ),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
@@ -1056,6 +1183,9 @@ def _compute_vs_baseline(
     draws: int,
     findings: Collector,
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -1096,6 +1226,9 @@ def _compute_vs_baseline(
             where_id=f"cond:{comp.of}",
             conditions_by_index=conditions_by_index,
             resample_columns=resample_columns,
+            weights=weights,
+            strata=strata,
+            weighted_by=weighted_by,
         )
         if block:
             out[comp.of] = block
@@ -1118,6 +1251,9 @@ def _compute_declared_contrasts(
     draws: int,
     findings: Collector,
     resample_columns: bool,
+    weights: dict[str, Any] | None = None,
+    strata: dict[str, str] | None = None,
+    weighted_by: str | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1166,6 +1302,9 @@ def _compute_declared_contrasts(
             where_id=f"contrast:{comp.id}",
             conditions_by_index=conditions_by_index,
             resample_columns=resample_columns,
+            weights=weights,
+            strata=strata,
+            weighted_by=weighted_by,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -2555,6 +2694,9 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
                 resample_columns=resample_spec["declared"],
+                weights=weights,
+                strata=resample_strata,
+                weighted_by=weight_by if weights else None,
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2568,6 +2710,9 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
                 resample_columns=resample_spec["declared"],
+                weights=weights,
+                strata=resample_strata,
+                weighted_by=weight_by if weights else None,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:

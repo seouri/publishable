@@ -6746,6 +6746,86 @@ def _cited_sections() -> set[str]:
     }
 
 
+def _interval_method_names() -> set[str]:
+    """Every `method` string § Statistical reporting's construction tables define.
+
+    Both `| The interval | Is |` tables, as one set: keying them apart would need a
+    positional locator, and what the code-agreement pins below need is whether an
+    emitted string is one the document defines at all. The name is the first
+    backticked token of the first cell, the same shape `_status_tables` reads.
+    """
+    names: set[str] = set()
+    lines = REFERENCE_MD.read_text().split("\n")
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells[:2] != ["The interval", "Is"] or not lines[i + 1].startswith("|---"):
+            continue
+        for row in lines[i + 2 :]:
+            if not row.startswith("|"):
+                break
+            match = re.match(r"`([^`]+)`", row.strip().strip("|").split("|")[0].strip())
+            assert match, row
+            names.add(match.group(1))
+    return names
+
+
+def test_the_interval_construction_tables_are_parsed_at_all():
+    """The control for every agreement pin that reads this set: a parser finding
+    nothing makes all of them pass vacuously, which is the shape of the bug they
+    exist to catch. Both tables must be found — one per-condition name and one
+    contrast name that predate this slice."""
+    names = _interval_method_names()
+    assert "t_over_units" in names
+    assert "weighted_t_over_units" in names
+    assert "paired_t_over_units" in names
+    assert "paired_percentile_over_units" in names
+
+
+def test_a_weighted_contrast_has_a_documented_method_string():
+    """Decision 3: the four documents gave a weighted contrast no `method` string
+    at all. Both weighted paired forms are defined before any code emits one — a
+    record key code writes and no document names is the pair `CLAUDE.md` says to
+    grep for."""
+    names = _interval_method_names()
+    assert "weighted_paired_t_over_units" in names
+    assert "weighted_paired_percentile_over_units" in names
+
+
+def _section_text(heading: str) -> str:
+    """`reference.md` from `heading` to the next heading of the same depth or shallower.
+
+    Named rather than positional: the caller passes what the section *is*, so an
+    inserted sibling section cannot silently move the slice.
+    """
+    lines = REFERENCE_MD.read_text().split("\n")
+    start = next(i for i, line in enumerate(lines) if line.strip() == heading)
+    depth = len(heading) - len(heading.lstrip("#"))
+    for j in range(start + 1, len(lines)):
+        match = re.match(r"(#{1,6}) ", lines[j])
+        if match and len(match.group(1)) <= depth:
+            return "\n".join(lines[start:j])
+    return "\n".join(lines[start:])
+
+
+def test_the_weighted_contrast_record_keys_are_documented():
+    """Task 3's ruling, in the document before any code writes it. `n_paired` is a
+    scalar and § Contrasts argues why a contrast has no `n` mapping to join, so
+    Kish's size over the intersection takes a scalar sibling rather than the shape
+    § Weighted samples uses per condition.
+
+    The control asserts the section was really located and is bounded — not
+    `"n_paired" in section`, which a slicer returning the empty string would
+    already fail on the two assertions below it (`n_paired` is a substring of
+    `n_paired_effective`, so it adds no discriminating power of its own):
+    the slice must start at the heading it was asked for and must not run to
+    the end of the file, which only a genuinely bounded slice can satisfy."""
+    section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert section.startswith("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert "Reporting strata" not in section  # the next sibling heading — rules out "ran to EOF"
+    assert "weighted_by" in section
+    assert "n_paired_effective" in section
+
+
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to
@@ -7337,6 +7417,99 @@ def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_toge
     strat_column_width, strat_derived_width = widths(doc_strat)
     assert strat_column_width < plain_column_width
     assert strat_derived_width < plain_derived_width
+
+
+_COHORT_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        # `bias` is 0.0 for cohort `a` and 5.0 for cohort `b`, and only the
+        # SPEARMAN condition applies it — so every cohort-`a` unit's
+        # spearman-minus-pearson difference is exactly 0.0 and every cohort-`b`
+        # unit's is exactly 5.0, a population that is half one point mass and
+        # half the other. Stratifying by `cohort` then draws a fixed 50/50 split
+        # every single resample, so the stratified mean is deterministic at 2.5;
+        # an unstratified draw mixes the two point masses in a proportion that
+        # varies draw to draw, which is real, measurable width a wrong or
+        # dropped `strata` cannot reproduce.
+        shift = {{"pearson": 0.0, "spearman": 1.0}}.get(cfg.parameters.analysis.method, 0.0)
+        for i, unit in enumerate(units):
+            bias = 0.0 if unit.attributes["cohort"] == "a" else 5.0
+            io.record(unit.key, {{"pred": float(i) / 40.0 + bias * shift}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_a_declared_stratify_by_reaches_a_contrasts_interval_through_run(tmp_path, capsys):
+    """Major 2 of fix round 1: task 6's report excused an unpinned `strata=None`
+    mutation at `command_run`'s two `_compute_vs_baseline`/
+    `_compute_declared_contrasts` call sites by citing the (now-retired) weighted
+    contrast refusal — gated on `weight_by`, not on `stratify_by`. An
+    **unweighted** config declaring `statistics.resample.stratify_by` beside a baseline sweep
+    AND a declared `statistics.contrasts` entry validates clean and runs today,
+    so decision 5's production sites (not just the direct-call ones tasks 6-8
+    already cover) are pinnable now, at **both** call sites in one run. No
+    `weight_by` anywhere in this config.
+
+    `_COHORT_CONTRAST_STEP`'s bimodal design (see its own comment) makes a
+    stratified contrast draw a near-constant 2.5 every time and an unstratified
+    one draw a mix that varies — a measurably narrower interval, the same shape
+    the per-condition tests above already use, but through `vs_baseline` and
+    `results.contrasts` rather than a bare condition block."""
+    common_statistics = {
+        "correction": "holm",
+        "contrasts": [{"id": "c1", "of": "method=spearman", "against": "baseline"}],
+    }
+    doc_plain = run_a_project(
+        tmp_path / "plain",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={**common_statistics, "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    doc_strat = run_a_project(
+        tmp_path / "strat",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            **common_statistics,
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]},
+        },
+    )
+
+    def widths(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        vs_baseline_entry = _first_contrast(run, "method=spearman")
+        declared_entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+        assert vs_baseline_entry is not None
+        for entry in (vs_baseline_entry, declared_entry):
+            assert entry["method"] == "paired_percentile_over_units"
+        return (
+            vs_baseline_entry["ci95"][1] - vs_baseline_entry["ci95"][0],
+            declared_entry["ci95"][1] - declared_entry["ci95"][0],
+        )
+
+    plain_vs_baseline_width, plain_declared_width = widths(doc_plain)
+    strat_vs_baseline_width, strat_declared_width = widths(doc_strat)
+    assert strat_vs_baseline_width < plain_vs_baseline_width
+    assert strat_declared_width < plain_declared_width
 
 
 _RAGGED_COLUMN_STEP = """\
@@ -9450,3 +9623,666 @@ def test_command_run_threads_the_real_wide_cfg_to_its_own_resolver_call_too(
         sys.modules.pop(module, None)
     captured = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-RESOLVER-SWEPT-PARAM" in captured
+
+
+_W_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 9.0},
+    "u4": {"m": 10.0},
+    "u5": {"m": 11.0},
+}
+_W_AGAINST = {k: {"m": 0.0} for k in _W_OF}
+_W_WEIGHTS = {"u0": 1, "u1": 1, "u2": 1, "u3": 3, "u4": 3, "u5": 3}
+_W_STRATA = {"u0": "A", "u1": "A", "u2": "A", "u3": "B", "u4": "B", "u5": "B"}
+
+
+def _weighted_contrast_block(**extra):
+    """One column contrast over the six-unit weighted fixture, called directly
+    rather than through `run` — precise control over `weights`, `strata` and the
+    collapsed rows a real run would have to be engineered to produce.
+    `test_a_weighted_run_publishes_a_weighted_delta_end_to_end` is the pin that
+    a real `run` reaches the identical construction through `command_run`.
+    Returns `(metric_block, members)`.
+    """
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    if "weights" in extra:
+        extra.setdefault("weighted_by", "sampling_weight")
+
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"m": 6.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        **extra,
+    )
+    return block["s"]["m"], members
+
+
+def test_a_contrasts_column_draw_honours_resample_stratify_by():
+    """Task 5's `strata` reaching the contrast call site. The forced bound is the
+    assertion: a stratified draw is three `A` keys and three `B` keys, so its
+    smallest possible mean is (3·1 + 3·9)/6 = 5.0, while an unstratified draw over
+    the same six units reaches 4.33. Nothing about RNG or draw count can move
+    that bound."""
+    stratified, _ = _weighted_contrast_block(resample_columns=True, strata=_W_STRATA)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert stratified["ci95"][0] >= 5.0 - 1e-9
+    # The control that must report: without strata the same seed and draw count
+    # produce a lower bound below the forced floor.
+    assert plain["ci95"][0] < 5.0
+
+
+def test_the_three_comparison_functions_accept_weights_and_strata():
+    """The threading itself, at all three signatures — `_comparison_step_blocks`
+    above plus the two callers.
+
+    **Amended from its task 6 form** (which this docstring replaces rather than
+    layering a correction onto): task 6 pinned "a weight passed today must not
+    silently move a number", true only until task 7 built the weighted
+    `_column_mean` closure. Task 7's `delta` formula weights a recorded column's
+    mean whenever `col_weights` is not `None` — unconditionally on
+    `resample_columns`, the same way a weighted *condition* mean is unconditional
+    on a declared `resample` (§ Weighted samples). So a weight passed here, even
+    with `resample_columns=False`, now moves `delta` from 6.0 to 8.0 — and this
+    test asserts that rather than the pre-task-7 no-op, so the regression this
+    file pins stays true of the code that exists.
+
+    **What this pins is half of the record § Contrasts requires — the other
+    half is `test_a_weighted_run_publishes_a_weighted_delta_end_to_end`'s.**
+    Task 10 wires `weighted_paired_t_over_units` into this same
+    `resample_columns=False` branch, so the interval beside this weighted
+    `delta` and weighted `cohens_d` is weighted too rather than the unweighted
+    `paired_t_over_units(diffs)` § Contrasts forbids sitting beside them
+    ("all four move together or none of them does"); this test does not itself
+    assert the interval or `cohens_d`, only the `delta` the threading changed."""
+    from publishable.cli import _compute_declared_contrasts, _compute_vs_baseline
+    from publishable.sweep import Condition
+
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="arm"),
+    ]
+    common = dict(
+        conditions=conditions,
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"m": 6.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        findings=Collector(),
+        resample_columns=False,
+    )
+    plain, _ = _compute_vs_baseline(doc={}, **common)
+    threaded, _ = _compute_vs_baseline(doc={}, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
+    assert plain is not None and threaded is not None
+    assert plain[1]["s"]["m"]["delta"] == pytest.approx(6.0)
+    assert threaded[1]["s"]["m"]["delta"] == pytest.approx(8.0)
+
+    doc = {"statistics": {"contrasts": [{"id": "c1", "of": "arm", "against": "baseline"}]}}
+    out, _ = _compute_declared_contrasts(doc=doc, weights=_W_WEIGHTS, strata=_W_STRATA, **common)
+    assert out is not None
+    assert out[0]["s"]["m"]["n_paired"] == 6
+    # `n_paired` alone is true under any weighting — a dropped `weights` still
+    # gives 6 — so the declared-contrast arm needs its own delta pin, the same
+    # one `_compute_vs_baseline`'s arm has above.
+    assert out[0]["s"]["m"]["delta"] == pytest.approx(8.0)
+
+
+def test_a_weighted_column_contrast_weights_its_delta_and_its_draws():
+    """The payoff path. All three C configs declare `statistics.resample`, so a
+    recorded column's contrast goes through `paired_percentile_of_derived` with the
+    `_column_mean` closure — `paired_t_over_units` is never called on them.
+
+    The two answers are exact arithmetic, not observations: unweighted
+    (1+2+3+9+10+11)/6 = 6.0, weighted (1+2+3+27+30+33)/12 = 8.0. A weighting that
+    did nothing, or that weighted only the point estimate, lands on 6.0 for one of
+    the two assertions."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert plain["delta"] == pytest.approx(6.0)
+    assert weighted["delta"] == pytest.approx(8.0)
+    # The interval moved with it, drawn from the same seed: per-draw the weight is
+    # monotone in the value here (1.0-3.0 carry 1, 9.0-11.0 carry 3), so every
+    # drawn multiset's weighted mean is at least its unweighted mean, and sorting
+    # preserves that elementwise. So the pool DOMINATES rather than merely
+    # differing, which a wrong weighting would break in a detectable direction.
+    assert weighted["ci95"][0] > plain["ci95"][0]
+    assert weighted["ci95"][1] > plain["ci95"][1]
+
+
+def test_a_weighted_column_contrast_records_the_documented_method_string():
+    """The agreement pin, against the document rather than against a second
+    literal: a test comparing each of two spellings to its own hard-coded string
+    is how this repo shipped a name claiming an agreement no assertion made.
+    `_interval_method_names` parses § Statistical reporting's construction
+    tables."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    assert weighted["method"] == "weighted_paired_percentile_over_units"
+    assert plain["method"] == "paired_percentile_over_units"
+    assert weighted["method"] in _interval_method_names()
+    assert plain["method"] in _interval_method_names()
+
+
+def test_a_weighted_derived_contrast_keeps_the_unweighted_method_string():
+    """Decision 1, pinned. Core does not weight a derived metric: its resample
+    closure re-attributes the roster inside every draw, so the weight column
+    reaches `aggregate` as a unit attribute and the template weights its own
+    metric. So `method` stays `paired_percentile_over_units` even under a declared
+    weight — the split this slice's whole payoff argument rests on, and the one no
+    other test in this file can see."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.m
+        return float(sum(column) / len(column))
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"d": 6.0}}, 0: {"s": {"d": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={(1, "s"): {"d": 6.0}, (0, "s"): {"d": 0.0}},
+        resample_fns_by_key={(1, "s"): {"d": _derived}, (0, "s"): {"d": _derived}},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+    )
+    assert block["s"]["d"]["method"] == "paired_percentile_over_units"
+    # And the unweighted arithmetic: core handed the closure the plain collapsed
+    # rows, so the derived delta is 6.0 and not 8.0.
+    assert block["s"]["d"]["delta"] == pytest.approx(6.0)
+
+
+def test_a_weighted_stratified_column_contrast_weights_inside_the_strata():
+    """The ordering constraint task 5 exists for, made observable. A weighted
+    stratified draw is three `A` keys and three `B` keys with `B` carrying weight
+    3, so its forced floor is (3·1·1 + 3·3·9)/12 = 7.0 — above the unweighted
+    stratified floor of 5.0 and far above the unweighted unstratified 4.33.
+
+    **What this separates, precisely** (narrowed in fix round 1: the review
+    found the mispairing mutation below — the weight vector taken from
+    `col_keys` instead of the drawn keys, i.e. weighting over the wrong pool —
+    passes this test): weighted-and-stratified from stratified-alone (7.0 vs
+    5.0) and stratified-alone from unweighted-unstratified (5.0 vs the 4.33
+    documented above but not asserted here). It does not by itself separate a
+    correctly-drawn weight vector from a mispaired one; the payoff test
+    (`test_a_weighted_column_contrast_weights_its_delta_and_its_draws`) is what
+    catches that, since only there does the draw's own key list, not a fixed
+    external one, distinguish the two."""
+    both, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS, strata=_W_STRATA)
+    stratified_only, _ = _weighted_contrast_block(resample_columns=True, strata=_W_STRATA)
+    assert both["ci95"][0] >= 7.0 - 1e-9
+    assert stratified_only["ci95"][0] >= 5.0 - 1e-9
+    assert stratified_only["ci95"][0] < 7.0
+
+
+_K_OF = {f"u{i}": {"m": float(i + 1)} for i in range(4, 8)}
+_K_AGAINST = {k: {"m": 0.0} for k in _K_OF}
+_K_WEIGHTS = {
+    "u0": 1,
+    "u1": 1,
+    "u2": 1,
+    "u3": 3,
+    "u4": 1,
+    "u5": 1,
+    "u6": 1,
+    "u7": 3,
+}
+
+
+def test_a_weighted_contrast_entry_carries_the_three_documented_keys():
+    """§ Contrasts: `weighted_by` beside `method`, `n_paired_effective` as a scalar
+    sibling of `n_paired`, and `cohens_d` weighted on the same weights the delta
+    used. All four move together or the declaration is half delivered.
+
+    The key names are compared against the document's own § Contrasts text rather
+    than against a second literal, which is the agreement a hard-coded pair of
+    strings cannot make."""
+    weighted, _ = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    plain, _ = _weighted_contrast_block(resample_columns=True)
+    section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert weighted["weighted_by"] == "sampling_weight"
+    assert "weighted_by" in section
+    assert "n_paired_effective" in section
+    assert weighted["n_paired_effective"] == pytest.approx(4.8)
+    assert weighted["n_paired"] == 6
+    assert weighted["cohens_d"] == pytest.approx(2.0)
+    # The unweighted neighbour: absent keys, not null ones, and the unweighted dz.
+    assert "weighted_by" not in plain
+    assert "n_paired_effective" not in plain
+    assert plain["cohens_d"] == pytest.approx(1.3416407864998738)
+
+
+def test_a_weighted_contrast_records_the_declared_attribute_name_not_a_constant():
+    """Minor 8 of fix round 1: every fixture in this file declares the same
+    attribute name (`"sampling_weight"`, via `_weighted_contrast_block`'s own
+    `setdefault`), so a production site that hardcoded that literal instead of
+    threading `weighted_by` through would pass every other test here silently.
+    A second name, distinct from the fixtures' default, is the only way to tell
+    "threaded" from "hardcoded" apart."""
+    weighted, _ = _weighted_contrast_block(
+        resample_columns=True, weights=_W_WEIGHTS, weighted_by="cohort_inverse_probability"
+    )
+    assert weighted["weighted_by"] == "cohort_inverse_probability"
+
+
+def test_kish_is_taken_over_the_paired_intersection_not_the_weight_mapping():
+    """The trap `cli`'s own weight-construction site sets up: `weights` is built
+    from the WHOLE roster, while a contrast is computed over the intersection —
+    under a declared `holdout` the collapsed table is the test partition alone.
+
+    Three distinct answers separate the three readings, which is what makes this
+    fixture discriminating: Kish over the whole mapping is 12²/24 = 6.0, over the
+    four-unit intersection 6²/12 = 3.0, and `n_paired` is 4. No two coincide, so a
+    denominator taken from the mapping and one taken from the count both fail.
+
+    C1-C3 all declare `holdout: null`, so no payoff config separates them — the
+    fixture instantiates the seam directly."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(8),
+        aggregated={1: {"s": {"m": 6.5}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): _K_OF, (0, "s"): _K_AGAINST},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_K_WEIGHTS,
+    )
+    assert block["s"]["m"]["n_paired"] == 4
+    assert block["s"]["m"]["n_paired_effective"] == pytest.approx(3.0)
+
+
+def test_a_weighted_derived_contrast_carries_the_record_keys_without_a_weighted_method():
+    """Decision 1's other half. Core does not weight a derived metric, so `method`
+    stays the unweighted spelling and `cohens_d` stays `null` — the worked
+    example's own rule, a derived metric having no per-unit value to difference.
+    But `weighted_by` and `n_paired_effective` still travel beside it: the
+    declaration is true of the run either way, which is the same arrangement
+    `summarize_step` makes per condition."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.m
+        return float(sum(column) / len(column))
+
+    block, _members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=_cli_roster(6),
+        aggregated={1: {"s": {"d": 6.0}}, 0: {"s": {"d": 0.0}}},
+        collapsed_by_key={(1, "s"): _W_OF, (0, "s"): _W_AGAINST},
+        derived_by_key={(1, "s"): {"d": 6.0}, (0, "s"): {"d": 0.0}},
+        resample_fns_by_key={(1, "s"): {"d": _derived}, (0, "s"): {"d": _derived}},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="arm", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+        weighted_by="sampling_weight",
+    )
+    entry = block["s"]["d"]
+    assert entry["weighted_by"] == "sampling_weight"
+    assert entry["n_paired_effective"] == pytest.approx(4.8)
+    assert entry["method"] == "paired_percentile_over_units"
+    assert entry["cohens_d"] is None
+
+
+def test_a_weighted_column_contrast_with_no_resample_takes_the_weighted_t():
+    """The general case, off the payoff path: C1-C3 all declare
+    `statistics.resample`, so `resample_columns` is True for them and this branch
+    is never taken. What it makes honest is a weighted column contrast in a config
+    that declares no `resample`, which would otherwise publish an unweighted
+    interval beside a weighted delta.
+
+    The centre is exact — 8.0 weighted against 6.0 unweighted — so this cannot
+    pass by landing on a similar interval, and the `method` is checked against the
+    document's own construction tables rather than a second literal."""
+    weighted, members = _weighted_contrast_block(resample_columns=False, weights=_W_WEIGHTS)
+    plain, plain_members = _weighted_contrast_block(resample_columns=False)
+    assert weighted["method"] == "weighted_paired_t_over_units"
+    assert weighted["method"] in _interval_method_names()
+    assert plain["method"] == "paired_t_over_units"
+    low, high = weighted["ci95"]
+    assert (low + high) / 2 == pytest.approx(8.0)
+    low_p, high_p = plain["ci95"]
+    assert (low_p + high_p) / 2 == pytest.approx(6.0)
+    # The member carries the weights beside the differences, so the corrected
+    # bound task 9 built is reachable from a real run rather than from a
+    # hand-built `Member` alone.
+    assert members[0].weights == (1, 1, 1, 3, 3, 3)
+    assert members[0].diffs is not None
+    assert plain_members[0].weights is None
+
+
+def test_a_resampled_column_contrasts_member_carries_no_weights():
+    """`corrected_from_pool = is_derived or resample_columns`, so the payoff path's
+    member carries the POOL — already drawn from weighted values — and `Member`
+    refuses weights beside one.
+
+    The real pin on `cli`'s pool guard is `Member.__post_init__` itself
+    (`test_weights_beside_a_pool_is_refused` in `test_correction.py`): once
+    `members[0].pool is not None` holds, `members[0].weights is None` follows
+    from the object having been constructed at all rather than from anything
+    this test's own assertions distinguish. What this test adds is that `cli`
+    reaches that shape at all — `pool is not None` and `diffs is None` — on a
+    real weighted, resampled call, not merely that the invariant holds in the
+    abstract."""
+    weighted, members = _weighted_contrast_block(resample_columns=True, weights=_W_WEIGHTS)
+    assert members[0].pool is not None
+    assert members[0].diffs is None
+    assert members[0].weights is None
+
+
+def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, monkeypatch):
+    """The first weighted contrast to reach `run.yaml`. Until this task's
+    retirement of the weighted-contrast refusal, `command_run` returned before
+    ever running on a weighted comparison, so every weighted-contrast test
+    called `_comparison_step_blocks` directly — this is the
+    pin that the whole path is wired, including the three things `command_run`
+    threads and no direct call can see: `weights`, `weighted_by` and
+    `resample_strata`.
+
+    `_METHOD_VARYING_STEP` is the starter step for the reason
+    `test_a_baseline_sweep_reports_a_delta` uses it: its per-unit values differ
+    both by condition and per unit between conditions, so the per-unit differences
+    themselves vary. A step recording the same numbers under two labels gives a
+    zero-width interval and a `cohens_d` of `None` whatever the weighting does,
+    which is the trap this file's own comment records.
+
+    Six units weighted 1/1/1/3/3/3, so Kish's size is 12²/30 = 4.8 against six
+    completed — the two figures differ, which is what makes the `n_paired_effective`
+    assertion say something."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=(
+            "patient_id,sampling_weight,band\n"
+            "p1,1,low\np2,1,low\np3,1,low\np4,3,high\np5,3,high\np6,3,high\n"
+        ),
+        units_overrides={
+            "attributes": ["sampling_weight", "band"],
+            "weight_by": "sampling_weight",
+        },
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["band"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    assert entry["method"] == "weighted_paired_percentile_over_units"
+    assert entry["weighted_by"] == "sampling_weight"
+    assert entry["n_paired"] == 6
+    assert entry["n_paired_effective"] == pytest.approx(4.8)
+    assert entry["cohens_d"] is not None
+    # The corrected bound came off the same weighted pool rather than from a
+    # re-run unweighted construction: `corrected_from_pool` is True under a
+    # declared `resample`, so this is the payoff path's own corrected interval.
+    assert entry["ci95_corrected"] is not None
+
+
+def test_the_sibling_refusal_rows_state_their_own_reading():
+    """Two § Errors rows each state their own family-reading property directly,
+    rather than by contrast with a sibling row — the weighted-contrast refusal's
+    row is retired, so a row that argued "unlike that one" would now be a
+    dangling reference, and this repo's rule is to delete a claim rather than
+    rewrite it into a second one.
+
+    Located by each row's own final cell, which is what tells a row from a
+    citation."""
+    lines = REFERENCE_MD.read_text().split("\n")
+
+    def _row(code: str) -> str:
+        return next(line for line in lines if line.rstrip().endswith(f"| `{code}` |"))
+
+    allocation = _row("E-DATA-ALLOCATION-CONTRAST")
+    cluster = _row("E-DATA-CLUSTER-CONTRAST")
+    assert "per comparison" in allocation  # the control
+    assert "cluster_by" in cluster  # the control
+    assert "E-DATA-WEIGHT-CONTRAST" not in allocation
+    assert "E-DATA-WEIGHT-CONTRAST" not in cluster
+
+
+def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
+    """§ Weighted samples' only sentence about a weighted contrast named no
+    construction, no `method` string and no check, and its "worth checking when it
+    isn't" described a case core cannot produce: one roster-wide weight mapping
+    reaches both sides of every comparison, so the same-weights property holds by
+    construction under `between` too."""
+    section = _section_text("### Weighted samples")
+    assert "weight_by" in section  # the control
+    assert "worth checking when it isn't" not in section
+    assert "the same weights reach both sides" in section
+
+
+_C_STRATA = {
+    "u0": "abnormal|low",
+    "u1": "abnormal|low",
+    "u2": "abnormal|low",
+    "u3": "normal|high",
+    "u4": "normal|high",
+    "u5": "normal|high",
+}
+
+
+def _c_shape_common():
+    """The three shortcut configs' shared shape, as `_comparison_step_blocks`' own
+    arguments: `weight_by: sampling_weight`, a `resample` declaring
+    `stratify_by: [consensus_label, count_stratum]` (composed into one label the
+    way `cli.resample_strata` composes it), `cluster_by: null` and `holdout: null`.
+
+    One recorded column, `prob`, and one derived metric, `auroc` — C1's headline
+    metric is derived by the template's `aggregate`, so both branches of
+    `paired_percentile_of_derived` are exercised.
+    """
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.prob
+        return float(sum(column) / len(column))
+
+    of = {k: {"prob": v["m"]} for k, v in _W_OF.items()}
+    against = {k: {"prob": 0.0} for k in _W_OF}
+    return dict(
+        conditions=[
+            Condition(index=0, label="regime=utilization_only", is_baseline=True),
+            Condition(index=1, label="regime=zero_shot", values={"model.regime": "zero_shot"}),
+        ],
+        roster=_cli_roster(6),
+        aggregated={
+            1: {"step03_screen": {"prob": 6.0, "auroc": 6.0}},
+            0: {"step03_screen": {"prob": 0.0, "auroc": 0.0}},
+        },
+        collapsed_by_key={(1, "step03_screen"): of, (0, "step03_screen"): against},
+        derived_by_key={(1, "step03_screen"): {"auroc": 6.0}, (0, "step03_screen"): {"auroc": 0.0}},
+        resample_fns_by_key={
+            (1, "step03_screen"): {"auroc": _derived},
+            (0, "step03_screen"): {"auroc": _derived},
+        },
+        seed=7,
+        draws=200,
+        findings=Collector(),
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+        weighted_by="sampling_weight",
+        strata=_C_STRATA,
+    )
+
+
+def test_the_c1_shape_publishes_a_weighted_stratified_vs_baseline_delta():
+    """C1 — a one-axis `grid` over model regime with the utilization-only
+    regression as the declared `baseline`, over a weighted roster with a
+    patient-level stratified bootstrap. The last core-side refusal these three
+    carry is what task 13 retires; this is the number it was standing in for.
+
+    Exact arithmetic on the column: weighted (1+2+3+27+30+33)/12 = 8.0 against
+    unweighted 6.0. Forced bound on the interval: a weighted stratified draw is
+    three low-stratum keys at weight 1 and three high at weight 3, so its floor is
+    (3·1·1 + 3·3·9)/12 = 7.0."""
+    from publishable.cli import _compute_vs_baseline
+
+    out, members = _compute_vs_baseline(doc={}, **_c_shape_common())
+    assert out is not None
+    column = out[1]["step03_screen"]["prob"]
+    derived = out[1]["step03_screen"]["auroc"]
+    assert column["delta"] == pytest.approx(8.0)
+    assert column["method"] == "weighted_paired_percentile_over_units"
+    assert column["ci95"][0] >= 7.0 - 1e-9
+    assert column["weighted_by"] == "sampling_weight"
+    assert column["n_paired_effective"] == pytest.approx(4.8)
+    assert column["cohens_d"] == pytest.approx(2.0)
+    # The derived half, on the same run: core did not weight it, so its `method`
+    # is the unweighted spelling and its `cohens_d` is null — while `weighted_by`
+    # and the effective size travel beside it anyway.
+    assert derived["method"] == "paired_percentile_over_units"
+    assert derived["cohens_d"] is None
+    assert derived["weighted_by"] == "sampling_weight"
+    assert derived["n_paired_effective"] == pytest.approx(4.8)
+    # The derived draw was stratified too: its own forced floor is the UNWEIGHTED
+    # stratified one, 5.0, because core does not weight a derived metric.
+    assert derived["ci95"][0] >= 5.0 - 1e-9
+    # Both metrics joined the correction family, and the column's member
+    # carries the pool rather than the differences. `weights is None` follows
+    # from `pool is not None` alone (`Member.__post_init__` refuses the two
+    # together), so this is a shape check on `cli`'s output, not an
+    # independent pin on the guard itself — that pin is
+    # `test_weights_beside_a_pool_is_refused` in `test_correction.py`.
+    assert {(m.step, m.metric) for m in members} == {
+        ("step03_screen", "prob"),
+        ("step03_screen", "auroc"),
+    }
+    assert all(m.pool is not None and m.weights is None for m in members)
+
+
+def test_the_c2_and_c3_shape_publishes_a_weighted_declared_contrast():
+    """C2 and C3 — a declared `statistics.contrasts` entry rather than a baseline,
+    which is the other route to a comparison and the one `_compute_vs_baseline`
+    cannot reach. The same weighted, stratified numbers, on the record shape that
+    lands beside the conditions rather than inside one."""
+    from publishable.cli import _compute_declared_contrasts
+
+    doc = {
+        "statistics": {
+            "contrasts": [
+                {
+                    "id": "sensitivity",
+                    "of": "regime=zero_shot",
+                    "against": "regime=utilization_only",
+                }
+            ]
+        }
+    }
+    out, members = _compute_declared_contrasts(doc=doc, **_c_shape_common())
+    assert out is not None
+    entry = out[0]
+    assert entry["id"] == "sensitivity"
+    column = entry["step03_screen"]["prob"]
+    assert column["delta"] == pytest.approx(8.0)
+    assert column["method"] == "weighted_paired_percentile_over_units"
+    assert column["n_paired_effective"] == pytest.approx(4.8)
+    assert column["ci95"][0] >= 7.0 - 1e-9
+    assert [m.where for m in members] == ["contrast:sensitivity"] * 2
+
+
+def test_a_weighted_report_by_level_mints_no_member_and_no_delta():
+    """§ Reporting strata: strata "repeat `aggregated` metrics only, never
+    `vs_baseline` or a contrast's delta", and they do not join the correction
+    family. All three C configs declare `report_by`, so the boundary is live on
+    exactly the shapes this task exercises — and `_comparison_step_blocks` excludes
+    the `by` key from its per-metric loop, which is what makes a stratum unable to
+    become a comparison.
+
+    Asserted as an absence beside a presence that must report: the two real
+    metrics are still there, so a loop that produced nothing at all would fail
+    rather than pass."""
+    from publishable.cli import _compute_vs_baseline
+
+    common = _c_shape_common()
+    common["aggregated"][1]["step03_screen"]["by"] = {"sex": {"f": {"prob": 5.0}}}
+    common["aggregated"][0]["step03_screen"]["by"] = {"sex": {"f": {"prob": 0.0}}}
+    out, members = _compute_vs_baseline(doc={}, **common)
+    assert out is not None
+    assert set(out[1]["step03_screen"]) == {"prob", "auroc"}
+    assert len(members) == 2
+
+
+def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
+    """Fix round 1, M4. § Validation's *Allocation deltas aren't computed* row
+    cited *Weighted deltas aren't computed* by name — the identical dangling
+    citation task 11 removed from its § Errors twin, `E-DATA-ALLOCATION-
+    CONTRAST`'s row, in the same commit. Task 13 deletes *Weighted deltas
+    aren't computed*, so the § Validation row would have gone on citing a row
+    that no longer exists. *Clustered deltas aren't computed* is not deleted
+    by task 13, so that citation stays.
+
+    Located by heading rather than by row-relative position, so a later
+    insertion above this row cannot make the assertion pass by accident."""
+    lines = REFERENCE_MD.read_text().split("\n")
+    allocation = next(
+        line for line in lines if line.startswith("| Allocation deltas aren't computed")
+    )
+    assert "Clustered deltas aren't computed" in allocation  # the control
+    assert "per comparison" in allocation  # the control
+    assert "Weighted deltas aren't computed" not in allocation

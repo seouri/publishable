@@ -3827,3 +3827,293 @@ def test_percentile_of_derived_is_invariant_to_stratum_labels():
     a = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata)
     b = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata_renamed)
     assert a == b
+
+
+_PAIRED_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 9.0},
+    "u4": {"m": 10.0},
+    "u5": {"m": 11.0},
+}
+_PAIRED_AGAINST = {k: {"m": 0.0} for k in _PAIRED_OF}
+_PAIRED_KEYS = ["u0", "u1", "u2", "u3", "u4", "u5"]
+_PAIRED_STRATA = {"u0": "A", "u1": "A", "u2": "A", "u3": "B", "u4": "B", "u5": "B"}
+
+
+def _mean_of_m(table):
+    column = table.m
+    return float(sum(column) / len(column))
+
+
+def test_a_stratified_paired_draw_preserves_each_stratums_key_count():
+    """`reference.md` § Weighted samples: `resample.stratify_by` says what an
+    independent draw is, "resampling within each stratum so a bootstrap can't
+    return a replicate whose stratum composition the design ruled out".
+
+    The assertion is a FORCED BOUND, not an observation. A stratified draw is
+    always three `A` keys and three `B` keys, so the smallest mean it can produce
+    is three copies of `u0` (1.0) and three of `u3` (9.0) — exactly 5.0. An
+    unstratified draw can go to 4.33 with five `A` keys and one `B`, and does at
+    this seed and draw count. Neither the RNG nor the draw count can move the
+    bound, which is what makes this test discriminating rather than lucky."""
+    from publishable.stats import paired_percentile_of_derived
+
+    stratified = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=_PAIRED_STRATA,
+    )
+    plain = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_AGAINST,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+    )
+    assert min(stratified.pool) >= 5.0 - 1e-9
+    # The control that must report: the same seed and draw count without strata
+    # reaches below the forced floor, so the bound above is the stratification and
+    # not a pool that happens to start high.
+    assert min(plain.pool) < 5.0
+    assert stratified.draws_used == 200
+    assert plain.draws_used == 200
+
+
+def test_a_stratified_paired_draw_still_draws_once_for_both_sides():
+    """The property stratification must not cost. One drawn key list feeds both
+    tables, so what is resampled is the difference — drawing each side's strata
+    independently would resample the two conditions apart, the failure this
+    construction's docstring argues about the unstratified draw.
+
+    Pinned by an oracle rather than by inspection: with `against` holding the same
+    column as `of`, a single shared draw cancels to exactly zero on every draw, so
+    a zero-width pool at zero is proof the two tables saw the same keys. Two
+    independent draws could not produce it."""
+    from publishable.stats import paired_percentile_of_derived
+
+    got = paired_percentile_of_derived(
+        _PAIRED_OF,
+        _PAIRED_OF,
+        _PAIRED_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=200,
+        strata=_PAIRED_STRATA,
+    )
+    assert set(got.pool) == {0.0}
+
+
+def test_a_stratum_mapping_missing_a_drawn_key_is_a_core_defect():
+    """Indexed, not `.get`-ed — the discipline `percentile_of_derived`'s own
+    `strata` branch states: a caller whose roster and mapping have come to
+    disagree about which units exist is a core defect, not a silent extra
+    stratum."""
+    from publishable.stats import paired_percentile_of_derived
+
+    with pytest.raises(KeyError):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            _PAIRED_KEYS,
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata={"u0": "A"},
+        )
+
+
+def test_an_unsorted_key_list_with_strata_is_a_core_defect():
+    """The relabelling invariance above depends on `grouped`'s first-occurrence
+    order coinciding with pool content order, which holds only when `keys` is
+    ascending — the same precondition `percentile_of_derived` enforces itself by
+    sorting its own `collapsed` keys rather than trusting a caller. This
+    function trusts `paired_keys` to hand it a sorted list instead of sorting
+    defensively, so a caller that stops doing so is a bookkeeping error worth
+    raising on."""
+    from publishable.stats import paired_percentile_of_derived
+
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            ["u3", "u4", "u5", "u0", "u1", "u2"],
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata=_PAIRED_STRATA,
+        )
+
+
+_UNEQUAL_OF = {
+    "u0": {"m": 1.0},
+    "u1": {"m": 2.0},
+    "u2": {"m": 3.0},
+    "u3": {"m": 4.0},
+    "u4": {"m": 100.0},
+    "u5": {"m": 200.0},
+}
+_UNEQUAL_AGAINST = {k: {"m": 0.0} for k in _UNEQUAL_OF}
+_UNEQUAL_KEYS = ["u0", "u1", "u2", "u3", "u4", "u5"]
+_UNEQUAL_STRATA = {"u0": "A", "u1": "A", "u2": "B", "u3": "B", "u4": "B", "u5": "B"}
+
+
+def test_a_relabelled_stratum_draws_the_identical_sequence():
+    """The invariance `percentile_over_units` and `percentile_of_derived` both
+    keep, and for the identical reason: pools are ordered by their own sorted
+    contents rather than by label, so renaming a stratum cannot change the
+    interval.
+
+    **The strata are deliberately unequal-sized (2 and 4) with values that do
+    not merely offset by a constant** (1, 2 against 3, 4, 100, 200) — an earlier
+    version of this test used equal-sized strata differing by a constant, under
+    which every drawn difference shifts by the same amount regardless of which
+    pool is drawn first, so a genuine relabelling bug (swapping which pool a
+    label points at) was invisible: it passed under a label-order mutation that
+    should have failed it. This fixture breaks that translation symmetry, and a
+    label-order mutation (`pools = [sorted(group) for _lab, group in
+    sorted(grouped.items())]`, ordering by the label string rather than by pool
+    contents) was verified to make the two calls' pools differ before this test
+    was written; only the shipped content-ordering makes them agree."""
+    from publishable.stats import paired_percentile_of_derived
+
+    swapped = {k: ("B" if v == "A" else "A") for k, v in _UNEQUAL_STRATA.items()}
+    first = paired_percentile_of_derived(
+        _UNEQUAL_OF,
+        _UNEQUAL_AGAINST,
+        _UNEQUAL_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=100,
+        strata=_UNEQUAL_STRATA,
+    )
+    second = paired_percentile_of_derived(
+        _UNEQUAL_OF,
+        _UNEQUAL_AGAINST,
+        _UNEQUAL_KEYS,
+        _mean_of_m,
+        _mean_of_m,
+        seed=7,
+        draws=100,
+        strata=swapped,
+    )
+    assert first.pool == second.pool
+
+
+def test_a_weighted_dz_standardizes_by_the_weighted_standard_deviation():
+    """`reference.md` § Statistical reporting: "A weighted condition standardizes by
+    the weighted standard deviation, on the same weights the mean used."
+
+    Exact arithmetic, not an observation. Σw = 12, Σw² = 30, so the denominator is
+    12 − 30/12 = 9.5; Σw(d − 8)² = 49 + 36 + 25 + 3 + 12 + 27 = 152; 152/9.5 = 16.0,
+    sd = 4.0, dz = 8.0/4.0 = 2.0. The unweighted answer over the same differences
+    is 6/√20 = 1.3416..., so a weighting that did nothing lands on a different
+    number rather than on this one."""
+    from publishable.stats import cohens_dz, weighted_cohens_dz
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    assert weighted_cohens_dz(diffs, [1, 1, 1, 3, 3, 3]) == pytest.approx(2.0)
+    assert cohens_dz(diffs) == pytest.approx(1.3416407864998738)
+
+
+def test_a_weighted_dz_at_equal_weights_is_the_unweighted_one():
+    """The oracle, and the reason the variance denominator is `Σw − Σw²/Σw` rather
+    than `Σw`: at w ≡ 1 it is n − 1, so this is a generalization rather than a
+    second statistic wearing the same name. If this ever fails, the formula is
+    wrong rather than this test."""
+    from publishable.stats import cohens_dz, weighted_cohens_dz
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    assert weighted_cohens_dz(diffs, [1] * 6) == pytest.approx(cohens_dz(diffs))
+    # Invariant to rescaling, as every weighted construction here is: a weight
+    # column summing to a population size gives the same answer as one summing to
+    # the row count.
+    assert weighted_cohens_dz(diffs, [7] * 6) == pytest.approx(cohens_dz(diffs))
+
+
+def test_a_weighted_dz_refuses_the_degenerate_shapes_the_unweighted_one_does():
+    """`None` below two differences, and `None` at zero dispersion — the two
+    refusals `cohens_dz` carries, kept so the pair refuses the same inputs.
+
+    Plus the one the weights add: a non-positive denominator. It is NOT
+    reachable by concentrating all the weight on one unit — `Σw − Σw²/Σw` for
+    two or more strictly positive weights is algebraically positive, and a
+    fixture that only probed `[1, 0]` (refused earlier, by `checked_weights`)
+    would wrongly generalize that no fixture reaches this line. It IS reachable
+    by a weight ratio wide enough that `Σw²/Σw` rounds to `Σw` in floating
+    point: `[1e17, 1.0]` computes a denominator of exactly `0.0`, verified
+    directly below rather than only through the `None` it produces."""
+    from publishable.stats import weighted_cohens_dz
+
+    assert weighted_cohens_dz([1.0], [1]) is None
+    assert weighted_cohens_dz([2.0, 2.0], [1, 3]) is None
+    total = 1e17 + 1.0
+    assert total - (1e17 * 1e17 + 1.0) / total == 0.0
+    assert weighted_cohens_dz([1.0, 2.0], [1e17, 1.0]) is None
+
+
+def test_a_weighted_paired_t_is_the_weighted_construction_under_a_paired_name():
+    """The general case's raw interval, and its corrected counterpart. Delegates to
+    `weighted_t_over_units` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units` — so the `Σw − Σw²/Σw`
+    denominator, the Kish df and the rescaling invariance are inherited rather than
+    re-derived.
+
+    The centre is exact arithmetic: Σwd/Σw = 96/12 = 8.0 weighted against 36/6 =
+    6.0 unweighted. A centre is asserted rather than an endpoint because it is
+    exact under any df, so this cannot be a test that agrees with a wrong critical
+    value."""
+    from publishable.stats import paired_t_over_units, weighted_paired_t_over_units
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    weighted = weighted_paired_t_over_units(diffs, [1, 1, 1, 3, 3, 3])
+    plain = paired_t_over_units(diffs)
+    assert weighted is not None and plain is not None
+    assert (weighted.low + weighted.high) / 2 == pytest.approx(8.0)
+    assert (plain.low + plain.high) / 2 == pytest.approx(6.0)
+    assert weighted.method == "weighted_paired_t_over_units"
+    assert plain.method == "paired_t_over_units"
+    # The df moved too, and it is the part that bites: Kish's size here is
+    # 12²/30 = 4.8 against 6 units, so the weighted half-width is wider than the
+    # weighted sem alone would give. Pinned only as an inequality against the
+    # unweighted half-width — the Kish df itself is pinned elsewhere, by
+    # `test_the_weighted_interval_is_the_t_interval_at_kishs_effective_size`
+    # and by this file's own equal-weights oracle above.
+    assert (weighted.high - weighted.low) != pytest.approx(plain.high - plain.low)
+
+
+def test_a_weighted_paired_t_at_equal_weights_is_the_unweighted_one():
+    """The oracle. Equal weights must reproduce `paired_t_over_units` digit for
+    digit — endpoints, not merely centre — which is what `weighted_t_over_units`'
+    variance denominator buys and what a `Σw` denominator would break."""
+    from publishable.stats import paired_t_over_units, weighted_paired_t_over_units
+
+    diffs = [1.0, 2.0, 3.0, 9.0, 10.0, 11.0]
+    weighted = weighted_paired_t_over_units(diffs, [1] * 6)
+    plain = paired_t_over_units(diffs)
+    assert weighted is not None and plain is not None
+    assert weighted.low == pytest.approx(plain.low)
+    assert weighted.high == pytest.approx(plain.high)
+
+
+def test_a_weighted_paired_t_returns_none_when_kish_falls_below_two():
+    """Inherited from `weighted_t_over_units`, and worth its own pin because the
+    record shape it produces is new: `ci95: null` beside a present `weighted_by`
+    and an `n_paired_effective` below 2. Eight rows concentrated onto 1.7
+    effective units have no more dispersion for a df to describe than one row
+    does. Weights [1,1,1,9] give 12²/84 = 1.714."""
+    from publishable.stats import weighted_paired_t_over_units
+
+    assert weighted_paired_t_over_units([1.0, 2.0, 3.0, 10.0], [1, 1, 1, 9]) is None

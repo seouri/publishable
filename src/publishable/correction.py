@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from publishable.stats import interval_at, paired_t_over_units
+from publishable.stats import interval_at, paired_t_over_units, weighted_paired_t_over_units
 
 ALPHA = 0.05
 
@@ -30,6 +30,12 @@ class Member:
     Neither may reach `run.yaml`: they are tuples so a member cannot be mutated
     into the record by accident. `pool` must already be sorted ascending —
     `interval_at` reads fixed ranks off it and does not sort.
+
+    `weights`, when set, is the weight vector a weighted column contrast's
+    `diffs` were weighted by, one weight per difference and in the same order —
+    a modifier on that evidence rather than a third kind of it, so it travels
+    alongside `diffs` and never alongside `pool`. `None` is the default and the
+    shape every construction predating this field still builds.
     """
 
     where: str
@@ -40,6 +46,7 @@ class Member:
     pool: tuple[float, ...] | None
     diffs: tuple[float, ...] | None
     declaration_index: int
+    weights: tuple[Any, ...] | None = None
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
@@ -60,7 +67,30 @@ class Member:
         prevent. Neither set would make `_corrected_bounds` return `None` for
         a reason that has nothing to do with the pool being too small, so
         `thin: True` would fire over a member that was never thin.
+
+        **`weights` is a modifier on `diffs`, not a third kind of evidence**, so
+        it does not enter the exactly-one rule and is checked separately. A
+        weighted column contrast's raw interval is `weighted_paired_t_over_units`
+        over those differences, and the corrected bound has to be the same
+        construction at a smaller α or it is a counterpart in name only. Beside
+        `pool` it would be applied twice — a percentile pool is already built
+        from weighted draws — and at a different length it is a misaligned vector,
+        the failure class that produces a plausible number rather than an error.
+        Both are `cli`'s bookkeeping to get right, so both raise `ValueError` for
+        the reason the rule above does.
         """
+        if self.weights is not None:
+            if self.pool is not None:
+                raise ValueError(
+                    "Member weights modify diffs, not a pool; a percentile pool is "
+                    "already drawn from weighted values"
+                )
+            if self.diffs is None or len(self.weights) != len(self.diffs):
+                raise ValueError(
+                    "Member weights must be the same length as diffs, not "
+                    f"{len(self.weights)} against "
+                    f"{'no diffs' if self.diffs is None else len(self.diffs)}"
+                )
         if self.ci95 is None:
             return
         if (self.pool is None) == (self.diffs is None):
@@ -155,8 +185,9 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
 
     **What decides the construction is which field the member carries, not what
     kind of metric it is.** A member carrying per-unit differences re-runs
-    `paired_t_over_units` over them — exact at any α. A member carrying a draw
-    pool reads a second rank pair off it. A derived metric always carries a
+    `paired_t_over_units` over them, or `weighted_paired_t_over_units` when the
+    member also carries `weights` — exact at any α either way. A member
+    carrying a draw pool reads a second rank pair off it. A derived metric always carries a
     pool; a recorded column carries differences by default and **carries a pool
     instead under a declared `statistics.resample`**, because its raw interval
     was then a percentile and a *t* corrected bound would be its counterpart in
@@ -170,7 +201,17 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     precisely the number a reader cannot tell is wrong.
     """
     if member.diffs is not None:
-        got = paired_t_over_units(member.diffs, confidence=1.0 - level)
+        # The weights, when the member carries them, decide WHICH t construction
+        # rebuilds the bound — the same evidence at a smaller α either way. A
+        # weighted raw interval with an unweighted corrected counterpart is
+        # narrower or wider than the truth by construction rather than by
+        # evidence, which is the fault `__post_init__`'s exactly-one rule refuses
+        # one axis over and which no reader of `run.yaml` could detect.
+        got = (
+            paired_t_over_units(member.diffs, confidence=1.0 - level)
+            if member.weights is None
+            else weighted_paired_t_over_units(member.diffs, member.weights, confidence=1.0 - level)
+        )
         return None if got is None else (got.low, got.high)
     if member.pool is not None:
         return interval_at(member.pool, 1.0 - level)

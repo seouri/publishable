@@ -65,13 +65,32 @@ through `validate_config` rather than re-derived from emit sites, in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. Both
 qualifications stay attached to that number: the plugin must exist and be installed, and a declared
 apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
-regardless of what a template declares — filed, owned by H7d). Six stay blocked on two causes neither
+regardless of what a template declares — filed, owned by H7d). Six stayed blocked on two causes neither
 of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
-(H4b) for C1–C3. Also closed: `hash_index` was broken for every source, table and glob included, not
-only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
+for C1–C3, **which H4b-1 has since retired** — see the entry below, where C1–C3 stay non-executable on
+`io.reuse_from` alone. Also closed: `hash_index` was broken for every source, table and glob included,
+not only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
 Part A left open — a resolver's raise now becomes a redacted diagnostic at both `validate` and `run`,
 except a `KeyboardInterrupt`, which is deliberately re-raised as a traceback carrying no message so
 Ctrl-C still stops the command.
+
+**H4b-1 (weights through contrasts) merged on 2026-08-17.** `E-DATA-WEIGHT-CONTRAST` is retired. A
+`data.units.weight_by` declared beside a comparison now computes a weighted contrast over the paired
+intersection, its interval is its own construction there, and the record carries `weighted_by` and
+`n_paired_effective`. **No-remaining-core-side-blocker goes three → six** — C1, C2 and C3 join E1, E2
+and E5 — measured the same way, by running each config's blocks through `validate_config`. **The
+executable count stays at three**, because C1–C3 also need `io.reuse_from`, still unbuilt and unowned;
+that gap is why "no remaining core-side blocker" is the honest phrase here and "executes" is not.
+Three things worth carrying. The refusal's own message, its § Errors row and the charter all named
+`paired_t_over_units` as the estimator needing weights, and **all three C configs declare `resample`**,
+so the payoff actually runs through `paired_percentile_of_derived` — a slice built from that charter
+would have shipped a payoff that never runs. **The four documents gave a weighted contrast no `method`
+string at all**, so the vocabulary was minted in `reference.md` before any code emitted it. And a
+weighted contrast **whose metric is derived** is the exception: core hands the template the weight
+column and does not weight the delta itself, so the `method` stays unweighted and `cohens_d` is `null`
+while `weighted_by` and the effective size travel regardless. Out of scope with their routes: clusters
+through contrasts is **H4b-2**, which unblocks zero configs and still owns `E-DATA-CLUSTER-CONTRAST`;
+the unpaired forms are H4c; `null_test` is H4d.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the

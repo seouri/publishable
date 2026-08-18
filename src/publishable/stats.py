@@ -404,6 +404,34 @@ def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Int
     return Interval(low=plain.low, high=plain.high, method="paired_t_over_units")
 
 
+def weighted_paired_t_over_units(
+    diffs: Sequence[float], weights: Sequence[Any], confidence: float = 0.95
+) -> Interval | None:
+    """Student's *t* on the *weighted* per-unit differences, df = Kish's effective n − 1.
+
+    The contrast's interval is its own construction over the paired intersection,
+    never a difference of the two sides' intervals — `paired_t_over_units`'
+    argument, unchanged by the weighting.
+
+    Delegates to `weighted_t_over_units` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units`. That is not tidiness: it is
+    what makes the `Σw − Σw²/Σw` variance denominator, the Kish df, the exact
+    reduction to the unweighted form at equal weights, and the invariance to
+    rescaling the weights properties of ONE construction rather than of two that
+    can drift apart. A hand-rolled variance here is how a paired interval and a
+    per-condition one come to disagree about what a weighted interval is.
+
+    `None` below two differences and `None` when Kish's effective size falls below
+    two, both inherited: the record then carries `ci95: null` beside a present
+    `weighted_by` and an `n_paired_effective` below 2 — the weighting happened, and
+    there was no df to describe it with.
+    """
+    plain = weighted_t_over_units(diffs, weights, confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="weighted_paired_t_over_units")
+
+
 def cohens_dz(diffs: Sequence[float]) -> float | None:
     """The mean of the per-unit differences over their standard deviation.
 
@@ -414,6 +442,55 @@ def cohens_dz(diffs: Sequence[float]) -> float | None:
         return None
     mean = sum(diffs) / len(diffs)
     variance = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
+    sd = math.sqrt(variance)
+    return mean / sd if sd > 0 else None
+
+
+def weighted_cohens_dz(diffs: Sequence[float], weights: Sequence[Any]) -> float | None:
+    """The weighted mean of the per-unit differences over their weighted standard
+    deviation.
+
+    `reference.md` § Statistical reporting: "A weighted condition standardizes by
+    the weighted standard deviation, on the same weights the mean used." So the
+    same weights the delta was computed with, and no others — a *d* standardized by
+    an unweighted dispersion is a ratio of two different samples' summaries.
+
+    **The variance denominator is `Σw − Σw²/Σw`, not `Σw`**, the same choice
+    `weighted_t_over_units` argues at length: at w ≡ 1 it is n − 1, so equal
+    weights reproduce `cohens_dz` digit for digit and this is a generalization
+    rather than a second statistic wearing the same name. `Σw` would shrink the
+    denominator and inflate every *d*.
+
+    Invariant to rescaling the weights, as every weighted construction here is:
+    both the mean and the variance divide the scale out.
+
+    `None` below two differences and `None` at zero dispersion, the two refusals
+    `cohens_dz` carries, kept so the pair refuses the same inputs. `None` also
+    for a non-positive denominator — reachable not by concentrating all the
+    weight on one unit (`checked_weights` admits that; `Σw − Σw²/Σw` is still
+    strictly positive for two or more strictly positive weights, algebraically)
+    but by a **weight ratio wide enough that `Σw²/Σw` rounds to `Σw` in floating
+    point** — `weighted_cohens_dz([1.0, 2.0], [1e17, 1.0])`'s `Σw² / Σw` computes
+    to exactly `1e17`, indistinguishable from `Σw` at that magnitude, so the
+    subtraction is exactly `0.0` rather than merely small. Reporting no *d* for
+    an under-determined variance is the same honesty `t_over_units` already
+    practises below two values; inventing one from a denominator that has
+    rounded away is not.
+
+    `weights` is annotated `Any` for the reason `weighted_t_over_units`' is: a
+    weight is a unit attribute, `units._from_table` builds those from
+    `csv.DictReader`, and `units.usable_weight` — reached through
+    `checked_weights` — is the single gate `validate` approved the config against.
+    """
+    if len(diffs) < 2:
+        return None
+    w = checked_weights(weights)
+    total = sum(w)
+    denominator = total - sum(x * x for x in w) / total
+    if denominator <= 0:
+        return None
+    mean = _weighted_mean(w, diffs)
+    variance = sum(a * (d - mean) ** 2 for a, d in zip(w, diffs, strict=True)) / denominator
     sd = math.sqrt(variance)
     return mean / sd if sd > 0 else None
 
@@ -1142,6 +1219,8 @@ def paired_percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
+    method: str = "paired_percentile_over_units",
 ) -> PairedResample:
     """Percentiles of the resampled difference, one draw applied to both sides.
 
@@ -1166,14 +1245,87 @@ def paired_percentile_of_derived(
     nothing to raise. A caller that genuinely wants the same statistic on both
     sides passes the same callable twice; that's a normal call, not a special
     case this function has to detect.
+
+    `method` names the `Interval` the caller gets back, rather than this
+    function deriving one from a `weights` parameter it deliberately does not
+    take: this construction is shared by a derived contrast, which core does
+    not weight (the weight column reaches `aggregate` as a unit attribute
+    instead), and a recorded column's contrast, which it does — one
+    construction, two possible `method` strings, and the arithmetic that picks
+    between them lives in the caller's own resample closure, not here.
+
+    `strata`, when given, resamples within each stratum rather than over the
+    whole `keys` list — the same `resample.stratify_by` honoured per condition
+    by `percentile_over_units` and `percentile_of_derived`, honoured here for
+    the first time. **The pairing survives the stratification**: one drawn key
+    list still feeds both sides, so stratifying changes which keys are drawn
+    and never that the two sides see the same ones — drawing each side's strata
+    independently would resample the two conditions apart, the same failure the
+    unstratified draw's docstring above already argues about. `strata` is
+    indexed, not `.get`-ed, the discipline `percentile_of_derived`'s own
+    `strata` branch already keeps: a caller whose roster and mapping have come
+    to disagree about which units exist is a core defect, not a silent extra
+    stratum. Pools are ordered by their own sorted contents rather than by
+    label, so renaming a stratum draws the identical sequence of tables — the
+    same relabelling invariance `percentile_over_units` and
+    `percentile_of_derived` keep.
+
+    **Not built here:** its siblings' content-based degenerate refusal — if
+    every key in every stratum carries the identical recorded row, the draw is
+    a constant and the interval has zero width. `paired_percentile_of_derived`
+    has none of those refusals to begin with (a deferred finding
+    `docs/superpowers/spec-defects.md` already records), and a stratified
+    contrast is where it first becomes reachable through a near-unique
+    `stratify_by`; that sweep is filed rather than built, with a named owner.
     """
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
     n = len(keys)
+    # One pool per stratum, built by walking `keys` — which `paired_keys` returns
+    # sorted — so each pool's own contents come out sorted, and the pools are then
+    # ordered by those contents rather than by label. That is the same
+    # relabelling-invariance `percentile_over_units` and `percentile_of_derived`
+    # keep for the same reason: a renamed stratum must draw the identical sequence
+    # of tables. `strata` is indexed, not `.get`-ed, the discipline `weights` and
+    # `clusters` follow elsewhere here — a caller whose roster and mapping have
+    # come to disagree about which units exist is a core defect, not a silent
+    # extra stratum. It need not be exactly `keys`' set: a caller passing a
+    # roster-wide mapping simply never has the extra entries looked up.
+    #
+    # **`keys` must already be sorted ascending when `strata` is given.**
+    # `grouped`'s label order is first-occurrence order over this walk, and the
+    # relabelling invariance above holds only because that first-occurrence
+    # order coincides with content order whenever `keys` is ascending — the same
+    # precondition `percentile_of_derived` enforces itself by calling
+    # `sorted(collapsed)` rather than trusting its caller. This function trusts
+    # `paired_keys`, which returns its intersection sorted, so it checks instead
+    # of silently sorting: a caller that has stopped passing a sorted list is a
+    # bookkeeping error worth raising on, not one worth correcting quietly.
+    pools: list[list[str]] | None = None
+    if strata is not None:
+        if keys != sorted(keys):
+            raise ValueError(
+                "paired_percentile_of_derived requires keys sorted ascending "
+                "when strata is given, since the stratum pools' relabelling "
+                "invariance depends on first-occurrence order coinciding with "
+                "content order"
+            )
+        grouped: dict[str, list[str]] = {}
+        for key in keys:
+            grouped.setdefault(strata[key], []).append(key)
+        pools = sorted(sorted(group) for group in grouped.values())
     values: list[float] = []
     for _ in range(draws):
-        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        # ONE drawn key list, feeding BOTH sides — under strata exactly as
+        # without. Stratifying changes which keys are drawn and never that the two
+        # sides see the same ones; drawing each side's strata independently would
+        # resample the two conditions apart and destroy the pairing, which is the
+        # failure this function's docstring argues about the unstratified draw.
+        if pools is None:
+            drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        else:
+            drawn = [group[rng.randrange(len(group))] for group in pools for _ in range(len(group))]
         table_a = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
         table_b = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:
@@ -1199,7 +1351,7 @@ def paired_percentile_of_derived(
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
     return PairedResample(
-        interval=Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
+        interval=Interval(low=values[lo], high=values[hi], method=method),
         draws_used=len(values),
         pool=values,
     )
