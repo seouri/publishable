@@ -555,3 +555,36 @@ the new `sides` arm, **and the fixture that would discriminate cannot be built**
 carrying two kinds, which `__post_init__` raises on. The order's real protection is that refusal, and
 the plan says so in tasks 12 and 21 rather than prescribing a mutation that would pass. Verified by
 reading `Member.__post_init__` and `_corrected_bounds` together.
+
+### 11. Three probes the plan ran rather than reasoned about
+
+**Added after the plan's first draft**, on review. None is a disagreement with this document; each is a
+fact three of its tasks rest on and that nothing above measured.
+
+- **A `groups × grid` config runs end to end today.** Probed at `e40a219` through
+  `tests/test_cli.py`'s `run_a_project` with a two-arm roster, `unit_attributes=["arm"]`,
+  `units_overrides={"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}}` and no
+  declared contrast: **`EXIT_OK`**. Task 18's three run-through tests would otherwise have discovered
+  a scaffolding gap inside the single most complex commit in the plan.
+- **Its condition labels are `arm=control__method=pearson` and siblings** — group axis first, and the
+  parameter segment carrying the **leaf** name (`method`), not the dotted path (`analysis.method`).
+  Every `of`/`against` label in the plan's tasks 9, 16 and 18 uses that grammar. A wrong label does not
+  crash; it draws `E-STATS-CONTRAST-UNKNOWN` and the test fails attributing the wrong thing.
+- **`aggregate_returns` beside an `extra_step_source` summary-`Estimate` step produces a
+  recorded-column contrast (`paired_t_over_units`) AND a derived one
+  (`paired_percentile_over_units`) in one record, beside an untouched `reported: true` `Estimate`.**
+  That is task 21's boundary pin and task 18's derived run, and it was verified by running rather than
+  by reading `run_a_project`'s docstring.
+
+### 12. Two mechanical facts the plan's own conventions turned into edits
+
+- **`n_paired`'s record POSITION moves if the conditional write is appended.** § Contrasts' three
+  fenced examples all show it between `method` and the interval, `run.yaml` is emitted in insertion
+  order, and **nothing in `tests/` asserts contrast-entry key order** (measured at `e40a219`) — so
+  appending the key after `correction` would move it in every existing record with every test green,
+  which is the documented *"the test's reader normalising the defect away"* shape one axis over.
+  The plan writes the keys **in place** with a dict unpacking inside each record literal.
+- **A test-count absolute cannot be stated per task on this branch.** Three tasks rename tests, two
+  replace one in place, and two mutation steps instruct adding a discriminating test — so an absolute
+  would be wrong by one somewhere and wrong for every task after it. The plan states each task's
+  **delta** and requires the implementer to reconcile the absolute against their own previous run.

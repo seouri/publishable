@@ -163,8 +163,12 @@ scoping's `051600c`, and re-measured rather than carried:
 - `uv run ruff check .` → **All checks passed!**
 - `uv run mypy` → **Success: no issues found in 45 source files**
 
-A task that leaves the count below its own additions has broken something. Every task states its
-expected count.
+**Every task states its own DELTA, not an absolute.** Three tasks rename tests rather than adding
+them, two replace a test in place, and two mutation steps instruct adding a discriminating test — so
+an absolute stated here would be wrong by one somewhere and would then be wrong for every task after
+it, producing a chain of false stops. Each task says "the previous count + N"; **compute the absolute
+from your own previous run and reconcile any difference before committing.** A task that leaves the
+count below its own additions has broken something.
 
 **Disk is tight on this machine.** Before the first suite run, clear stale pytest temp directories:
 `rm -rf /private/tmp/pytest-of-* "$TMPDIR"/pytest-of-* 2>/dev/null`. There were none at
@@ -289,6 +293,19 @@ retiring or adding a declaration, and `_check_sweep`'s own comment makes that pl
 both of its existing codes. Likewise **no row moves in any `Status`-carrying table**:
 `tests/test_cli.py` asserts set equality between the document's `NOT BUILT` command rows and
 `cli.NOT_BUILT_COMMANDS`.
+
+**A `groups × grid` config runs end to end today, and its condition labels are these.** Probed at
+`e40a219` through `run_a_project` with a two-arm roster, `unit_attributes=["arm"]`,
+`units_overrides={"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}}`,
+`sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}], "grid": {"analysis.method":
+["pearson", "spearman"]}}` and **no declared contrast**: the run completed at `EXIT_OK` and
+`sweep.yaml`'s labels were **`arm=control__method=pearson`, `arm=control__method=spearman`,
+`arm=treatment__method=pearson`, `arm=treatment__method=spearman`** — group axis first, and the
+parameter segment carrying the **leaf** name (`method`) rather than the dotted path
+(`analysis.method`). Every `of`/`against` label in this plan uses that grammar. **A wrong label does
+not crash**: it draws `E-STATS-CONTRAST-UNKNOWN` and the test fails attributing the wrong thing, which
+is the "a refusal that happens to fire must be attributed" trap — so if a label does not resolve, print
+`sweep.yaml`'s own list rather than guessing again.
 
 **`tests/conftest.py` already has** an autouse `os.environ` restore, an opt-in `registries` fixture
 and an opt-in `installed` distribution fixture. **Do not add duplicates, and do not add a second
@@ -913,7 +930,7 @@ _H4C_CELLS = {
 
 
 @pytest.mark.parametrize("cell", sorted(_H4C_BASELINE))
-def test_every_paired_contrast_cell_is_byte_identical_across_this_branch(cell):
+def test_every_paired_contrast_cell_is_unmoved_across_this_branch(cell):
     """H4c derives `paired` at both metric branches and grows `_corrected_bounds`
     by two arms. Both are changes that can move a PAIRED contrast without moving
     anything a reader of one entry would notice, so all six reachable paired cells
@@ -1015,7 +1032,7 @@ def test_an_unpaired_pass_leaves_a_summary_estimate_alone(tmp_path, capsys):
       `n_paired` rather than on a width.
 
 - [ ] **Step 2: run and see all three pass.** `uv run pytest tests/test_cli.py -k
-      "byte_identical or grows_no_unpaired_key or summary_estimate_alone"` → **8 passed** (six
+      "cell_is_unmoved or grows_no_unpaired_key or summary_estimate_alone"` → **8 passed** (six
       parametrized cells plus two). **That is the point of a regression pin**: their value is
       entirely in Step 3's mutations, and in the tasks after this one that must keep them green.
       **If a cell fails here, stop**: the literal is wrong, not the code, and a wrong baseline
@@ -1036,7 +1053,7 @@ def test_an_unpaired_pass_leaves_a_summary_estimate_alone(tmp_path, capsys):
 
       **Mutation 2 — a corrected bound at the wrong confidence.** In `correction._corrected_bounds`,
       change the plain `diffs` arm's `confidence=1.0 - level` to `confidence=0.95`.
-      `test_every_paired_contrast_cell_is_byte_identical_across_this_branch[plain_t]` must **FAIL**
+      `test_every_paired_contrast_cell_is_unmoved_across_this_branch[plain_t]` must **FAIL**
       on `ci95_corrected`, seeing `[4.354794810376774, 8.311871856289892]` — the raw interval —
       where it expects `[4.002316360103361, 8.664350306563305]`. **Checked against the test body:**
       the two branches differ because Bonferroni over a family of 2 is α = 0.025 and
@@ -1050,8 +1067,7 @@ def test_an_unpaired_pass_leaves_a_summary_estimate_alone(tmp_path, capsys):
       Run each against the **full, unfiltered** suite in the foreground; revert each by editing the
       file back in place, never `git checkout --`.
 
-- [ ] **Step 4: run the gates.** `uv run pytest` → **2200 + 8 = 2208 passed**, 1 skipped,
-      2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
+- [ ] **Step 4: run the gates.** `uv run pytest` → **the previous count + 8**, 1 skipped, 2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
       `uv run mypy`.
 
 - [ ] **Step 5: Commit.**
@@ -1293,8 +1309,7 @@ def welch_t_over_units(
     return Interval(low=delta - half, high=delta + half, method="welch_t_over_units")
 ```
 
-- [ ] **Step 4: run and see them pass.** `uv run pytest` → **2208 + 4 = 2212 passed**, 1 skipped,
-      2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
+- [ ] **Step 4: run and see them pass.** `uv run pytest` → **the previous count + 4**, 1 skipped, 2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
       `uv run mypy`.
 
 - [ ] **Step 5: mutate — four mutations, and one named blind.**
@@ -1328,7 +1343,7 @@ def welch_t_over_units(
 
       **Mutation 4 — the extraction.** In `_sample_variance`, change `(len(values) - 1)` to
       `len(values)`. `test_the_extracted_sample_variance_leaves_t_over_units_where_it_was` must
-      **FAIL** on both of its assertions, **and** `test_every_paired_contrast_cell_is_byte_identical_across_this_branch[plain_t]`
+      **FAIL** on both of its assertions, **and** `test_every_paired_contrast_cell_is_unmoved_across_this_branch[plain_t]`
       from task 21 must **FAIL** on `ci95` — the pair is what says the extraction is watched from
       inside `stats.py` and from the record at once.
 
@@ -1458,8 +1473,7 @@ def cohens_ds(of: Sequence[float], against: Sequence[float]) -> float | None:
     return (mean_of - mean_against) / sd if sd > 0 else None
 ```
 
-- [ ] **Step 4: run and see them pass.** `uv run pytest` → **2212 + 3 = 2215 passed**, 1 skipped,
-      2 xfailed. Then the other three gates.
+- [ ] **Step 4: run and see them pass.** `uv run pytest` → **the previous count + 3**, 1 skipped, 2 xfailed. Then the other three gates.
 
 - [ ] **Step 5: mutate.**
 
@@ -1934,8 +1948,7 @@ def unpaired_percentile_of_sides(
       construction did not exist when this plan was written, so a stated literal would have been
       invented rather than computed.
 
-- [ ] **Step 6: run and see them pass.** `uv run pytest` → **2215 + 5 = 2220 passed**, 1 skipped,
-      2 xfailed. Then the other three gates.
+- [ ] **Step 6: run and see them pass.** `uv run pytest` → **the previous count + 5**, 1 skipped, 2 xfailed. Then the other three gates.
 
 - [ ] **Step 7: mutate — four mutations.**
 
@@ -2304,8 +2317,7 @@ def welch_t_over_units_clustered(
     )
 ```
 
-- [ ] **Step 5: run and see them pass.** `uv run pytest` → **2220 + 4 = 2224 passed**, 1 skipped,
-      2 xfailed. Then the other three gates.
+- [ ] **Step 5: run and see them pass.** `uv run pytest` → **the previous count + 4**, 1 skipped, 2 xfailed. Then the other three gates.
 
 - [ ] **Step 6: mutate — five mutations, and one named blind.**
 
@@ -2486,8 +2498,7 @@ def test_the_unpaired_clustered_percentile_is_invariant_to_relabelling():
       is the *"an assertion implied by another in the same test"* shape, and naming it is cheaper
       than a review round.
 
-- [ ] **Step 3: run the gates.** `uv run pytest` → **2224 + 3 = 2227 passed**, 1 skipped,
-      2 xfailed. Then the other three.
+- [ ] **Step 3: run the gates.** `uv run pytest` → **the previous count + 3**, 1 skipped, 2 xfailed. Then the other three.
 
 - [ ] **Step 4: mutate — three mutations.**
 
@@ -2893,8 +2904,7 @@ def crossed_group_axes(of: "Condition", against: "Condition") -> list[str]:
       **Check every row this insertion moved**, and every count phrase near it — a positional locator
       wrong twice in this repo was falsified by exactly this kind of insertion.
 
-- [ ] **Step 6: run and see them pass.** `uv run pytest` → **2227 + 7 = 2234 passed**, 1 skipped,
-      2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
+- [ ] **Step 6: run and see them pass.** `uv run pytest` → **the previous count + 7**, 1 skipped, 2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
       `uv run mypy`. Run the mechanical pass over `docs/reference.md`.
 
 - [ ] **Step 7: mutate — four mutations.**
@@ -3359,9 +3369,29 @@ def unpaired_keys(
       purpose: task 17a counts `'"paired": True'` in this function's source and must fail in exactly
       one commit, task 13's. **Do not derive it here.**
 
-      **(vi) The two count blocks become conditional.** Replace the unconditional `"n_paired"` entry
-      in both record literals with a shared block after them, beside the existing
-      `if weights is not None:` block:
+      **(vi) The count keys become conditional IN PLACE, not appended after the literal.** Replace the
+      `"n_paired": n_paired,` line in **each** record literal with an unpacking, so the conditional
+      write keeps the key's **position** between `method` and `ci95`:
+
+```python
+                    **(
+                        {"n_paired": len(base_keys) if is_derived else len(col_keys)}
+                        if is_paired
+                        else {"n_of": len(of_col), "n_against": len(against_col)}
+                    ),
+```
+
+      **Why position and not just presence.** § Contrasts' three fenced examples all show `n_paired`
+      between `method` and the interval, and `run.yaml` is emitted in insertion order — so appending
+      the key after `correction` would move it in every existing record while every test reading the
+      record through `yaml.safe_load` stayed green. **That is the documented shape where a reader
+      normalises the defect away**: a mapping's key order lives in the serialization, and
+      `safe_load` discards it. Measured at `e40a219`: nothing in `tests/` asserts contrast-entry key
+      order, so nothing would have caught it. Writing the keys in place costs one expression and
+      removes the question, and it is what lets task 21's pin mean what its name says.
+
+      The three-line comment that justified the unconditional write goes above the unpacking, once, in
+      the branch a reader meets first:
 
 ```python
             # § Contrasts: `n_paired` is the intersection, and a PAIRED contrast has
@@ -3371,13 +3401,6 @@ def unpaired_keys(
             # meaning, a pairing that failed, which is the whole reason this key is
             # absent here rather than zero. Absent, not null, the shape `weighted_by`
             # and `n_paired_effective` already use.
-            if is_paired:
-                metric_block[metric_key]["n_paired"] = (
-                    len(base_keys) if is_derived else len(col_keys)
-                )
-            else:
-                metric_block[metric_key]["n_of"] = len(of_col)
-                metric_block[metric_key]["n_against"] = len(against_col)
 ```
 
       and the cluster block becomes:
@@ -3418,12 +3441,33 @@ def unpaired_keys(
       task report: **task 16 owns the per-side warning and its message**, and a placeholder that
       warns on the thinner side is the reading that cannot under-report in the interim.
 
-- [ ] **Step 5: run and see them pass.** `uv run pytest` → **2234 + 8 = 2242 passed**, 1 skipped,
-      2 xfailed. **Task 21's six-cell pin and `test_a_paired_contrast_entry_still_grows_no_unpaired_key`
+- [ ] **Step 5: sweep for readers of `n_paired`, and confirm each is on a paired fixture.** Decision 5
+      measured that the readers are the two write sites and `tests/` alone — nothing in `attrition`,
+      `_entry_for` or the hypothesis `observed` path reads it — and **this task is where that
+      measurement has to hold rather than be trusted**, because it is where the key becomes
+      conditional:
+
+```bash
+grep -rn 'n_paired' src/ tests/ | grep -v 'n_paired_effective\|n_paired_clusters'
+# the can-fail control: a key that IS read outside cli
+grep -rn 'n_paired_clusters' src/ tests/ | head
+```
+
+      **Filter the file list, never the output** — the `grep -v` above filters two sibling **key
+      names**, which is a different operation from discarding lines that matched. Read every hit and
+      record in the task report whether it is a write, a paired-fixture read, or a reader that would
+      see the key absent. **A reader that would see it absent is a finding this task closes**, not a
+      later task's; every one measured at `e40a219` is a write or a paired-fixture read, so this is
+      expected to be a no-op — and *"likely a no-op"* recorded is different from unowned.
+      `test_a_derived_contrast_over_an_empty_stratum_reports_no_delta` is the read that must stay
+      green: it asserts `n_paired == 0` for a **paired** contrast whose stratum matched nobody, and it
+      is the live proof that `0` means pairing failed.
+
+- [ ] **Step 6: run and see them pass.** `uv run pytest` → **the previous count + 7**, 1 skipped, 2 xfailed. **Task 21's six-cell pin and `test_a_paired_contrast_entry_still_grows_no_unpaired_key`
       must both still be green** — if either fails, the paired arm moved and the fix is here, not in
       the pin. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files), `uv run mypy`.
 
-- [ ] **Step 6: mutate — five mutations.**
+- [ ] **Step 7: mutate — five mutations.**
 
       **Mutation 1 — `paired_keys` for both.** In the unpaired arm, change `of_side_keys` and
       `against_side_keys` to `base_keys`. `test_an_unpaired_contrasts_delta_is_a_difference_of_two_side_means`
@@ -3461,7 +3505,7 @@ def unpaired_keys(
 
       Run each against the **full, unfiltered** suite in the foreground; revert by editing back.
 
-- [ ] **Step 7: Commit.**
+- [ ] **Step 8: Commit.**
 
 ```bash
 git add src/publishable/stats.py src/publishable/cli.py tests/test_stats.py tests/test_cli.py
@@ -3751,8 +3795,7 @@ class UnpairedEvidence:
       the comment above states the general form, so **delete the docstring sentence rather than
       re-enumerate it**.
 
-- [ ] **Step 5: run and see them pass.** `uv run pytest` → **2242 + 4 = 2246 passed**, 1 skipped,
-      2 xfailed. Then the other three gates.
+- [ ] **Step 5: run and see them pass.** `uv run pytest` → **the previous count + 4**, 1 skipped, 2 xfailed. Then the other three gates.
 
 - [ ] **Step 6: mutate — four mutations.**
 
@@ -4006,8 +4049,7 @@ def test_the_five_t_arms_are_each_reached_by_one_member_shape():
       order matters. **Do not add a count of arms to the docstring**: the prose rule is no counts, and
       a count here would go stale the next time a construction lands.
 
-- [ ] **Step 4: run and see them pass.** `uv run pytest` → **2246 + 4 = 2250 passed**, 1 skipped,
-      2 xfailed. **Task 21's six cells must all still be green** — `_corrected_bounds` gaining an arm
+- [ ] **Step 4: run and see them pass.** `uv run pytest` → **the previous count + 4**, 1 skipped, 2 xfailed. **Task 21's six cells must all still be green** — `_corrected_bounds` gaining an arm
       above the `diffs` branch is precisely what that pin's `ci95_corrected` literals exist to catch.
       Then the other three gates.
 
@@ -4219,8 +4261,7 @@ def test_differing_axes_docstring_names_no_caller():
     back is a true cycle, and `contrasts` sits below both.
 ```
 
-- [ ] **Step 4: run and see them pass.** `uv run pytest` → **2250 + 2 = 2252 passed**, 1 skipped,
-      2 xfailed. **The count is +2 and not +3** because the replaced test occupied one of the three
+- [ ] **Step 4: run and see them pass.** `uv run pytest` → **the previous count + 2**, 1 skipped, 2 xfailed. **The count is +2 and not +3** because the replaced test occupied one of the three
       names — confirm that arithmetic against the actual output rather than assuming it, and if the
       number differs, find out why before committing.
 
@@ -4546,8 +4587,7 @@ def test_an_unpaired_clustered_contrast_records_its_two_counts_and_a_cluster_rob
       equal any of fixture A's four mutant half-widths. If it equals one of them, change the cluster
       split and say why.
 
-- [ ] **Step 5: run and see them pass.** `uv run pytest` → **2252 + 8 = 2260 passed**, 1 skipped,
-      2 xfailed. Task 21's six cells must still be green. Then the other three gates.
+- [ ] **Step 5: run and see them pass.** `uv run pytest` → **the previous count + 8**, 1 skipped, 2 xfailed. Task 21's six cells must still be green. Then the other three gates.
 
 - [ ] **Step 6: mutate — five mutations.**
 
@@ -4822,8 +4862,7 @@ def test_the_validate_time_thin_warning_names_no_key_it_cannot_promise(
       alike. **Re-read the whole message and the whole comment block above it** — the comment argues
       about skipping a stratum whose attribute was just refused, which is unaffected.
 
-- [ ] **Step 5: run and see them pass.** `uv run pytest` → **2260 + 4 = 2264 passed**, 1 skipped,
-      2 xfailed. **The existing validate-side test asserting `"2 of 12 units"` must still be green**,
+- [ ] **Step 5: run and see them pass.** `uv run pytest` → **the previous count + 5**, 1 skipped, 2 xfailed. **The existing validate-side test asserting `"2 of 12 units"` must still be green**,
       and every `W-STATS-CONTRAST-THIN` presence/absence test in both files must be unchanged. Then
       the other three gates.
 
@@ -5225,7 +5264,7 @@ def test_the_derived_suppression_reads_the_pairing_answer_not_an_empty_intersect
       | `tests/test_cli.py::test_the_allocation_refusal_row_states_its_own_reading` | Its `_row("E-DATA-ALLOCATION-CONTRAST")` raises `StopIteration` once the row is deleted. **Convert it to the same check over `E-DATA-WEIGHT-ALLOCATION-CONTRAST`'s row**, which task 9 wrote with a `per comparison` clause for exactly this reason, and rename accordingly |
       | The `tests/test_cli.py` comment reading *"either would draw `E-DATA-ALLOCATION-CONTRAST` instead of validating"* | Read the test it belongs to and repair the claim. If the config it describes now validates, say that instead — the comment exists to explain a fixture choice, and the choice may no longer need explaining |
 
-- [ ] **Step 6: run the gates.** `uv run pytest` → **2264 + 4 = 2268 passed**, 1 skipped, 2 xfailed —
+- [ ] **Step 6: run the gates.** `uv run pytest` → **the previous count + 4**, 1 skipped, 2 xfailed —
       **and check that arithmetic against the actual output**, since several tests are renamed rather
       than added and one may be merged. If the number differs, find out which test moved before
       committing. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
@@ -5371,8 +5410,7 @@ def test_expansion_modes_says_a_cross_arm_contrast_is_computed():
     assert "E-DATA-ALLOCATION-CONTRAST" not in section
 ```
 
-- [ ] **Step 4: run the gates and both passes.** `uv run pytest` → **2268 + 2 = 2270 passed**, 1
-      skipped, 2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
+- [ ] **Step 4: run the gates and both passes.** `uv run pytest` → **the previous count + 2**, 1 skipped, 2 xfailed. Then `uv run ruff check .`, `uv run ruff format --check .` (80 files),
       `uv run mypy`. Then the **mechanical** pass over `docs/reference.md` and
       `docs/experimental-designs.md`, and the **cross-document** pass over all four documents —
       § Mistakes core prevents is one of its named classes, and this task edits it.
@@ -5517,7 +5555,7 @@ PY
 
       **Do not edit any earlier dated section.** They are measurements on their dates.
 
-- [ ] **Step 5: run the gates.** `uv run pytest` → **2270 + 1 = 2271 passed**, 1 skipped, 2 xfailed.
+- [ ] **Step 5: run the gates.** `uv run pytest` → **the previous count + 1**, 1 skipped, 2 xfailed.
       Then the other three. Run the **mechanical** pass over `docs/feasibility-llm-growth-studies.md`
       — it is exempt from the cross-document pass and subject to the mechanical one in full,
       including `×` for multiplication and hyphens in anchors.
@@ -5659,7 +5697,7 @@ found, not that it was run.
 | 2 — `Member`'s third evidence *kind*, one field, exactly-one counted over three, both modifiers "never beside `sides`", `_corrected_bounds` to five *t* arms | Task 11 (the type, the field, the counted rule, both modifier checks), task 12 (five *t* arms plus the unchanged `pool` arm, counted; `correction.py` as the second production call site, written first) |
 | 3 — four spellings, `reference.md` first, no new table rows, the df clause scoped to the *t* forms, no reuse of `paired_percentile_of_derived` | Task 1 (the ruling, the narrowing, the clause), task 6 (`unpaired_percentile_of_sides` as a new construction with the argument written into its docstring), task 8 (the second spelling through `method=`), task 22 Step 2 (the clause's re-read tripwire) |
 | 4 — Welch-Satterthwaite over two cluster-robust per-side variances, each contributing `G_s` − 1 | Task 1 (the document clause), task 7 (the construction, with both rejected readings named and mutations 1–3 separating all three) |
-| 5 — `n_paired` **absent**, `n_of`/`n_against` and `n_clusters_of`/`n_clusters_against` in its place, `n_paired_effective` with no counterpart | Task 2 (documented first, with the absent-not-null argument), task 10 (emitted conditionally, mutation 3 pinning the rejection of `n_paired: 0`), task 21 (`test_a_paired_contrast_entry_still_grows_no_unpaired_key` reading the obligation in the other direction) |
+| 5 — `n_paired` **absent**, `n_of`/`n_against` and `n_clusters_of`/`n_clusters_against` in its place, `n_paired_effective` with no counterpart, and **absence-tolerance in the readers** | Task 2 (documented first, with the absent-not-null argument), task 10 (emitted conditionally **in place** so the key's position does not move, mutation 3 pinning the rejection of `n_paired: 0`, and Step 5 sweeping every reader with a can-fail control), task 21 (`test_a_paired_contrast_entry_still_grows_no_unpaired_key` reading the obligation in the other direction) |
 | 6 — `W-STATS-CONTRAST-THIN` and `limits.min_reported_n` per side, firing where **either** is below | Task 2 (§ Contrasts restated), task 16 (both emit sites, with an asymmetric fixture and two silent-reading mutations) |
 | 7 — the retirement last, `paired` derived from ONE expression with two callers | Task 9 (the predicate minted, first caller), task 13 (second caller, three literals derived), task 18 (last among the code tasks, carrying the `validate`-clean and `run`-through halves) |
 | 8 — suppress the derived unpaired case on a guard reading the pairing answer, two grounds in one guard, verified by `run` | Task 2 (documented), task 15 (the guard, in task 18's commit, with the proxy-discriminating control test and mutation 2), task 22 Step 3(a) (the whole-branch re-check) |
@@ -5699,6 +5737,14 @@ scoping requires the first, and the second is mechanically forced); task 14 also
 10. **`tests/test_validate.py`'s `_groups_cluster_*` fixture has per-arm cluster counts of 3 and 3**,
     so it cannot discriminate a side-swapping construction. Closed in task 18 Step 4 by building that
     task's own roster at 3 and 4 rather than reusing it.
+
+**Three facts three tasks rested on were probed rather than reasoned about**, at `e40a219`: that a
+`groups × grid` config runs to `EXIT_OK` through `run_a_project` with the `units_overrides` shape
+§ Global Constraints names; that its condition labels are `arm=control__method=pearson` and siblings,
+group axis first and the parameter segment carrying the **leaf** name — which is the grammar every
+`of`/`against` in tasks 9, 16 and 18 uses; and that `aggregate_returns` beside a summary-`Estimate`
+step produces both a recorded-column and a derived contrast in one record, which is task 21's third
+pin and task 18's derived run. **None of the three is a reading.**
 
 **One thing this plan could not resolve, and it is stated rather than absorbed:** the **percentile
 half-width literals** for the two unpaired percentile spellings, and the unpaired clustered *t*
