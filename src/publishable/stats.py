@@ -43,7 +43,7 @@ class Interval:
 
 @dataclass(frozen=True)
 class PairedResample:
-    """A paired percentile interval and the pool it was read from.
+    """A percentile interval and the pool it was read from.
 
     The pool travels so a caller can build the *corrected* interval at a
     smaller α off the same draws (`interval_at`). It is deliberately not a
@@ -1411,6 +1411,108 @@ def _drawable_content(
     )
 
 
+def _draw_pools(
+    keys: list[str],
+    strata: dict[str, str] | None,
+    clusters: dict[str, str] | None,
+) -> list[list[list[str]]]:
+    """One draw shape, for a percentile construction's two callers.
+
+    A list of stratum groups, each holding the DRAWABLE things that stratum
+    owns, each of those a list of keys. A unit is the drawable thing by
+    default; a whole cluster is, once `clusters` is given (`reference.md`
+    § Clustered units: "`resample` resamples clusters, not rows"), which is
+    the same move `percentile_over_units_clustered` makes one level up.
+    Written as one shape rather than four branches because the
+    clustered/unstratified and stratified/unclustered paths must not drift
+    apart — and it is RNG-IDENTICAL to the two branches it replaces: with no
+    clusters and no strata it is one group of `n` single-key items, so
+    `randrange(n)` is called `n` times in the same order; with strata the
+    group order and the per-group counts are today's, each key merely
+    wrapped.
+
+    Two callers: `paired_percentile_of_derived` draws one key list and
+    applies it to both sides; `unpaired_percentile_of_sides` calls this once
+    per side, independently. Both trust the `strata` × `clusters`
+    composition rule, the relabelling invariance and the sorted-keys caller
+    contract to be the same for either — a second copy is how one of them is
+    fixed in one place and not the other.
+    """
+    if clusters is None:
+        # `keys` order preserved rather than sorted — the unstratified draw
+        # indexed `keys` directly, and sorting here would move an unsorted
+        # caller's draw sequence.
+        items = [[key] for key in keys]
+    else:
+        by_cluster: dict[str, list[str]] = {}
+        for key in keys:
+            # Indexed, not `.get`-ed, the discipline `t_over_units_clustered`
+            # states: a key the roster doesn't hold is a core defect, and a
+            # cluster of its own for it would raise the count the interval rests
+            # on.
+            by_cluster.setdefault(clusters[key], []).append(key)
+        # Ordered by their own sorted contents rather than by label, so a
+        # relabelled roster draws the identical sequence —
+        # `percentile_over_units_clustered`'s own invariance, for the same
+        # reason.
+        items = sorted(sorted(group) for group in by_cluster.values())
+    pools: list[list[list[str]]]
+    if strata is None:
+        pools = [items]
+    else:
+        # **`keys` must already be sorted ascending when `strata` is given.**
+        # This is a caller-contract assertion, not a correctness requirement:
+        # `pools = [sorted(group) for group in grouped.values()]` followed by
+        # `pools.sort()` below makes the whole partition a pure function of
+        # CONTENT, so the relabelling invariance holds regardless of the order
+        # `keys` arrives in or the order strata are first encountered while
+        # walking it — verified by running with this check disabled, a shuffled
+        # `keys` list under `strata` draws the identical sequence a sorted one
+        # does. What the check buys instead is the same discipline
+        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
+        # than trusting its caller): this function trusts `paired_keys`, which
+        # returns its intersection sorted, so a caller that has stopped doing
+        # that is a bookkeeping regression worth raising on rather than
+        # correcting quietly and never being told about.
+        if keys != sorted(keys):
+            raise ValueError(
+                "a percentile draw requires keys sorted ascending when strata "
+                "is given, matching the contract this module's key functions "
+                "already satisfy — not because the result would otherwise "
+                "differ, but because a caller that has stopped supplying a "
+                "sorted list is a regression worth raising on rather than "
+                "correcting silently"
+            )
+        grouped: dict[str, list[list[str]]] = {}
+        for item in items:
+            rendered = strata[item[0]]
+            for key in item:
+                # A stratum must be CONSTANT within a drawable thing. With no
+                # clusters an item is one key and this cannot fire; with
+                # clusters it is the composition of two declarations rather than
+                # a third rule, and it is the same fault
+                # `percentile_over_units_clustered` raises under the same code —
+                # § Errors carries one row per code covering every emit site.
+                if strata[key] != rendered:
+                    # Only reachable when `clusters` was given: with no clusters
+                    # every item is a single key, and `strata[item[0]] == rendered`
+                    # trivially, so this branch can never fire for `item`'s one key.
+                    assert clusters is not None
+                    raise ContractError(
+                        f"cluster {clusters[key]!r} carries stratum values "
+                        f"{rendered!r} and {strata[key]!r}. A resample draws "
+                        "whole clusters, so a cluster cannot be drawn within one "
+                        "stratum while carrying two; stratify on an attribute "
+                        "that is constant within a cluster, or drop `cluster_by` "
+                        "if the units really are independent",
+                        code="E-STATS-RESAMPLE-STRATIFY-VARIES",
+                    )
+            grouped.setdefault(rendered, []).append(item)
+        pools = [sorted(group) for group in grouped.values()]
+        pools.sort()
+    return pools
+
+
 def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
@@ -1502,89 +1604,7 @@ def paired_percentile_of_derived(
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
-    # ONE uniform draw shape: a list of stratum groups, each holding the DRAWABLE
-    # things that stratum owns, each of those a list of keys. A unit is the
-    # drawable thing by default; a whole cluster is, once `clusters` is given
-    # (`reference.md` § Clustered units: "`resample` resamples clusters, not
-    # rows"), which is the same move `percentile_over_units_clustered` makes one
-    # level up. Written as one shape rather than four branches because the
-    # clustered/unclustered and stratified/unstratified paths must not drift
-    # apart — and it is RNG-IDENTICAL to the two branches it replaces: with no
-    # clusters and no strata it is one group of `n` single-key items, so
-    # `randrange(n)` is called `n` times in the same order; with strata the group
-    # order and the per-group counts are today's, each key merely wrapped.
-    if clusters is None:
-        # `keys` order preserved rather than sorted — the unstratified draw
-        # indexed `keys` directly, and sorting here would move an unsorted
-        # caller's draw sequence.
-        items = [[key] for key in keys]
-    else:
-        by_cluster: dict[str, list[str]] = {}
-        for key in keys:
-            # Indexed, not `.get`-ed, the discipline `t_over_units_clustered`
-            # states: a key the roster doesn't hold is a core defect, and a
-            # cluster of its own for it would raise the count the interval rests
-            # on.
-            by_cluster.setdefault(clusters[key], []).append(key)
-        # Ordered by their own sorted contents rather than by label, so a
-        # relabelled roster draws the identical sequence —
-        # `percentile_over_units_clustered`'s own invariance, for the same
-        # reason.
-        items = sorted(sorted(group) for group in by_cluster.values())
-    pools: list[list[list[str]]]
-    if strata is None:
-        pools = [items]
-    else:
-        # **`keys` must already be sorted ascending when `strata` is given.**
-        # This is a caller-contract assertion, not a correctness requirement:
-        # `pools = [sorted(group) for group in grouped.values()]` followed by
-        # `pools.sort()` below makes the whole partition a pure function of
-        # CONTENT, so the relabelling invariance holds regardless of the order
-        # `keys` arrives in or the order strata are first encountered while
-        # walking it — verified by running with this check disabled, a shuffled
-        # `keys` list under `strata` draws the identical sequence a sorted one
-        # does. What the check buys instead is the same discipline
-        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
-        # than trusting its caller): this function trusts `paired_keys`, which
-        # returns its intersection sorted, so a caller that has stopped doing
-        # that is a bookkeeping regression worth raising on rather than
-        # correcting quietly and never being told about.
-        if keys != sorted(keys):
-            raise ValueError(
-                "paired_percentile_of_derived requires keys sorted ascending "
-                "when strata is given, matching the contract `paired_keys` "
-                "already satisfies — not because the result would otherwise "
-                "differ, but because a caller that has stopped supplying a "
-                "sorted list is a regression worth raising on rather than "
-                "correcting silently"
-            )
-        grouped: dict[str, list[list[str]]] = {}
-        for item in items:
-            rendered = strata[item[0]]
-            for key in item:
-                # A stratum must be CONSTANT within a drawable thing. With no
-                # clusters an item is one key and this cannot fire; with
-                # clusters it is the composition of two declarations rather than
-                # a third rule, and it is the same fault
-                # `percentile_over_units_clustered` raises under the same code —
-                # § Errors carries one row per code covering every emit site.
-                if strata[key] != rendered:
-                    # Only reachable when `clusters` was given: with no clusters
-                    # every item is a single key, and `strata[item[0]] == rendered`
-                    # trivially, so this branch can never fire for `item`'s one key.
-                    assert clusters is not None
-                    raise ContractError(
-                        f"cluster {clusters[key]!r} carries stratum values "
-                        f"{rendered!r} and {strata[key]!r}. A resample draws "
-                        "whole clusters, so a cluster cannot be drawn within one "
-                        "stratum while carrying two; stratify on an attribute "
-                        "that is constant within a cluster, or drop `cluster_by` "
-                        "if the units really are independent",
-                        code="E-STATS-RESAMPLE-STRATIFY-VARIES",
-                    )
-            grouped.setdefault(rendered, []).append(item)
-        pools = [sorted(group) for group in grouped.values()]
-        pools.sort()
+    pools = _draw_pools(keys, strata, clusters)
     # Content-based, not count-based, and applied whether or not `strata` or
     # `clusters` were given. If every drawable thing within a stratum carries the
     # same pair of rows (a stratum holding one of them trivially so), drawing any
@@ -1624,6 +1644,138 @@ def paired_percentile_of_derived(
         # returned — and `float("high")` raises `ValueError`, caught here.
         # Narrowing this to a closed set that drops `ValueError` reopens that
         # path; see the pin in tests/test_stats.py.
+        except Exception:
+            continue
+        if a is None or b is None:
+            continue
+        diff = float(a) - float(b)
+        if math.isnan(diff):
+            continue
+        values.append(diff)
+    if len(values) < min_honest_draws(confidence):
+        return PairedResample(interval=None, draws_used=len(values), pool=sorted(values))
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return PairedResample(
+        interval=Interval(low=values[lo], high=values[hi], method=method),
+        draws_used=len(values),
+        pool=values,
+    )
+
+
+def _side_content(
+    item: Sequence[str], rows: Mapping[str, Mapping[str, float]]
+) -> tuple[tuple[tuple[str, float], ...], ...]:
+    """What a drawable thing contributes to ONE side's draw, as a comparable value.
+
+    `_drawable_content`'s single-sided counterpart: the row each of its keys
+    carries, sorted, so two things with the same rows in a different key order are
+    the same contribution. The keys are deliberately not in the value, for the
+    reason that function gives — a draw that replaces one key with another carrying
+    an identical row produces an identical table.
+
+    Separate rather than a parameter on `_drawable_content`, because the unpaired
+    draw's two sides hold DIFFERENT key sets and a signature taking both mappings
+    could only be given one side's keys with the other's rows.
+    """
+    return tuple(sorted(tuple(sorted(rows[key].items())) for key in item))
+
+
+def unpaired_percentile_of_sides(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    of_keys: list[str],
+    against_keys: list[str],
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
+    method: str = "unpaired_percentile_over_units",
+    of_clusters: dict[str, str] | None = None,
+    against_clusters: dict[str, str] | None = None,
+) -> PairedResample:
+    """Percentiles of the difference, resampling within each side independently.
+
+    `reference.md` § Statistical reporting: "The percentiles of the difference,
+    resampling within each side independently. The unpaired counterpart of the
+    second."
+
+    **This is a separate construction from `paired_percentile_of_derived` and not a
+    `method` string over it.** That function draws ONE key list and applies it to
+    both sides, and its docstring argues at length that drawing each side
+    independently "would resample the two conditions apart and destroy the
+    pairing" — which is exactly the arrangement this function's own definition
+    requires, because the two sides here hold disjoint units and there is no
+    pairing to destroy. Two spellings of two different constructions, not one
+    construction serving two names.
+
+    Two computes, not one, for `paired_percentile_of_derived`'s own reason: a
+    contrast's two sides can hold their `cfg` fixed on every axis except the one
+    being compared, and `aggregate(units, cfg)` is evaluated once per side with
+    that side's own `cfg`.
+
+    `method` names the `Interval` the caller gets back rather than being derived
+    from a parameter here: one construction serves the plain and the `_clustered`
+    spelling, and the arithmetic that picks between them lives in the caller.
+
+    `strata` resamples within each stratum, per side. `of_clusters`/
+    `against_clusters` make the drawable thing a whole cluster within its own side
+    — `reference.md` § Statistical reporting: "the percentile forms resample whole
+    clusters", the "jointly across both sides" qualifier being the paired case's.
+    Two mappings rather than one, because the two sides' key sets are disjoint and
+    a single mapping would be indexed with keys it does not hold. Both compose with
+    `strata` through `_draw_pools`, which is where every one of those rules lives.
+
+    **The degenerate refusal is per side and it is AND.** Where every drawable thing
+    in every stratum of BOTH sides carries the same row, every replicate reproduces
+    the same difference, both percentile ranks land on it, and the interval has zero
+    width while looking exactly like a narrow one — which § Statistical reporting
+    refuses in those terms. Where only one side cannot vary the difference still
+    can, so there is a real interval to report and refusing it would be the same
+    defect in the opposite direction. Content, not count: two clusters per stratum
+    carrying identical rows clear any count floor and are still degenerate.
+
+    `PairedResample(interval=None, draws_used=0, pool=[])` below two keys on either
+    side, the floor every construction here shares. The pool is sorted on both
+    return paths, because `interval_at` reads fixed ranks off it and does not sort.
+    """
+    if len(of_keys) < 2 or len(against_keys) < 2:
+        return PairedResample(interval=None, draws_used=0, pool=[])
+    rng = random.Random(seed)
+    of_pools = _draw_pools(of_keys, strata, of_clusters)
+    against_pools = _draw_pools(against_keys, strata, against_clusters)
+    if all(len({_side_content(item, of) for item in group}) <= 1 for group in of_pools) and all(
+        len({_side_content(item, against) for item in group}) <= 1 for group in against_pools
+    ):
+        return PairedResample(interval=None, draws_used=0, pool=[])
+    values: list[float] = []
+    for _ in range(draws):
+        # TWO draws per replicate, `of` first and `against` second, each over its
+        # own side's pools — which is what "resampling within each side
+        # independently" means, and the one thing this construction does that
+        # `paired_percentile_of_derived` refuses to do.
+        drawn_of = [
+            key
+            for group in of_pools
+            for _ in range(len(group))
+            for key in group[rng.randrange(len(group))]
+        ]
+        drawn_against = [
+            key
+            for group in against_pools
+            for _ in range(len(group))
+            for key in group[rng.randrange(len(group))]
+        ]
+        table_of = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn_of])
+        table_against = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn_against])
+        try:
+            a = compute_of(table_of)
+            b = compute_against(table_against)
+        # A degenerate draw, not a fault; see `percentile_of_derived`. Also the same
+        # containment for a template returning a non-numeric metric, which reaches
+        # `cli.py`'s resample closure and raises `ValueError` from `float()`.
         except Exception:
             continue
         if a is None or b is None:

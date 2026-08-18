@@ -34,6 +34,7 @@ from publishable.stats import (
     summarize_step,
     t_over_units,
     t_over_units_clustered,
+    unpaired_percentile_of_sides,
     weighted_t_over_units,
     weighted_t_over_units_clustered,
     welch_t_over_units,
@@ -4516,3 +4517,228 @@ def test_a_paired_draw_that_can_vary_still_reports():
     )
     assert got.interval is not None
     assert got.interval.high > got.interval.low
+
+
+def _side_rows(values, prefix):
+    return {f"{prefix}{i:02d}": {"m": v} for i, v in enumerate(values)}
+
+
+def _row_count_recorder():
+    """A compute closure that records the row count of every table it is handed.
+
+    The percentile discriminator is the per-replicate DRAW SIZE, and § The two
+    discriminating fixtures requires it be asserted rather than inferred from the
+    interval — which only works if the construction admits an observable. This is
+    that observable: the closure returns the column mean, so the draw proceeds
+    normally, and the sizes accumulate in a list the test reads afterwards."""
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(table))
+        column = table.m
+        return float(sum(column) / len(column))
+
+    return compute, seen
+
+
+def test_the_unpaired_percentile_draws_each_side_independently():
+    """Fixture A through the percentile form. An independent per-side draw takes
+    exactly 5 rows from `of` and exactly 25 from `against` on EVERY replicate; a
+    mutant drawing once from the pooled 30 and splitting, or drawing `min(n)` for
+    both, returns different sizes.
+
+    **The draw size is asserted, not inferred from the interval.** An interval
+    assertion cannot tell a pooled draw from an independent one — both produce a
+    plausible number centred near 10 — and `is not None` is a uselessly weak
+    discriminator on this slice, where a suppressed contrast, a thin side and a
+    degenerate draw all return `None` too.
+
+    The endpoints are pinned as literals beside the sizes, captured from this
+    test's first green run in the same commit, so a later change cannot move the
+    draw while keeping the counts right."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute_of, seen_of = _row_count_recorder()
+    compute_against, seen_against = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute_of,
+        compute_against,
+        seed=7,
+        draws=400,
+    )
+    assert set(seen_of) == {5}
+    assert set(seen_against) == {25}
+    assert len(seen_of) == 400 and len(seen_against) == 400
+    assert got.draws_used == 400
+    assert got.interval is not None
+    assert got.interval.method == "unpaired_percentile_over_units"
+    assert got.pool == sorted(got.pool)
+    assert [got.interval.low, got.interval.high] == pytest.approx([7.400000000000002, 12.8])
+
+
+def test_the_unpaired_percentile_pool_is_the_evidence_a_corrected_bound_reads():
+    """`interval_at` reads fixed ranks off a pool and does not sort, so a pool
+    returned unsorted gives a corrected interval built from two arbitrary
+    positions. Both return paths here sort, and the too-thin path sorts a partial
+    pool for the same reason.
+
+    Asserted through `interval_at` rather than on the list alone, because the
+    property that matters is that a SECOND rank pair off the same pool is wider,
+    not merely that a list is ordered."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    got = unpaired_percentile_of_sides(
+        of_rows,
+        against_rows,
+        sorted(of_rows),
+        sorted(against_rows),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert got.interval is not None
+    tighter = interval_at(got.pool, 0.975)
+    assert tighter is not None
+    assert tighter[0] <= got.interval.low and tighter[1] >= got.interval.high
+
+
+def test_the_unpaired_percentile_refuses_only_when_both_sides_cannot_vary():
+    """The AND rule, and it is the one a copied check gets wrong. Two constant
+    sides make every replicate reproduce the same difference, so both percentile
+    ranks land on it and the interval has zero width while looking exactly like a
+    narrow one — the shape § Statistical reporting refuses in those terms. One
+    constant side does NOT refuse: the other still varies, so the difference has a
+    real sampling distribution, and an `or` here would null an interval that is
+    fine.
+
+    The one-sided case asserts a POSITIVE width rather than `is not None`, because
+    a degenerate draw and a suppressed contrast both return `None` and only a width
+    separates a real interval from either."""
+    flat_of = _side_rows([3.0] * 5, "a")
+    flat_against = _side_rows([1.0] * 25, "b")
+    varied_against = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    both_flat = unpaired_percentile_of_sides(
+        flat_of,
+        flat_against,
+        sorted(flat_of),
+        sorted(flat_against),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert both_flat.interval is None
+    assert both_flat.draws_used == 0
+    assert both_flat.pool == []
+    one_flat = unpaired_percentile_of_sides(
+        flat_of,
+        varied_against,
+        sorted(flat_of),
+        sorted(varied_against),
+        compute,
+        other,
+        seed=7,
+        draws=400,
+    )
+    assert one_flat.interval is not None
+    assert one_flat.interval.high > one_flat.interval.low
+
+
+def test_the_unpaired_percentile_refuses_a_side_below_two_keys():
+    """`None` below two keys on either side, the floor every construction in this
+    module shares. Asserted on both sides, because a guard reading `of_keys` alone
+    passes the first case and fails nothing."""
+    of_rows = _side_rows(_WELCH_OF, "a")
+    against_rows = _side_rows(_WELCH_AGAINST, "b")
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    assert (
+        unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            ["a00"],
+            sorted(against_rows),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+        ).interval
+        is None
+    )
+    assert (
+        unpaired_percentile_of_sides(
+            of_rows,
+            against_rows,
+            sorted(of_rows),
+            ["b00"],
+            compute,
+            other,
+            seed=7,
+            draws=400,
+        ).interval
+        is None
+    )
+
+
+def test_the_extracted_draw_pools_leaves_the_paired_draw_where_it_was():
+    """The extraction is pure code motion and this is the oracle. The paired
+    clustered draw over H4b-2's own 2/4/6 fixture must produce the same pool it
+    produced before `_draw_pools` existed — an RNG sequence that changed by one
+    call moves the percentiles without necessarily widening anything, so this
+    asserts the ENDPOINTS rather than the width.
+
+    Both raises move with the body and are re-pinned here: an unsorted `keys` under
+    `strata` still raises `ValueError`, and a cluster spanning two strata still
+    raises `E-STATS-RESAMPLE-STRATIFY-VARIES`."""
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    of = {k: {"m": v} for k, v in zip(keys, values, strict=True)}
+    against = {k: {"m": 0.0} for k in keys}
+    compute, _ = _row_count_recorder()
+    other, _ = _row_count_recorder()
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        other,
+        seed=7,
+        draws=400,
+        clusters=dict(zip(keys, labels, strict=True)),
+    )
+    assert got.interval is not None
+    assert [got.interval.low, got.interval.high] == pytest.approx([1.0, 8.0])
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            of,
+            against,
+            list(reversed(keys)),
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            strata={k: "s" for k in keys},
+        )
+    with pytest.raises(ContractError) as exc:
+        paired_percentile_of_derived(
+            of,
+            against,
+            keys,
+            compute,
+            other,
+            seed=7,
+            draws=400,
+            strata={k: ("x" if k == "u00" else "y") for k in keys},
+            clusters=dict(zip(keys, labels, strict=True)),
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
