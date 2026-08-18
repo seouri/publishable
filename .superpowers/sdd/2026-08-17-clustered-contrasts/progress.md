@@ -292,3 +292,27 @@ these tasks consume — "already built exactly as described" is the claim carryi
 
 Both blind-mutation predictions held, including task 10's roster-order mutation, which **task 13's
 ragged fixture then caught as the plan promised** — the disposition working end to end.
+
+### Batch 3 — task review: spec compliance PASS, quality PASS with one Major
+
+Review at `task-b3-review.md`. The reviewer verified the trap **by running** rather than by reading:
+task 12's mutation fails 57 tests including the named one, and an **α mutation of its own**
+(`confidence=1.0-level` → `0.95`) fails at `Expected: 20.2139` — so **H4b-1's silently-unpinned α did
+not recur**. It also ran task 10's mutation 2, which the report had left resting on its own word, and
+got both named tests failing in **opposite directions**. It **attempted to overturn the task-11
+blindness claim and failed**: that blindness is structural, the pool walk going over `keys`. Unlike
+batch 2's, the claim survives. The "no brief/code disagreements" hypothesis **stands** — all four
+batch-2 interfaces match.
+
+**Major 1 is the same false claim returning by a different route, and the mechanism is worth
+carrying.** Batch 1 deleted a df-provenance clause from `docs/reference.md` because the percentile
+form is a resampling draw with **no df at all**. Batch 3 reintroduced it at **three sites** — two
+comments in `cli.py` and a test docstring that restates the deleted sentence **verbatim while citing
+§ Contrasts as its source, a section that no longer contains it.** Verified by running: the derived
+clustered call returns `paired_percentile_over_units_clustered` with `n_paired_clusters: 3`.
+
+**Ruling: delete at all three sites and fix the citation, before task 14 runs** — task 14 reads
+these comments as its spec. **A claim deleted from a document propagates back through comments
+written from the same intuition**, which is why deleting it in one place is not closing it; the
+repo's own habit row says prefer deleting to rewriting, and this is the case where rewriting would
+have re-seeded it a third time.
