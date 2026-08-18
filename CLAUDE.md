@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4b-2 → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -41,9 +41,10 @@ one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one 
 beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
 **zero experiments newly executing** — all nine still declare a resolver and still earn
 `E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
-[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. H4b
-(weighted contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
-execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b.
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. That
+prediction for H4b was written when all nine still declared a resolver; **H7b has since landed and H4b
+split**, so what H4b-1 actually delivered is the entry below — the refusal retired, three configs' last
+core-side blocker gone, and the executable count unmoved all the same.
 
 **H7b Part A (plugin registries and entry points) merged on 2026-08-17.** A plugin installed on the
 machine can register a template, resolver, probe, reader and writer, and `validate` resolves any of
