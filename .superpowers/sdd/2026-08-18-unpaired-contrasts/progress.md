@@ -221,3 +221,37 @@ precision** as a house convention. That is a different thing from the `cohort-pi
 whose intervals `CLAUDE.md` records as checked numerically and forbids narrowing. It is worth a filing:
 a reader cannot tell which numbers in these documents are derived and which are illustrative, and this
 slice has now had two tasks re-derive a field from a block that was never derived in the first place.
+
+## Batch 2 — tasks 4-8 — the six unpaired constructions — complete, review dispatched
+
+Commits `900e22b` (`welch_t_over_units`, `_sample_variance` extracted), `1bb70b7` (`cohens_ds`),
+`620f698` (`unpaired_percentile_of_sides`, `_draw_pools` extracted), `ecd535a`
+(`welch_t_over_units_clustered`, `_cr1_variance` extracted), `14587e0` (the `_clustered` percentile
+spelling), report `72e3e67`. Suite 2208 → **2227** passed, 1 skipped, 2 xfailed — deltas
++4/+3/+5/+4/+3, each matching its brief. Four gates clean. `E-DATA-ALLOCATION-CONTRAST` alive; every
+new construction tested **by direct call**.
+
+**§ Statistical reporting's unpaired constructions now exist.** They had been specified in the present
+tense since the section was written.
+
+**Five implementer findings, all handed to the reviewer.** Two are brief defects that could not have
+worked: task 6's `pytest.raises(..., match="E-STATS-RESAMPLE-STRATIFY-VARIES")` **cannot pass** —
+`ContractError`'s message never contains its code, only `.code` does — and `getattr(table, "m")` fails
+`ruff check`. Both fixed to the idioms the file already uses.
+
+**Two mutation findings the reviewer must adjudicate, and they are different in kind.** Task 6's
+mutation 2 is claimed **genuinely blind on fixture A**, verified by direct call: with no strata or
+clusters `_draw_pools` gives one group per side sized exactly to that side, so concatenate-then-split
+reconstructs the draw bit-for-bit. The reviewer was told that **if a fixture with strata or clusters
+would discriminate, the mutation is not blind — it is mis-fixtured**, which is a different verdict with
+a different remedy. Task 7's mutation 4 is reported **ambiguous**: read literally it does not reproduce
+the brief's target, and hitting `9.647234756296374` required *also* treating each unit as its own
+cluster. **Ruling deferred to the reviewer**, because a mutation that reaches the target only by
+changing a second thing is either the mutation the brief meant or **a mutation whose two branches
+cannot differ wearing the costume of one that can** — and the second is the shape this slice's
+pre-flight ruling exists to catch.
+
+**Four extractions in five tasks** — `_sample_variance`, `_draw_pools`, `_cr1_variance`, plus
+`PairedResample` reused with the word "paired" deleted from its docstring. Extractions are where
+`CLAUDE.md`'s traps concentrate: a mutation applied to the extracted body rather than the call site,
+and a monkeypatch left aimed at a name the code no longer calls. The reviewer was pointed at both.
