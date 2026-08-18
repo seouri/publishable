@@ -194,3 +194,30 @@ justified as "where a config can produce it" **still shows a record no config ca
 establish whether any harness-backgrounded run had a mutation live across the transition. The
 implementer was told to answer from its own record and, if it cannot tell, to **say so and re-run** —
 an unverifiable measurement is not a clean one.
+
+**Fix round 1 — all seven findings closed** (`0066830`, `6c7bdf5`), confirmed by a scoped re-review.
+Major 1's fix is the right shape: the two clauses are now **grammatically parallel, each carrying its
+own df**, so the correct rule — Welch-Satterthwaite over two cluster-robust per-side variances, each
+side contributing `G_s − 1` — is stated **normatively in that sentence**, not merely removed from it.
+The reviewer swept the four documents individually, read for paraphrases rather than grepping for a
+spelling, and found no survivor. Suite 2208 passed, 1 skipped, 2 xfailed. Batch 1 complete.
+
+**Ruling on the backgrounded-run question, which the prior reviewer could not settle.** The
+implementer's reconstruction is **corroboration, not proof**: mutation 3's failure list lacking
+mutation 2's signature tests falsifies one specific overlap, and nothing retrospective can prove no
+window ever left a mutation applied unobserved. **The re-reviewer replaced the inference with a
+measurement** — a full foreground suite against the **committed HEAD**, the artifact that actually
+ships, clean before and after, at exactly the pre-mutation baseline. Any leaked mutation would appear
+as extra failures there. **Ruling: the process claim stays labelled corroborated rather than proven,
+and the shipped state is verified directly.** That is the right disposition — it answers the question
+that matters without asserting the one that cannot be answered. **Cost if wrong:** none for this
+branch; the general lesson is that when a process claim is unverifiable, verify the artifact instead.
+
+**A finding neither task owns, filed rather than passed over.** Checking Major 3's re-derived
+`cohens_d` against the block's own numbers, the re-reviewer found the value is **not** formula-exact —
+and that the same naive back-calculation disagrees by a similar margin with the **pre-existing,
+untouched** blocks' stated values. So § Contrasts' illustrative record blocks carry **invented
+precision** as a house convention. That is a different thing from the `cohort-pilot` worked example,
+whose intervals `CLAUDE.md` records as checked numerically and forbids narrowing. It is worth a filing:
+a reader cannot tell which numbers in these documents are derived and which are illustrative, and this
+slice has now had two tasks re-derive a field from a block that was never derived in the first place.
