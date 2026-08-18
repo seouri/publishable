@@ -8117,8 +8117,8 @@ def test_a_contrast_beside_groups_and_cluster_by_now_validates_clean(write_confi
     `cluster_by` takes, and it is the one this repo's two-shape claim needs — a
     *generated* cross-arm comparison taking the same route is pinned separately
     by
-    `test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not`
-    and `test_a_declared_contrast_across_arms_is_refused`, neither of which
+    `test_a_generated_cross_arm_comparison_now_validates_clean`
+    and `test_a_declared_contrast_across_arms_now_validates_clean`, neither of which
     declares `cluster_by`. A prior test duplicating this fixture under a name
     that quantified over both shapes was deleted rather than kept beside it —
     it discriminated nothing this one does not."""
