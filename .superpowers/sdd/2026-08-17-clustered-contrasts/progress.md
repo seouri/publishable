@@ -372,3 +372,34 @@ rather than the new tests — which is the argument for the full-suite rule stat
 Both blindness claims go to the reviewer to attempt an overturn: batch 2's fell to a one-line fixture
 change, batch 3's survived. **The record on this slice is one overturned, one upheld**, which is why
 neither is accepted on the implementer's word.
+
+### Batch 4 — task review: spec compliance PASS, quality CHANGES REQUIRED, three Majors
+
+Review at `task-b4-review.md` (`4d7a836`). **The retirement is complete at both ends**, enumerated by
+reading `_check_sweep` and then confirmed by a file-list-filtered grep. And the **`run`-through half
+is verified end to end**: the reviewer's own config produces a `run.yaml` carrying
+`paired_t_over_units_clustered`, `n_paired: 12`, `n_paired_clusters: 3`, and a `ci95_corrected` whose
+half-width ratio 15.578/8.763 = 1.777 **is the *t* ratio at df = clusters − 1 = 2** — so the corrected
+bound is the clustered construction, not a clustered field on an unclustered number. Task 17's
+literals were confirmed real pre-change baselines by re-capturing them in a throwaway worktree at
+`82310b9`.
+
+**Both blindness claims upheld — and one on better grounds than it was given.** Mutation 2's arms are
+unreachable together for **every input**, because `cli.py:905` raises first; the implementer's grounds
+("mutually exclusive for every fixture") were the weaker version of a stronger fact. **The slice's
+record on blindness claims is now one overturned, three upheld**, which is the disposition the
+pre-flight ruling was betting on.
+
+**Major 2 is the finding that matters: a correction appended to a brief was never executed and never
+mentioned.** `plan:2867` required a derived-metric-under-`cluster_by` fixture and a decision on
+`n_paired_clusters` beside a null interval, and `spec-defects.md` says task 14 **must** re-check that
+corner. The reviewer **reproduced it by direct call**: `{'delta': None, 'method': None, 'ci95': None,
+'n_paired_clusters': 3}`. **Task 14 is the commit that removed the thing making it unreachable**,
+which is precisely why the correction was routed there. **A brief correction is not a note; it is
+scope** — and this is the first time on either slice that appended scope was silently dropped rather
+than argued with.
+
+**Major 1: the measurement is misdated** — 2026-08-17 against a commit stamped 2026-08-18, while all
+five sibling headings match their own commit's date. **Major 3: `spec-defects.md` is stale in the one
+entry task 14 changed code under** — it names a test task 14 renamed and still conditions on the
+refusal task 14 lifted, missed by a step that amended seven other rows.
