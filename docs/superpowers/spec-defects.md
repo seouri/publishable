@@ -6636,3 +6636,11 @@ the precedent, a narrow refusal nobody owns retiring — writing this one as a d
 an entry comes to read as live work nobody holds.
 
 **Ruled by:** H4c, task 1. **Owner of the obligation:** none — retiring is not owed.
+
+**Addendum (batch-1 review, fix round 1): the mint itself is owed to task 9, not this task.** Task 1
+only names and grounds the refusal in prose (`reference.md`, above); it mints no § Errors row and no
+§ Validation row for `E-DATA-WEIGHT-ALLOCATION-CONTRAST`, and writes no test. **Task 9 owns both
+rows and the pin**: the twin of `tests/test_cli.py::test_the_weight_cluster_refusal_has_both_of_its_rows`
+(the H4b-2 precedent for exactly this claim), which task 9's own plan brief cites as "the shape of
+the pin that says so" without writing it. Recorded here, at the ruling's own entry, so task 9's
+implementer finds the obligation rather than re-discovering it.

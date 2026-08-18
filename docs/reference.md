@@ -382,7 +382,7 @@ Each row states the condition, not the wording.
 | [`replication.repeats`](#a-batch-says-when-not-what) declares a `batch` level but no step in the pipeline sets `nondeterministic = True` | `W-REPL-DETERMINISTIC` |
 | `replication.repeats`'s total across every declared level is below the template's `default_repeats`, checked only once every level's count is resolvable — a floor warning derived from an already-invalid design would be noise | `W-REPL-FLOOR` |
 | A template's `aggregate` produced no usable value for a completed condition and step — it raised, a returned key collided with one a step already recorded, or every resample draw of it was degenerate. Reported at `run` time; the recorded columns' own summaries are unaffected, and only the derived metric is lost | `W-STATS-AGGREGATE-FAILED` |
-| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized `n_paired` is below it | `W-STATS-CONTRAST-THIN` |
+| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized denominator is below it: `n_paired` where the contrast is paired, and `n_of` or `n_against` — either side — where it is not | `W-STATS-CONTRAST-THIN` |
 | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
 | `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
 | A family of more than zero comparisons per metric exists and `statistics.correction` is `none` — every interval is reported uncorrected, and each records `correction: null` to say so | `W-STATS-FAMILY` |
@@ -1357,10 +1357,13 @@ results:
       against: 01_arm=control__method=pearson
       step03_analyze:
         abs_error: {delta: 0.041, basis: units, paired: false, confounded: true,
-                    method: unpaired_percentile_over_units,
+                    method: welch_t_over_units,
                     differs_on: [arm, analysis.method],   # two axes at once — not a main effect
                     n_of: 116, n_against: 112,
-                    ci95: [0.012, 0.070]}
+                    ci95: [0.012, 0.070], ci95_corrected: [0.005, 0.077],
+                    cohens_d: 0.27,
+                    correction: holm, correction_level: 0.0125,
+                    family_size: 4, family: {comparisons: 2, metrics: 2}}
 ```
 
 Leave the nuisance axes out of `sweep.baseline` and the problem doesn't arise: the baseline [expands over every axis it doesn't fix](#expansion-modes), so each cell gets its own reference and every contrast differs in exactly one place. Fixing a value on every axis is the other coherent choice: one reference for the whole run, interpretable on the single-axis contrasts and marked on the rest. It does not produce the record above — where the value it fixes is a level of a group axis, [`E-SWEEP-BASELINE-GROUP`](#errors-validate-reports) refuses it outright on the peers rule, and where it fixes parameter axes only the baseline expands over the group axis anyway, so every generated comparison stays within an arm. A cross-arm record is a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, which is what the block above is.
@@ -2435,7 +2438,7 @@ Those last two rows differ, and `data.units` is the whole discriminator. With no
 | `weighted_paired_t_over_units` | Student's *t* on the [weighted](#weighted-samples) per-unit differences over the [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) intersection: the weighted mean of the differences, the weighted variance, and df from Kish's effective size over that intersection rather than `n_paired` − 1. A **paired** column metric under `weight_by`, when no `resample` is declared |
 | `weighted_paired_percentile_over_units` | The same single joint draw as `paired_percentile_over_units`, with the [weighted](#weighted-samples) column mean recomputed on each draw, so the weights are in the estimate rather than in the drawing. A **paired** column metric under `weight_by` and a declared `resample` |
 
-When [`cluster_by`](#clustered-units) is declared, each of the **unweighted** forms above takes a `_clustered` suffix and reads the cluster as the draw: the *t* forms are cluster-robust (CR1) with df = clusters − 1, over the differenced values when paired and over the arm-level ones when not. When the two sides are unpaired the *t* form's df is Welch-Satterthwaite over the two cluster-robust per-side variances, each side contributing `G_s` − 1 — the substitution the suffix rule describes happens inside each side's own variance and its own df, and combining them is what the unclustered Welch form already does. And the percentile forms resample whole clusters — jointly across both sides when paired. Same rule and same reason as `t_over_units_clustered` above. Every delta in `vs_baseline` and in [`results.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) records its `method`, exactly as every value in `aggregated` does — a [hypothesis](#pre-registration) quoting one under `observed` is quoting that record rather than restating it.
+When [`cluster_by`](#clustered-units) is declared, each of the **unweighted** forms above takes a `_clustered` suffix and reads the cluster as the draw: the *t* forms are cluster-robust (CR1) — over the differenced values when paired, with **df = clusters − 1**, and over the arm-level ones when not, with df from Welch-Satterthwaite over the two cluster-robust per-side variances, each side contributing `G_s` − 1 — the substitution the suffix rule describes happens inside each side's own variance and its own df, and combining them is what the unclustered Welch form already does. And the percentile forms resample whole clusters — jointly across both sides when paired. Same rule and same reason as `t_over_units_clustered` above. Every delta in `vs_baseline` and in [`results.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) records its `method`, exactly as every value in `aggregated` does — a [hypothesis](#pre-registration) quoting one under `observed` is quoting that record rather than restating it.
 
 **A weighted contrast weights a recorded column and not a derived metric.** A column has a per-unit
 value to weight, so `weight_by` moves its delta, its interval and its `cohens_d` onto the two
@@ -2447,7 +2450,12 @@ while `weighted_by` and the effective size travel beside it regardless: the decl
 the run either way. The `_clustered` suffix does not compose with either weighted form:
 [`E-DATA-WEIGHT-CLUSTER-CONTRAST`](#errors-validate-reports) refuses a design declaring both beside a
 comparison, because a weighted clustered interval takes its df from the cluster count rather than
-from Kish's effective size and the two coincide too often to leave the choice implicit. Neither weighted form has an unpaired counterpart: [`E-DATA-WEIGHT-ALLOCATION-CONTRAST`](#errors-validate-reports) refuses a design declaring `weight_by` beside a comparison whose two conditions differ on a group axis, because a Welch *t* on two weighted means needs Kish's effective size **per side** — two df inputs where the paired form needed one, on the dimension where a wrong choice hides best.
+from Kish's effective size and the two coincide too often to leave the choice implicit. Neither
+weighted form has an unpaired counterpart:
+[`E-DATA-WEIGHT-ALLOCATION-CONTRAST`](#errors-validate-reports) refuses a design declaring
+`weight_by` beside a comparison whose two conditions differ on a group axis, because a Welch *t*
+on two weighted means needs Kish's effective size **per side** — two df inputs where the paired
+form needed one, on the dimension where a wrong choice hides best.
 
 **A contrast draw that cannot vary reports no interval rather than a zero-width one.** The joint
 draw's smallest drawable thing is a unit, or a whole cluster where
@@ -2690,7 +2698,17 @@ so, or beside no cluster count at all, is a declaration accepted whose effect is
 [§ Statistical reporting](#statistical-reporting) defines no clustered effect size, so it is the same
 number a clustered run and an unclustered one report.
 
-**An unpaired contrast records no `n_paired` at all, and two scalar siblings in its place.** Its intersection is [empty by construction](#allocation-within-subjects-or-between-subjects) — that is what a group axis means — so `n_paired: 0` would be arithmetically true and descriptively false, and it would spend on a design where pairing is not the concept the same `0` this section already spends on a pairing that failed. `n_paired` is therefore **absent — not null** — and `n_of` and `n_against` carry the two sides' completed counts, mirroring the entry's own `of:`/`against:` keys. Under [`cluster_by`](#clustered-units) `n_paired_clusters` is absent for the same reason and `n_clusters_of`/`n_clusters_against` replace it: a cluster count is per side once the sides are disjoint, and Welch's df reads both. There is no unpaired counterpart to `n_paired_effective`, because [`E-DATA-WEIGHT-ALLOCATION-CONTRAST`](#errors-validate-reports) refuses the only composition that would produce one.
+**An unpaired contrast records no `n_paired` at all, and two scalar siblings in its place.** Its
+intersection is [empty by construction](#allocation-within-subjects-or-between-subjects) — that is
+what a group axis means — so `n_paired: 0` would be arithmetically true and descriptively false,
+and it would spend on a design where pairing is not the concept the same `0` this section already
+spends on a pairing that failed. `n_paired` is therefore **absent — not null** — and `n_of` and
+`n_against` carry the two sides' completed counts, mirroring the entry's own `of:`/`against:`
+keys. Under [`cluster_by`](#clustered-units) `n_paired_clusters` is absent for the same reason and
+`n_clusters_of`/`n_clusters_against` replace it: a cluster count is per side once the sides are
+disjoint, and Welch's df reads both. There is no unpaired counterpart to `n_paired_effective`,
+because [`E-DATA-WEIGHT-ALLOCATION-CONTRAST`](#errors-validate-reports) refuses the only
+composition that would produce one.
 
 ```yaml
 results:
@@ -2708,7 +2726,15 @@ results:
                family_size: 4, family: {comparisons: 2, metrics: 2}}
 ```
 
-The interval, the `method` and the two counts move together, the same obligation a weighted or a clustered entry carries: a delta whose interval assumes neither shared units nor equal variances, beside a `method` that does not say so, or beside no per-side counts at all, is a design honoured whose record is half delivered. `cohens_d` here is *d*s, over the pooled within-condition standard deviation, which is [§ Statistical reporting](#statistical-reporting)'s own split. A **derived** metric's unpaired contrast is suppressed on the same shape and for a second, independent reason: no per-side draw exists for a recomputed metric, so `delta`, `method` and `ci95` are all `null` with the per-side counts beside them, exactly as [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) describes for a declared cluster.
+The interval, the `method` and the two counts move together, the same obligation a weighted or a
+clustered entry carries: a delta whose interval assumes neither shared units nor equal variances,
+beside a `method` that does not say so, or beside no per-side counts at all, is a design honoured
+whose record is half delivered. `cohens_d` here is *d*s, over the pooled within-condition standard
+deviation, which is [§ Statistical reporting](#statistical-reporting)'s own split. A **derived**
+metric's unpaired contrast is suppressed on the same shape and for a second, independent reason:
+no per-side draw exists for a recomputed metric, so `delta`, `method` and `ci95` are all `null`
+with the per-side counts beside them, exactly as [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises)
+describes for a declared cluster.
 
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 
