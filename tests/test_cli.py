@@ -3321,8 +3321,9 @@ def test_every_reachable_contrast_cell_writes_its_own_method(
 
 
 def test_a_clustered_resampled_contrast_really_drew_clusters():
-    """The `method` string and the draw are two claims, and the parametrized table
-    above pins only the first. A `method` naming a construction the draw did not
+    """The `method` string and the draw are two claims, and
+    `test_every_reachable_contrast_cell_writes_its_own_method`'s parametrized
+    table pins only the first. A `method` naming a construction the draw did not
     perform is the whole failure this slice was ordered around — so the DRAW is
     asserted here, by the only evidence available at this level: the same fixture,
     resampled, with and without the membership must produce DIFFERENT intervals.
@@ -3372,9 +3373,7 @@ def test_a_clustered_contrast_member_carries_its_membership_and_no_pool():
 
 
 def test_a_clustered_contrast_entry_carries_its_cluster_count():
-    """§ Contrasts: the cluster count is a scalar sibling of `n_paired`, and it is
-    the count the interval's df was taken from, so a reader can check `clusters − 1`
-    against the interval rather than take it on trust.
+    """§ Contrasts: the cluster count is a scalar sibling of `n_paired`.
 
     All three facts are asserted together — interval, `method`, count — because a
     count beside an unclustered interval, or a clustered interval with no count, is

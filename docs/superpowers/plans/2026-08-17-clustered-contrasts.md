@@ -2864,6 +2864,20 @@ passing**, because the combination is refused today and no fixture exercises it.
   regression and record.
 - Produces: a clustered comparison that validates clean and runs.
 
+**Correction, appended 2026-08-18 after batch 3 (tasks 10–13)'s review, at `e2417d9`.** Batch 1
+already asked this task to re-check the derived corner once the refusal retires (ledger, Major 2
+ruling); the batch 3 review found one more consequence of that corner that no comment or brief names.
+`cli.py`'s `if clusters is not None:` block writes `n_paired_clusters` under `is_derived` too, unguarded
+by whether an interval exists — verified by a direct call, which returns `n_paired_clusters: 3` beside
+`ci95: None, method: None`. Read is unreachable **today** through `command_run` (the reviewer traced
+the four-hop chain: `resample_fns` is built for every derived key, `summarize_step`'s `drawable` test
+always fires under a declared cluster, and the `except ContractError` retry drops the whole derived
+mapping before it reaches `aggregated`) — but that chain is exactly what retiring
+`E-DATA-CLUSTER-CONTRAST` does not touch, so it survives this task unchanged. **When this task builds
+its end-to-end fixture, add one that makes a template's `aggregate` return a derived metric under a
+declared `cluster_by`, and decide whether `n_paired_clusters` beside a null interval is the record
+`reference.md` wants** — the batch 1 re-check and this one are the same corner, one hop further in.
+
 **Every site, enumerated by READING and then confirmed by grep** — that order, per `CLAUDE.md`
 § Answering a question with a proxy, and the grep filters the file list rather than the output. The
 enumeration below was taken at `82310b9`:
@@ -3076,6 +3090,18 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
       three gates, then the mechanical `*.md` pass — **and check the deleted rows left no dangling
       anchor**: grep the four documents for `#errors-validate-reports` links whose text names the
       retired code.
+
+**Correction, appended 2026-08-18 after batch 3 (tasks 10–13)'s review, at `e2417d9`.** Mutation 1
+below was written naming one call site (`_compute_vs_baseline`'s) with a second sentence pointing at
+`_compute_declared_contrasts`' own. The review verified **by running** that dropping `clusters=clusters`
+at **all four** sites simultaneously — `_compute_vs_baseline`'s and `_compute_declared_contrasts`' own
+calls to `_comparison_step_blocks`, **and** `command_run`'s own two calls to those two functions — still
+leaves the full suite at 2196 passed while `E-DATA-CLUSTER-CONTRAST` is alive, the same blindness for
+the same reason at every site. Mutation 1 below is unchanged, but run it a **third and fourth time**
+at `command_run`'s two call sites (into `_compute_vs_baseline` and into `_compute_declared_contrasts`)
+as well as the two named — four sites, one mutation shape, and this task's `run`-through fixture is
+what makes all four reachable at once, so all four should fail together rather than one standing in
+for the other three.
 
 - [ ] **Step 7: Mutate.**
 

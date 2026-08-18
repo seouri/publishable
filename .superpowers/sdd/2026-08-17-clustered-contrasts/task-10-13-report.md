@@ -96,3 +96,78 @@ batch calls `_comparison_step_blocks` directly, never through `validate`/`run`, 
 convention. No config is unblocked by this work (no sentence in this report or the commits claims
 otherwise); the no-remaining-core-side-blocker count stays six and the executable count stays three,
 unchanged by H4b-2's own framing.
+
+**Correction, appended 2026-08-18 in Fix round 1: the sentence above has the two numbers backwards.**
+Per `CLAUDE.md`, three of nine (E1, E2, E5) have **no remaining core-side blocker** — that number is
+three, not six — and **six** stay blocked on causes outside H7b/H4b-2 (`io.reuse_from` for three,
+`E-DATA-WEIGHT-CONTRAST` for the other three). Both counts are genuinely unchanged by this batch, which
+is the claim the sentence above was making; the two labels were swapped against their numbers. Not
+retro-edited, per `CLAUDE.md`'s rule for the development record — the paragraph above stands as
+written, and this is what replaces it.
+
+## Fix round 1 — batch 3 review, `task-b3-review.md`
+
+**Major 1 — the df-provenance clause batch 1 deleted from `docs/reference.md` had come back at three
+sites.** `cli.py`'s two comments and `test_cli.py`'s docstring for
+`test_a_clustered_contrast_entry_carries_its_cluster_count` all claimed or implied `n_paired_clusters`
+is the df a clustered interval was computed from — false for the two percentile cells, which have no
+df at all. **Deleted the clause at all three sites, kept the surrounding true sentences**:
+- `cli.py`'s "the one fact a cluster adds" comment: removed "*or with no count for a reader to check
+  `clusters − 1` against*", keeping "a cluster-robust delta beside a `method` that does not say so is
+  a declaration accepted whose effect is half delivered."
+- `cli.py`'s `cluster_count_of` comment: removed "*so the count printed beside an interval cannot
+  disagree with the df inside it*", keeping the single-counting-expression argument, which the
+  reviewer verified independently true.
+- `test_cli.py`'s docstring: removed "*and it is the count the interval's df was taken from, so a
+  reader can check `clusters − 1` against the interval rather than take it on trust*", keeping "§
+  Contrasts: the cluster count is a scalar sibling of `n_paired`" — which the reviewer confirmed
+  `docs/reference.md:2649-2653` still says, so the citation is now accurate rather than dangling.
+  Verified by re-running `tests/test_cli.py` and `tests/test_correction.py` in full (below) — behaviour
+  unaffected, comments only.
+
+**Minor 1 — `raw_half` was arithmetic on the test's own literal.** In
+`test_a_clustered_members_corrected_bound_is_the_clustered_construction`, replaced the derived
+`raw_half = (member.ci95[1] - member.ci95[0]) / 2` with an independent call to
+`paired_t_over_units_clustered(diffs, labels)` (imported alongside `paired_t_over_units`), asserting
+its half-width against the same `8.763214143637903` — now a check against production code rather than
+against the value the test itself constructed `member.ci95` from two lines above. Verified by running
+`uv run pytest tests/test_correction.py -k clustered` (1 passed).
+
+**Minor 2 — the report's six/three counts were swapped against their labels.** Corrected by appending
+the note above rather than retro-editing the original sentence, per `CLAUDE.md`'s rule for the
+development record.
+
+**Minor 3 — four positional locators.** Replaced with what the sibling names or does, not its
+position:
+- `cli.py`, both "*the guard at the top of this function*" comments (the *t*-branch and the
+  percentile-branch method selections) → "*the `E-DATA-WEIGHT-CLUSTER-CONTRAST` guard above*".
+- `cli.py`, "*the weighted block beside it*" → "*the `weighted_by`/`n_paired_effective` block above*".
+- `test_cli.py`, "*the parametrized table above*" (in
+  `test_a_clustered_resampled_contrast_really_drew_clusters`'s docstring) → named the table's own test,
+  `test_every_reachable_contrast_cell_writes_its_own_method`.
+  Verified by re-running the full suite (below) — comments and a docstring only, no behavioural change.
+
+**Minor 4 — the derived arm writes `n_paired_clusters` beside a null interval, unrecorded for task
+14.** Appended a correction to task 14's brief in
+`docs/superpowers/plans/2026-08-17-clustered-contrasts.md`, right after its Interfaces block, dated
+2026-08-18 and pinned to `e2417d9`: it names the reviewer's finding (a direct call returns
+`n_paired_clusters: 3` beside `ci95: None, method: None`), confirms the reviewer's unreachability
+grounds (traced the same four-hop chain), and asks task 14 to build an end-to-end derived-metric-under-
+`cluster_by` fixture and decide what the record should say. This is the same corner batch 1 already
+asked task 14 to re-check (ledger, Major 2 ruling), one hop further in — recorded rather than fixed
+here, since fixing it would mean deciding `reference.md`'s record shape without the end-to-end fixture
+task 14 owns.
+
+**Minor 5 — one mutation, four threading sites.** Appended a correction to task 10's Mutation 1, at
+task 14's own re-run of it (`docs/superpowers/plans/2026-08-17-clustered-contrasts.md`, Task 14 Step
+7), naming all four sites the reviewer verified blind together — `_compute_vs_baseline`'s and
+`_compute_declared_contrasts`' own calls to `_comparison_step_blocks`, plus `command_run`'s two calls
+into those two functions — rather than the two the brief already named. Task 14's brief now says to run
+the mutation a third and fourth time at `command_run`'s own two call sites.
+
+**Verification of the round.** `uv run ruff check .` clean, `uv run ruff format --check .` (80 files),
+`uv run mypy` clean (45 source files), and `uv run pytest` → **2196 passed, 1 skipped, 2 xfailed** —
+unchanged from batch 3's own count, since every fix here is a comment, a docstring, or a plan
+correction, none of it behavioural. No mutation was re-run against the corrected code beyond
+`test_a_clustered_members_corrected_bound_is_the_clustered_construction`'s own pass/fail, since no
+production code changed.

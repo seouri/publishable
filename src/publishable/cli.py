@@ -1073,12 +1073,12 @@ def _comparison_step_blocks(
                         draws=draws,
                         strata=strata,
                         # One spelling per declaration, and the weighted-clustered
-                        # cell is unreachable — the guard at the top of this
-                        # function refuses it. The construction is ONE function
-                        # serving three `method` strings, so the string is the
-                        # caller's to pass: `paired_percentile_of_derived` is
-                        # shared with the derived branch, which core neither
-                        # weights nor clusters.
+                        # cell is unreachable — the `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+                        # guard above refuses it before either branch runs. The
+                        # construction is ONE function serving three `method`
+                        # strings, so the string is the caller's to pass:
+                        # `paired_percentile_of_derived` is shared with the derived
+                        # branch, which core neither weights nor clusters.
                         method=(
                             "paired_percentile_over_units_clustered"
                             if clusters is not None
@@ -1092,9 +1092,10 @@ def _comparison_step_blocks(
                 else:
                     # The general case, off the resample path. One arm per
                     # declaration, and the weighted-clustered cell is unreachable —
-                    # the guard at the top of this function refuses it, so this is
-                    # a three-way choice over two independent declarations rather
-                    # than a four-cell one with a cell missing.
+                    # the `E-DATA-WEIGHT-CLUSTER-CONTRAST` guard above refuses it
+                    # before either branch runs, so this is a three-way choice
+                    # over two independent declarations rather than a four-cell
+                    # one with a cell missing.
                     if col_clusters is not None:
                         interval = paired_t_over_units_clustered(diffs, col_clusters)
                     elif col_weights is not None:
@@ -1149,17 +1150,15 @@ def _comparison_step_blocks(
                 )
             # The one fact a cluster adds to a contrast entry, and it moves with
             # the interval and the `method`: § Contrasts requires it, and a
-            # cluster-robust delta beside a `method` that does not say so, or with
-            # no count for a reader to check `clusters − 1` against, is a
+            # cluster-robust delta beside a `method` that does not say so is a
             # declaration accepted whose effect is half delivered. Absent — not
             # null — when nothing is clustered, the same absent-not-null shape
             # `weighted_by` has.
             #
             # `cluster_count_of` is the SINGLE counting expression — the one
             # `attrition`'s `n.clusters` and `t_over_units_clustered`'s df both
-            # read — so the count printed beside an interval cannot disagree with
-            # the df inside it. `len(set(...))` here would be a second authority
-            # for one number.
+            # read. `len(set(...))` here would be a second authority for one
+            # number.
             #
             # Over the keys the difference was actually computed over, never the
             # roster-wide mapping: a ragged column's clusters are its own, and a
@@ -1168,10 +1167,11 @@ def _comparison_step_blocks(
                 # The `is_derived` arm is unreachable under a declared cluster —
                 # `summarize_step` raises `E-DATA-CLUSTER-DERIVED` and the whole
                 # derived mapping is dropped before it reaches `aggregated`, so no
-                # metric here is derived. Written the same shape as the weighted
-                # block beside it rather than dropped, because the two must not
-                # disagree about which key set a fact is computed over if that
-                # refusal is ever lifted.
+                # metric here is derived. Written in the same `base_keys if
+                # is_derived else col_keys` shape the `weighted_by`/
+                # `n_paired_effective` block above uses, rather than dropped,
+                # because the two must not disagree about which key set a fact is
+                # computed over if that refusal is ever lifted.
                 metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
                     clusters, base_keys if is_derived else col_keys
                 )

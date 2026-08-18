@@ -10,7 +10,7 @@ from publishable.correction import (
     family_shape,
     rank_family,
 )
-from publishable.stats import paired_t_over_units
+from publishable.stats import paired_t_over_units, paired_t_over_units_clustered
 
 
 def _m(where="1", step="s", metric="r", delta=0.1, ci95=(0.0, 0.2), decl=0):
@@ -660,8 +660,13 @@ def test_a_clustered_members_corrected_bound_is_the_clustered_construction():
         declaration_index=0,
         clusters=labels,
     )
-    raw_half = (member.ci95[1] - member.ci95[0]) / 2
-    assert raw_half == pytest.approx(8.763214143637903)
+    # The RAW half-width, independently constructed rather than read back off
+    # `member.ci95` (which is built from this same literal two lines above, so an
+    # assertion against it would be arithmetic on the test's own input, not a
+    # check on production code).
+    raw = paired_t_over_units_clustered(diffs, labels)
+    assert raw is not None
+    assert (raw.high - raw.low) / 2 == pytest.approx(8.763214143637903)
     bounds = _corrected_bounds(member, 0.01)
     assert bounds is not None
     assert (bounds[1] - bounds[0]) / 2 == pytest.approx(20.213931212789273)
