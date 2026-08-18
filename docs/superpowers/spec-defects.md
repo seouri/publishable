@@ -6592,3 +6592,47 @@ cannot differ:
   name, checked by `grep -c` against `tests/`.)
 
 **Ruled by:** H4b-2, task 5. **Owner of the obligation:** H4c.
+
+## RULED by H4c task 1 — the vocabulary, the weighted unpaired refusal, and the unpaired clustered df
+
+Four rulings, made before any construction is built, so a later task cannot bake the answer in by
+omission:
+
+1. **`welch_t_over_units` and `unpaired_percentile_over_units` already have § Statistical reporting
+   rows.** Confirmed unchanged. They are the spellings tasks 4 and 6 emit.
+2. **`welch_t_over_units_clustered` and `unpaired_percentile_over_units_clustered` get NO rows of
+   their own.** They are licensed by the `_clustered` suffix rule. H4b-2's decision 5 verbatim: adding
+   rows converts a self-maintaining rule into a maintenance obligation nobody owns.
+3. **The weighted unpaired pair gets no spelling at all.** `weighted_welch_t_over_units` and
+   `weighted_unpaired_percentile_over_units` are refused by `E-DATA-WEIGHT-ALLOCATION-CONTRAST`,
+   minted in task 9 as a **standing** narrow refusal — not a `-UNSUPPORTED` build-family code, and
+   carrying no "until the estimators exist" hedge. An alternation grep for both stems over `src/`,
+   `docs/` (excluding `docs/superpowers/`, which is evidence) and `tests/` returned **zero** at
+   `051600c`, so refusing it removes nothing and mints over vapour.
+4. **The df of an unpaired clustered *t* is Welch-Satterthwaite over the two cluster-robust per-side
+   variances, each side contributing df = `G_s` − 1.** Two rejected readings, named so nobody
+   re-derives them: `min(G_of, G_against) − 1` discards a side's information and contradicts "df =
+   clusters − 1" on the side it discards; `G_total − 2` is the **pooled** reading `welch_t_over_units`
+   refuses by construction.
+
+**Sweep outputs (Step 1), run against `src/`, `docs/reference.md`, `docs/design-principles.md`,
+`docs/experimental-designs.md`, `README.md` and `tests/` — `docs/superpowers/` excluded as evidence:**
+
+```
+E-DATA-WEIGHT-ALLOCATION-CONTRAST  → exit 1 (no hits)
+weighted_welch|weighted_unpaired   → exit 1 (no hits, once docs/superpowers/ is excluded;
+                                       with it included, 8 hits, all in the development record)
+welch_t_over_units_clustered|unpaired_percentile_over_units_clustered → exit 1 (no hits)
+cohens_ds                          → exit 1 (no hits)
+n_of:|n_against|n_clusters_of|n_clusters_against → exit 1 (no hits)
+```
+
+Can-fail controls: `grep -rc E-DATA-WEIGHT-CLUSTER-CONTRAST src/publishable/validate.py
+docs/reference.md` → 1, 2 (both non-zero). `grep -rc 'n_paired:' docs/reference.md` → 3
+(non-zero). All identifiers this task rules on were free at the time of ruling.
+
+**No slice inherits `E-DATA-WEIGHT-ALLOCATION-CONTRAST` as work.** `E-DATA-WEIGHT-CLUSTER-CONTRAST` is
+the precedent, a narrow refusal nobody owns retiring — writing this one as a deferral instead is how
+an entry comes to read as live work nobody holds.
+
+**Ruled by:** H4c, task 1. **Owner of the obligation:** none — retiring is not owed.
