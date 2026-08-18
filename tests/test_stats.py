@@ -13,6 +13,7 @@ from publishable.stats import (
     _percentile_ranks,
     _sample_variance,
     _t_critical,
+    cohens_ds,
     cohens_dz,
     collapse_repeats,
     handed_to,
@@ -2045,6 +2046,43 @@ def test_cohens_dz_is_none_below_two_differences():
 def test_cohens_dz_is_none_when_every_difference_is_identical():
     """Zero dispersion would divide by zero; no `d` is honest, infinity is not."""
     assert cohens_dz([2.0, 2.0, 2.0]) is None
+
+
+def test_cohens_ds_pools_the_two_within_condition_variances():
+    """Fixture A: mean 20 over 5 units with s² 5 against mean 10 over 25 units with
+    s² 25. The pooled variance is ((4·5) + (24·25)) / 28 = 22.142857…, so the
+    pooled sd is 4.705619740571601 and *d*s is 10 / that = 2.1251185925162073.
+
+    **The discriminating alternative is the interval's own denominator.**
+    `welch_t_over_units` on this data has SE √2, and 10/√2 is 7.0710678118654755 —
+    a factor of 3.33 out. § Statistical reporting states that asymmetry
+    deliberately, and this assertion is what makes it checkable rather than
+    merely written down.
+
+    An unweighted equal-size fixture could not tell the two apart at all, which is
+    why this shares fixture A rather than inventing a tidier one."""
+    assert cohens_ds(_WELCH_OF, _WELCH_AGAINST) == pytest.approx(2.1251185925162073)
+
+
+def test_cohens_ds_is_not_standardized_by_the_welch_denominator():
+    """The control that must report, and the number the wrong denominator lands on.
+    Asserted as a literal rather than as an inequality: `!=` alone passes for any
+    third wrong number, and a *d* is a number readers compare across papers."""
+    interval = welch_t_over_units(_WELCH_OF, _WELCH_AGAINST)
+    assert interval is not None
+    welch_se = (interval.high - interval.low) / 2 / _t_critical(96 / 7, 0.95)
+    assert 10.0 / welch_se == pytest.approx(7.0710678118654755)
+    assert cohens_ds(_WELCH_OF, _WELCH_AGAINST) != pytest.approx(7.0710678118654755)
+
+
+def test_cohens_ds_refuses_what_cohens_dz_refuses():
+    """`None` below two values on either side, and `None` at zero dispersion — the
+    two refusals `cohens_dz` carries, kept so the pair refuses the same inputs. A
+    *d* over a denominator that has rounded away is the same invention
+    `t_over_units` already declines below two values."""
+    assert cohens_ds([1.0], [1.0, 2.0, 3.0]) is None
+    assert cohens_ds([1.0, 2.0, 3.0], [1.0]) is None
+    assert cohens_ds([2.0, 2.0, 2.0], [1.0, 1.0, 1.0]) is None
 
 
 def test_iteration_yields_one_row_per_unit():

@@ -631,6 +631,41 @@ def weighted_cohens_dz(diffs: Sequence[float], weights: Sequence[Any]) -> float 
     return mean / sd if sd > 0 else None
 
 
+def cohens_ds(of: Sequence[float], against: Sequence[float]) -> float | None:
+    """The difference of two condition means over the pooled within-condition sd.
+
+    `reference.md` § Statistical reporting: "paired contrasts report *d*z … and
+    unpaired ones report *d*s, over the pooled within-condition standard
+    deviation. They are different quantities from the same data and the one that
+    applies follows from `paired`, which is derived rather than declared."
+
+    **The denominator pools where `welch_t_over_units`' deliberately does not**, and
+    § Statistical reporting says in terms that this is not an inconsistency: an
+    interval is an inference and gets the assumption-light construction, while *d*
+    is a descriptive standardization whose conventional denominator *is* the pooled
+    one, and a *d* against a Welch-style denominator is a number no reader could
+    compare to another paper's. So this function does not read the interval beside
+    it, and must not be tidied into doing so.
+
+    Reported only for a per-unit mean, exactly as `cohens_dz` is: a derived metric
+    has no per-unit value to difference, which is why the worked example carries
+    `cohens_d: null` for `r`.
+
+    `None` below two values on either side and `None` at zero dispersion, the two
+    refusals `cohens_dz` carries, kept so the family refuses the same inputs.
+    """
+    if len(of) < 2 or len(against) < 2:
+        return None
+    mean_of = sum(of) / len(of)
+    mean_against = sum(against) / len(against)
+    pooled = (
+        (len(of) - 1) * _sample_variance(of, mean_of)
+        + (len(against) - 1) * _sample_variance(against, mean_against)
+    ) / (len(of) + len(against) - 2)
+    sd = math.sqrt(pooled)
+    return (mean_of - mean_against) / sd if sd > 0 else None
+
+
 def resample_seed(digest: str) -> int:
     """From the design digest, never `parameters_hash`.
 
