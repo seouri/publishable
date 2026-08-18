@@ -2061,6 +2061,42 @@ def paired_keys(
     return sorted(keys)
 
 
+def unpaired_keys(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    allowed: set[str] | None,
+) -> tuple[list[str], list[str]]:
+    """Each side's own completed units, narrowed by a `within` stratum if given.
+
+    `paired_keys`' counterpart for a contrast whose two conditions differ on a
+    declared `sweep.groups` axis: the two sides hold disjoint sets of units, so
+    there is no intersection to take and no per-unit difference to contribute. What
+    replaces the intersection is two sets, and what replaces the mean of a
+    difference vector is a difference of two means.
+
+    **This function does not decide whether a comparison is paired** —
+    `contrasts.crossed_group_axes` does — and it deliberately does not subtract the
+    two sides from each other. Two sides sharing a key is not what makes a
+    comparison paired, the group axis is, and a set difference here would silently
+    drop a unit from a roster whose arms overlap for a reason this function cannot
+    see.
+
+    Sorted, for the reason `paired_keys` sorts: a resample over these keys must be
+    row-order invariant, and `unpaired_percentile_of_sides` asserts a sorted-keys
+    caller contract when `strata` is given.
+
+    `allowed` narrows **both** sides. A narrowing applied to one would compute a
+    delta over a stratum on one side and a whole arm on the other, which is exactly
+    the number no reader could detect is wrong.
+    """
+    of_keys = set(of)
+    against_keys = set(against)
+    if allowed is not None:
+        of_keys &= allowed
+        against_keys &= allowed
+    return sorted(of_keys), sorted(against_keys)
+
+
 def _is_anonymous_level(level: "RepeatLevel") -> bool:
     """The single-`seed`-level `resolve_repeats` synthesizes when no
     `replication` block is declared at all — never produced by a declared

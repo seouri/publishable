@@ -3187,6 +3187,174 @@ def _clustered_contrast_call(**extra):
     return _comparison_step_blocks(Comparison(id="c", of=1, against=0), **kwargs)
 
 
+_UNPAIRED_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
+_UNPAIRED_AGAINST = [5.0] * 12 + [15.0] * 12 + [10.0]
+
+
+def _unpaired_contrast_call(**extra):
+    """`_comparison_step_blocks` over fixture A, two disjoint arms.
+
+    `of` is 5 units at mean 20 with s² 5, `against` 25 units at mean 10 with s² 25 —
+    so s²/n is exactly 1 on each side and both contribute comparably to the Welch
+    variance, which is what keeps a `min(n) − 1` df mutant visible. Delta 10, Welch
+    SE √2, df 96/7, half-width 3.039125537798091.
+
+    The two conditions differ on `arm`, which both declare as a `selector`, so
+    `crossed_group_axes` returns `["arm"]` and the comparison is unpaired. **The two
+    sides' collapsed tables share no key**, which is what a group axis means."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(len(_UNPAIRED_OF))]
+    against_keys = [f"c{i:02d}" for i in range(len(_UNPAIRED_AGAINST))]
+    roster = UnitList([Unit(key=k) for k in of_keys + against_keys])
+    comparison = extra.pop("_comparison", None) or Comparison(
+        id="arm_effect", of=1, against=0, declared=True
+    )
+    kwargs = dict(
+        roster=roster,
+        aggregated={1: {"s": {"m": 20.0}}, 0: {"s": {"m": 10.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(of_keys, _UNPAIRED_OF, strict=True)},
+            (0, "s"): {k: {"m": v} for k, v in zip(against_keys, _UNPAIRED_AGAINST, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=control",
+                values={"arm": "control"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1,
+                label="arm=treatment",
+                values={"arm": "treatment"},
+                selectors=frozenset({"arm"}),
+            ),
+        },
+        resample_columns=False,
+    )
+    kwargs.update(extra)
+    return _comparison_step_blocks(comparison, **kwargs)
+
+
+def test_an_unpaired_contrast_records_its_two_side_counts_and_no_n_paired():
+    """Decision 5, and it is the first conditional write of `n_paired` in this
+    codebase. § Contrasts defines `n_paired` as the intersection, and an unpaired
+    contrast's intersection is empty by construction — so `n_paired: 0` would be
+    arithmetically true and descriptively false, and it would spend on a design
+    where pairing is not the concept the same `0` § Contrasts already spends on a
+    pairing that FAILED.
+
+    **Absent, not null**, the shape `weighted_by` and `n_paired_effective` already
+    use. Asserted beside the two presences, because a control asserting only
+    absences passes identically if nothing ran."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 5
+    assert entry["n_against"] == 25
+    assert "n_paired" not in entry
+    assert "n_paired_effective" not in entry
+
+
+def test_an_unpaired_contrasts_delta_is_a_difference_of_two_side_means():
+    """`paired_keys` does not apply, so the point estimate cannot be the mean of a
+    difference vector — there are no per-unit differences to take. It is the
+    difference of the two sides' own means over the units each side completed.
+
+    Asserted as a POSITIVE literal rather than `is not None`: over disjoint arms
+    every construction in this module returns `None`, so a null assertion cannot
+    tell a computed delta from a failed one — which is why this slice bans that
+    shape. 20 − 10 = 10 exactly, and the two side means are asserted separately so a
+    delta that came from the wrong side's mean is attributable."""
+    block, _ = _unpaired_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["delta"] == pytest.approx(10.0)
+    assert entry["basis"] == "units"
+
+
+def test_an_unpaired_contrast_narrows_both_sides_by_its_within_stratum():
+    """`within` narrows each side, and it must narrow BOTH: a narrowing applied to
+    one side gives a delta computed over a stratum on one side and a whole arm on
+    the other, which is a number no reader could detect is wrong.
+
+    The stratum keeps 3 of 5 `of` units and 2 of 25 `against` units, so the two
+    counts move by different amounts — a fixture narrowing both sides equally could
+    not tell a per-side narrowing from a shared one."""
+    from publishable.contrasts import Comparison
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    keep = set(of_keys[:3]) | set(against_keys[:2])
+    roster = UnitList(
+        [
+            Unit(key=k, attributes={"site": "north" if k in keep else "south"})
+            for k in of_keys + against_keys
+        ]
+    )
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 3
+    assert entry["n_against"] == 2
+
+
+def test_a_weighted_unpaired_comparison_is_a_core_defect_here_not_a_silent_choice():
+    """`E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses the combination at `validate`
+    and `cli` always validates before running, so reaching this function with both
+    is a bookkeeping error rather than a config — the same standing the
+    weight-cluster guard beside it has, and `ValueError` for the same reason
+    `Member.__post_init__` gives: nothing here came from outside core.
+
+    Raised rather than resolved by ignoring the weight: silently publishing an
+    unweighted cross-arm delta beside a `weighted_by` marker is a declaration
+    accepted whose effect is not delivered, and no reader of `run.yaml` could tell."""
+    with pytest.raises(ValueError, match="E-DATA-WEIGHT-ALLOCATION-CONTRAST"):
+        _unpaired_contrast_call(
+            weights={f"t{i:02d}": 1.0 for i in range(5)} | {f"c{i:02d}": 1.0 for i in range(25)},
+            weighted_by="sampling_weight",
+        )
+
+
+def test_an_unpaired_clustered_contrast_records_two_cluster_counts_and_no_paired_one():
+    """§ Contrasts: `n_paired_clusters` counts the clusters the paired intersection
+    falls in, so it has nothing to count here. `n_clusters_of` and
+    `n_clusters_against` replace it — **two integers that cannot coincide on this
+    fixture**, 3 against 4, which is what makes them the strongest discriminator
+    available: a construction reading one side's count, or a pooled count of 7,
+    writes a wrong integer into the record even where a float assertion might be
+    argued about.
+
+    `cluster_count_of` is the single counting expression, the one `attrition`'s
+    `n.clusters` and every clustered df read; `len(set(...))` here would be a second
+    authority for one number."""
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    clusters = {k: f"g{i // 2}" for i, k in enumerate(of_keys)}  # 3 clusters: 2/2/1
+    clusters |= {k: f"h{i // 7}" for i, k in enumerate(against_keys)}  # 4: 7/7/7/4
+    block, _ = _unpaired_contrast_call(clusters=clusters)
+    entry = block["s"]["m"]
+    assert entry["n_clusters_of"] == 3
+    assert entry["n_clusters_against"] == 4
+    assert "n_paired_clusters" not in entry
+
+
 def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
     """The membership reaches the construction, and the construction is the
     cluster-robust one. Both halves are asserted, because a `method` that changed
@@ -3854,18 +4022,19 @@ def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branc
     """The H4c tripwire, and the reason two PAIRED clustered constructions were
     enough for H4b-2.
 
-    `_comparison_step_blocks` writes `paired` as a literal `True` at both metric
-    branches, so every comparison surviving `E-DATA-ALLOCATION-CONTRAST` is paired
-    and no unpaired contrast interval is ever asked for. The obvious runtime pin —
-    "fail if `paired` is ever `False`" — is a mutation whose two branches cannot
-    differ, because there is no runtime state to assert against. So the LITERAL is
-    what is pinned: the moment H4c makes either site conditional, this fails and
-    forces whoever does it to confront the clustered unpaired constructions, which
-    do not exist.
+    `_comparison_step_blocks` writes `paired` as a literal `True` at four metric
+    sites — the derived and recorded-column branches, each now with a paired arm
+    and an unpaired arm, task 10's own addition — so every comparison surviving
+    `E-DATA-ALLOCATION-CONTRAST` is paired and no unpaired contrast interval is
+    ever asked for. The obvious runtime pin — "fail if `paired` is ever `False`" —
+    is a mutation whose branches cannot differ, because there is no runtime state
+    to assert against. So the LITERAL is what is pinned: the moment a later task
+    (13) makes any site conditional on `is_paired`, this fails and forces whoever
+    does it to confront every site that needs to move together.
 
     Both counts are asserted, and that is the point: the first alone passes under a
-    third branch writing `"paired": is_paired`, and the second alone passes under
-    two sites that both became conditional.
+    fifth branch writing `"paired": is_paired`, and the second alone passes under
+    sites that became conditional without changing in number.
 
     **Scope of the pin**: this reads one function's source text, so it is defeated
     by extracting either write into a helper — the guarantee it protects is real,
@@ -3874,8 +4043,8 @@ def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branc
     from publishable.cli import _comparison_step_blocks
 
     source = inspect.getsource(_comparison_step_blocks)
-    assert source.count('"paired": True') == 2
-    assert source.count('"paired":') == 2
+    assert source.count('"paired": True') == 4
+    assert source.count('"paired":') == 4
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])

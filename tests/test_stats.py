@@ -35,6 +35,7 @@ from publishable.stats import (
     summarize_step,
     t_over_units,
     t_over_units_clustered,
+    unpaired_keys,
     unpaired_percentile_of_sides,
     weighted_t_over_units,
     weighted_t_over_units_clustered,
@@ -542,6 +543,30 @@ def test_an_empty_allowed_set_yields_no_pairing():
     against = {"u1": {"m": 1.0}}
     assert paired_keys(of, against, set()) == []
     assert paired_keys(of, against, None) == ["u1"]
+
+
+def test_unpaired_keys_gives_each_side_its_own_completed_set():
+    """`paired_keys` is the intersection and it is the wrong set for a contrast
+    whose two sides are disjoint. Each side gets its own completed units, sorted for
+    the same reason `paired_keys` sorts — a draw over these keys must be row-order
+    invariant.
+
+    The fixture is genuinely disjoint AND has one shared key, which is the case a
+    naive `set(of) - set(against)` would get wrong: sharing a key is not what makes
+    a comparison paired, the group axis is, and this function does not decide that."""
+    of = {"a": {"m": 1.0}, "b": {"m": 2.0}, "s": {"m": 3.0}}
+    against = {"c": {"m": 4.0}, "s": {"m": 5.0}}
+    assert unpaired_keys(of, against, None) == (["a", "b", "s"], ["c", "s"])
+
+
+def test_unpaired_keys_narrows_both_sides_by_the_stratum():
+    """`within` narrows each side, the same narrowing `paired_keys` applies to the
+    intersection. Asserted on both sides, because a function narrowing only `of`
+    passes any test that reads one side."""
+    of = {"a": {"m": 1.0}, "b": {"m": 2.0}}
+    against = {"c": {"m": 3.0}, "d": {"m": 4.0}}
+    assert unpaired_keys(of, against, {"a", "c"}) == (["a"], ["c"])
+    assert unpaired_keys(of, against, set()) == ([], [])
 
 
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():

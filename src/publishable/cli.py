@@ -19,7 +19,12 @@ from publishable.artifacts import ResolverIO, allocation_hash, build_allocation_
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
-from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.contrasts import (
+    crossed_group_axes,
+    differing_axes,
+    resolve_contrasts,
+    units_matching,
+)
 from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -75,6 +80,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     unit_table_from_rows,
+    unpaired_keys,
     weighted_cohens_dz,
     weighted_mean_of,
     weighted_paired_t_over_units,
@@ -877,23 +883,19 @@ def _comparison_step_blocks(
     two effects and no amount of correct pairing separates them — the
     factorial main-effects problem core refuses to solve, so it is marked
     rather than reported as if it were clean. Both keys are absent, not
-    `False`/`[]`, when only one axis differs. `paired` stays hard `True`
-    here: the crossed-*group*-axis case `reference.md` shows with
-    `paired: false` and `unpaired_*` is the one `validate` refuses at
-    config time — `E-DATA-ALLOCATION-CONTRAST` reads the resolved comparison
-    family and rejects any comparison whose two sides differ on a declared
-    `sweep.groups` axis, which is what makes the two sides disjoint sets of
-    units regardless of what `allocation` itself is declared as, and no
-    construction here computes an unpaired interval. `cli` always validates
-    before running, so every comparison that reaches this function is
-    genuinely paired rather than merely one this build happens not to
-    construct — `True` is a true claim about what survived validation, not a
-    placeholder for a case nothing can reach. **That claim expires with
-    `E-DATA-ALLOCATION-CONTRAST`**: the slice that builds the unpaired
-    estimator family and lifts the refusal must also make `paired` here a
-    derived value — `contrasts.differing_axes(...) ∩ (of.selectors | against.selectors)`
-    non-empty, the same test the refusal runs today — rather than leaving
-    `True` hard-coded against a comparison validation no longer rejects.
+    `False`/`[]`, when only one axis differs.
+
+    `is_paired` — `not contrasts.crossed_group_axes(of, against)` — decides which
+    arm each metric takes: the intersection and `n_paired` on one side, each
+    side's own completed units (narrowed by `within`) and `n_of`/`n_against` on
+    the other, where the point estimate is the difference of the two side means
+    rather than a mean of differences. `E-DATA-ALLOCATION-CONTRAST` still refuses
+    an unpaired comparison at `validate`, and `cli` always validates before
+    running, so the unpaired arm is reachable only by direct call until that
+    refusal lifts. **`"paired": True` in both arms' record literals stays a
+    literal, not `is_paired`, on purpose**: deriving it is a later task's change,
+    made in one place rather than smuggled in here where it would be
+    unobservable which commit did it.
     """
     # `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses this combination at `validate`, and
     # `cli` always validates before running — so both being set is core's own
@@ -909,6 +911,25 @@ def _comparison_step_blocks(
         )
     differs_on = differing_axes(conditions_by_index[comp.of], conditions_by_index[comp.against])
     confounded = len(differs_on) > 1
+    # Whether the two sides share their units, from the SAME expression `validate`
+    # refuses on — `contrasts.crossed_group_axes`, whose docstring argues why it is
+    # one function with two callers. Read once at function scope: a per-metric
+    # re-derivation is how two entries in one block come to disagree about a fact
+    # about their two conditions.
+    is_paired = not crossed_group_axes(
+        conditions_by_index[comp.of], conditions_by_index[comp.against]
+    )
+    # `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses this combination at `validate`,
+    # and `cli` always validates before running — so both being set is core's own
+    # bookkeeping error, not a config. Raised rather than resolved by dropping the
+    # weight: an unweighted cross-arm delta published beside a `weighted_by` marker
+    # is a declaration accepted whose effect is not delivered, and no reader of
+    # `run.yaml` could tell. `ValueError` for the reason the guard below gives.
+    if weights is not None and not is_paired:
+        raise ValueError(
+            "a weighted unpaired comparison has no construction in this build; "
+            "E-DATA-WEIGHT-ALLOCATION-CONTRAST refuses the combination at validate"
+        )
     allowed = units_matching(roster, comp.within)
     of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
     against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
@@ -918,6 +939,7 @@ def _comparison_step_blocks(
         of_collapsed = collapsed_by_key[(comp.of, step_name)]
         against_collapsed = collapsed_by_key[(comp.against, step_name)]
         base_keys = paired_keys(of_collapsed, against_collapsed, allowed)
+        of_side_keys, against_side_keys = unpaired_keys(of_collapsed, against_collapsed, allowed)
         of_summary = aggregated.get(comp.of, {}).get(step_name, {})
         against_summary = aggregated.get(comp.against, {}).get(step_name, {})
         of_derived = derived_by_key.get((comp.of, step_name)) or {}
@@ -937,18 +959,19 @@ def _comparison_step_blocks(
             # load-bearing.
             col_weights: list[Any] | None = None
             col_clusters: list[str] | None = None
+            of_col: list[str] = of_side_keys
+            against_col: list[str] = against_side_keys
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
                     metric_key
                 )
-                n_paired = len(base_keys)
                 interval = None
                 delta = None
                 # Reset per metric, beside the other two: assigned only inside
-                # `n_paired >= 2` below, so a one-unit intersection would leave
-                # the name unbound where the member is built (a `NameError` on
-                # the first pass) or — worse, at function scope — hand a later
+                # `len(base_keys) >= 2` below, so a one-unit intersection would
+                # leave the name unbound where the member is built (a `NameError`
+                # on the first pass) or — worse, at function scope — hand a later
                 # metric the *previous* metric's draw pool, which nothing
                 # downstream could detect.
                 resampled = None
@@ -981,7 +1004,7 @@ def _comparison_step_blocks(
                         compute_of,
                         compute_against,
                     )
-                    if n_paired >= 2:
+                    if len(base_keys) >= 2:
                         resampled = paired_percentile_of_derived(
                             of_collapsed,
                             against_collapsed,
@@ -993,161 +1016,215 @@ def _comparison_step_blocks(
                             strata=strata,
                         )
                         interval = resampled.interval
+                # § Contrasts: `n_paired` is the intersection, and a PAIRED contrast has
+                # to record it. An unpaired contrast's intersection is empty by
+                # construction, so `n_paired: 0` would be arithmetically true and
+                # descriptively false — and § Contrasts already spends `0` on a different
+                # meaning, a pairing that failed, which is the whole reason this key is
+                # absent here rather than zero. Absent, not null, the shape `weighted_by`
+                # and `n_paired_effective` already use.
                 metric_block[metric_key] = {
                     "delta": delta,
                     "basis": "units",
                     "paired": True,
                     "method": interval.method if interval else None,
-                    "n_paired": n_paired,
+                    # `is_derived` is always True on this arm, so the count is
+                    # `base_keys` unconditionally — `col_keys` belongs to the
+                    # recorded-column arm below and referencing it here (even
+                    # inside a ternary neither branch of which is ever taken)
+                    # is a name pyflakes cannot prove bound on this path.
+                    **(
+                        {"n_paired": len(base_keys)}
+                        if is_paired
+                        else {"n_of": len(of_col), "n_against": len(against_col)}
+                    ),
                     "ci95": [interval.low, interval.high] if interval else None,
                     "cohens_d": None,
                     "correction": None,
                 }
             else:
-                col_keys = [
-                    k
-                    for k in base_keys
-                    if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
-                ]
-                diffs = [
-                    of_collapsed[k][metric_key] - against_collapsed[k][metric_key] for k in col_keys
-                ]
-                n_paired = len(col_keys)
-                # The intersection's OWN weights, in `col_keys` order, so nothing
-                # downstream can weight a unit the difference beside it did not
-                # come from. `None` when no weight is declared, which is what
-                # keeps every unweighted construction on exactly the arithmetic it
-                # had.
-                col_weights = None if weights is None else [weights[k] for k in col_keys]
-                # The intersection's OWN cluster labels, in `col_keys` order, so
-                # nothing downstream groups a unit the difference beside it did not
-                # come from. Indexed, not `.get`-ed, the discipline
-                # `t_over_units_clustered` states: a key the roster doesn't hold is
-                # a core defect, and a cluster of its own for it would raise the
-                # group count and narrow the interval. The roster-wide mapping is
-                # safe to index — `col_keys` is a subset of it — and this is not
-                # the Kish seam, which had to be narrowed because it SUMS.
-                col_clusters = None if clusters is None else [clusters[k] for k in col_keys]
-                resampled = None
-                if resample_columns and n_paired >= 2:
-                    # `col_keys`, NOT `base_keys`. The derived branch above uses
-                    # `base_keys` because a derived metric has no column to be
-                    # ragged about; a recorded column does.
-                    # `paired_percentile_of_derived` builds its `UnitTable`s from
-                    # whole rows, so `base_keys` here would feed `compute` rows
-                    # missing this column — `UnitTable.__getattr__` pads with
-                    # `None` and the mean below raises, which the construction
-                    # catches as a degenerate draw and silently drops. A quarter
-                    # of a roster missing the column nulls the interval; one unit
-                    # missing leaves it looking fine, which is why this is a
-                    # correctness rule and not a tidiness one.
-                    #
-                    # The same callable twice: both sides compute the mean of the
-                    # same column, which is a normal call rather than the
-                    # shared-closure cancellation `paired_percentile_of_derived`
-                    # warns about — that one is about a SWEPT AXIS changing which
-                    # formula `aggregate` runs, and a column mean is one formula.
-                    #
-                    # **The weights live in the CLOSURE, not in the
-                    # construction.** `paired_percentile_of_derived` is shared
-                    # with the derived branch, which core does not weight
-                    # (§ Weighted samples hands that weight column to `aggregate`
-                    # as a unit attribute), so a `weights` parameter there would
-                    # weight the wrong half. The closure can reach them because
-                    # the construction keeps the real unit key inside every draw:
-                    # each row is `{"unit": k, **of[k]}`, and a bootstrap draw
-                    # duplicates units on purpose, so the vector is built from the
-                    # DRAWN keys rather than from the roster — a vector filtered
-                    # or ordered differently weights the wrong unit, which is
-                    # `summarize_step`'s own discipline one level over.
-                    def _column_mean(
-                        table: UnitTable,
-                        _name: str = metric_key,
-                        _weights: dict[str, Any] | None = weights,
-                    ) -> float:
-                        column: list[float] = getattr(table, _name)
-                        if _weights is None:
-                            return float(sum(column) / len(column))
-                        drawn = [_weights[k] for k in table.unit]
-                        got = weighted_mean_of([float(v) for v in column], drawn)
-                        if got is None:
-                            # An empty column — the identical input on which the
-                            # unweighted branch above raises `ZeroDivisionError`,
-                            # and which `paired_percentile_of_derived` catches as a
-                            # degenerate draw either way. Raised rather than
-                            # coerced to a number, so the two branches refuse the
-                            # same input; a fabricated 0.0 here would enter the
-                            # pool as a real draw.
-                            raise ValueError("a weighted column contrast drew an empty table")
-                        return got
+                if is_paired:
+                    col_keys = [
+                        k
+                        for k in base_keys
+                        if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
+                    ]
+                    diffs = [
+                        of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
+                        for k in col_keys
+                    ]
+                    n_paired = len(col_keys)
+                    # The intersection's OWN weights, in `col_keys` order, so nothing
+                    # downstream can weight a unit the difference beside it did not
+                    # come from. `None` when no weight is declared, which is what
+                    # keeps every unweighted construction on exactly the arithmetic it
+                    # had.
+                    col_weights = None if weights is None else [weights[k] for k in col_keys]
+                    # The intersection's OWN cluster labels, in `col_keys` order, so
+                    # nothing downstream groups a unit the difference beside it did not
+                    # come from. Indexed, not `.get`-ed, the discipline
+                    # `t_over_units_clustered` states: a key the roster doesn't hold is
+                    # a core defect, and a cluster of its own for it would raise the
+                    # group count and narrow the interval. The roster-wide mapping is
+                    # safe to index — `col_keys` is a subset of it — and this is not
+                    # the Kish seam, which had to be narrowed because it SUMS.
+                    col_clusters = None if clusters is None else [clusters[k] for k in col_keys]
+                    resampled = None
+                    if resample_columns and n_paired >= 2:
+                        # `col_keys`, NOT `base_keys`. The derived branch above uses
+                        # `base_keys` because a derived metric has no column to be
+                        # ragged about; a recorded column does.
+                        # `paired_percentile_of_derived` builds its `UnitTable`s from
+                        # whole rows, so `base_keys` here would feed `compute` rows
+                        # missing this column — `UnitTable.__getattr__` pads with
+                        # `None` and the mean below raises, which the construction
+                        # catches as a degenerate draw and silently drops. A quarter
+                        # of a roster missing the column nulls the interval; one unit
+                        # missing leaves it looking fine, which is why this is a
+                        # correctness rule and not a tidiness one.
+                        #
+                        # The same callable twice: both sides compute the mean of the
+                        # same column, which is a normal call rather than the
+                        # shared-closure cancellation `paired_percentile_of_derived`
+                        # warns about — that one is about a SWEPT AXIS changing which
+                        # formula `aggregate` runs, and a column mean is one formula.
+                        #
+                        # **The weights live in the CLOSURE, not in the
+                        # construction.** `paired_percentile_of_derived` is shared
+                        # with the derived branch, which core does not weight
+                        # (§ Weighted samples hands that weight column to `aggregate`
+                        # as a unit attribute), so a `weights` parameter there would
+                        # weight the wrong half. The closure can reach them because
+                        # the construction keeps the real unit key inside every draw:
+                        # each row is `{"unit": k, **of[k]}`, and a bootstrap draw
+                        # duplicates units on purpose, so the vector is built from the
+                        # DRAWN keys rather than from the roster — a vector filtered
+                        # or ordered differently weights the wrong unit, which is
+                        # `summarize_step`'s own discipline one level over.
+                        def _column_mean(
+                            table: UnitTable,
+                            _name: str = metric_key,
+                            _weights: dict[str, Any] | None = weights,
+                        ) -> float:
+                            column: list[float] = getattr(table, _name)
+                            if _weights is None:
+                                return float(sum(column) / len(column))
+                            drawn = [_weights[k] for k in table.unit]
+                            got = weighted_mean_of([float(v) for v in column], drawn)
+                            if got is None:
+                                # An empty column — the identical input on which the
+                                # unweighted branch above raises `ZeroDivisionError`,
+                                # and which `paired_percentile_of_derived` catches as a
+                                # degenerate draw either way. Raised rather than
+                                # coerced to a number, so the two branches refuse the
+                                # same input; a fabricated 0.0 here would enter the
+                                # pool as a real draw.
+                                raise ValueError("a weighted column contrast drew an empty table")
+                            return got
 
-                    resampled = paired_percentile_of_derived(
-                        of_collapsed,
-                        against_collapsed,
-                        col_keys,
-                        _column_mean,
-                        _column_mean,
-                        seed,
-                        draws=draws,
-                        strata=strata,
-                        # One spelling per declaration, and the weighted-clustered
-                        # cell is unreachable — the `E-DATA-WEIGHT-CLUSTER-CONTRAST`
-                        # guard above refuses it before either branch runs. The
-                        # construction is ONE function serving three `method`
-                        # strings, so the string is the caller's to pass:
-                        # `paired_percentile_of_derived` is shared with the derived
-                        # branch, which core neither weights nor clusters.
-                        method=(
-                            "paired_percentile_over_units_clustered"
-                            if clusters is not None
-                            else "weighted_paired_percentile_over_units"
-                            if weights is not None
-                            else "paired_percentile_over_units"
-                        ),
-                        clusters=(None if clusters is None else {k: clusters[k] for k in col_keys}),
-                    )
-                    interval = resampled.interval
-                else:
-                    # The general case, off the resample path. One arm per
-                    # declaration, and the weighted-clustered cell is unreachable —
-                    # the `E-DATA-WEIGHT-CLUSTER-CONTRAST` guard above refuses it
-                    # before either branch runs, so this is a three-way choice
-                    # over two independent declarations rather than a four-cell
-                    # one with a cell missing.
-                    if col_clusters is not None:
-                        interval = paired_t_over_units_clustered(diffs, col_clusters)
-                    elif col_weights is not None:
-                        interval = weighted_paired_t_over_units(diffs, col_weights)
+                        resampled = paired_percentile_of_derived(
+                            of_collapsed,
+                            against_collapsed,
+                            col_keys,
+                            _column_mean,
+                            _column_mean,
+                            seed,
+                            draws=draws,
+                            strata=strata,
+                            # One spelling per declaration, and the weighted-clustered
+                            # cell is unreachable — the `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+                            # guard above refuses it before either branch runs. The
+                            # construction is ONE function serving three `method`
+                            # strings, so the string is the caller's to pass:
+                            # `paired_percentile_of_derived` is shared with the derived
+                            # branch, which core neither weights nor clusters.
+                            method=(
+                                "paired_percentile_over_units_clustered"
+                                if clusters is not None
+                                else "weighted_paired_percentile_over_units"
+                                if weights is not None
+                                else "paired_percentile_over_units"
+                            ),
+                            clusters=(
+                                None if clusters is None else {k: clusters[k] for k in col_keys}
+                            ),
+                        )
+                        interval = resampled.interval
                     else:
-                        interval = paired_t_over_units(diffs)
-                metric_block[metric_key] = {
-                    # The (weighted, when `col_weights` is not `None`) mean of
-                    # the per-unit differences over `col_keys` — the same unit
-                    # set the interval is drawn from, and identical to the
-                    # difference of the two column means over that set, so the
-                    # point estimate and the pool cannot drift onto different
-                    # rosters.
-                    "delta": (
-                        mean_of(diffs)
-                        if col_weights is None
-                        else weighted_mean_of(diffs, col_weights)
-                    ),
-                    "basis": "units",
-                    "paired": True,
-                    "method": interval.method if interval else None,
-                    "n_paired": n_paired,
-                    "ci95": [interval.low, interval.high] if interval else None,
-                    # Cohen's dz survives the switch: it differences a PER-UNIT
-                    # value, which a column has and a derived metric does not,
-                    # and it is computed from the local `diffs` list rather than
-                    # from anything the `Member` carries.
-                    "cohens_d": (
-                        cohens_dz(diffs)
-                        if col_weights is None
-                        else weighted_cohens_dz(diffs, col_weights)
-                    ),
-                    "correction": None,
-                }
+                        # The general case, off the resample path. One arm per
+                        # declaration, and the weighted-clustered cell is unreachable —
+                        # the `E-DATA-WEIGHT-CLUSTER-CONTRAST` guard above refuses it
+                        # before either branch runs, so this is a three-way choice
+                        # over two independent declarations rather than a four-cell
+                        # one with a cell missing.
+                        if col_clusters is not None:
+                            interval = paired_t_over_units_clustered(diffs, col_clusters)
+                        elif col_weights is not None:
+                            interval = weighted_paired_t_over_units(diffs, col_weights)
+                        else:
+                            interval = paired_t_over_units(diffs)
+                    metric_block[metric_key] = {
+                        # The (weighted, when `col_weights` is not `None`) mean of
+                        # the per-unit differences over `col_keys` — the same unit
+                        # set the interval is drawn from, and identical to the
+                        # difference of the two column means over that set, so the
+                        # point estimate and the pool cannot drift onto different
+                        # rosters.
+                        "delta": (
+                            mean_of(diffs)
+                            if col_weights is None
+                            else weighted_mean_of(diffs, col_weights)
+                        ),
+                        "basis": "units",
+                        "paired": True,
+                        "method": interval.method if interval else None,
+                        "n_paired": n_paired,
+                        "ci95": [interval.low, interval.high] if interval else None,
+                        # Cohen's dz survives the switch: it differences a PER-UNIT
+                        # value, which a column has and a derived metric does not,
+                        # and it is computed from the local `diffs` list rather than
+                        # from anything the `Member` carries.
+                        "cohens_d": (
+                            cohens_dz(diffs)
+                            if col_weights is None
+                            else weighted_cohens_dz(diffs, col_weights)
+                        ),
+                        "correction": None,
+                    }
+                else:
+                    of_col = [k for k in of_side_keys if metric_key in of_collapsed[k]]
+                    against_col = [
+                        k for k in against_side_keys if metric_key in against_collapsed[k]
+                    ]
+                    of_values = [of_collapsed[k][metric_key] for k in of_col]
+                    against_values = [against_collapsed[k][metric_key] for k in against_col]
+                    resampled = None
+                    # Task 14 selects the construction. Until it does, an unpaired
+                    # contrast records its delta and its two counts with no interval
+                    # — a point with no interval, which is the honest shape every
+                    # construction in `stats.py` already returns below its floor.
+                    interval = None
+                    of_mean = mean_of(of_values)
+                    against_mean = mean_of(against_values)
+                    metric_block[metric_key] = {
+                        # The difference of the two sides' own means, over the units
+                        # each side completed AND recorded this column for. Never a
+                        # mean of differences: there are no per-unit differences, and
+                        # `n_paired`'s intersection is empty by construction.
+                        "delta": (
+                            None
+                            if of_mean is None or against_mean is None
+                            else of_mean - against_mean
+                        ),
+                        "basis": "units",
+                        "paired": True,
+                        "method": interval.method if interval else None,
+                        "n_of": len(of_col),
+                        "n_against": len(against_col),
+                        "ci95": [interval.low, interval.high] if interval else None,
+                        "cohens_d": None,
+                        "correction": None,
+                    }
             # The three facts a weight adds to a contrast entry, and they move
             # together with the delta and the interval: § Contrasts requires it,
             # and a weighted delta beside an unweighted effect size or an
@@ -1182,18 +1259,27 @@ def _comparison_step_blocks(
             # roster-wide mapping: a ragged column's clusters are its own, and a
             # count over the roster would describe units the delta never saw.
             if clusters is not None:
-                # Written in the same `base_keys if is_derived else col_keys`
-                # shape the `weighted_by`/`n_paired_effective` block above uses,
-                # so the two never disagree about which key set a fact is
-                # computed over. A fact about the paired INTERSECTION, not about
-                # whether a construction ran — the same reason `n_paired` itself
-                # is written whether or not `method`/`delta`/`ci95` came back
-                # non-null (`docs/superpowers/spec-defects.md`'s H4b-2 task 4
-                # entry records the decision, for the derived-key-collision
-                # corner where this fires with every other field `None`).
-                metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
-                    clusters, base_keys if is_derived else col_keys
-                )
+                if is_paired:
+                    # Written in the same `base_keys if is_derived else col_keys`
+                    # shape the `weighted_by`/`n_paired_effective` block above uses,
+                    # so the two never disagree about which key set a fact is
+                    # computed over. A fact about the paired INTERSECTION, not about
+                    # whether a construction ran — the same reason `n_paired` itself
+                    # is written whether or not `method`/`delta`/`ci95` came back
+                    # non-null (`docs/superpowers/spec-defects.md`'s H4b-2 task 4
+                    # entry records the decision, for the derived-key-collision
+                    # corner where this fires with every other field `None`).
+                    metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
+                        clusters, base_keys if is_derived else col_keys
+                    )
+                else:
+                    # Per side once the sides are disjoint, and Welch's df reads
+                    # both. Two integers that cannot coincide, which is what makes
+                    # them a stronger discriminator than any float here.
+                    metric_block[metric_key]["n_clusters_of"] = cluster_count_of(clusters, of_col)
+                    metric_block[metric_key]["n_clusters_against"] = cluster_count_of(
+                        clusters, against_col
+                    )
             if confounded:
                 # Marked, not merely reported: a delta mixing two axes is the
                 # factorial main-effects problem, which core refuses to
@@ -1228,7 +1314,7 @@ def _comparison_step_blocks(
                     delta=metric_block[metric_key]["delta"] or 0.0,
                     ci95=(interval.low, interval.high) if interval else None,
                     pool=tuple(resampled.pool) if corrected_from_pool and resampled else None,
-                    diffs=None if corrected_from_pool else tuple(diffs),
+                    diffs=(None if corrected_from_pool or not is_paired else tuple(diffs)),
                     # Only where `diffs` is: a pool is already drawn from weighted
                     # values, so weights beside one would be applied twice, and
                     # `Member.__post_init__` refuses that rather than letting it
@@ -1251,12 +1337,30 @@ def _comparison_step_blocks(
                     declaration_index=0,
                 )
             )
-            if comp.within is not None and min_reported_n is not None and n_paired < min_reported_n:
+            # Task 16 owns the per-side warning and its message. Until then, this
+            # is a placeholder: the same `base_keys if is_derived else col_keys`
+            # count the paired arm already records as `n_paired` (deviation from
+            # the brief's literal `len(col_keys) if is_paired else ...`, which
+            # left `col_keys` unbound on a derived, paired, within-scoped metric —
+            # `test_a_derived_key_collision_under_a_cluster_still_carries_the_
+            # intersection_facts` and others hit it as `UnboundLocalError`), and
+            # the thinner of the two side counts on the unpaired arm, which is
+            # the reading that cannot under-report in the interim.
+            reported_n = (
+                (len(base_keys) if is_derived else len(col_keys))
+                if is_paired
+                else min(len(of_col), len(against_col))
+            )
+            if (
+                comp.within is not None
+                and min_reported_n is not None
+                and reported_n < min_reported_n
+            ):
                 findings.warn(
                     "W-STATS-CONTRAST-THIN",
                     "limits.min_reported_n",
                     f"{where}, step {step_name!r} metric {metric_key!r}: n_paired "
-                    f"{n_paired} is below limits.min_reported_n ({min_reported_n})",
+                    f"{reported_n} is below limits.min_reported_n ({min_reported_n})",
                 )
         if metric_block:
             block[step_name] = metric_block
