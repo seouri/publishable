@@ -3152,7 +3152,12 @@ def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branc
 
     Both counts are asserted, and that is the point: the first alone passes under a
     third branch writing `"paired": is_paired`, and the second alone passes under
-    two sites that both became conditional."""
+    two sites that both became conditional.
+
+    **Scope of the pin**: this reads one function's source text, so it is defeated
+    by extracting either write into a helper — the guarantee it protects is real,
+    but this is not the only way to make the guarantee false and have this test
+    stay green."""
     from publishable.cli import _comparison_step_blocks
 
     source = inspect.getsource(_comparison_step_blocks)

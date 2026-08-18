@@ -2625,17 +2625,27 @@ results:
                family_size: 4, family: {comparisons: 2, metrics: 2}}
 ```
 
+Whatever core weighted moves together, and `weighted_by` and the effective size travel beside it
+either way — which of the four core weighted is the split
+[§ Statistical reporting](#statistical-reporting) draws
+between a recorded column and a derived metric. A weighted delta beside an unweighted interval, an
+unweighted `cohens_d`, or an `n_paired` with no effective size beside it, is a
+declaration accepted whose effect is half delivered — the same obligation a weighted per-condition
+block carries, with one more part because a contrast reports an effect size a condition does not.
+
 **Under [`cluster_by`](#clustered-units) a contrast entry carries one more key, and it is a count
 rather than a name.** `n_paired_clusters` is the number of distinct clusters the paired intersection
 falls in — a **scalar sibling of `n_paired`**, on the same argument `n_paired_effective` rests on:
 this record deliberately has no `n` mapping to join, and the cluster count is a fact about the
-intersection `n_paired` counts. It is the count the interval's df was taken from, so a reader can
-check `clusters − 1` against the interval rather than take it on trust.
+intersection `n_paired` counts.
 
-There is deliberately **no attribute-naming key** beside it. Every clustered contrast records a
-`method` carrying the `_clustered` suffix, so the record already discloses that the cluster was the
-draw — which is the disclosure a weighted contrast could not make, since a weighted *derived* metric
-keeps the unsuffixed spelling and needs `weighted_by` to say so at all. One fact, disclosed once.
+There is deliberately **no attribute-naming key** beside it. A clustered contrast over a **recorded
+column** records a `method` carrying the `_clustered` suffix, so the record already discloses that the
+cluster was the draw — which is the disclosure a weighted contrast could not make, since a weighted
+*derived* metric keeps the unsuffixed spelling and needs `weighted_by` to say so at all. One fact,
+disclosed once. A **derived** metric whose key collides with a recorded column's is a separate, open
+corner: which branch such a contrast takes, and whether it discloses the cluster at all, is recorded
+in `docs/superpowers/spec-defects.md` rather than promised here.
 
 ```yaml
 results:
@@ -2658,14 +2668,6 @@ so, or beside no cluster count at all, is a declaration accepted whose effect is
 `cohens_d` is **not** in that set — *d*z is standardized by the dispersion of the differences and
 [§ Statistical reporting](#statistical-reporting) defines no clustered effect size, so it is the same
 number a clustered run and an unclustered one report.
-
-Whatever core weighted moves together, and `weighted_by` and the effective size travel beside it
-either way — which of the four core weighted is the split
-[§ Statistical reporting](#statistical-reporting) draws
-between a recorded column and a derived metric. A weighted delta beside an unweighted interval, an
-unweighted `cohens_d`, or an `n_paired` with no effective size beside it, is a
-declaration accepted whose effect is half delivered — the same obligation a weighted per-condition
-block carries, with one more part because a contrast reports an effect size a condition does not.
 
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 

@@ -6400,6 +6400,30 @@ claim.
 
 **Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
 
+**CORRECTION, fix round 1 (task-b1 review, Major 2):** the "H4b-2 does not need it" paragraph above
+reasons from a proxy and overstates what it found. `_comparison_step_blocks` iterates
+`set(of_summary) & set(against_summary)` from **`aggregated`**, but the branch it takes —
+`is_derived = metric_key in of_derived or metric_key in against_derived` — reads **`derived_by_key`**,
+a different mapping. Those two disagree in one reachable state: `stats.summarize_step` raises
+`E-STEP-KEY-COLLISION` for a derived key shadowing a recorded column **before** its
+`clusters is not None and seed is not None` guard; `cli.command_run` assigns `derived_by_key` and
+`resample_fns_by_key` **before** calling `summarize_step`; and that call's `except ContractError`
+retry re-summarizes with no `derived` but never clears either mapping. So a clustered step whose
+derived key collides with a recorded column's name reaches `aggregated` holding the recorded column
+while `derived_by_key` still holds the name, and `_comparison_step_blocks` takes the derived branch —
+confirmed by a direct call producing `method: 'paired_percentile_over_units'`, unsuffixed, beside
+`ci95: [0.6, 0.6]` (task 3's zero-width shape, incidentally).
+
+**The ruling is unchanged** — re-own to H4c, do not build the clustered derived draw, on the
+construction-family argument, which this collision does not touch. What is narrowed is the reachability
+claim: the derived branch is unreachable in a clustered run **only through `validate` and `run`
+end-to-end, and only while `E-DATA-CLUSTER-CONTRAST` refuses cluster + contrast wholesale** — it is
+directly reachable today by calling `_comparison_step_blocks` itself, which is not a path `validate`
+closes. **Task 14, which retires `E-DATA-CLUSTER-CONTRAST`, must re-check this corner before treating
+it as closed** — the collision case, and with it whatever `method`/`ci95` shape a name-colliding
+clustered derived metric should record, is not decided by this entry and does not resolve itself when
+the wholesale refusal lifts.
+
 ## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
 
 Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
@@ -6416,8 +6440,17 @@ neither of them the obvious "assert `paired` is never `False`", which is a mutat
 cannot differ:
 
 - `tests/test_cli.py::test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`
-  fails the moment either literal becomes conditional.
-- `tests/test_validate.py::test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`
-  fails the moment the refusal stops firing for a cross-arm comparison.
+  fails the moment either literal becomes conditional. **Scope:** it reads
+  `inspect.getsource(_comparison_step_blocks)`, so it is defeated by extracting either `"paired": True`
+  write into a helper function — a real gap in the pin, not only a hypothetical one, since the source
+  it inspects is exactly one function body.
+- `tests/test_validate.py::test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals` fails the
+  moment the allocation refusal stops firing for a declared cross-arm contrast beside `cluster_by`.
+  (Fix round 1, Major/Minor review: a second test once duplicated this fixture under the name
+  `test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`, quantifying over "every"
+  shape while asserting only this one; it was deleted as non-discriminating rather than kept beside an
+  identical fixture. The other unpaired shape — a *generated* cross-arm comparison — is pinned
+  separately by two pre-existing tests, neither declaring `cluster_by`, named in this test's own
+  docstring.)
 
 **Ruled by:** H4b-2, task 5. **Owner of the obligation:** H4c.

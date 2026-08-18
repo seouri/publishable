@@ -97,3 +97,90 @@ an unreverted mutation.
 Confirmed alive and untouched by all five tasks — every new/amended test in tasks 3 and 5 asserts it
 **alongside** the code it's paired with, never as a total set, per the slice's binding convention.
 It retires only at task 14, which is out of this batch's scope.
+
+## Fix round 1 (review at `ce77241`, `.superpowers/sdd/2026-08-17-clustered-contrasts/task-b1-review.md`)
+
+Both Majors accepted as findings; the rulings underneath both survive. Both Minors that named a
+concrete defect (3, 4) closed by documenting or repairing what they named; Minors 1–2, which named
+the same test, closed together by deleting the non-discriminating one rather than differentiating it
+— the review itself observed that task 15's narrow-rather-than-delete convention makes the surviving
+pre-existing test the stronger pin regardless, so keeping both bought nothing.
+
+**Major 1 — the df clause in `docs/reference.md` § Contrasts.** Deleted the sentence *"It is the
+count the interval's df was taken from, so a reader can check `clusters − 1` against the interval
+rather than take it on trust"* — per `CLAUDE.md`'s "prefer deleting a claim to rewriting it," since
+the clause is general over `n_paired_clusters` and `paired_percentile_over_units_clustered` (a
+resampling draw, no df) carries that same key. The two sentences on either side of it stand
+unchanged and need nothing added. **Verified by:** grepping the four documents, `CLAUDE.md`, and the
+feasibility analysis for the deleted phrase and for `"Every clustered contrast"` (Major 2) — no hits;
+re-running `tests/test_cli.py::test_the_clustered_contrast_record_key_is_documented`, which checks the
+section only for `n_paired_effective`/`n_paired_clusters`/absence of `clustered_by` and does not quote
+the deleted clause — pass; full suite after the edit — 2163 passed (before Minor 1/2's deletion, see
+below), gates clean.
+
+**Major 2 — task 4's reachability grounds, and § Contrasts' universal quantifier.** Both narrowed,
+neither retro-edited into looking like they were always true:
+
+- `docs/superpowers/spec-defects.md`, task 4's entry: appended a `**CORRECTION, fix round 1**` block
+  (did not edit the original ruling text) stating the actual disagreement — `_comparison_step_blocks`
+  branches on `derived_by_key`, not on `aggregated`, and the two diverge in one reachable state (a
+  clustered step whose derived key collides with a recorded column's name, surviving a
+  `summarize_step` → `except ContractError` retry that never clears `derived_by_key` /
+  `resample_fns_by_key`) — and states plainly that unreachability holds only through `validate`/`run`
+  end-to-end and only while `E-DATA-CLUSTER-CONTRAST` stands, naming **task 14** as the owner that
+  must re-check the corner when it retires that refusal.
+- `docs/reference.md` § Contrasts: narrowed *"Every clustered contrast records a `method` carrying the
+  `_clustered` suffix"* to *"A clustered contrast over a **recorded column** records..."*, and added a
+  sentence naming the derived-key-collision corner as open and pointing to `spec-defects.md` rather
+  than promising a resolution here.
+
+**Verified by:** re-reading the three code sites the review's Major 2 cites
+(`stats.summarize_step`'s raise-before-guard ordering, `cli.command_run`'s pre-call assignment of
+`derived_by_key`/`resample_fns_by_key`, and the `except ContractError` retry's failure to clear them)
+against the current source — all three still hold at this commit; grepping for the deleted universal
+phrase (no hits); full suite after the edit — unaffected (doc-only change plus the spec-defects.md
+correction), gates clean.
+
+**Minor 1/2 — the near-duplicate test.** Deleted
+`test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal` from `tests/test_validate.py`
+rather than renaming or differentiating it: it shared the fixture, the config, and (functionally) the
+assertion with `test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals` immediately above
+it, and the review's own guard-inversion mutation already showed both failing together with no
+daylight between them. Added a paragraph to the surviving test's docstring naming it as also serving
+as H4b-2 task 5's behavioural tripwire, cross-referencing the two pre-existing tests
+(`test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not`,
+`test_a_declared_contrast_across_arms_is_refused`) that cover the other unpaired shape (a *generated*
+cross-arm comparison, no `cluster_by`) the deleted test's name had wrongly quantified over. Updated
+`docs/superpowers/spec-defects.md` task 5's tripwire citation from the deleted test's name to the
+surviving one. **Verified by:** re-running task 5's prescribed mutation
+(`validate.py`'s allocation guard, `if not group_axes: continue` → `if group_axes: continue`) against
+the full, unfiltered suite in the foreground — **86 failed** (one fewer than the review's 87, the
+exact delta of the deleted duplicate), the surviving test named in it; reverted by editing the file
+back, re-ran — clean. This is a net **-1** test versus the round-0 count: **2162 passed, 1 skipped, 2
+xfailed** is the new expected number, not 2163.
+
+**Minor 3 — the `inspect.getsource` pin's scope.** Added one line each to the test's own docstring
+(`tests/test_cli.py::test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`)
+and to task 5's `spec-defects.md` entry, stating plainly that the pin is scoped to one function's
+source text and is defeated by extracting either `"paired": True` write into a helper. No behavior
+changed; documentation only. **Verified by:** re-reading both edits render correctly; full suite
+unaffected.
+
+**Minor 4 — the orphaned weighted paragraph.** Task 2's insertion had put the `n_paired_clusters`
+block between the weighted `arm_sensitivity` fence and the paragraph beginning *"Whatever core
+weighted moves together..."* — which directly followed that fence before the insertion — so the
+paragraph ended up stranded after the new clustered material, and the clustered section's own closing
+line (*"the same obligation a weighted entry carries"*) forward-referenced a paragraph that now
+appeared textually after it instead of before. Fixed by cutting the paragraph from where the
+insertion had stranded it and pasting it back immediately after the weighted fence, ahead of the
+`cluster_by` heading — restoring the pre-insertion order and turning the forward-reference back into a
+backward one. **Verified by:** `grep -c "Whatever core weighted moves together" docs/reference.md` →
+1 (confirms the move, not a duplication); re-running
+`tests/test_cli.py::test_the_clustered_contrast_record_key_is_documented` and the mechanical pass
+(anchors, duplicate headings, trailing whitespace/tabs, `×` usage) over `docs/reference.md` — clean.
+
+**Full verification, all fixes applied:** `ruff check` clean, `ruff format --check` 80 files, `mypy`
+45 source files clean, full unfiltered `pytest` in the foreground — **2162 passed, 1 skipped, 2
+xfailed**. `git status --porcelain` empty after commit. No `ENOSPC` this round (3.0–3.7 GiB free
+throughout); every mutation reverted by editing the file back and re-verified by re-running, never by
+`git status` alone.

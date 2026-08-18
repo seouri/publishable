@@ -8063,7 +8063,18 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_confi
     construction exists) and `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two
     sides are disjoint arms), asserted as the exact set. After task 16b there
     are two reporters over one comparison, not one, and this is checked rather
-    than assumed."""
+    than assumed.
+
+    This is also H4b-2 task 5's behavioural tripwire (fix round 1, Minor 1/2):
+    it is the shape a declared cross-arm contrast beside `cluster_by` takes,
+    and it is the one this repo's two-shape claim needs — a *generated*
+    cross-arm comparison earning the same allocation refusal is pinned
+    separately by
+    `test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not`
+    and `test_a_declared_contrast_across_arms_is_refused`, neither of which
+    declares `cluster_by`. A prior test duplicating this fixture under a name
+    that quantified over both shapes was deleted rather than kept beside it —
+    it discriminated nothing this one does not."""
     (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
     doc = _groups_cluster_doc(
         statistics={
@@ -8074,29 +8085,6 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_confi
         "E-DATA-CLUSTER-CONTRAST",
         "E-DATA-ALLOCATION-CONTRAST",
     }
-
-
-def test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal(write_config, tmp_path):
-    """The behavioural half of H4b-2 task 5's H4c tripwire, and the half that
-    survives the literal being refactored.
-
-    H4b-2 builds PAIRED clustered constructions only, which is sufficient exactly
-    while every unpaired comparison is refused before it reaches `cli`. Asserted
-    ALONGSIDE `E-DATA-CLUSTER-CONTRAST` rather than as a total code set, so H4b-2
-    task 14's retirement is a one-line deletion here.
-
-    `validate` collects rather than aborting, so the cluster refusal firing does not
-    make the allocation one unreachable — both are reported over the one
-    comparison, and this asserts both."""
-    (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
-    doc = _groups_cluster_doc(
-        statistics={
-            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
-        }
-    )
-    found = _error_codes(write_config(doc))
-    assert "E-DATA-ALLOCATION-CONTRAST" in found
-    assert "E-DATA-CLUSTER-CONTRAST" in found  # deleted by task 14, not narrowed
 
 
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
