@@ -1625,6 +1625,11 @@ def test_the_weight_cluster_refusal_has_both_of_its_rows():
         )
 ```
 
+      **Before writing that block, grep `_check_sweep` for an existing `weight_by` local.** The
+      retired `E-DATA-WEIGHT-CONTRAST` guard bound that name in this function, and a survivor would be
+      silently shadowed. Measured at `82310b9`: no `weight_by` appears anywhere in `_check_sweep`, so
+      the binding above is new — **re-check, since tasks 1–5 have committed since.**
+
       In `docs/reference.md` § Errors `validate` reports, add a two-cell row whose final cell is
       `` `E-DATA-WEIGHT-CLUSTER-CONTRAST` `` and whose first states the check, its resolved-family
       reading and its temporariness — the shape its siblings in that table have.
@@ -1797,6 +1802,15 @@ def _drawable_content(
     in the value: a draw that replaces one key with another carrying identical
     rows produces an identical table, and a signature carrying the key would call
     that a difference.
+
+    **This is the WHOLE row, not the column the compute closure reads**, and that
+    makes the refusal narrower than its per-condition siblings, whose own draws
+    carry one `(value, weight)` pair each. A collapsed table holding several
+    recorded columns can differ on a column this contrast's closure never touches,
+    and the refusal then does not fire though that metric's draw cannot vary. The
+    filed defect is still closed — a near-unique `stratify_by` puts one drawable
+    thing in each stratum, so the check holds however many columns the rows carry
+    — but the general case is bounded by this and is not claimed.
     """
     return tuple(
         sorted(
@@ -1852,6 +1866,14 @@ already had. Content-based rather than count-based, and over the **drawable thin
 default, a whole cluster under `clusters` — so it covers the stratified and unstratified draws and
 the clustered and unclustered ones as one expression. The rule was stated in `reference.md`
 § Statistical reporting first, by task 3.
+
+**What is closed and what is bounded.** The filed reachability — a near-unique `stratify_by` making
+every draw pick from an identical multiset — is closed outright: one drawable thing per stratum
+satisfies the check whatever the rows carry. The check compares **whole collapsed rows**, so a table
+holding several recorded columns can differ on a column a given metric's closure never reads, and
+that metric's draw can still be constant without the refusal firing. Bounded and stated rather than
+claimed away; a signature keyed on the metric the closure reads would close it, and no filed defect
+asks for that today.
 ```
 
 - [ ] **Step 6: Mutate.**
@@ -1944,8 +1966,9 @@ def _clustered_contrast_call(**extra):
     keys = [f"u{i:02d}" for i in range(12)]
     values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
     roster = UnitList([Unit(key=k) for k in keys])
-    return _comparison_step_blocks(
-        Comparison(id="c", of=1, against=0),
+    # `extra` OVERRIDES rather than adding, so a caller can pass `clusters=None`
+    # or `resample_columns=True` without colliding with the defaults below.
+    kwargs = dict(
         roster=roster,
         aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
         collapsed_by_key={
@@ -1966,8 +1989,9 @@ def _clustered_contrast_call(**extra):
         },
         resample_columns=False,
         clusters=dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)),
-        **extra,
     )
+    kwargs.update(extra)
+    return _comparison_step_blocks(Comparison(id="c", of=1, against=0), **kwargs)
 
 
 def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
@@ -2264,6 +2288,29 @@ def test_every_reachable_contrast_cell_writes_its_own_method(
     assert block["s"]["m"]["method"] == expected
 
 
+def test_a_clustered_resampled_contrast_really_drew_clusters():
+    """The `method` string and the draw are two claims, and the parametrized table
+    above pins only the first. A `method` naming a construction the draw did not
+    perform is the whole failure this slice was ordered around — so the DRAW is
+    asserted here, by the only evidence available at this level: the same fixture,
+    resampled, with and without the membership must produce DIFFERENT intervals.
+
+    A clustered draw takes 3 things from {2, 4, 6} units and pools them; a unit
+    draw takes 12 units. On differences of 1.0/5.0/9.0 concentrated by cluster
+    those distributions are not close, and identical endpoints would mean the
+    membership never reached the construction.
+
+    The clustered endpoints are recorded as literals beside the inequality, so a
+    later change cannot move the draw while keeping the two merely unequal. Capture
+    them from the first green run of this test and paste them in."""
+    clustered, _ = _clustered_contrast_call(resample_columns=True)
+    plain, _ = _clustered_contrast_call(resample_columns=True, clusters=None)
+    assert clustered["s"]["m"]["method"] == "paired_percentile_over_units_clustered"
+    assert plain["s"]["m"]["method"] == "paired_percentile_over_units"
+    assert clustered["s"]["m"]["ci95"] != plain["s"]["m"]["ci95"]
+    assert clustered["s"]["m"]["ci95"] == pytest.approx([0.0, 0.0])  # paste the run's
+
+
 def test_a_clustered_contrast_method_is_one_the_document_defines():
     """The agreement between the emitted string and § Statistical reporting, pinned
     against the DOCUMENT rather than against a second literal — a test comparing
@@ -2324,7 +2371,7 @@ def test_a_clustered_contrast_method_is_one_the_document_defines():
       comprehension is over `col_keys`, so a key the mapping lacks raises here rather than being
       invented a cluster.
 
-- [ ] **Step 4: Run and see them pass.** `uv run pytest` → **2182 + 7 = 2189 passed**, 1 skipped,
+- [ ] **Step 4: Run and see them pass.** `uv run pytest` → **2182 + 8 = 2190 passed**, 1 skipped,
       2 xfailed (the parametrized test contributes six). Then the other three gates.
 
 - [ ] **Step 5: Mutate.**
@@ -2335,18 +2382,20 @@ def test_a_clustered_contrast_method_is_one_the_document_defines():
       the table catches a fall-through at the cell rather than anywhere.
 
       **Mutation 2 — the membership never reaches the draw.** Change `clusters=(None if clusters is
-      None else {k: clusters[k] for k in col_keys})` to `clusters=None`. The parametrized test
-      **still passes**, because the `method` string is a separate argument — **so this mutation is
-      blind against it, and that is the finding**: a `method` naming a construction the draw did not
-      perform is exactly decision 2's failure. The test that catches it is task 17's end-to-end
-      regression pin over a clustered resampled config, whose interval endpoints differ between a
-      cluster draw and a unit draw. **Run this mutation and record its silence in the task report** —
-      silence here is evidence about the tests, and it is why task 17 exists.
+      None else {k: clusters[k] for k in col_keys})` to `clusters=None`. The **parametrized test
+      still passes**, because the `method` string is a separate argument — that silence is evidence
+      about *that* test, not about the code, and it is exactly why
+      `test_a_clustered_resampled_contrast_really_drew_clusters` exists. **That** test must **FAIL**
+      on `clustered[...]["ci95"] != plain[...]["ci95"]`: with the membership dropped, the two calls
+      differ in nothing but a `method` string and return byte-identical intervals. A `method` naming
+      a construction the draw did not perform is decision 2's failure verbatim, and this is the one
+      mutation that reaches it.
 
-      **Mutation 3 — the narrowing.** Change `{k: clusters[k] for k in col_keys}` to `clusters`. Also
-      blind against every fixture in this task, since `col_keys` is the whole roster here. Recorded,
-      with the fixture that would catch it named: a ragged column whose `col_keys` is a strict subset,
-      which task 13 builds.
+      **Mutation 3 — the narrowing.** Change `{k: clusters[k] for k in col_keys}` to `clusters`.
+      **Blind against every fixture in this task**, since `col_keys` is the whole roster here — and
+      blind for a second reason worth knowing: `paired_percentile_of_derived` builds its pools by
+      walking `keys`, so a wider mapping contributes no extra pools and the draw is unchanged. The
+      narrowing is a provenance discipline rather than an arithmetic one. Recorded, not prescribed.
 
 - [ ] **Step 6: Commit.**
 
@@ -2552,8 +2601,9 @@ def test_a_clustered_contrast_member_carries_its_membership_and_no_pool():
       **`corrected_from_pool` is the single decision, read once for all three fields**, so `pool`,
       `weights` and `clusters` cannot disagree about which evidence this member carries.
 
-- [ ] **Step 4: Run and see them pass.** `uv run pytest` → **2189 + 4 = 2193 passed**, 1 skipped,
-      2 xfailed. Then the other three gates.
+- [ ] **Step 4: Run and see them pass.** `uv run pytest` → **2190 + 3 = 2193 passed**, 1 skipped,
+      2 xfailed — **three**, not four: two of this task's tests are in `tests/test_correction.py` and
+      one in `tests/test_cli.py`. Then the other three gates.
 
 - [ ] **Step 5: Mutate.**
 
@@ -2746,6 +2796,13 @@ def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over
             # roster-wide mapping: a ragged column's clusters are its own, and a
             # count over the roster would claim a df the interval never used.
             if clusters is not None:
+                # The `is_derived` arm is unreachable under a declared cluster —
+                # `summarize_step` raises `E-DATA-CLUSTER-DERIVED` and the whole
+                # derived mapping is dropped before it reaches `aggregated`, so no
+                # metric here is derived. Written the same shape as the weighted
+                # block beside it rather than dropped, because the two must not
+                # disagree about which key set a fact is computed over if that
+                # refusal is ever lifted.
                 metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
                     clusters, base_keys if is_derived else col_keys
                 )
@@ -2913,6 +2970,15 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
                 "baseline": {"analysis.method": "pearson"},
                 "grid": {"analysis.method": ["spearman"]},
             },
+            statistics={
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "method=pearson",
+                    }
+                ]
+            },
         )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     entry = next(
@@ -2925,6 +2991,15 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
     assert entry["n_paired_clusters"] == 3
     assert entry["delta"] == pytest.approx(6.333333333333333)
     assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(8.763214143637903)
+    # The DECLARED-contrast path, which is a second call site for the membership:
+    # `_compute_declared_contrasts` threads `clusters` on its own line, and no
+    # direct-call fixture in this plan reaches it. Same two conditions, so the same
+    # arithmetic — which is what makes a disagreement between the two entries a
+    # threading fault rather than a fixture difference.
+    declared = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert declared["method"] == "paired_t_over_units_clustered"
+    assert declared["n_paired_clusters"] == 3
+    assert declared["ci95"] == entry["ci95"]
 ```
 
       Read `run_a_project`'s `_starter_step` parameter before writing the `MonkeyPatch.context()`
@@ -2932,6 +3007,13 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
       `_starter_step=_CLUSTER_CONTRAST_STEP` and drop the context manager. The literal `{` in the
       step source must be doubled, as that helper's docstring requires, because the source goes
       through `STARTER_STEP.format(pkg=pkg)`.
+
+      **`unit.attributes["site"]` is readable inside a step, checked rather than assumed:** `Unit`
+      carries `attributes` as a frozen mapping built from `data.units.attributes`, and
+      `reference.md` § The unit list says a declared attribute is also readable directly
+      (`unit.site`). Keying the gap on the attribute rather than on an enumeration index is what
+      makes this fixture independent of roster order — an index-keyed version would pass under a
+      mutation that reordered the roster.
 
 - [ ] **Step 3: Run and see them fail.** The `validate` test fails on
       `codes(path) == set()` (the retired code is still reported); the `run` test fails with the
@@ -3005,7 +3087,10 @@ def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tm
       1.9786. **Checked against the test body:** the test travels the whole path from
       `clusters_of`, and the two readings give numbers a factor of four apart on an identical delta.
       **This is the mutation task 10 recorded as blind against its own direct calls**, and closing it
-      here is why task 14 carries the `run`-through half.
+      here is why task 14 carries the `run`-through half. **Then run it again on
+      `_compute_declared_contrasts`' own `clusters=clusters` line**, which is a separate call site: the
+      test's `declared[...]` assertions must **FAIL** while the `vs_baseline` ones pass, which is what
+      says the two sites are pinned independently rather than one standing in for the other.
 
       **Mutation 2 — the retirement itself is real.** Re-add the deleted emit (a one-line `c.error`
       with the same code). `test_a_clustered_comparison_now_validates_clean` must **FAIL** on
@@ -3412,6 +3497,8 @@ Run after the plan was written, against the spec with fresh eyes.
 | Task 1 before 6–9 and 11; 4 before 2; 3 before 7; 2 before 13; 6 before 12; 14 last; 15 not the dev record | § Sequencing, and each dependent task's own brief |
 | The discriminating fixture, its four constraints and five half-widths | § The discriminating fixture, used verbatim by tasks 6, 10, 11, 13, 14 |
 | The percentile form's 6–18 pooled row count against a mutant's fixed 12 | 7, asserted directly |
+| The clustered percentile draw actually reaching production, not only its `method` string | 11, `test_a_clustered_resampled_contrast_really_drew_clusters`; the parametrized table pins the string alone |
+| Both `cli` call sites threading the membership | 14, whose end-to-end config carries a `vs_baseline` **and** a declared contrast, mutated at each site separately |
 | `E-DATA-CLUSTER-DERIVED` re-owned by name | 4 (owner), 15 (wording) |
 | The surviving-citation sweep, by claim, over a named file list, excluding the dev record | 15 |
 | The filings — finiteness, disclosure 1 and 3, sorted-pool, § How a metric becomes a number, `report_by`, `corrected_fields` dedupe | 16, one table row each |
@@ -3425,12 +3512,20 @@ decision (moved to task 15, deviation (b)); its task 10/11 split leaves task 10 
 
 ### 2. Placeholder scan
 
-Two tasks carry `...` inside a code block on purpose, and both say what to build and where to read
-the shape from rather than deferring the decision: task 17's second and third tests, whose configs
-must be **copied from named existing tests** rather than invented, and whose expected endpoint
-literals must be **captured at `82310b9` before the change lands** — a regression pin whose expected
-values are captured afterwards is not one. Every other code block is complete. No "TBD", no "add
-appropriate error handling", no "similar to task N".
+Three deliberate blanks, each with what fills it and where the shape comes from:
+
+- **Task 17's second and third tests** carry `...` for a body that must be **copied from a named
+  existing test** rather than invented, and expected endpoint literals that must be **captured at
+  `82310b9` before the change lands** — a regression pin whose expected values are captured
+  afterwards is not one.
+- **Task 11's `pytest.approx([0.0, 0.0])  # paste the run's`** is a placeholder for endpoints
+  captured from that test's own first green run. It is legitimate because the **discriminating**
+  assertion in that test is the inequality above it, which needs no literal; the endpoints are a
+  second lock so a later change cannot move the draw while leaving the two merely unequal. Leaving
+  `[0.0, 0.0]` in place would fail the test, so it cannot ship unfilled.
+
+Every other code block is complete. No "TBD", no "add appropriate error handling", no "similar to
+task N".
 
 ### 3. Type consistency across tasks
 
@@ -3443,7 +3538,7 @@ appropriate error handling", no "similar to task N".
 | `Member.clusters: tuple[str, ...] \| None` | 12 | 12 (`_corrected_bounds`), 13 (asserted on the ragged fixture) |
 | `clusters: dict[str, str] \| None` parameter | 10 | 10, 11, 13 on all three `cli` functions and both `command_run` call sites |
 | `E-DATA-WEIGHT-CLUSTER-CONTRAST` | 1 (reserved), 8 (minted) | 10 (the `ValueError` message), 12 (`Member.__post_init__`), 14 (**not** deleted), 18 |
-| `_clustered_contrast_call(**extra)` | 10 | 12, 13 |
+| `_clustered_contrast_call(**extra)` — `extra` **overrides** the defaults, so `clusters=None` and `resample_columns=True` are both passable | 10 | 11, 12 |
 | `_CONTRAST_CLUSTER_LABELS` | 10 | 11, 12 |
 | `_WEIGHTED_SITE_BODY` | 8 | 8 only |
 
