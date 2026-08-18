@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.contrasts import crossed_group_axes, resolve_contrasts, units_matching
 from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
@@ -5058,9 +5058,7 @@ def _check_sweep(
         against_cond = conditions_by_index.get(comp.against)
         if of_cond is None or against_cond is None:
             continue
-        differing = differing_axes(of_cond, against_cond)
-        group_selectors = of_cond.selectors | against_cond.selectors
-        group_axes = [axis for axis in differing if axis in group_selectors]
+        group_axes = crossed_group_axes(of_cond, against_cond)
         if not group_axes:
             continue
         plural = "" if len(group_axes) == 1 else "s"
@@ -5080,6 +5078,36 @@ def _check_sweep(
             "two arms as separate runs and join them in a `study`. This will be honored "
             "once the unpaired estimators exist",
         )
+        # A weighted unpaired contrast has no construction and will not get one.
+        # `weight_by` beside a cross-arm comparison needs Kish's effective size PER
+        # SIDE — two df inputs where the paired form needed one — and the two
+        # readings coincide in any fixture not built to separate them, so the wrong
+        # choice would be invisible. Refused rather than approximated, on the
+        # precedent `E-DATA-WEIGHT-CLUSTER-CONTRAST` set. Standing, not temporary:
+        # it refuses a COMBINATION rather than a declaration, so it carries a
+        # § Validation row and a § Errors row and is not one of the `NOT BUILT`
+        # declarations § The one config file counts.
+        #
+        # Inside this loop rather than beside the `comparisons > 0` guards above,
+        # because it is the same per-comparison reading its neighbour is: a
+        # `groups × grid` design's within-arm comparisons are paired and weightable,
+        # and a guard firing on the declaration would refuse a design core computes
+        # correctly today.
+        if isinstance(weight_by, str) and weight_by:
+            c.error(
+                "E-DATA-WEIGHT-ALLOCATION-CONTRAST",
+                "data.units.weight_by",
+                f"is declared beside a comparison whose two conditions "
+                f"({of_cond.label!r} and {against_cond.label!r}) differ on group "
+                f"axis{plural} {', '.join(group_axes)}, and no construction computes "
+                "a weighted unpaired delta: a Welch *t* on two weighted means takes "
+                "its df from Kish's effective size per side, two inputs where the "
+                "paired form needed one, and the two readings coincide in any sample "
+                "not built to separate them. Drop `weight_by` and the cross-arm delta "
+                "is computed unweighted, keep it and compare within an arm, or express "
+                "the weighted difference as an `Estimate` returned by a `summary` step, "
+                "which core records as reported rather than recomputing",
+            )
 
     if comparisons > 0 and (correction or "holm") == "none":
         c.warn(

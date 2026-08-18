@@ -8115,6 +8115,139 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal(
     assert _error_codes(write_config(doc)) == {"E-DATA-ALLOCATION-CONTRAST"}
 
 
+def _groups_weight_csv() -> str:
+    """`_groups_cluster_csv`'s roster with a weight column instead of a cluster one.
+
+    A separate builder rather than a column added to that one: its own tests assert
+    a documented arm/site crossing, and a roster that grew a column would be a
+    second fixture wearing the first one's name."""
+    rows = ["patient_id,arm,sampling_weight"]
+    for arm, keys in _GROUPS_CLUSTER_ARMS.items():
+        for key in keys:
+            rows.append(f"{key},{arm},{2 if arm == 'control' else 3}")
+    return "\n".join(rows) + "\n"
+
+
+def _groups_weight_doc(**extra) -> dict:
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm", "sampling_weight"],
+            "weight_by": "sampling_weight",
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_groups_and_weight_by_compose_with_no_comparison(write_config, tmp_path):
+    """The can-fail control, and it must come first: the combination ITSELF is
+    legal, so a refusal that fired here would be refusing a declaration rather than
+    a combination. A `between` + `by_attribute` + `weight_by` config over a roster
+    whose arms carry different weights validates fully clean."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    assert _error_codes(write_config(_groups_weight_doc())) == set()
+
+
+def test_a_weighted_cross_arm_contrast_draws_the_weight_allocation_refusal(write_config, tmp_path):
+    """`E-DATA-WEIGHT-ALLOCATION-CONTRAST`. A Welch *t* on two weighted means needs
+    Kish's effective size PER SIDE — two df inputs where the paired form needed one,
+    on the dimension where a wrong choice hides best — so the composition is refused
+    rather than approximated, on the precedent `E-DATA-WEIGHT-CLUSTER-CONTRAST` set.
+
+    Asserted ALONGSIDE `E-DATA-ALLOCATION-CONTRAST` rather than as an exact set:
+    that code is alive until this slice's retirement task, and `validate` collects
+    rather than aborting, so both report. Task 18 owns the flip to a set of one."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        statistics={
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
+        }
+    )
+    found = _error_codes(write_config(doc))
+    assert "E-DATA-WEIGHT-ALLOCATION-CONTRAST" in found
+    assert "E-DATA-ALLOCATION-CONTRAST" in found
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found  # attributed, not incidental
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+
+
+def test_a_weighted_within_arm_contrast_draws_neither_refusal(write_config, tmp_path):
+    """The refusal is per comparison, not per config. A `groups × grid` design whose
+    declared contrast stays inside one arm shares that arm's units, so it is paired
+    and weightable — `weighted_paired_t_over_units` is exactly the construction it
+    gets — and a guard firing on `weight_by` beside a group axis would refuse a
+    design core computes correctly today.
+
+    This is the assertion that separates the two readings, and without it a guard
+    keyed on the declaration rather than on the comparison passes every other test
+    in this file."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        sweep={
+            "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+            "grid": {"analysis.method": ["pearson", "spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "within_control",
+                    "of": "arm=control__method=spearman",
+                    "against": "arm=control__method=pearson",
+                }
+            ]
+        },
+    )
+    found = _error_codes(write_config(doc))
+    assert "E-DATA-WEIGHT-ALLOCATION-CONTRAST" not in found
+    assert "E-DATA-ALLOCATION-CONTRAST" not in found
+
+
+def test_a_weighted_clustered_cross_arm_contrast_draws_both_composition_refusals(
+    write_config, tmp_path
+):
+    """Two independent compositions, both refused, and `validate` collects rather
+    than aborting — so the finding set carries both plus the allocation refusal
+    still alive at this task. `E-DATA-WEIGHT-CLUSTER-CONTRAST` fires on an unpaired
+    comparison too, which H4c-SCOPING probed and which is why H4c inherits that
+    composition as a standing refusal rather than as work."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_weight_csv())
+    doc = _groups_weight_doc(
+        statistics={
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
+        }
+    )
+    doc["data.units"]["cluster_by"] = "arm"
+    found = _error_codes(write_config(doc))
+    assert "E-DATA-WEIGHT-ALLOCATION-CONTRAST" in found
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" in found
+    assert "E-DATA-ALLOCATION-CONTRAST" in found
+
+
+def test_the_weight_allocation_refusal_has_both_of_its_rows():
+    """A refusal of a COMBINATION carries a § Validation row and a § Errors row —
+    the two ends of one check — which is what distinguishes it from a
+    `-UNSUPPORTED` build-family code and what decides that it outlives H4c. The
+    twin of `test_the_weight_cluster_refusal_has_both_of_its_rows` in
+    `tests/test_cli.py`, moved here beside the guard's own tests.
+
+    Each row is located by what it is rather than by position: the § Errors row by
+    its final cell, the § Validation row by the code it names."""
+    reference_md = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+    lines = reference_md.read_text().split("\n")
+    errors_row = next(
+        line for line in lines if line.rstrip().endswith("| `E-DATA-WEIGHT-ALLOCATION-CONTRAST` |")
+    )
+    assert "weight_by" in errors_row
+    validation_row = next(
+        line for line in lines if line.startswith("| Weighted unpaired deltas aren't computed |")
+    )
+    assert "group axis" in validation_row
+
+
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
 #
 # `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in

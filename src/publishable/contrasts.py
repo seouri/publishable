@@ -119,6 +119,43 @@ def differing_axes(of: "Condition", against: "Condition") -> list[str]:
     ]
 
 
+def crossed_group_axes(of: "Condition", against: "Condition") -> list[str]:
+    """The declared group axes two conditions disagree on — empty iff they are paired.
+
+    `reference.md` § Allocation's pairing table: two conditions differing only on
+    parameter axes share their units and are paired unit by unit (or paired within
+    that arm under `between`), while two differing on *any* `groups` axis hold
+    disjoint sets of units by construction. So this list being empty **is** the
+    pairing test, and it answers per comparison rather than per config — in a
+    `groups × grid` design, control-pearson against control-spearman is paired and
+    computable while control-pearson against treatment-pearson is not.
+
+    **One expression with two callers, deliberately.** `validate` refuses
+    `weight_by` beside a non-empty answer, and `cli._comparison_step_blocks` derives
+    the `paired` it records from the same answer. Two spellings of one rule drifting
+    apart is a defect this codebase has already shipped, and here the drift would be
+    `validate` refusing a shape `cli` records as paired.
+
+    Returns the **list**, not a boolean: `validate`'s message names the axes and
+    pluralizes on how many there are, and a boolean would force a second expression
+    to recompute them.
+
+    `Condition.selectors` is the authority on which of a condition's `values` paths
+    select units rather than set a parameter — carried on the condition and set by
+    `expand`, which is the only place that knows which mode produced a cell. Reading
+    `values` alone would call every differing path a group axis. The **union** of
+    both sides' selectors, because a path one side declares and the other does not
+    still makes the two sides disjoint.
+
+    Not gated on `allocation`: the axis being a declared `groups` axis is what makes
+    the two sides disjoint, whatever `allocation` itself is declared as — a config
+    missing that declaration entirely earns `E-DATA-ALLOCATION-WITHIN-ARMS`
+    separately.
+    """
+    selecting = of.selectors | against.selectors
+    return [k for k in differing_axes(of, against) if k in selecting]
+
+
 def baseline_for(
     condition: "Condition", baselines: list["Condition"], free: list[str]
 ) -> "Condition | None":
