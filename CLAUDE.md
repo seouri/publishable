@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4b-2 → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4c → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -107,7 +107,14 @@ beside `n_paired`. One live defect closed for every config regardless of cluster
 whose every stratum's rows are identical now reports `ci95: null` rather than a zero-width interval.
 A `report_by` level's recorded-column interval staying `t_over_units` under a declared `resample`
 stays live on C1–C3, created by neither a weight nor a cluster, declined in writing and re-owned to
-H4c rather than folded in.
+H4c rather than folded in. **The whole-branch review found a Critical no per-task review could**: with
+the refusal gone, a derived key colliding with a recorded column's name published an *unclustered*
+contrast interval — half-width 2.0 beside per-condition cluster-robust values at 10.31, `validate`
+reporting zero errors — reachable because `derived_by_key` and `resample_fns_by_key` are both built
+before the `summarize_step` call whose `except ContractError` retry clears neither. **That one corner
+was given four wrong grounds in four separate commits**, each an answer from a proxy rather than from
+the state the code branches on, and the last of them cited a row rewritten in the same breath. Only an
+end-to-end `run` exposed it; every direct-call probe hand-built the maps and so never reached it.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the

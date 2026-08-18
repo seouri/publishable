@@ -2362,7 +2362,7 @@ blocks; what each was missing is a named owner for the day its precondition brea
 | `correction.corrected_fields` dedupe unpinned | **H4 Statistics** — it is the slice that would build `Member` lists from somewhere other than `cli._comparison_step_blocks`, which is the condition the row names |
 | `_evidence_ratio`'s `assert` stripped under `python -O` | **No slice; closed as a convention question.** Third instance of the pattern, and the row itself says the next line raises loudly. A repo-wide convention on `assert` is not a slice's work and should not sit in a defect ledger pretending to be one |
 | `W-STATS-CORRECTED-THIN`'s message leads with `cond:1` | **No slice; closed.** `reference.md` § Exit codes and diagnostics makes the identifier the contract and the wording explicitly not, so this is a cosmetic harmonisation any slice may do opportunistically and none owes |
-| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — the original condition restored: "a new percentile construction returning an unsorted pool would break it silently." H4b-2 is the nearer of the remaining paired-construction slices |
+| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4c** — re-ownered 2026-08-18 after H4b-2 merged, whose own task 7 was checked against this row and returns a sorted pool. The original condition stands: "a new percentile construction returning an unsorted pool would break it silently," and H4c is now the nearer of the remaining paired-construction slices |
 | `PairedResample.pool` is a `list`, so the dataclass is unhashable | **No slice; closed.** Nothing keys on it and a tuple would copy per resample. Recorded so it is not re-litigated |
 | `Member.__post_init__` exempts `ci95 is None` | **No slice; closed.** Deliberate, documented, and pinned by `family_members` dropping such a member first |
 
@@ -4236,7 +4236,7 @@ status does. It remains the numbering **task 8 builds on**, and it is no longer 
 `reference.md` § How artifacts are organized, label-grammar table, **Index** row:
 
 > Assigned over the expansion in order, each cell's baseline first *within its cell*. … With one
-> baseline it is condition `00`; with [one per cell](#expansion-modes) they land at the head of
+> baseline it is condition `00`; with [one per cell](../reference.md#expansion-modes) they land at the head of
 > each cell, which is why `ablate × groups` numbers `00_cohort=derivation__baseline` and
 > `03_cohort=validation__baseline` rather than putting both baselines first.
 
@@ -5603,8 +5603,13 @@ could publish a zero-width contrast interval`, which gives `paired_percentile_of
 content-based degenerate refusal it lacked, over both the clustered and unclustered draws and the
 stratified and unstratified ones as one check.
 Findings 1 and 3 are general contrast-disclosure gaps that neither weights nor clusters created, so
-they stay with **H4b-2** as the nearer of the two contrast-family slices rather than being split a
-third way.
+they stay with the nearer of the remaining contrast-family slices rather than being split a third way.
+
+**RE-OWNED 2026-08-18, after H4b-2 merged — Findings 1 and 3 pass to H4c.** H4b-2 has landed and
+closed Finding 2; the sentence above named it as the nearer slice, and it is no longer a slice that
+will run. H4c — the unpaired contrast constructions — is now the nearest, and it touches the same
+`_comparison_step_blocks` disclosure surface both findings are about. Re-ownered by name rather than
+left reading as live work nobody holds, per `CLAUDE.md` § Habits that cost real work.
 
 **Finding 1 — a declared `resample` can silently remove a column contrast's interval.** Task 16
 routes a recorded column's contrast through `stats.paired_percentile_of_derived` under a declared
