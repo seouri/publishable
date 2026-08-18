@@ -3371,6 +3371,110 @@ def test_a_clustered_contrast_member_carries_its_membership_and_no_pool():
     assert members[0].weights is None
 
 
+def test_a_clustered_contrast_entry_carries_its_cluster_count():
+    """§ Contrasts: the cluster count is a scalar sibling of `n_paired`, and it is
+    the count the interval's df was taken from, so a reader can check `clusters − 1`
+    against the interval rather than take it on trust.
+
+    All three facts are asserted together — interval, `method`, count — because a
+    count beside an unclustered interval, or a clustered interval with no count, is
+    a declaration accepted whose effect is half delivered. `cohens_d` is asserted
+    to be the UNCLUSTERED number, because it is: *d*z is over the differences and
+    § Statistical reporting defines no clustered effect size."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["n_paired"] == 12
+    assert entry["n_paired_clusters"] == 3
+    assert entry["method"] == "paired_t_over_units_clustered"
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(8.763214143637903)
+    assert entry["cohens_d"] == pytest.approx(2.0338284916219784)
+
+
+def test_an_unclustered_contrast_entry_grows_no_cluster_count():
+    """Absent, not null — the same absent-not-null shape `weighted_by` already has.
+    An explicit null would claim a cluster count was computed and found nothing."""
+    _, _ = _clustered_contrast_call()  # the control: the key IS written somewhere
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    block, _ = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=UnitList([Unit(key=k) for k in keys]),
+        aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": 1.0 + i} for i, k in enumerate(keys)},
+            (0, "s"): {k: {"m": 0.0} for k in keys},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=False,
+    )
+    assert "n_paired_clusters" not in block["s"]["m"]
+
+
+def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over():
+    """The seam a whole-roster count cannot see, and the fixture the alignment
+    mutations in tasks 10 and 11 need. Two units carry the column on one side only,
+    so `col_keys` is a strict subset of the roster — and both of them are cluster
+    `a`'s entire membership, so the roster holds three clusters and the difference
+    was computed over two.
+
+    A count over the roster-wide mapping says 3; a count over `col_keys` says 2,
+    which is the number the df beside it used. Three distinct readings —
+    `n_paired` 10, roster clusters 3, computed clusters 2 — so no two can be
+    confused."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    of_collapsed = {k: {"m": v} for k, v in zip(keys, values, strict=True)}
+    against_collapsed = {k: {"m": 0.0} for k in keys}
+    for ragged in keys[:2]:  # cluster `a` entire
+        against_collapsed[ragged] = {"other": 0.0}
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=UnitList([Unit(key=k) for k in keys]),
+        aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={(1, "s"): of_collapsed, (0, "s"): against_collapsed},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=False,
+        clusters=dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)),
+    )
+    entry = block["s"]["m"]
+    assert entry["n_paired"] == 10
+    assert entry["n_paired_clusters"] == 2
+    assert members[0].clusters == ("b",) * 4 + ("c",) * 6
+
+
 def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
     """The H4c tripwire, and the reason two PAIRED clustered constructions were
     enough for H4b-2.

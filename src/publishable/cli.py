@@ -98,6 +98,7 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
+    cluster_count_of,
     clusters_of,
     fold_basis,
     holdout_for,
@@ -1146,6 +1147,34 @@ def _comparison_step_blocks(
                 metric_block[metric_key]["n_paired_effective"] = kish_effective_n(
                     [weights[k] for k in (base_keys if is_derived else col_keys)]
                 )
+            # The one fact a cluster adds to a contrast entry, and it moves with
+            # the interval and the `method`: § Contrasts requires it, and a
+            # cluster-robust delta beside a `method` that does not say so, or with
+            # no count for a reader to check `clusters − 1` against, is a
+            # declaration accepted whose effect is half delivered. Absent — not
+            # null — when nothing is clustered, the same absent-not-null shape
+            # `weighted_by` has.
+            #
+            # `cluster_count_of` is the SINGLE counting expression — the one
+            # `attrition`'s `n.clusters` and `t_over_units_clustered`'s df both
+            # read — so the count printed beside an interval cannot disagree with
+            # the df inside it. `len(set(...))` here would be a second authority
+            # for one number.
+            #
+            # Over the keys the difference was actually computed over, never the
+            # roster-wide mapping: a ragged column's clusters are its own, and a
+            # count over the roster would claim a df the interval never used.
+            if clusters is not None:
+                # The `is_derived` arm is unreachable under a declared cluster —
+                # `summarize_step` raises `E-DATA-CLUSTER-DERIVED` and the whole
+                # derived mapping is dropped before it reaches `aggregated`, so no
+                # metric here is derived. Written the same shape as the weighted
+                # block beside it rather than dropped, because the two must not
+                # disagree about which key set a fact is computed over if that
+                # refusal is ever lifted.
+                metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
+                    clusters, base_keys if is_derived else col_keys
+                )
             if confounded:
                 # Marked, not merely reported: a delta mixing two axes is the
                 # factorial main-effects problem, which core refuses to
@@ -1621,8 +1650,13 @@ def command_run(config_path: Path) -> int:
     # `cluster_by` makes the cluster the inferential draw"; § Clustered units calls
     # it "the effective sample size alongside the unit count"). So it travels in
     # `attrition`'s counts, exactly where `effective` goes, rather than in
-    # `beside_n` — the two routes `stats.summarize_step` describes, and nothing in
-    # the documents shows a `clustered_by` sibling of `weighted_by`.
+    # `beside_n` — the two routes `stats.summarize_step` describes. There is no
+    # `clustered_by` sibling of `weighted_by` on a CONTRAST entry either, and here
+    # the reason is not silence but a second disclosure: a contrast's `method`
+    # already carries the `_clustered` suffix, which discloses the clustering by
+    # itself, so a name naming the same attribute again would be a second
+    # disclosure of one fact. The count is a new fact no `method` string carries,
+    # so it travels on its own as `n_paired_clusters`.
     #
     # The membership mapping itself goes to `summarize_step` as well, for the reason
     # `weights` does: a ragged column's clusters are its own, and only the call that
