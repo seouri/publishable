@@ -1345,20 +1345,25 @@ Getting this wrong is not a subtle error. Analyzing a between-subjects study as 
 | Any `groups` axis | No, by construction | Unpaired |
 | Two `groups` axes, or a `groups` axis *and* a parameter axis | No | Unpaired, and confounded — see below |
 
-So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false` in `vs_baseline`.
+So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false`.
 
 The last row is the one to design around rather than rely on. A contrast crossing two axes at once — two group axes, or a group axis and a parameter axis — differs in two places, so its delta mixes the two effects and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is marked rather than merely reported:
 
 ```yaml
-vs_baseline:                                   # 03_arm=treatment__method=spearman
-  step03_analyze:
-    r: {delta: 0.041, basis: units, paired: false, confounded: true,
-        method: unpaired_percentile_over_units,
-        differs_on: [arm, analysis.method],    # two axes at once — not a main effect
-        ci95: [0.012, 0.070]}
+results:
+  contrasts:
+    - id: arm_and_method
+      of: 03_arm=treatment__method=spearman
+      against: 01_arm=control__method=pearson
+      step03_analyze:
+        abs_error: {delta: 0.041, basis: units, paired: false, confounded: true,
+                    method: unpaired_percentile_over_units,
+                    differs_on: [arm, analysis.method],   # two axes at once — not a main effect
+                    n_of: 116, n_against: 112,
+                    ci95: [0.012, 0.070]}
 ```
 
-Leave the nuisance axes out of `sweep.baseline` and the problem doesn't arise: the baseline [expands over every axis it doesn't fix](#expansion-modes), so each cell gets its own reference and every contrast differs in exactly one place. Fixing a value on every axis is the other coherent choice, and it's the one that produces contrasts like the above — interpretable on the single-axis ones, marked on the rest.
+Leave the nuisance axes out of `sweep.baseline` and the problem doesn't arise: the baseline [expands over every axis it doesn't fix](#expansion-modes), so each cell gets its own reference and every contrast differs in exactly one place. Fixing a value on every axis is the other coherent choice: one reference for the whole run, interpretable on the single-axis contrasts and marked on the rest. It does not produce the record above — where the value it fixes is a level of a group axis, [`E-SWEEP-BASELINE-GROUP`](#errors-validate-reports) refuses it outright on the peers rule, and where it fixes parameter axes only the baseline expands over the group axis anyway, so every generated comparison stays within an arm. A cross-arm record is a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, which is what the block above is.
 
 ### A fixed holdout split
 
