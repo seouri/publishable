@@ -4977,57 +4977,7 @@ def _check_sweep(
     # result avoids reporting that fault again for the cluster guard below.
     units_here = _units_declaration(doc.get("data") or {}, c) or {}
 
-    # A clustered design that publishes a contrast. `reference.md` § Statistical
-    # reporting: when `cluster_by` is declared each contrast construction "takes a
-    # `_clustered` suffix and reads the cluster as the draw" — the *t* forms
-    # cluster-robust with df = clusters − 1 "over the differenced values when
-    # paired and over the arm-level ones when not", and the percentile forms
-    # resampling whole clusters, "jointly across both sides when paired". **None
-    # of those five constructions exists in this build.** `stats.paired_t_over_units`
-    # takes a list of per-unit differences and nothing else;
-    # `paired_delta_of_derived` and `paired_percentile_of_derived` take rows and a
-    # seed and know nothing about membership; there is no unpaired form at all.
-    # So a clustered run's `vs_baseline` delta and its interval would be drawn as
-    # if every unit were an independent observation — which is the one thing the
-    # declaration says they are not — sitting beside per-condition intervals that
-    # *are* cluster-robust (`summarize_step` wires those), with nothing in the
-    # record distinguishing the two. § Clustered units calls exactly that interval
-    # "too narrow", and the delta is the number a reader acts on.
-    #
-    # **The guard reads the resolved family, not the declaration.** It fires on
-    # what `resolve_contrasts` will actually build: a `sweep.baseline` with no
-    # axis beside it expands to a single `is_baseline` row that is never a
-    # comparison's subject, so such a run publishes no delta and stays legal,
-    # while a declared `statistics.contrasts` entry over a sweep with no baseline
-    # publishes one and is caught. `statistics.report_by` is outside it on the
-    # same argument — a stratum repeats the per-condition aggregation, whose
-    # interval *is* clustered, and publishes no delta.
-    #
-    # Temporary, and narrowly so: H4 Statistics owns the `_clustered` contrast
-    # family and lifts this the moment those constructions exist. It refuses a
-    # *combination* rather than a declaration, so it carries a row in
-    # § Validation's registry and is not one of the `NOT BUILT` declarations
-    # § The one config file counts — `data.units.cluster_by` itself is built,
-    # and a clustered run publishing no contrast gets cluster-robust intervals
-    # on every `basis: units` column.
     cluster_by = units_here.get("cluster_by")
-    if comparisons > 0 and isinstance(cluster_by, str) and cluster_by:
-        plural = "" if comparisons == 1 else "s"
-        c.error(
-            "E-DATA-CLUSTER-CONTRAST",
-            "data.units.cluster_by",
-            f"makes the cluster the inferential draw for each condition's own interval, and "
-            f"this design also publishes {comparisons} comparison{plural}, which no "
-            "construction in this build clusters: a `vs_baseline` delta and a declared "
-            "`statistics.contrasts` entry are both computed over per-unit differences as "
-            "though the units were independent, so the delta's interval would be narrower "
-            "than the design supports while the values beside it are cluster-robust, with "
-            "nothing in the record saying so. Declare one or the other here: drop "
-            "`cluster_by` only if the units really are independent, or keep it and express "
-            "the difference as an `Estimate` returned by a `summary` step, which core "
-            "records as reported rather than recomputing. The combination will be honored "
-            "once the paired and unpaired estimators take clusters",
-        )
 
     # A design declaring BOTH a weight and a cluster beside a comparison. H4b-2
     # builds the two unweighted paired clustered constructions `reference.md`

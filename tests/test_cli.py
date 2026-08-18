@@ -1456,11 +1456,13 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
 
 
 # `groups × cluster_by`, end to end — task 19 Step 3's review addition. Step 3
-# itself stayed at `validate` level (correctly: the addendum's correction
-# forces no `baseline`/`statistics.contrasts` beside the axis, since either
-# would draw `E-DATA-CLUSTER-CONTRAST`/`E-DATA-ALLOCATION-CONTRAST` instead of
-# validating), but validating clean is exactly what lets the same combination
-# execute — nothing before this pinned that it actually does.
+# itself stayed at `validate` level (correctly, at the time: the addendum's
+# correction forced no `baseline`/`statistics.contrasts` beside the axis, since
+# either would draw `E-DATA-ALLOCATION-CONTRAST` instead of validating — task
+# 14 has since retired the sibling cluster-contrast refusal this comment
+# originally named alongside it), but validating clean is exactly what lets
+# the same combination execute — nothing before this pinned that it actually
+# does.
 #
 # **Fixture, corrected after review found the first draft could not fail.**
 # The original mapping put every site in both arms, so the arm-scoped and the
@@ -3472,6 +3474,83 @@ def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over
     assert entry["n_paired"] == 10
     assert entry["n_paired_clusters"] == 2
     assert members[0].clusters == ("b",) * 4 + ("c",) * 6
+
+
+_CONTRAST_CLUSTER_ROSTER = "patient_id,site\n" + "".join(
+    f"p{i:02d},{s}\n" for i, s in enumerate("aabbbbcccccc")
+)
+
+_CLUSTER_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        gap = {{"a": 1.0, "b": 5.0, "c": 9.0}}
+        shift = 0.0 if cfg.parameters.analysis.method == "pearson" else 1.0
+        units = list(io.units)
+        for unit in units:
+            io.record(unit.key, {{"pred": shift * gap[unit.attributes["site"]]}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tmp_path):
+    """The whole path, for the first time: `validate` lets a clustered comparison
+    through, `command_run` threads the membership from `clusters_of` down to the
+    construction, and `run.yaml` carries the cluster-robust delta.
+
+    12 units in 3 clusters of 2/4/6; the spearman condition records 1.0/5.0/9.0 by
+    cluster and the pearson baseline records 0.0, so the differences are the plan's
+    fixture and the half-width is 8.7632 — against 1.9786 if the membership never
+    reached the construction, which is the mutation task 10 could not catch by
+    direct call.
+
+    The count and the `method` are asserted beside the number, because the three
+    move together."""
+    doc = run_a_project(
+        tmp_path,
+        _starter_step=_CLUSTER_CONTRAST_STEP,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CONTRAST_CLUSTER_ROSTER,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "spearman_vs_pearson",
+                    "of": "method=spearman",
+                    "against": "baseline",
+                }
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = next(
+        block["pred"]
+        for condition in run["results"]["conditions"]
+        for block in condition.get("vs_baseline", {}).values()
+    )
+    assert entry["method"] == "paired_t_over_units_clustered"
+    assert entry["n_paired"] == 12
+    assert entry["n_paired_clusters"] == 3
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(8.763214143637903)
+    # The DECLARED-contrast path, which is a second call site for the membership:
+    # `_compute_declared_contrasts` threads `clusters` on its own line, and no
+    # direct-call fixture in this plan reaches it. Same two conditions, so the same
+    # arithmetic — which is what makes a disagreement between the two entries a
+    # threading fault rather than a fixture difference.
+    declared = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert declared["method"] == "paired_t_over_units_clustered"
+    assert declared["n_paired_clusters"] == 3
+    assert declared["ci95"] == entry["ci95"]
 
 
 def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
@@ -10481,13 +10560,15 @@ def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, 
 
 
 def test_the_sibling_refusal_rows_state_their_own_reading():
-    """Two § Errors rows each state their own family-reading property directly,
-    rather than by contrast with a sibling row — the weighted-contrast refusal's
-    row is retired, so a row that argued "unlike that one" would now be a
-    dangling reference, and this repo's rule is to delete a claim rather than
-    rewrite it into a second one.
+    """A § Errors row states its own family-reading property directly, rather
+    than by contrast with a sibling row — the weighted-contrast refusal's row
+    is retired, so a row that argued "unlike that one" would now be a dangling
+    reference, and this repo's rule is to delete a claim rather than rewrite it
+    into a second one. The cluster-contrast row this test once located beside
+    the allocation row is retired as of task 14: a clustered comparison now
+    validates and runs, so there is no longer a sibling row to check here.
 
-    Located by each row's own final cell, which is what tells a row from a
+    Located by the row's own final cell, which is what tells a row from a
     citation."""
     lines = REFERENCE_MD.read_text().split("\n")
 
@@ -10495,11 +10576,8 @@ def test_the_sibling_refusal_rows_state_their_own_reading():
         return next(line for line in lines if line.rstrip().endswith(f"| `{code}` |"))
 
     allocation = _row("E-DATA-ALLOCATION-CONTRAST")
-    cluster = _row("E-DATA-CLUSTER-CONTRAST")
     assert "per comparison" in allocation  # the control
-    assert "cluster_by" in cluster  # the control
     assert "E-DATA-WEIGHT-CONTRAST" not in allocation
-    assert "E-DATA-WEIGHT-CONTRAST" not in cluster
 
 
 def test_the_weight_cluster_refusal_has_both_of_its_rows():
@@ -10689,8 +10767,13 @@ def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
     citation task 11 removed from its § Errors twin, `E-DATA-ALLOCATION-
     CONTRAST`'s row, in the same commit. Task 13 deletes *Weighted deltas
     aren't computed*, so the § Validation row would have gone on citing a row
-    that no longer exists. *Clustered deltas aren't computed* is not deleted
-    by task 13, so that citation stays.
+    that no longer exists.
+
+    Task 14 went on to delete *Clustered deltas aren't computed* itself — the
+    row this test's docstring once said stayed — and re-worded the citation
+    into a direct statement of the property rather than a citation of any row
+    at all, the same repair `E-DATA-WEIGHT-CONTRAST`'s retirement got. So this
+    row now names no sibling row, of either kind.
 
     Located by heading rather than by row-relative position, so a later
     insertion above this row cannot make the assertion pass by accident."""
@@ -10698,6 +10781,6 @@ def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
     allocation = next(
         line for line in lines if line.startswith("| Allocation deltas aren't computed")
     )
-    assert "Clustered deltas aren't computed" in allocation  # the control
     assert "per comparison" in allocation  # the control
     assert "Weighted deltas aren't computed" not in allocation
+    assert "Clustered deltas aren't computed" not in allocation
