@@ -2654,9 +2654,10 @@ There is deliberately **no attribute-naming key** beside it. A clustered contras
 column** records a `method` carrying the `_clustered` suffix, so the record already discloses that the
 cluster was the draw — which is the disclosure a weighted contrast could not make, since a weighted
 *derived* metric keeps the unsuffixed spelling and needs `weighted_by` to say so at all. One fact,
-disclosed once. A **derived** metric whose key collides with a recorded column's is decided: the same
-clusters-guarded suppression `E-DATA-CLUSTER-DERIVED` states for the recorded-column path applies to
-the contrast over that key too — no delta, no draw, `method`/`delta`/`ci95` all `null` — and
+disclosed once. A **derived** metric whose key collides with a recorded column's is decided:
+`_comparison_step_blocks` reads the declared `cluster_by` and suppresses the contrast over that key
+— no delta, no draw, `method`/`delta`/`ci95` all `null`, the shape
+[`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) describes — and
 `n_paired_clusters` travels beside `n_paired` regardless, because both are facts about the paired
 INTERSECTION rather than about whether a construction ran, and `n_paired` already keeps that shape
 when a draw is too thin or degenerate to publish. History of the corner, not a live gap, is in

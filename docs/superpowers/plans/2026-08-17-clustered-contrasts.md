@@ -2893,6 +2893,7 @@ end. Batch 4's own re-check of this same corner (task 14's fix round 1) repeated
 one level closer to the code, arguing from `resample_fns_by_key` being empty rather than checking
 whether it was. Only an end-to-end `run` — not a direct call with the maps hand-built — exposed the
 real shape, which is what closed it.
+**Every site, enumerated by READING and then confirmed by grep** — that order, per `CLAUDE.md`
 § Answering a question with a proxy, and the grep filters the file list rather than the output. The
 enumeration below was taken at `82310b9`:
 

@@ -465,3 +465,39 @@ written — the normative row, the test docstring, the filing and the plan's cor
 fix has shipped unpinned here.
 
 **The dated counts do not move**; the reviewer confirmed the fix perturbs none of them.
+
+**Whole-branch Critical — code fix correct and pinned** (`698fd84`), verified by an independent
+reviewer that **reproduced the defect on its own config** and then the suppression: post-fix the
+`run.yaml` carries `method: null`, `ci95: null`, `delta: null` with `n_paired_clusters: 3` beside
+`n_paired: 12`, against per-condition `t_over_units_clustered` — the shape § Contrasts specifies. Its
+can-fail control published `delta: 11.0, method: paired_percentile_over_units, ci95: [6.83, 15.0]`,
+the defect on its own numbers. The pin fails **exactly one named test** on the full suite. And it
+confirmed the fix's **blast radius is exactly the collision-under-cluster corner**, by running the
+unclustered collision path and a cluster-plus-non-colliding-key variant pre and post: field-for-field
+identical.
+
+**Two documentation defects blocked, both closed by the controller.**
+
+**The plan was retro-edited rather than appended to** — `git show --numstat` showed 15 insertions and
+**1 deletion**, and the deleted line was a pre-existing bolded sentence head, leaving its tail
+orphaned and the enumeration table below it with no claim introducing it. Two violations at once:
+`CLAUDE.md`'s never-retro-edit-the-development-record rule, and mangled prose. Restored. Caught by
+`--numstat`, not by reading the correction — **an append that deletes a line is indistinguishable
+from an append until you count both sides of the diff.**
+
+**And § Contrasts stated a FOURTH wrong ground for this same corner**, inside the commit fixing the
+third: "the same clusters-guarded suppression `E-DATA-CLUSTER-DERIVED` states for the recorded-column
+path applies to the contrast over that key too". Disproved by running — under a declared cluster
+**nothing** is suppressed on the recorded-column path; that column's contrast gets a real
+`paired_t_over_units_clustered` interval and the *derived* mapping is what is dropped. The citation
+was also **circular**: the row it cites was edited in the same commit to state the thing being cited.
+Closed by stating the behaviour directly — `_comparison_step_blocks` reads the declared `cluster_by`
+and suppresses — with the § Errors row referenced for the shape rather than for the grounds.
+
+**Ruling: four wrong grounds for one corner is the slice's signature finding**, and every one was a
+proxy — `aggregated`, then `resample_fns_by_key`, then a sibling path's behaviour, then a citation of
+a row rewritten in the same breath. The behaviour was right from the third fix onward; only the
+*reasons* kept being wrong. **Cost if wrong:** nothing further, since the current sentence asserts
+only what a probe confirmed.
+
+Suite 2200 passed, 1 skipped, 2 xfailed; four gates clean.
