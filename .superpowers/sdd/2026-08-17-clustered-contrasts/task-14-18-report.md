@@ -181,3 +181,103 @@ dash, no trailing whitespace, `×` not needed in the new prose, no new headings 
 3. `_METHOD_VARYING_STEP`'s parity-alternating diff over an even unit count is blind to a
    full-roster-reversal mutation specifically (not to arbitrary reordering) — worth knowing before
    reusing it as a "generic" fixture for any future reversal-shaped mutation.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-17-clustered-contrasts/task-b4-review.md`. Spec compliance PASS;
+task quality CHANGES REQUIRED (three Majors). All closed. Both blindness claims and both
+brief-vs-code disagreements were UPHELD by the reviewer, on stronger grounds in one case
+(`cli.py:905` raises before the swapped arms are ever reached — mutually exclusive for every input,
+not merely every fixture).
+
+**M1 — misdated measurement.** Changed `docs/feasibility-llm-growth-studies.md`'s new heading from
+"Measured on 2026-08-17" to "Measured on 2026-08-18" (`git show -s --format=%ci dcb7ed0` →
+2026-08-18 04:00:15, matching all five sibling headings' own-commit-date convention), and fixed the
+same date in this report's own lines (now above). Verified: `grep -c "2026-08-17 against commit
+\`dcb7ed0" docs/feasibility-llm-growth-studies.md` → 0; the link/anchor scan found nothing pointing
+at the old heading text, so no anchor moved.
+
+**M2 — task 14's plan correction 1, executed and decided.** Built the fixture: a direct call to
+`_comparison_step_blocks` with `derived_by_key` naming a key present in `aggregated` (the
+recorded-column survivor of a collision) and `resample_fns_by_key` holding nothing for it (the state
+the collision's uncleared retry leaves), under a declared `clusters` mapping. Reproduces the
+reviewer's shape exactly: `{'delta': None, 'method': None, 'ci95': None, 'n_paired': 12,
+'n_paired_clusters': 3, ...}`. Pinned by
+`tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_facts`.
+
+**Decision: `n_paired_clusters` belongs beside a null interval, and no code changed.** `n_paired`
+itself is written unconditionally in both branches of `_comparison_step_blocks` — a fact about the
+paired intersection, not about whether a construction ran — and the too-few-units and
+degenerate-draw shapes already publish it beside a null `method`/`ci95` with no cluster involved at
+all. `reference.md` § Contrasts already describes `n_paired_clusters` as "a scalar sibling of
+`n_paired`... a fact about the intersection `n_paired` counts" — the identical class of fact, so
+giving it the identical treatment keeps the two in the same class rather than making the newer one
+conditional on something the older one ignores. Guarding the write on `interval is not None` would
+turn it into a claim about the construction, which its own documentation does not make it. Recorded
+the decision in `docs/reference.md` § Contrasts (the "separate, open corner" paragraph now states it
+rather than leaving it fully open) and in `docs/superpowers/spec-defects.md`'s H4b-2-task-4 entry, as
+a dated correction — including the now-updated reachability claim (see M3): the corner is reachable
+through a genuine `run`, not only a direct call, now that the wholesale refusal is gone.
+
+**M3 — `spec-defects.md` re-read and corrected in the one entry task 14 changed code under.** Fixed
+the stale test-name reference (`…_draws_both_refusals` → `…_draws_the_allocation_refusal`, task 14's
+own rename; verified `grep -c` for the old name in `tests/` is 0 and the new name resolves once) and
+the stale reachability condition (the corner is no longer gated on `E-DATA-CLUSTER-CONTRAST`
+refusing cluster + contrast wholesale, since that refusal is retired — folded into the same M2
+correction above rather than a separate one, since both concern the same paragraph).
+
+**m1 — the four-site mutation, run at all four.** Ran Mutation 1 at the two sites the original report
+missed: `command_run`'s own calls into `_compute_vs_baseline` (line 2785) and
+`_compute_declared_contrasts` (line 2802). Both fail correctly — the first on `entry["method"]`
+(`paired_t_over_units` instead of `_clustered`), the second on `declared["method"]` while the
+`vs_baseline` assertions passed — confirming all four sites are pinned independently. Both reverted
+by editing back; `git diff src/publishable/cli.py` empty after, confirmed by re-running the
+end-to-end test green.
+
+**m2 — `docs/reference.md:513`, stated directly rather than via a new sibling citation.** Changed
+"for the same reason a group axis's own guard does" to the direct statement: "a `sweep.baseline`
+with no axis beside it publishes no delta, and this guard should not refuse a design that never
+reaches a comparison."
+
+**m3 — renamed the test.** `test_the_sibling_refusal_rows_state_their_own_reading` →
+`test_the_allocation_refusal_row_states_its_own_reading` (singular, matching what it now checks).
+Verified no stray references to the old name remain in `tests/` or `spec-defects.md`.
+
+**m4 — deleted the false unreachability claim at `cli.py:1167`.** Removed "The `is_derived` arm is
+unreachable under a declared cluster" and the reasoning built on it; kept the `base_keys`/`col_keys`
+shape argument and added the actual reason (`n_paired_clusters` is an intersection-fact, not a
+construction-fact), cross-referencing the spec-defects.md entry M2 updated.
+
+**m5 — thickened the § Executability entry.** Added the per-config table (all nine, run through
+`validate_config` against a table-source stand-in for the real resolver plugin — a 60-unit roster
+carrying the union of every attribute any of the nine configs' `attributes`/`report_by`/
+`stratify_by` names, honestly distinguished in the text from the two prior entries' hand-written
+resolver plugin), the can-fail control (C1 + a real `cluster_by` beside its declared `weight_by`
+draws exactly `{E-DATA-WEIGHT-CLUSTER-CONTRAST}`; the same addition with `weight_by` stripped stays
+clean), and the `Full local pytest/ruff/mypy gates at this commit` line its three siblings carry.
+
+**m6 — `CLAUDE.md:93`.** Replaced the stale "clusters through contrasts is H4b-2, which unblocks
+zero configs and still owns `E-DATA-CLUSTER-CONTRAST`" with a forward reference and added the actual
+H4b-2 merged-entry paragraph below it, in the same style the H7b Part B / H4b-1 entries use.
+
+**m7 — wrong scope name, both sites.** `tests/test_cli.py`'s docstring and this report's task 17
+section both said `aggregated` is "built only from condition-scope step output"; `cli.py:2162-2168`
+actually filters `r.execution.scope == "repeat"`. Fixed the docstring to cite the real filter and
+line numbers; this report's task 17 section is corrected by this note rather than rewritten in
+place, per the file's own append-don't-retro-edit convention for a completed task's section.
+
+**Verification.** Every mutation run against the full, unfiltered suite, in the foreground; reverted
+by editing the file back (never `git checkout --`); `__pycache__` cleared before each run; behaviour
+re-verified by re-running rather than by `git status`. Gates: `2199 passed, 1 skipped, 2 xfailed`,
+`ruff check` clean, `ruff format --check` 80 files, `mypy` clean on 45 files.
+
+**One number moved and is called out rather than buried:** the coordinator's message set the
+expectation "2198 passed" for this round; the actual figure is **2199**, one more than expected,
+because M2 required building a new fixture test
+(`test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_facts`) that did not
+exist before this round. This is the fixture the review's Major 2 explicitly asked for, not drift.
+
+**Nothing closed by assertion alone that wasn't also verified by running:** M2's fixture output was
+compared against the reviewer's own reproduced shape; M1's date against `git show`; m1's mutations
+against the full suite; m6's new prose against the actual code state on this branch. No finding was
+left open.

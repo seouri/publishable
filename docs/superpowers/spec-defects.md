@@ -6499,6 +6499,35 @@ it as closed** — the collision case, and with it whatever `method`/`ci95` shap
 clustered derived metric should record, is not decided by this entry and does not resolve itself when
 the wholesale refusal lifts.
 
+**CORRECTION (H4b-2 task 14, fix round 1), the re-check the paragraph above names, done and dated.**
+The wholesale refusal is now gone, so the reachability condition above no longer obtains: a real
+project whose template's `aggregate` returns a derived key colliding with a recorded column's, under
+a declared `cluster_by`, can now reach this corner through `validate` and a genuine `run` end to end
+— retiring `E-DATA-CLUSTER-CONTRAST` was exactly what stood between the collision and a real run, not
+merely between a direct call and one. Confirmed by reproducing the shape through
+`_comparison_step_blocks` directly (`derived_by_key` naming the collided key on both conditions,
+`resample_fns_by_key` holding nothing for it — the state the collision's uncleared retry leaves):
+
+```
+{'delta': None, 'basis': 'units', 'paired': True, 'method': None, 'n_paired': 12,
+ 'ci95': None, 'cohens_d': None, 'correction': None, 'n_paired_clusters': 3}
+```
+
+Pinned by `tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_facts`.
+
+**The decision the paragraph above deferred: `n_paired_clusters` beside a null interval is the record
+`reference.md` wants, and no code changes.** `n_paired` is written unconditionally in both branches of
+`_comparison_step_blocks` — a fact about the paired intersection, not about whether a construction
+ran, and the too-few-units and degenerate-draw shapes already publish it beside a null `method`/`ci95`
+with no cluster involved at all. `n_paired_clusters` is `reference.md` § Contrasts' own "scalar
+sibling of `n_paired`... a fact about the intersection `n_paired` counts" — the identical class of
+fact, so giving it the identical treatment (present whenever `clusters is not None`, regardless of
+what the construction that follows manages to compute) keeps the two intersection-facts in the same
+class rather than making the newer one conditional on something the older one ignores. Guarding the
+write on `interval is not None` would turn `n_paired_clusters` into a claim about the construction,
+which its own documentation does not make it. `reference.md` § Contrasts now states this decision
+directly rather than leaving it fully open.
+
 ## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
 
 Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
@@ -6519,13 +6548,16 @@ cannot differ:
   `inspect.getsource(_comparison_step_blocks)`, so it is defeated by extracting either `"paired": True`
   write into a helper function — a real gap in the pin, not only a hypothetical one, since the source
   it inspects is exactly one function body.
-- `tests/test_validate.py::test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals` fails the
-  moment the allocation refusal stops firing for a declared cross-arm contrast beside `cluster_by`.
-  (Fix round 1, Major/Minor review: a second test once duplicated this fixture under the name
-  `test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`, quantifying over "every"
-  shape while asserting only this one; it was deleted as non-discriminating rather than kept beside an
-  identical fixture. The other unpaired shape — a *generated* cross-arm comparison — is pinned
-  separately by two pre-existing tests, neither declaring `cluster_by`, named in this test's own
-  docstring.)
+- `tests/test_validate.py::test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal`
+  fails the moment the allocation refusal stops firing for a declared cross-arm contrast beside
+  `cluster_by`. (Fix round 1, Major/Minor review: a second test once duplicated this fixture under the
+  name `test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`, quantifying over
+  "every" shape while asserting only this one; it was deleted as non-discriminating rather than kept
+  beside an identical fixture. The other unpaired shape — a *generated* cross-arm comparison — is
+  pinned separately by two pre-existing tests, neither declaring `cluster_by`, named in this test's
+  own docstring. **Renamed again by H4b-2 task 14**, fix round 1: `E-DATA-CLUSTER-CONTRAST` retired,
+  so this fixture now draws the allocation refusal alone rather than both, and
+  `…_draws_both_refusals` became `…_draws_the_allocation_refusal` — this entry updated to the current
+  name, checked by `grep -c` against `tests/`.)
 
 **Ruled by:** H4b-2, task 5. **Owner of the obligation:** H4c.

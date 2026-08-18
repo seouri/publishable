@@ -3476,6 +3476,95 @@ def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over
     assert members[0].clusters == ("b",) * 4 + ("c",) * 6
 
 
+def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_facts():
+    """Task 14's brief carried an appended correction (plan `:2867`): when this
+    task retires the wholesale refusal, build the fixture for a derived metric
+    whose key collides with a recorded column's, under a declared `cluster_by`,
+    and decide whether `n_paired_clusters` beside a null interval is the record
+    `reference.md` wants. `docs/superpowers/spec-defects.md`'s H4b-2-task-4 entry
+    (fix round 1) narrows the reachability claim and names this task by name to
+    re-check the corner. Batch 4's review reproduced it and left the decision
+    open; this is that fixture and that decision.
+
+    **The collision, reproduced at the level this function operates on.**
+    `cli.command_run` assigns `derived_by_key` before calling `summarize_step`,
+    and the `except ContractError` retry that follows a name collision
+    (`E-STEP-KEY-COLLISION`) drops the derived mapping from `aggregated` but
+    clears neither `derived_by_key` nor `resample_fns_by_key`. So
+    `_comparison_step_blocks` can see a metric key in `aggregated` (the recorded
+    column survived) while `derived_by_key` still names it — `is_derived` reads
+    true — and `resample_fns_by_key` holds nothing callable for it, since the
+    collision means no derived closure was ever built for this run. Modelled
+    directly, without going through `command_run`, by handing this function
+    that exact combination: the key present in `aggregated` and `derived_by_key`
+    both, `resample_fns_by_key` empty.
+
+    **The decision: yes, `n_paired_clusters` belongs beside a null interval
+    here, unchanged from what the code already does.** `n_paired` is written
+    unconditionally in both branches of this function — it is a fact about the
+    PAIRED INTERSECTION (`len(base_keys)`/`len(col_keys)`), not a fact about
+    whether a construction ran, and `reference.md` § Contrasts already
+    describes `n_paired_clusters` the same way: "a scalar sibling of
+    `n_paired`... a fact about the intersection `n_paired` counts." Since
+    `n_paired` itself is written whether or not `method`/`delta`/`ci95` came
+    back non-null (the too-few-units and degenerate-draw shapes both do this
+    already, unclustered), giving `n_paired_clusters` the identical treatment —
+    present whenever `clusters is not None`, regardless of whether anything
+    downstream could be computed — keeps the two intersection-facts in the same
+    class rather than making the newer one conditional on a fact the older one
+    ignores. The alternative (guard the write on `interval is not None`) would
+    make `n_paired_clusters` a claim about the CONSTRUCTION rather than about
+    the INTERSECTION, which is not what its own documentation says it is."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    labels = _CONTRAST_CLUSTER_LABELS
+    roster = UnitList([Unit(key=k) for k in keys])
+    collapsed = {
+        (1, "s"): {k: {"pred": 5.0} for k in keys},
+        (0, "s"): {k: {"pred": 0.0} for k in keys},
+    }
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=roster,
+        aggregated={1: {"s": {"pred": 5.0}}, 0: {"s": {"pred": 0.0}}},
+        collapsed_by_key=collapsed,
+        # The collision itself: `pred` named in `derived_by_key` for both
+        # conditions, with no matching entry in `resample_fns_by_key` — the
+        # shape the dropped-but-uncleared retry leaves behind.
+        derived_by_key={(1, "s"): {"pred": 5.0}, (0, "s"): {"pred": 0.0}},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=False,
+        clusters=dict(zip(keys, labels, strict=True)),
+    )
+    entry = block["s"]["pred"]
+    # The null half: nothing was computed, because `compute_of`/`compute_against`
+    # are both `None` (no callable survived the collision) and the derived
+    # branch's `if compute_of is not None and compute_against is not None:`
+    # guard never opens.
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert entry["ci95"] is None
+    assert entry["cohens_d"] is None
+    # The intersection half: present regardless, on the decision above.
+    assert entry["n_paired"] == 12
+    assert entry["n_paired_clusters"] == 3
+
+
 _CONTRAST_CLUSTER_ROSTER = "patient_id,site\n" + "".join(
     f"p{i:02d},{s}\n" for i, s in enumerate("aabbbbcccccc")
 )
@@ -10559,7 +10648,7 @@ def test_a_weighted_run_publishes_a_weighted_delta_end_to_end(tmp_path, capsys, 
     assert entry["ci95_corrected"] is not None
 
 
-def test_the_sibling_refusal_rows_state_their_own_reading():
+def test_the_allocation_refusal_row_states_its_own_reading():
     """A § Errors row states its own family-reading property directly, rather
     than by contrast with a sibling row — the weighted-contrast refusal's row
     is retired, so a row that argued "unlike that one" would now be a dangling
@@ -10939,13 +11028,14 @@ def test_a_clustered_run_leaves_a_summary_estimate_alone(tmp_path):
     **No mutation reaches this — checked, not assumed, and this is a
     structural separation rather than a guarded one.** `_comparison_step_blocks`
     walks `aggregated: dict[int, dict[str, dict[str, Any]]]`, keyed by
-    condition index and built only from condition-scope steps; a `summary`
-    step runs once, is never aggregated per condition, and `run_record.py`
-    writes it straight into `results.summary` from the execution ledger,
-    `scope == "summary"`. There is no exclusion clause in the clustered walk
-    to remove — a summary `Estimate` is never IN the mapping the walk reads in
-    the first place. This test is the pin that the two records stay separate,
-    not a pin against a reachable mutation."""
+    condition index and built (`cli.py:2162-2168`) only from executions whose
+    own `r.execution.scope == "repeat"`; a `summary` step runs once, is never
+    aggregated per condition, and `run_record.py` writes it straight into
+    `results.summary` from the execution ledger, `scope == "summary"`. There
+    is no exclusion clause in the clustered walk to remove — a summary
+    `Estimate` is never IN the mapping the walk reads in the first place. This
+    test is the pin that the two records stay separate, not a pin against a
+    reachable mutation."""
     doc = run_a_project(
         tmp_path,
         _starter_step=_CLUSTER_CONTRAST_STEP,

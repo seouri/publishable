@@ -1164,14 +1164,15 @@ def _comparison_step_blocks(
             # roster-wide mapping: a ragged column's clusters are its own, and a
             # count over the roster would describe units the delta never saw.
             if clusters is not None:
-                # The `is_derived` arm is unreachable under a declared cluster —
-                # `summarize_step` raises `E-DATA-CLUSTER-DERIVED` and the whole
-                # derived mapping is dropped before it reaches `aggregated`, so no
-                # metric here is derived. Written in the same `base_keys if
-                # is_derived else col_keys` shape the `weighted_by`/
-                # `n_paired_effective` block above uses, rather than dropped,
-                # because the two must not disagree about which key set a fact is
-                # computed over if that refusal is ever lifted.
+                # Written in the same `base_keys if is_derived else col_keys`
+                # shape the `weighted_by`/`n_paired_effective` block above uses,
+                # so the two never disagree about which key set a fact is
+                # computed over. A fact about the paired INTERSECTION, not about
+                # whether a construction ran — the same reason `n_paired` itself
+                # is written whether or not `method`/`delta`/`ci95` came back
+                # non-null (`docs/superpowers/spec-defects.md`'s H4b-2 task 4
+                # entry records the decision, for the derived-key-collision
+                # corner where this fires with every other field `None`).
                 metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
                     clusters, base_keys if is_derived else col_keys
                 )

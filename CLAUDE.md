@@ -90,8 +90,24 @@ string at all**, so the vocabulary was minted in `reference.md` before any code 
 weighted contrast **whose metric is derived** is the exception: core hands the template the weight
 column and does not weight the delta itself, so the `method` stays unweighted and `cohens_d` is `null`
 while `weighted_by` and the effective size travel regardless. Out of scope with their routes: clusters
-through contrasts is **H4b-2**, which unblocks zero configs and still owns `E-DATA-CLUSTER-CONTRAST`;
-the unpaired forms are H4c; `null_test` is H4d.
+through contrasts, **which H4b-2 has since retired** — see the entry below; the unpaired forms are
+H4c; `null_test` is H4d.
+
+**H4b-2 (clusters through contrasts) merged on 2026-08-18.** `E-DATA-CLUSTER-CONTRAST` is retired,
+and `E-DATA-WEIGHT-CLUSTER-CONTRAST` is minted for the one combination still refused: a design
+declaring both `weight_by` and `cluster_by` beside a comparison, because a weighted clustered
+interval's df comes from the cluster count rather than from Kish's effective size and the two
+constructions coincide in any fixture not built to separate them. **It unblocks zero configs**, and
+both counts stay exactly where H4b-1 left them — six with no remaining core-side blocker, three
+executable — because no config in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) declares `data.units.cluster_by`
+at all; a retired refusal nothing hits is not an execution. A clustered comparison now records
+`paired_t_over_units_clustered` or `paired_percentile_over_units_clustered`, with `n_paired_clusters`
+beside `n_paired`. One live defect closed for every config regardless of cluster: a contrast draw
+whose every stratum's rows are identical now reports `ci95: null` rather than a zero-width interval.
+A `report_by` level's recorded-column interval staying `t_over_units` under a declared `resample`
+stays live on C1–C3, created by neither a weight nor a cluster, declined in writing and re-owned to
+H4c rather than folded in.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
