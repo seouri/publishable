@@ -1455,11 +1455,12 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
 
 
 # `groups × cluster_by`, end to end — task 19 Step 3's review addition. Step 3
-# itself stayed at `validate` level (correctly, at the time: the addendum's
-# correction forced no `baseline`/`statistics.contrasts` beside the axis, since
-# either would draw `E-DATA-ALLOCATION-CONTRAST` instead of validating — task
-# 14 has since retired the sibling cluster-contrast refusal this comment
-# originally named alongside it), but validating clean is exactly what lets
+# itself stayed at `validate` level, and this test carries no
+# `baseline`/`statistics.contrasts` beside the axis because its own subject is
+# per-arm cluster counting through `report_by`, not a cross-arm comparison —
+# `E-DATA-ALLOCATION-CONTRAST` (a cross-arm comparison beside this design) and
+# `E-DATA-CLUSTER-CONTRAST` (a clustered one) are both retired now, so neither
+# constrains this fixture any longer. Validating clean is exactly what lets
 # the same combination execute — nothing before this pinned that it actually
 # does.
 #
@@ -8241,6 +8242,17 @@ def _section_text(heading: str) -> str:
         if match and len(match.group(1)) <= depth:
             return "\n".join(lines[start:j])
     return "\n".join(lines[start:])
+
+
+def test_expansion_modes_says_a_cross_arm_contrast_is_computed():
+    """§ Expansion modes' control-arm paragraph claimed core refuses the arm-versus-arm
+    delta. It computes it. Asserted on the section text with a control, because this
+    is the sentence a reader deciding whether to express a control arm as a contrast
+    actually reads."""
+    section = _section_text("### Expansion modes")
+    assert "statistics.contrasts" in section  # the control
+    assert "no unpaired construction exists" not in section
+    assert "E-DATA-ALLOCATION-CONTRAST" not in section
 
 
 def test_the_weighted_contrast_record_keys_are_documented():

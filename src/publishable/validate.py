@@ -3467,7 +3467,7 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
     imbalance is visible only to a reader who crosses it against the arms list
     by hand — the silently-wrong class. The repo's own precedent is to refuse
     the COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+    `E-DATA-WEIGHT-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
 
     **The `fold` half closes a defect that is live at this commit**, not a
     hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
@@ -3979,10 +3979,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
     # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
     # to its own arm, and `cli.py` writes `allocation.json` and
-    # `provenance.allocation_hash`. What an allocated run may *not* yet do is
-    # publish a cross-arm contrast: `_check_sweep` refuses that combination
-    # under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a combination rather
-    # than of a declaration, so it lives there rather than here.
+    # `provenance.allocation_hash`.
     #
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
@@ -4676,9 +4673,9 @@ def _check_sweep(
         # `experimental-designs.md` § Mistakes core prevents' *two identical
         # measurements reported as two arms*, verbatim. Where the axis declares
         # two or more levels, the other levels' product rows cross the single
-        # baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code —
-        # but that refusal is temporary, and at one level there is no cross-arm
-        # comparison for it to read at all, which is where the run was green.
+        # baseline — a comparison that now computes rather than being refused —
+        # but at one level there is no cross-arm comparison at all, which is
+        # where the run was green.
         #
         # The guard is keyed on the PATH, never on the value, so both shapes reach
         # here and the message states both: a value naming a declared level is
@@ -4698,10 +4695,9 @@ def _check_sweep(
             "all. Drop the level from the baseline, which then expands over the axis and "
             "gives every arm its own reference. Where the axis declares two or more "
             "levels, the comparison a designated arm was reaching for is a "
-            "`statistics.contrasts` entry naming "
-            "both conditions — whose delta this build refuses over disjoint arms "
-            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist, "
-            "leaving a `summary`-step `Estimate` or two runs joined in a `study`",
+            "`statistics.contrasts` entry naming both conditions, which core computes — "
+            "the baseline is refused because the arms of a group axis are peers, not "
+            "because the comparison itself is unavailable",
         )
 
     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []

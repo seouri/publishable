@@ -9217,6 +9217,24 @@ def test_a_baseline_may_not_fix_a_group_level(write_config):
     }
 
 
+def test_the_baseline_group_refusal_rests_on_the_peers_rule_alone(write_config):
+    """`E-SWEEP-BASELINE-GROUP` is PERMANENT and its message promised the cross-arm
+    delta "until the unpaired estimators exist" — a temporary clause inside a
+    permanent refusal, and one that is now simply false. The refusal rests on the
+    peers rule: the arms of a group axis are peers and a baseline designating one of
+    them is not a reference the expansion can give.
+
+    Asserted on the surviving text plus the absence of the temporary clause, so a
+    rewrite cannot re-seed it as a paraphrase. The control is the peers claim, which
+    must be present."""
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    path = write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
+    message = messages_by_code(path)["E-SWEEP-BASELINE-GROUP"]
+    assert "peers" in message  # the control
+    assert "unpaired" not in message
+    assert "until" not in message
+
+
 def test_two_group_axes_may_not_share_a_name(write_config):
     """§ Validation's *Axis names are distinct* — a shape `selector_paths`'
     dedup hides from the group-vs-parameter check above, since that check reads
