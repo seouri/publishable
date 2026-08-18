@@ -3427,6 +3427,153 @@ def test_an_unclustered_contrast_entry_grows_no_cluster_count():
     assert "n_paired_clusters" not in block["s"]["m"]
 
 
+_H4C_BASELINE = {
+    # Captured at `e40a219`, before any H4c behaviour changed, by calling
+    # `_clustered_contrast_call` and `correction.corrected_for` directly. Every
+    # cell is (method, ci95, cohens_d, ci95_corrected at bonferroni over a family
+    # of 2). The delta is 6.333333333333333 in every cell and is asserted once.
+    "plain_t": (
+        "paired_t_over_units",
+        [4.354794810376774, 8.311871856289892],
+        2.0338284916219784,
+        [4.002316360103361, 8.664350306563305],
+    ),
+    "plain_percentile": (
+        "paired_percentile_over_units",
+        [4.666666666666667, 8.0],
+        2.0338284916219784,
+        [4.333333333333333, 8.0],
+    ),
+    "clustered_t": (
+        "paired_t_over_units_clustered",
+        [-2.42988081030457, 15.096547476971235],
+        2.0338284916219784,
+        [-6.3050984446171165, 18.971765111283784],
+    ),
+    "clustered_percentile": (
+        "paired_percentile_over_units_clustered",
+        [1.0, 8.0],
+        2.0338284916219784,
+        [1.0, 9.0],
+    ),
+    "weighted_t": (
+        "weighted_paired_t_over_units",
+        [4.205411474977312, 8.461255191689354],
+        2.0235305596718636,
+        [3.8161416371442236, 8.850525029522442],
+    ),
+    "weighted_percentile": (
+        "weighted_paired_percentile_over_units",
+        [4.555555555555555, 7.888888888888889],
+        2.0235305596718636,
+        [4.368421052631579, 8.058823529411764],
+    ),
+}
+
+_H4C_WEIGHTS = {f"u{i:02d}": 1 + i % 2 for i in range(12)}
+
+_H4C_CELLS = {
+    "plain_t": dict(clusters=None),
+    "plain_percentile": dict(clusters=None, resample_columns=True),
+    "clustered_t": {},
+    "clustered_percentile": dict(resample_columns=True),
+    "weighted_t": dict(clusters=None, weights=_H4C_WEIGHTS, weighted_by="w"),
+    "weighted_percentile": dict(
+        clusters=None, weights=_H4C_WEIGHTS, weighted_by="w", resample_columns=True
+    ),
+}
+
+
+@pytest.mark.parametrize("cell", sorted(_H4C_BASELINE))
+def test_every_paired_contrast_cell_is_unmoved_across_this_branch(cell):
+    """H4c derives `paired` at both metric branches and grows `_corrected_bounds`
+    by two arms. Both are changes that can move a PAIRED contrast without moving
+    anything a reader of one entry would notice, so all six reachable paired cells
+    are pinned at once — `paired_t_over_units`, `paired_percentile_over_units`, and
+    the weighted and clustered forms of each.
+
+    **The corrected bound is pinned beside the raw one, and that is the half a
+    raw-only pin misses**: an arm inserted above the `diffs` branch in
+    `_corrected_bounds` leaves every `ci95` untouched and every `ci95_corrected`
+    wrong, and no reader of `run.yaml` could tell.
+
+    Every literal was captured at `e40a219` before any H4c behaviour changed. If
+    one of these fails, the fix is in `stats.py`, `correction.py` or `cli.py` —
+    never in the expected value."""
+    from publishable.correction import corrected_for
+
+    method, ci95, cohens_d, corrected = _H4C_BASELINE[cell]
+    block, members = _clustered_contrast_call(**_H4C_CELLS[cell])
+    entry = block["s"]["m"]
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    assert entry["paired"] is True
+    assert entry["n_paired"] == 12
+    assert entry["method"] == method
+    assert entry["ci95"] == pytest.approx(ci95)
+    assert entry["cohens_d"] == pytest.approx(cohens_d)
+    fields = corrected_for(members, "bonferroni", 2, {"comparisons": 1, "metrics": 2})
+    assert list(fields) == [("cond:1", "s", "m")]
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == pytest.approx(corrected)
+
+
+def test_a_paired_contrast_entry_still_grows_no_unpaired_key():
+    """The absent-not-null obligation read in the other direction. H4c makes
+    `n_paired` conditional for the first time in this codebase, and the failure
+    mode of a conditional write is writing BOTH shapes: `n_paired: 12` beside
+    `n_of: 12`, which decision 5 rejects as the worst of both.
+
+    Asserted beside a presence that must report, because a control asserting only
+    absences passes identically if nothing ran."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["n_paired"] == 12  # the presence that must report
+    assert entry["n_paired_clusters"] == 3
+    for absent in ("n_of", "n_against", "n_clusters_of", "n_clusters_against"):
+        assert absent not in entry
+
+
+def test_an_unpaired_pass_leaves_a_summary_estimate_alone(tmp_path, capsys):
+    """The boundary this slice OWES rather than merely respects. An `Estimate`
+    returned by a `summary` step is `reported: true`, outside the correction family
+    and never recomputed — and it is the documented route
+    `E-DATA-ALLOCATION-CONTRAST`'s own message offers before task 18 deletes it, so
+    retiring that message must not have moved it. A pass that walks every metric
+    block to decide pairing must not reach it.
+
+    The contrast beside it is asserted in the same record, because a control
+    asserting only absences passes identically if nothing ran."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="score",
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITH_N_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    reported = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert reported["reported"] is True
+    assert reported["method"] == "mixed model, REML"
+    for absent in ("paired", "n_paired", "n_of", "n_against", "correction"):
+        assert absent not in reported
+    # The presences that must report: `aggregate_returns` gives this run BOTH a
+    # recorded column (`pred`) and a derived metric (`score`), so the two contrast
+    # branches are both exercised beside the untouched `Estimate`.
+    block = next(c["vs_baseline"] for c in run["results"]["conditions"] if c.get("vs_baseline"))[
+        "step01_summarize_units"
+    ]
+    assert block["pred"]["paired"] is True
+    assert block["pred"]["method"] == "paired_t_over_units"
+    assert block["score"]["paired"] is True
+    assert block["score"]["method"] == "paired_percentile_over_units"
+    assert block["pred"]["n_paired"] == 40
+
+
 def test_a_ragged_clustered_column_counts_only_the_clusters_it_was_computed_over():
     """The seam a whole-roster count cannot see, and the fixture the alignment
     mutations in tasks 10 and 11 need. Two units carry the column on one side only,
