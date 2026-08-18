@@ -425,3 +425,43 @@ it was given**, the arms proving unreachable together for every input rather tha
 fixture. The pre-flight ruling bet that naming a mutation blind *in the plan* is the claim being
 checked before it is trusted; on this evidence the bet paid, but only because each claim was actually
 re-run rather than read.
+
+## Whole-branch review: DO NOT MERGE — one Critical
+
+Review at `whole-branch-review.md`. Everything else on the branch held, and held under running: the
+reviewer computed the CR1 half-width independently (10.313450515635465, digit for digit), confirmed
+the corrected bound is the same construction at the entry's own α with df = 2, fired
+`E-DATA-WEIGHT-CLUSTER-CONTRAST` on its own transplanted config and confirmed it clean without the
+cluster, re-measured E1 and C1, pinned both batch-2→batch-3 seams with mutations on the full suite,
+read (not grepped) for the deleted df claim, and checked every factual claim in `CLAUDE.md`'s new
+entry.
+
+**The Critical: a clustered run can still publish an UNCLUSTERED contrast interval, and this branch
+made it reachable.** Verified by running a real `run` — `run.yaml` carries `method:
+paired_percentile_over_units`, unsuffixed and drawn over **units**, half-width **2.0**, beside
+per-condition `t_over_units_clustered` at half-width **10.31**, with `n_paired_clusters: 3` written
+next to it, and **`validate` reports zero errors**. The same probe on `main` exits 1 with
+`E-DATA-CLUSTER-CONTRAST`. `cli.py` assigns **both** `derived_by_key` and `resample_fns_by_key` before
+the `summarize_step` call whose `except ContractError` retry clears **neither**.
+
+**This corner has now been assessed three times on this slice and been wrong three times.** Batch 1
+argued it unreachable from `aggregated`; a reviewer falsified that by direct call. Batch 4 was routed
+the re-check, argued it unreachable from `resample_fns_by_key`, and **that is false too** — a closure
+is built for **every** derived key before the raising call. Each argument was about a **proxy** rather
+than the state the code branches on, which is the section of `CLAUDE.md` this slice has now
+illustrated four times. **No per-task review could have caught it**: the pin is a direct call with the
+maps hand-built, and only an end-to-end `run` exposed it.
+
+It also falsifies a **normative row** — `reference.md`'s containment claim that "the whole `derived`
+mapping is dropped" — and the docstring of the test pinning it, which states the same false reason.
+
+**Ruling: the clusters-guarded suppression, which is what § Contrasts, the filing and the test's own
+docstring already claim happens.** Explicitly **not** clearing both maps in the retry: that would
+change the pre-existing *unclustered* collision path, a silent behaviour change on a path outside this
+slice's scope. **Cost if wrong:** the narrower fix leaves the unclustered collision path as it was,
+which is the status quo rather than a new gap. The false grounds are corrected everywhere they were
+written — the normative row, the test docstring, the filing and the plan's correction — and the fix is
+**pinned by a mutation**, because a probe proves the moment and five times in three slices a correct
+fix has shipped unpinned here.
+
+**The dated counts do not move**; the reviewer confirmed the fix perturbs none of them.
