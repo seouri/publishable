@@ -1071,11 +1071,21 @@ def _comparison_step_blocks(
                         seed,
                         draws=draws,
                         strata=strata,
+                        # One spelling per declaration, and the weighted-clustered
+                        # cell is unreachable — the guard at the top of this
+                        # function refuses it. The construction is ONE function
+                        # serving three `method` strings, so the string is the
+                        # caller's to pass: `paired_percentile_of_derived` is
+                        # shared with the derived branch, which core neither
+                        # weights nor clusters.
                         method=(
-                            "paired_percentile_over_units"
-                            if weights is None
+                            "paired_percentile_over_units_clustered"
+                            if clusters is not None
                             else "weighted_paired_percentile_over_units"
+                            if weights is not None
+                            else "paired_percentile_over_units"
                         ),
+                        clusters=(None if clusters is None else {k: clusters[k] for k in col_keys}),
                     )
                     interval = resampled.interval
                 else:

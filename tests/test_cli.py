@@ -3256,6 +3256,108 @@ def test_a_weighted_clustered_comparison_is_a_core_defect_here_not_a_silent_choi
         _clustered_contrast_call(weights={f"u{i:02d}": 1.0 for i in range(12)})
 
 
+@pytest.mark.parametrize(
+    "weighted,clustered,resampled,expected",
+    [
+        (False, False, False, "paired_t_over_units"),
+        (False, False, True, "paired_percentile_over_units"),
+        (False, True, False, "paired_t_over_units_clustered"),
+        (False, True, True, "paired_percentile_over_units_clustered"),
+        (True, False, False, "weighted_paired_t_over_units"),
+        (True, False, True, "weighted_paired_percentile_over_units"),
+    ],
+)
+def test_every_reachable_contrast_cell_writes_its_own_method(
+    weighted, clustered, resampled, expected
+):
+    """Every reachable combination of `weight_by`, `cluster_by` and a declared
+    `resample`, and the `method` § Statistical reporting defines for each — the two
+    weighted-clustered cells being refused at `validate` by
+    `E-DATA-WEIGHT-CLUSTER-CONTRAST` and so absent by construction.
+
+    Asserted as a table rather than one cell at a time because the failure this
+    guards is a cell FALLING THROUGH to a neighbour's `method`: an implementer
+    writing four arms leaves two cells publishing a string that names a
+    construction the run did not use, and every existing test still passes, since
+    nothing else builds those fixtures.
+
+    The `method` is asserted against the value the emitting code writes; that it is
+    a string the document defines is a separate pin,
+    `test_a_clustered_contrast_method_is_one_the_document_defines` below."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    block, _ = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=UnitList([Unit(key=k) for k in keys]),
+        aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(keys, values, strict=True)},
+            (0, "s"): {k: {"m": 0.0} for k in keys},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=resampled,
+        weights={k: 1 + i % 2 for i, k in enumerate(keys)} if weighted else None,
+        weighted_by="sampling_weight" if weighted else None,
+        clusters=(dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)) if clustered else None),
+    )
+    assert block["s"]["m"]["method"] == expected
+
+
+def test_a_clustered_resampled_contrast_really_drew_clusters():
+    """The `method` string and the draw are two claims, and the parametrized table
+    above pins only the first. A `method` naming a construction the draw did not
+    perform is the whole failure this slice was ordered around — so the DRAW is
+    asserted here, by the only evidence available at this level: the same fixture,
+    resampled, with and without the membership must produce DIFFERENT intervals.
+
+    A clustered draw takes 3 things from {2, 4, 6} units and pools them; a unit
+    draw takes 12 units. On differences of 1.0/5.0/9.0 concentrated by cluster
+    those distributions are not close, and identical endpoints would mean the
+    membership never reached the construction.
+
+    The clustered endpoints are recorded as literals beside the inequality, so a
+    later change cannot move the draw while keeping the two merely unequal. Capture
+    them from the first green run of this test and paste them in."""
+    clustered, _ = _clustered_contrast_call(resample_columns=True)
+    plain, _ = _clustered_contrast_call(resample_columns=True, clusters=None)
+    assert clustered["s"]["m"]["method"] == "paired_percentile_over_units_clustered"
+    assert plain["s"]["m"]["method"] == "paired_percentile_over_units"
+    assert clustered["s"]["m"]["ci95"] != plain["s"]["m"]["ci95"]
+    assert clustered["s"]["m"]["ci95"] == pytest.approx([1.0, 8.0])
+
+
+def test_a_clustered_contrast_method_is_one_the_document_defines():
+    """The agreement between the emitted string and § Statistical reporting, pinned
+    against the DOCUMENT rather than against a second literal — a test comparing
+    each of two spellings to its own hard-coded string is how this repo shipped a
+    name claiming an agreement no assertion made.
+
+    The suffix rule is what licenses these two, so the assertion is that the
+    unsuffixed stem is a defined `method` and the emitted string is that stem plus
+    `_clustered`. `_interval_method_names` parses both construction tables."""
+    names = _interval_method_names()
+    for stem in ("paired_t_over_units", "paired_percentile_over_units"):
+        assert stem in names  # the control: the tables were parsed
+        assert f"{stem}_clustered" not in names  # the suffix rule, not a row
+
+
 def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
     """The H4c tripwire, and the reason two PAIRED clustered constructions were
     enough for H4b-2.
