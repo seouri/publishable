@@ -247,3 +247,21 @@ reads as verified.
 never contains `weight_by`, which lives in the `path` argument — but the remedy put `path` **into**
 the message, making it the only one of `validate.py`'s 137 emits to restate its own path, rendering
 with visible duplication. The test still never asserts `f.path`.
+
+**Fix round 1 — all eleven findings closed** (`e5e0f17`), confirmed by a scoped re-review that
+verified four **by running**: `percentile_over_units([5.0]*8)` still returns `Interval(5, 5)`, so
+the deleted claim really was false and the asymmetry is now **disclosed** rather than asserted away;
+disabling the sorted-`keys` guard really does leave the draw identical, so the guard's grounds are
+now stated as a **caller-contract assertion rather than a correctness requirement** — the honest
+form; the reversed blindness claim's mutation now **fails exactly one named test**; and the refusal
+message is back in house form with the test asserting `f.path`, where the identity actually lives.
+Suite 2179 passed, 1 skipped, 2 xfailed. Batch 2 complete.
+
+**Carried forward for the whole-branch review:** two forward-dangling citations of the code task 14
+deletes are recorded in the plan's appended correction table, where task 14 will find them.
+
+## Batch 3 dispatched — tasks 10, 11, 12, 13: the threading and the record
+
+`clusters` to the contrast path and the clustered *t* selected; the `method` branch, six cells
+counted rather than carried; `Member.clusters` and the corrected bound; `n_paired_clusters` on every
+affected entry.
