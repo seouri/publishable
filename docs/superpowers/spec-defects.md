@@ -2362,9 +2362,28 @@ blocks; what each was missing is a named owner for the day its precondition brea
 | `correction.corrected_fields` dedupe unpinned | **H4 Statistics** — it is the slice that would build `Member` lists from somewhere other than `cli._comparison_step_blocks`, which is the condition the row names |
 | `_evidence_ratio`'s `assert` stripped under `python -O` | **No slice; closed as a convention question.** Third instance of the pattern, and the row itself says the next line raises loudly. A repo-wide convention on `assert` is not a slice's work and should not sit in a defect ledger pretending to be one |
 | `W-STATS-CORRECTED-THIN`'s message leads with `cond:1` | **No slice; closed.** `reference.md` § Exit codes and diagnostics makes the identifier the contract and the wording explicitly not, so this is a cosmetic harmonisation any slice may do opportunistically and none owes |
-| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — H4b-1 task 5 gave the function a `strata` parameter, sorting each stratum's pool independently rather than the whole pool once, which is a second route to an unsorted-pool input beside "a new percentile construction adds one"; H4b-2 is the nearer of the remaining paired-construction slices |
+| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — the original condition restored: "a new percentile construction returning an unsorted pool would break it silently." H4b-2 is the nearer of the remaining paired-construction slices |
 | `PairedResample.pool` is a `list`, so the dataclass is unhashable | **No slice; closed.** Nothing keys on it and a tuple would copy per resample. Recorded so it is not re-litigated |
 | `Member.__post_init__` exempts `ci95 is None` | **No slice; closed.** Deliberate, documented, and pinned by `family_members` dropping such a member first |
+
+**AMENDED 2026-08-18 (H4b-2, task 16), two rows.**
+
+**The sorted-pool row.** Checked again at `82310b9`: both of `paired_percentile_of_derived`'s return
+paths sort the pool (`pool=sorted(values)` and `values.sort()` before `pool=values`), so a reading
+that treated the `strata` parameter's per-stratum key pools as "a second route to an unsorted-pool
+input" was wrong — those are a different object from `PairedResample.pool`, sorted independently and
+never returned as the interval's own pool. The row above restores the original condition rather than
+that reasoning. **H4b-2 task 7 was checked against it**: the clustered draw it added returns through
+the same two sorted paths, so it created no new unsorted-pool route either. The row stays open,
+owned by H4b-2 still, for the same reason it always was — a *future* percentile construction is what
+would break the precondition, and none has been added that does.
+
+**The `correction.corrected_fields` dedupe row.** Recorded as **not H4b-2's**, rather than moved:
+the row's condition is "the slice that would build `Member` lists from somewhere other than
+`cli._comparison_step_blocks`." H4b-2 widens `Member` with a `clusters` field (task 12) and builds no
+`Member` list anywhere but that one function — the condition is unmet, not satisfied narrowly. Owner
+stays **H4 Statistics** at large; recording this here is what stops the next scoping re-deriving the
+question of whether H4b-2 met it.
 
 ## New error identifier: `E-STATS-REPORTBY-UNKNOWN`
 
@@ -5341,6 +5360,14 @@ publishing `nan` under a false `resample_draws: n`. This is bigger than task 11'
 also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
 none of which check finiteness either, and none of which this entry claims to have surveyed.
 
+**AMENDED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** The prediction above — "H4b-2 is the next
+place a whole weight vector or value column is drawn as a unit" — did not come true, checked rather
+than assumed: the paired clustered *t* H4b-2 built (`paired_t_over_units_clustered`) delegates to
+`t_over_units_clustered`, which does no weight arithmetic at all, and the clustered percentile draw
+`paired_percentile_of_derived` gained pools rows it does not sum. Neither construction is a place
+this entry's finiteness gap can land. Re-owned to **H4c**, the next slice past this one to touch
+`summarize_step`'s column path.
+
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
 Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
@@ -5554,6 +5581,13 @@ the level path echo a declaration whose relevance to that one block a reader mus
 open half of the fix. The deferral, its owner, and the fix list above are unchanged by this
 amendment.
 
+**DECLINED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** Live on C1–C3 still, unchanged by this
+slice: the gap is created by neither a weight nor a cluster, and `docs/superpowers/H4b-SCOPING.md`
+§ 12 warned against folding a `report_by` hardening question into a sibling contrast-family slice for
+exactly this reason. Owner moves from the general "H4 Statistics" to **H4c** by name, the direction
+the scoping recommends, rather than staying a description any of H4's remaining slices could read as
+its own.
+
 ## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -5652,6 +5686,13 @@ disclosure gaps, and a `where` that names the comparison is the thing Finding 1 
 would reuse. Not a regression — no contrast entry ever carried the echo, the echo itself being H4a
 task 17's own addition.
 
+**DECLINED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** Finding 1 is a contrast-scope thin
+finding needing a `where` and a registry row; Finding 3 is a contrast entry carrying no resolved-
+`resample` echo. Neither is a cluster question, and building either would mint a warning identifier
+and a § Warnings row this slice did not scope — H4b-2 added a third `method` spelling to the
+contrast entry (`paired_percentile_over_units_clustered`) and no new disclosure surface. Both stay
+deferred, re-owned to **H4c**.
+
 ## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 
 Found by the **H4a whole-branch fix pass** (2026-08-15, at `d59316d`), while adding a citation to
@@ -5692,6 +5733,16 @@ paired constructions — and did not write § How a metric becomes a number; tas
 inherits a citation of it from `paired_t_over_units` rather than resolving it. Any slice editing
 `reference.md` § Statistical reporting can settle which reading is right; H4b-2 is next to touch
 that material.
+
+**DECLINED 2026-08-18 (H4b-2, task 16), a third time — in writing, so a fourth silent pass does not
+happen.** H4b-2 edited two docstrings citing this phantom section (`stats.py`'s
+`paired_t_over_units_clustered` and `paired_percentile_of_derived`) without resolving either, the
+same shape task 9 left. Writing § How a metric becomes a number is a documentation change of real
+size over material a statistics slice edits but does not own describing — deciding between the two
+readings § Documentation conventions requires is not H4b-2's decision to make in passing. **Owner:
+explicitly unassigned** — no slice in the spine is named "documentation", and inventing one here
+would be the same maintenance-obligation-nobody-owns mistake this file's own conventions warn
+against. Re-check on the next slice that edits `reference.md` § Statistical reporting, still.
 
 ## OPEN — `technical_n` is a whole-roster figure beside a test-partition `n`
 
