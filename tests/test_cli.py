@@ -3358,6 +3358,19 @@ def test_a_clustered_contrast_method_is_one_the_document_defines():
         assert f"{stem}_clustered" not in names  # the suffix rule, not a row
 
 
+def test_a_clustered_contrast_member_carries_its_membership_and_no_pool():
+    """The member is what the correction family rebuilds from, so a clustered raw
+    interval whose member carried no membership would get an unclustered corrected
+    counterpart — narrower by construction rather than by evidence, and undetectable
+    in `run.yaml`. Asserted beside `pool is None`, because `_corrected_bounds` tests
+    `diffs` first and a member carrying both would take the wrong branch."""
+    _, members = _clustered_contrast_call()
+    assert len(members) == 1
+    assert members[0].clusters == tuple(_CONTRAST_CLUSTER_LABELS)
+    assert members[0].pool is None
+    assert members[0].weights is None
+
+
 def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
     """The H4c tripwire, and the reason two PAIRED clustered constructions were
     enough for H4b-2.

@@ -1189,6 +1189,12 @@ def _comparison_step_blocks(
                     weights=(
                         None if corrected_from_pool or col_weights is None else tuple(col_weights)
                     ),
+                    # `corrected_from_pool` is the single decision, read once for
+                    # all three fields, so `pool`, `weights` and `clusters` cannot
+                    # disagree about which evidence this member carries.
+                    clusters=(
+                        None if corrected_from_pool or col_clusters is None else tuple(col_clusters)
+                    ),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
