@@ -10165,6 +10165,24 @@ def test_the_sibling_refusal_rows_state_their_own_reading():
     assert "E-DATA-WEIGHT-CONTRAST" not in cluster
 
 
+def test_the_weight_cluster_refusal_has_both_of_its_rows():
+    """A refusal of a COMBINATION carries a § Validation row and a § Errors row —
+    the two ends of one check — which is what distinguishes it from a
+    `-UNSUPPORTED` build-family code and what decides that it outlives H4b-2.
+
+    Each row is located by what it is rather than by position: the § Errors row by
+    its final cell, the § Validation row by the code it names."""
+    lines = REFERENCE_MD.read_text().split("\n")
+    errors_row = next(
+        line for line in lines if line.rstrip().endswith("| `E-DATA-WEIGHT-CLUSTER-CONTRAST` |")
+    )
+    assert "weight_by" in errors_row
+    validation_row = next(
+        line for line in lines if line.startswith("| Weighted clustered deltas aren't computed |")
+    )
+    assert "cluster_by" in validation_row
+
+
 def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
     """§ Weighted samples' only sentence about a weighted contrast named no
     construction, no `method` string and no check, and its "worth checking when it

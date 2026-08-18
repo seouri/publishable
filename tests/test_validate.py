@@ -7599,6 +7599,76 @@ def test_a_clustered_declared_contrast_is_refused(write_config, tmp_path):
     assert "publishes 1 comparison," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
 
 
+_WEIGHTED_SITE_BODY = "".join(f"p{i},{s},{1 + i % 2}\n" for i, s in enumerate("aaabbbcccddd"))
+
+
+def test_a_weighted_clustered_comparison_draws_its_own_refusal(write_config, tmp_path):
+    """H4b-2 task 1's ruling: the weight × cluster composition is refused, not
+    built. H4b-2 builds the two UNWEIGHTED paired clustered constructions, and a
+    weighted clustered contrast would need a df from the cluster count beside a
+    weighted mean — a fourth construction whose wrong choice (Kish's effective size
+    instead) is invisible in any fixture not built to separate the two.
+
+    Asserted ALONGSIDE `E-DATA-CLUSTER-CONTRAST` rather than as a total code set:
+    `validate` collects rather than aborting, both guards read the same resolved
+    family, and task 14 deletes the cluster code alone, which must be a one-line
+    deletion here."""
+    _clustered_table(tmp_path, "patient_id,site,sampling_weight", _WEIGHTED_SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(
+                attributes=["site", "sampling_weight"], weight_by="sampling_weight"
+            ),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" in found
+    assert "E-DATA-CLUSTER-CONTRAST" in found  # deleted by task 14, not narrowed
+    message = messages_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"]
+    assert "weight_by" in message
+    assert "cluster_by" in message
+
+
+def test_a_cluster_without_a_weight_draws_only_the_cluster_refusal(write_config, tmp_path):
+    """The under-firing control on one side: the new code reads BOTH declarations,
+    so a clustered comparison with no weight must not draw it. Without this, a
+    guard that ignored `weight_by` entirely would pass the test above."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" not in codes(path)
+
+
+def test_a_weighted_clustered_design_with_no_comparison_stays_legal(write_config, tmp_path):
+    """The under-firing control on the other side, and the one that says this
+    refuses a COMBINATION rather than a declaration: both declarations together,
+    with no baseline and no `statistics.contrasts`, validate free of both contrast
+    codes. A weighted clustered run publishing no delta gets
+    `weighted_t_over_units_clustered` per condition and nothing here is wrong."""
+    _clustered_table(tmp_path, "patient_id,site,sampling_weight", _WEIGHTED_SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(
+                attributes=["site", "sampling_weight"], weight_by="sampling_weight"
+            )
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" not in found
+    assert "E-DATA-CLUSTER-CONTRAST" not in found
+
+
 def test_a_clustered_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
     """The edge that makes the guard narrower than `sweep.baseline` being declared,
     and the one H3a's implementer found. A baseline with no axis beside it expands

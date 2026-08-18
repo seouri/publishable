@@ -5029,6 +5029,41 @@ def _check_sweep(
             "once the paired and unpaired estimators take clusters",
         )
 
+    # A design declaring BOTH a weight and a cluster beside a comparison. H4b-2
+    # builds the two unweighted paired clustered constructions `reference.md`
+    # § Statistical reporting's suffix rule names, and deliberately not their
+    # weighted counterparts: a weighted clustered contrast takes its df from the
+    # CLUSTER COUNT and not from Kish's effective size — § Weighted samples,
+    # "`cluster_by` still decides the draw when both are declared" — and the two
+    # coincide in any fixture not built to separate them, so the wrong choice
+    # would be invisible. Refused rather than approximated, on the precedent
+    # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
+    #
+    # Reads the resolved family, for the reason its sibling above does. It refuses
+    # a COMBINATION rather than a declaration, so it carries a § Validation row
+    # and is not one of the `NOT BUILT` declarations § The one config file counts:
+    # both `weight_by` and `cluster_by` are built, and a run declaring both
+    # publishes `weighted_t_over_units_clustered` per condition.
+    weight_by = units_here.get("weight_by")
+    if (
+        comparisons > 0
+        and isinstance(cluster_by, str)
+        and cluster_by
+        and isinstance(weight_by, str)
+        and weight_by
+    ):
+        c.error(
+            "E-DATA-WEIGHT-CLUSTER-CONTRAST",
+            "data.units.weight_by",
+            "`data.units.weight_by` and `data.units.cluster_by` are both declared beside a "
+            "comparison, and no construction in this build computes a weighted clustered "
+            "delta: the weighted paired forms take no membership and the clustered paired "
+            "forms take no weights. Declare one of the two here — the cluster if what the "
+            "units share is what threatens the interval, the weight if what they represent "
+            "is — or keep both and express the difference as an `Estimate` returned by a "
+            "`summary` step, which core records as reported rather than recomputing",
+        )
+
     # A contrast whose two conditions were assigned to different arms of a
     # `sweep.groups` axis. `reference.md` § Allocation's pairing table: parameter
     # axes only under `allocation: between` share the same arm's units and are
