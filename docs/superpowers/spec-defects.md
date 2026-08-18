@@ -6341,6 +6341,13 @@ disclosure entry already defers to H4b-2.
 **Found by:** H4b-1, task 5. **Severity:** Minor — reachable only from a `stratify_by` whose strata
 are near-unique, which `validate` does not refuse.
 
+**AMENDED 2026-08-17 (H4b-2, task 3).** Ruled and specified: `reference.md` § Statistical reporting
+now states the rule — a contrast draw whose every stratum's drawable things carry the same pair of
+rows reports `ci95: null` — and H4b-2 task 9 gives it code inside
+`stats.paired_percentile_of_derived`, covering the clustered and unclustered draws and the stratified
+and unstratified ones as one check over the drawable item. **The entry is closed by that task, not by
+this one.**
+
 ## RULED by H4b-2 task 1 — the weight × cluster combination is refused, not built
 
 `docs/superpowers/H4b-SCOPING.md` § 10 assigned the `weight_by` × `cluster_by` × comparison refusal

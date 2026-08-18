@@ -6844,6 +6844,19 @@ def test_the_clustered_contrast_record_key_is_documented():
     assert "clustered_by" not in section
 
 
+def test_a_contrast_draw_that_cannot_vary_is_documented_as_reporting_no_interval():
+    """Task 3's ruling, in the document before task 9's code. The three sibling
+    percentile constructions each refuse a draw whose content cannot vary — "a
+    zero-width 95 % interval is not honest" — and the paired one carries none of
+    those refusals, which H4b-1 filed as a live defect against this slice by name.
+
+    The control asserts the section was located and holds the material this rule
+    belongs beside."""
+    section = _section_text("### Statistical reporting")
+    assert "paired_percentile_over_units" in section  # the control
+    assert "reports no interval rather than a zero-width one" in section
+
+
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to

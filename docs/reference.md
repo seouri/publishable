@@ -2442,6 +2442,18 @@ while `weighted_by` and the effective size travel beside it regardless: the decl
 the run either way. The `_clustered` suffix does not compose with either weighted form in this build
 — [`E-DATA-CLUSTER-CONTRAST`](#errors-validate-reports) refuses a clustered contrast outright.
 
+**A contrast draw that cannot vary reports no interval rather than a zero-width one.** The joint
+draw's smallest drawable thing is a unit, or a whole cluster where
+[`cluster_by`](#clustered-units) is declared; a
+[`stratify_by`](#the-one-config-file) stratum draws only from its own. So where every drawable thing
+in every stratum carries the same pair of rows — a stratum holding one of them trivially so — every
+replicate reproduces the same difference, both percentile ranks land on it, and the interval has zero
+width while looking exactly like a narrow one. That is the same refusal the per-condition percentile
+forms already make for their own draws, and it is a property of the draw's **content**, not of how
+many things it holds: two clusters carrying identical rows clear any count floor and still cannot
+vary. The contrast then reports its `delta` with `ci95: null`, which is the honest answer — reporting
+a point with no interval is honest, a zero-width 95 % interval is not.
+
 And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used. *d*s pools where `welch_t_over_units` deliberately doesn't, and that isn't an inconsistency: an interval is an inference and gets the assumption-light construction, while *d* is a descriptive standardization whose conventional denominator *is* the pooled one — reporting a *d* against a Welch-style denominator would be a number no reader could compare to another paper's.
 
 A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, at the same level the interval was computed at. **It does not add a place in the family**: the family counts comparisons × metrics, and a metric reported with both an interval and a p-value is one metric described two ways, not two findings. Counting it twice would correct a design for declaring `null_test` rather than for the comparisons it actually put in front of a reader.
