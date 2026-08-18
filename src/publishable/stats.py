@@ -802,7 +802,17 @@ def interval_at(pool: Sequence[float], confidence: float) -> tuple[float, float]
     `None` below `min_honest_draws(confidence)`: a correction that pushes the
     level past what the pool can support has no honest interval to report, and
     the caller records `ci95_corrected: null` rather than a too-narrow number.
+
+    **`pool` must already be sorted ascending.** This function reads fixed
+    ranks off it and does not sort — `correction.Member`'s own docstring states
+    the precondition, and every construction in this module that returns a
+    pool sorts it before returning. An unsorted pool would still return two
+    values that look exactly like an interval, silently.
     """
+    assert list(pool) == sorted(pool), (
+        "interval_at reads fixed ranks off a sorted pool and does not sort; an "
+        "unsorted pool gives two arbitrary positions"
+    )
     if len(pool) < min_honest_draws(confidence):
         return None
     lo, hi = _percentile_ranks(len(pool), confidence)

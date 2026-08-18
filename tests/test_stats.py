@@ -3038,6 +3038,20 @@ def test_interval_at_refuses_a_pool_too_small_for_the_level():
     assert interval_at(pool, 0.95) is not None
 
 
+def test_interval_at_refuses_an_unsorted_pool_rather_than_reading_two_positions():
+    """The filing H4b-2 restored and H4c claims. `interval_at` reads fixed ranks off
+    a pool, so an unsorted one returns two arbitrary values that look exactly like an
+    interval — and this slice added a construction returning a pool, which is the
+    seam that made the precondition worth asserting rather than documenting.
+
+    The sorted control must report, because an assertion that fires on every input
+    would pass the negative case too."""
+    ordered = [float(i) for i in range(400)]
+    assert interval_at(ordered, 0.95) is not None  # the control
+    with pytest.raises(AssertionError, match="sorted"):
+        interval_at(list(reversed(ordered)), 0.95)
+
+
 def test_the_paired_resample_carries_the_pool_it_read_its_interval_from():
     """The corrected interval comes from this pool, so the raw interval's own
     endpoints must be in it at the raw ranks. Returning a pool that is not the

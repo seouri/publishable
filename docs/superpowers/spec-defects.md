@@ -2362,7 +2362,7 @@ blocks; what each was missing is a named owner for the day its precondition brea
 | `correction.corrected_fields` dedupe unpinned | **H4 Statistics** — it is the slice that would build `Member` lists from somewhere other than `cli._comparison_step_blocks`, which is the condition the row names |
 | `_evidence_ratio`'s `assert` stripped under `python -O` | **No slice; closed as a convention question.** Third instance of the pattern, and the row itself says the next line raises loudly. A repo-wide convention on `assert` is not a slice's work and should not sit in a defect ledger pretending to be one |
 | `W-STATS-CORRECTED-THIN`'s message leads with `cond:1` | **No slice; closed.** `reference.md` § Exit codes and diagnostics makes the identifier the contract and the wording explicitly not, so this is a cosmetic harmonisation any slice may do opportunistically and none owes |
-| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4c** — re-ownered 2026-08-18 after H4b-2 merged, whose own task 7 was checked against this row and returns a sorted pool. The original condition stands: "a new percentile construction returning an unsorted pool would break it silently," and H4c is now the nearer of the remaining paired-construction slices |
+| ~~`paired_percentile_of_derived`'s sorted-pool precondition unasserted~~ | **CLOSED 2026-08-18 (H4c, task 20).** `stats.interval_at` now asserts `list(pool) == sorted(pool)` before reading ranks off it, placed before the `min_honest_draws` floor so a too-short unsorted pool is still caught first. Pinned by `test_interval_at_refuses_an_unsorted_pool_rather_than_reading_two_positions` (`tests/test_stats.py`), mutated and confirmed to fail with the assertion removed against the full suite. Scoped to a normal interpreter: `python -O` strips `assert`, the same standing every other `assert` in this codebase has |
 | `PairedResample.pool` is a `list`, so the dataclass is unhashable | **No slice; closed.** Nothing keys on it and a tuple would copy per resample. Recorded so it is not re-litigated |
 | `Member.__post_init__` exempts `ci95 is None` | **No slice; closed.** Deliberate, documented, and pinned by `family_members` dropping such a member first |
 
@@ -5368,6 +5368,39 @@ than assumed: the paired clustered *t* H4b-2 built (`paired_t_over_units_cluster
 this entry's finiteness gap can land. Re-owned to **H4c**, the next slice past this one to touch
 `summarize_step`'s column path.
 
+**AMENDED 2026-08-18 (H4c, task 20) — measured rather than inherited, and the premise is falsified
+for one of the two new constructions it names.** H4c's unpaired *t* forms sum per-side value columns
+and compute per-side variances, which made the premise likelier here than at H4b-2 — so it was
+checked rather than assumed. Probed directly at this commit:
+
+```
+welch_t_over_units([1.0, inf, 3.0], [1.0, 2.0, 3.0])  -> Interval(low=nan, high=nan, method='welch_t_over_units')
+welch_t_over_units([1.0, nan, 3.0], [1.0, 2.0, 3.0])  -> Interval(low=nan, high=nan, method='welch_t_over_units')
+welch_t_over_units_clustered(...)                     -> Interval(low=nan, high=nan, method='welch_t_over_units_clustered')
+cohens_ds([1.0, inf, 3.0], [1.0, 2.0, 3.0])            -> None
+cohens_ds([1.0, nan, 3.0], [1.0, 2.0, 3.0])            -> None
+```
+
+**`welch_t_over_units[_clustered]` does not refuse a non-finite value and does not raise — it returns
+an `Interval` whose `low`/`high` are `nan`.** That is neither this entry's "plausible but wrong"
+shape (a `nan` is visibly not a number, not a number that looks like one) nor a clean refusal
+(`ci95: null`) — it is a third shape this entry did not name, and it reaches `run.yaml` as written
+today: `[interval.low, interval.high]` serializes `nan` through PyYAML's own `.nan` literal rather
+than raising. `cohens_ds` returns `None`, but by coincidence of comparison semantics rather than a
+deliberate check: `pooled` becomes `nan`, `sd = sqrt(nan)` is `nan`, and `nan > 0` is `False` in
+Python, so the `if sd > 0` guard reads as a refusal without being one.
+
+**Ruled: re-decline, not fix here — the premise is confirmed likelier but the fix is a task, not a
+line.** Closing it means validating both value vectors (and, for the clustered forms, the per-cluster
+sums `_cr1_variance` accumulates) for finiteness before any arithmetic, on the same
+`is_measurement_numeric`/`usable_weight` precedent the original entry proposed, and routing the
+failure to a real refusal rather than a `nan`-valued `Interval` reaching the record. That is out of
+this task's scope (a claim/decline pass, not a construction task), and threading it through the
+unpaired forms while also fixing the pre-existing `t_over_units` family (which this probe did not
+re-check and which the original entry already flagged as unsurveyed) is more than one task's worth of
+work. **Owner: H4d**, the last remaining slice whose surface is the `statistics` block — the same
+terminal reasoning the `report_by`/`resample_columns` entry below carries.
+
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
 Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
@@ -5588,6 +5621,30 @@ exactly this reason. Owner moves from the general "H4 Statistics" to **H4c** by 
 the scoping recommends, rather than staying a description any of H4's remaining slices could read as
 its own.
 
+**RE-DECLINED 2026-08-18 (H4c, task 20) — another decline in the same unbroken line, and the
+terminal one named as such.** Still live on C1–C3, and confirmed unrelated to this slice's own
+surface: it is created by neither a weight, a cluster, nor a pairing derivation —
+`cli.command_run`'s `report_by` level call still does not pass `resample_columns` through to
+`summarize_step`, exactly as H4a task 15 left it, and nothing H4c built touches that call site. This
+is the only one of the five filings this task inherited that is genuinely unrelated to the unpaired
+contrast constructions.
+
+This entry has now been carried forward, unbuilt, across H4a's own review, H4b-2, and this slice —
+each declining in turn rather than fixing it, on grounds that keep being correct (it is not that
+slice's surface) and keep leaving the entry owned by a description rather than a name. Naming another
+description here would repeat the exact habit `CLAUDE.md` § Habits that cost real work calls out: "a
+ledger line saying 'filed' is not a filing" and a deferral pointing at a closed slice reads as live
+work nobody holds. **Owner: H4d**, named rather than described, because it is the last remaining
+slice in the charter whose surface is the `statistics` block at all.
+
+**H4d is terminal for this entry.** After H4d there is no further statistics slice in the charter for
+a fifth decline to point at. If H4d does not close it, the correct move at that point is not another
+deferral — it is converting this into a documented, permanent limitation: a § Errors or § Validation
+row (or a `reference.md` § Statistical reporting sentence, if no code check is warranted) stating
+plainly that a `report_by` level's recorded-column interval does not honour a declared
+`resample_columns`, so a reader stops expecting a fix that the charter no longer has a slice to
+deliver.
+
 ## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -5697,6 +5754,31 @@ finding needing a `where` and a registry row; Finding 3 is a contrast entry carr
 and a § Warnings row this slice did not scope — H4b-2 added a third `method` spelling to the
 contrast entry (`paired_percentile_over_units_clustered`) and no new disclosure surface. Both stay
 deferred, re-owned to **H4c**.
+
+**RULED 2026-08-18 (H4c, task 20) — the "no new disclosure surface" ground does not transfer, and
+this task rules on both findings rather than deferring both again unchanged.** H4c adds four
+`method` spellings (`welch_t_over_units[_clustered]`, `unpaired_percentile_over_units[_clustered]`)
+and a new record shape (`n_of`/`n_against` in `n_paired`'s place), so the ground H4b-2 declined on —
+that nothing about the contrast entry's disclosure surface changed — is false here, checked rather
+than carried.
+
+**Finding 3 — CLAIMED as still real and now unambiguously scoped to the shape this slice built.**
+Verified against the current `_comparison_step_blocks`: every unpaired and every paired arm still
+builds its entry as a literal mapping with no `beside_n`/`resample_beside` parameter, so a `run.yaml`
+entry for `welch_t_over_units` or `unpaired_percentile_over_units_clustered` carries no resolved-
+`resample` echo beside it, identically to the paired forms the original finding named. Not fixed
+here — the fix is a `beside_n`-shaped parameter threaded through both call sites in
+`_compute_vs_baseline`/`_compute_declared_contrasts`, which is a construction task rather than a
+claim/decline pass. **Owner: H4d.**
+
+**Finding 1 — RE-DECLINED, same reasoning, same owner.** A contrast-scope `W-STATS-RESAMPLE-THIN`
+needs a `where` (`_comparison_step_blocks` already carries `where_id`) and a new § Warnings registry
+row — warning-registry work this task does not scope. Verified still live: an unpaired column
+contrast whose resample draw falls below `min_honest_draws` publishes `ci95: null` with nothing
+warning that the loss came from a thin pool rather than a thin `n_of`/`n_against`, the identical gap
+the original finding named for the paired case. **Owner: H4d**, the same slice Finding 3 and the
+`report_by`/`resample_columns` entry below are owned by — the last remaining slice whose surface is
+the `statistics` block, so a fifth deferral past it is not available.
 
 ## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 
@@ -6559,7 +6641,17 @@ project through `main(["run", ...])` rather than a direct call, and fails on `en
 the suppression is removed — checked against the full, unfiltered suite (one failure, the pin
 itself; the shipped test's own name and premise corrected in the same commit).
 
-## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
+**RE-DECLINED 2026-08-18 (H4c, task 20), on a new ground — do not build the clustered derived draw
+here, owner H4d.** The old ground (cost and reachability, ruled by H4b-2 task 4 above) is used up:
+H4c is the slice that gave the derived branch a **second**, independent suppression condition
+(decision 8's unpaired ground, added in task 15 beside the pre-existing clustered one, stated as one
+guard naming both). Building the clustered derived draw inside H4c would mean that same guard having
+to distinguish three states — clustered, unpaired, and neither — rather than two, compounding in one
+commit the exact corner that has already been given four wrong grounds in four separate commits
+(recorded above: the reachability claim, the uncleared-retry premise, and the two corrections to
+both). Building it after the two-ground guard has shipped and stood through a whole-branch review is
+strictly safer than building it while that guard was still being written. **Owner: H4d**, the same
+terminal slice the other two re-declined filings in this task land on.
 
 Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
 metric branches, so no code path produces an unpaired contrast entry and every comparison reaching
