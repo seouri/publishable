@@ -3137,6 +3137,125 @@ def test_a_comparison_reads_its_own_condition_not_condition_zero():
     assert members[0].delta != 0.0
 
 
+_CONTRAST_CLUSTER_LABELS = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+
+
+def _clustered_contrast_call(**extra):
+    """`_comparison_step_blocks` over the plan's 12-unit, 3-cluster fixture.
+
+    `of` minus `against` is `1.0 ×2`, `5.0 ×4`, `9.0 ×6` in clusters of 2/4/6, so
+    the delta is 6.3333… under EVERY reading — clustering moves the variance, not
+    the point estimate — and the half-width is the only arithmetic discriminator:
+    8.7632 correct, against 4.4827 at the wrong df, 3.8678 on the IID variance,
+    6.1110 at a miscounted cluster and 1.9786 unclustered."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    roster = UnitList([Unit(key=k) for k in keys])
+    # `extra` OVERRIDES rather than adding, so a caller can pass `clusters=None`
+    # or `resample_columns=True` without colliding with the defaults below.
+    kwargs = dict(
+        roster=roster,
+        aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(keys, values, strict=True)},
+            (0, "s"): {k: {"m": 0.0} for k in keys},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=False,
+        clusters=dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)),
+    )
+    kwargs.update(extra)
+    return _comparison_step_blocks(Comparison(id="c", of=1, against=0), **kwargs)
+
+
+def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
+    """The membership reaches the construction, and the construction is the
+    cluster-robust one. Both halves are asserted, because a `method` that changed
+    without the endpoints — or the reverse — is exactly the half-delivered
+    declaration this wiring exists to prevent.
+
+    The delta is asserted too, and it is asserted to be UNCHANGED: 6.3333 is what
+    both the clustered and unclustered readings give, which is why it is a control
+    here rather than a discriminator."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert entry["method"] == "paired_t_over_units_clustered"
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    half = (entry["ci95"][1] - entry["ci95"][0]) / 2
+    assert half == pytest.approx(8.763214143637903)
+
+
+def test_an_unclustered_column_contrast_is_untouched():
+    """The control that must report, and the number a mutant dropping the mapping
+    lands on: the same differences with no `clusters` give `paired_t_over_units`
+    and a half-width of 1.9786, a factor of four narrower on the same centre."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    block, _ = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=UnitList([Unit(key=k) for k in keys]),
+        aggregated={1: {"s": {"m": 5.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(keys, values, strict=True)},
+            (0, "s"): {k: {"m": 0.0} for k in keys},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=spearman", values={"analysis.method": "spearman"}),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["m"]
+    assert entry["method"] == "paired_t_over_units"
+    assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(1.9785385229565593)
+
+
+def test_a_weighted_clustered_comparison_is_a_core_defect_here_not_a_silent_choice():
+    """`E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses the combination at `validate` and
+    `cli` always validates before running, so reaching this function with both is a
+    bookkeeping error rather than a config. Raised rather than resolved by
+    precedence: silently preferring one of the two would publish a `method` naming
+    a construction the other declaration contradicts, with nothing in the record
+    saying so.
+
+    `ValueError`, not `ContractError`, for the reason `Member.__post_init__` gives:
+    the latter is reserved for something a user's code asked for or handed back,
+    and nothing here comes from outside core."""
+    with pytest.raises(ValueError, match="E-DATA-WEIGHT-CLUSTER-CONTRAST"):
+        _clustered_contrast_call(weights={f"u{i:02d}": 1.0 for i in range(12)})
+
+
 def test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch():
     """The H4c tripwire, and the reason two PAIRED clustered constructions were
     enough for H4b-2.
