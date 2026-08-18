@@ -394,3 +394,33 @@ it. Both directions have now been observed on this slice.
 **A caller enumeration was re-introduced in `crossed_group_axes`' docstring, one function away from
 the one task 13 deleted in the same batch.** Recorded because deleting a forbidden pattern and adding
 another instance of it in the same file is the pattern worth naming, not the instance.
+
+**Fix round 1 — all seven findings closed** (`2b2674c`, `87ce22a`), confirmed by a scoped re-review
+that verified both Majors **by running**: mutation 1 now fails **2** tests including
+`test_the_five_t_arms_…` on `sides_clustered` (`-10.007…` against `-23.859…`), and the fixtures are
+now genuinely unequal per side (4-vs-3 and 3-vs-4) rather than the forbidden equal-size geometry. The
+centre assertion is load-bearing: under a sign-flip the **centre** assertions fail while the
+half-width ones pass.
+
+**A second leftover mutation was found applied in the working tree at review start** — the `sides`
+branch of `_corrected_bounds` collapsed to always call `welch_t_over_units`, left over from the
+stalled run. The reviewer **reverted it by editing the file back**, confirmed a zero diff against
+`HEAD`, and only then began. **That is twice on this batch that a stalled agent left a live
+mutation**, and both times it was caught by *reading the tree state first* rather than by trusting a
+green suite — the green suite is exactly what a leftover mutation can still produce.
+
+**And the fix report's own mutation tally was wrong**, caught by re-running rather than reading: the
+sign-flip fails **2** tests, not 1. The second is a **batch-2 test, untouched by this batch**, which
+independently asserts the same centre via a direct call. The substantive claim holds and the count
+does not — which is the same shape as task 9's 90-versus-126: **a mutation's blast radius is a
+measurement against a suite, and reporting it from memory of an earlier run is reporting a stale
+number.** Three instances on this slice now.
+
+Suite 2252 passed, 1 skipped, 2 xfailed. Batch 3 complete.
+
+## Batch 4 dispatched — tasks 14, 16, 15+17b+18, 19, 20, 22
+
+The `method` and `cohens_d` selection across the reachable cells; the thin warning at both emit
+sites; **the retirement of `E-DATA-ALLOCATION-CONTRAST`** with the derived suppression guard and the
+converted pin as one commit; the surviving-citation sweep; the five inherited filings; and the dated
+re-measurement.
