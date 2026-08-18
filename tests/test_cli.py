@@ -10784,3 +10784,191 @@ def test_the_validation_rows_own_reading_names_no_row_task_13_deletes():
     assert "per comparison" in allocation  # the control
     assert "Weighted deltas aren't computed" not in allocation
     assert "Clustered deltas aren't computed" not in allocation
+
+
+_LINEAR_DIFF_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        multiplier = 1.0 if cfg.parameters.analysis.method == "pearson" else 2.0
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": multiplier * float(i)}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_an_unclustered_resampled_contrast_draws_what_it_always_drew(tmp_path, capsys):
+    """The regression task 7's uniform draw shape owes. A config with no
+    `cluster_by` and no `weight_by`, under a declared `resample`, must produce the
+    same percentile interval it produced before the draw was rewritten — the shape
+    change is RNG-identical or it is a defect.
+
+    `_LINEAR_DIFF_STEP`, not the default scaffolded step or `_METHOD_VARYING_STEP`:
+    the default `{"present": True}` step records a boolean, which grows no
+    `basis: units` column and no `vs_baseline` block at all — the brief's own
+    literal config was checked against the code and found to need a numeric
+    step. `_METHOD_VARYING_STEP`'s per-unit diff alternates by parity (0.5/1.5),
+    which is symmetric under a full-roster reversal on an even unit count —
+    exactly the blind-mutation shape `CLAUDE.md` warns about, confirmed by
+    running Mutation 1 against it directly: the reflection leaves the sorted
+    endpoints unchanged. `_LINEAR_DIFF_STEP`'s diff is `i` itself, monotonic and
+    asymmetric under reversal, which the same mutation was checked to move.
+
+    Asserted on both endpoints and the `method`, not on the width: a draw
+    sequence that changed by one call moves the endpoints without necessarily
+    widening anything. Captured at `82310b9`, before task 7 landed, in a scratch
+    worktree running this exact config — both this test and its capture agree
+    at the current commit too, which is the regression itself passing."""
+    with pytest.MonkeyPatch.context() as mp:
+        import publishable.generators.experiment as experiment_gen
+
+        mp.setattr(experiment_gen, "STARTER_STEP", _LINEAR_DIFF_STEP)
+        doc = run_a_project(
+            tmp_path,
+            capsys=capsys,
+            units=40,
+            replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+            statistics={"resample": {"method": "bootstrap", "n": 2000}},
+        )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = next(
+        metric
+        for condition in run["results"]["conditions"]
+        for block in condition.get("vs_baseline", {}).values()
+        for metric in block.values()
+    )
+    assert entry["method"] == "paired_percentile_over_units"
+    assert "n_paired_clusters" not in entry
+    assert entry["ci95"] is not None
+    assert entry["ci95"][0] == pytest.approx(16.025)
+    assert entry["ci95"][1] == pytest.approx(23.025)
+
+
+def test_an_unclustered_weighted_contrast_is_unchanged_by_the_cluster_threading(tmp_path, capsys):
+    """H4b-1's output, one slice old. The `clusters` parameter threads through the
+    same three signatures its `weights` does, so a weighted contrast is the first
+    thing a mis-ordered arm in the construction choice would break.
+
+    **Checked rather than assumed that a swapped arm order could move this
+    test**: `col_weights` and `col_clusters` are never both non-`None` at this
+    site — `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses the combination at
+    `validate`, and no test in this file constructs both together by direct
+    call either — so the *t* branch's two-armed `if`/`elif` is a choice among
+    mutually exclusive declarations, and swapping the arms is a verified-blind
+    mutation for every fixture in this file, this one included. This test
+    stays useful as the regression pin regardless: a weighted column must
+    still reach `weighted_paired_t_over_units` after the threading, whatever
+    order the arms are checked in.
+
+    Copied from `test_a_weighted_run_publishes_a_weighted_delta_end_to_end`'s
+    config shape — six units weighted 1/1/1/3/3/3, Kish's size 4.8 against six
+    completed — with the same endpoints captured at `82310b9`, before this
+    slice threaded `clusters` through the three call sites `weights` already
+    had."""
+    import publishable.generators.experiment as experiment_gen
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+        doc = run_a_project(
+            tmp_path,
+            capsys=capsys,
+            replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+            roster_csv=(
+                "patient_id,sampling_weight,band\n"
+                "p1,1,low\np2,1,low\np3,1,low\np4,3,high\np5,3,high\np6,3,high\n"
+            ),
+            units_overrides={
+                "attributes": ["sampling_weight", "band"],
+                "weight_by": "sampling_weight",
+            },
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+            statistics={
+                "correction": "holm",
+                "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["band"]},
+            },
+        )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    assert entry["method"] == "weighted_paired_percentile_over_units"
+    assert entry["weighted_by"] == "sampling_weight"
+    assert entry["n_paired_effective"] == pytest.approx(4.8)
+    assert "n_paired_clusters" not in entry
+    assert entry["ci95"][0] == pytest.approx(0.583333333333333)
+    assert entry["ci95"][1] == pytest.approx(1.4166666666666665)
+
+
+_HEADLINE_ESTIMATE_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"headline": Estimate(value=0.5, ci95=[0.4, 0.6], n=12,
+                                      method="hand_computed")}}
+"""
+
+
+def test_a_clustered_run_leaves_a_summary_estimate_alone(tmp_path):
+    """The boundary this slice owes rather than merely respects. An `Estimate`
+    returned by a `summary` step is `reported: true`, outside the correction
+    family and never recomputed — the route `E-DATA-CLUSTER-CONTRAST`'s own
+    message offered before task 14 deleted it. A clustered pass walking every
+    metric block must not touch it: no `_clustered` suffix on its `method`, no
+    `n_paired_clusters`, no `ci95` rebuilt from the cluster count.
+
+    The clustered contrast beside it is asserted in the same record, because a
+    control asserting only absences passes identically if nothing ran.
+
+    **No mutation reaches this — checked, not assumed, and this is a
+    structural separation rather than a guarded one.** `_comparison_step_blocks`
+    walks `aggregated: dict[int, dict[str, dict[str, Any]]]`, keyed by
+    condition index and built only from condition-scope steps; a `summary`
+    step runs once, is never aggregated per condition, and `run_record.py`
+    writes it straight into `results.summary` from the execution ledger,
+    `scope == "summary"`. There is no exclusion clause in the clustered walk
+    to remove — a summary `Estimate` is never IN the mapping the walk reads in
+    the first place. This test is the pin that the two records stay separate,
+    not a pin against a reachable mutation."""
+    doc = run_a_project(
+        tmp_path,
+        _starter_step=_CLUSTER_CONTRAST_STEP,
+        extra_steps=["report_summary"],
+        extra_step_source=_HEADLINE_ESTIMATE_STEP,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CONTRAST_CLUSTER_ROSTER,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    summary_block = run["results"]["summary"]["step02_report_summary"]
+    estimate = summary_block["headline"]
+    assert estimate["reported"] is True
+    assert estimate["method"] == "hand_computed"
+    assert "_clustered" not in estimate["method"]
+    assert "n_paired_clusters" not in estimate
+    clustered_entry = next(
+        block["pred"]
+        for condition in run["results"]["conditions"]
+        for block in condition.get("vs_baseline", {}).values()
+    )
+    assert clustered_entry["method"] == "paired_t_over_units_clustered"
