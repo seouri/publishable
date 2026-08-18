@@ -6340,3 +6340,24 @@ disclosure entry already defers to H4b-2.
 
 **Found by:** H4b-1, task 5. **Severity:** Minor — reachable only from a `stratify_by` whose strata
 are near-unique, which `validate` does not refuse.
+
+## RULED by H4b-2 task 1 — the weight × cluster combination is refused, not built
+
+`docs/superpowers/H4b-SCOPING.md` § 10 assigned the `weight_by` × `cluster_by` × comparison refusal
+to **H4b-1 by name** — "not to whichever ships first". H4b-1 did not mint it, and
+`E-DATA-WEIGHT-CONTRAST` was retired in the same slice, so at `82310b9` such a config earns
+`E-DATA-CLUSTER-CONTRAST` alone and `reference.md` § Statistical reporting's *"The `_clustered`
+suffix does not compose with either weighted form in this build"* is enforced by nothing else.
+
+**Ruled: mint `E-DATA-WEIGHT-CLUSTER-CONTRAST`, a documented narrow refusal carrying a § Errors row
+and a § Validation row.** Not a `-UNSUPPORTED` build-family code: this refuses a *combination*, which
+is what decides whether it outlives the slice that minted it. The grounds are that minting is the
+precedent H3a and H3b both set for a combination made reachable by retiring a broader refusal; that
+no config in `docs/feasibility-llm-growth-studies.md` declares `cluster_by`, so the composition
+unblocks nothing measurable; and that a weighted clustered *t* takes its df from the **cluster
+count** rather than from Kish's effective size, a distinction invisible in any fixture not built to
+separate the two.
+
+**H4c inherits the composition itself**, alongside the unpaired clustered forms.
+
+**Ruled by:** H4b-2, task 1. **Built by:** H4b-2, task 8.
