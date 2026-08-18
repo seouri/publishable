@@ -3486,18 +3486,22 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
     re-check the corner. Batch 4's review reproduced it and left the decision
     open; this is that fixture and that decision.
 
-    **The collision, reproduced at the level this function operates on.**
-    `cli.command_run` assigns `derived_by_key` before calling `summarize_step`,
-    and the `except ContractError` retry that follows a name collision
-    (`E-STEP-KEY-COLLISION`) drops the derived mapping from `aggregated` but
-    clears neither `derived_by_key` nor `resample_fns_by_key`. So
-    `_comparison_step_blocks` can see a metric key in `aggregated` (the recorded
-    column survived) while `derived_by_key` still names it — `is_derived` reads
-    true — and `resample_fns_by_key` holds nothing callable for it, since the
-    collision means no derived closure was ever built for this run. Modelled
-    directly, without going through `command_run`, by handing this function
-    that exact combination: the key present in `aggregated` and `derived_by_key`
-    both, `resample_fns_by_key` empty.
+    **This is a direct-call fixture, and it does NOT reproduce the collision
+    end to end — the whole-branch review found that out, and this docstring
+    is corrected rather than left asserting what it got wrong.** The claim this
+    docstring previously made — that `resample_fns_by_key` holds nothing
+    callable for a colliding key, "since the collision means no derived closure
+    was ever built for this run" — is false: `command_run` builds a closure for
+    **every** key in `derived` (`cli.py`'s `resample_fns` comprehension, gated
+    on `if derived:`) *before* the call that can raise `E-STEP-KEY-COLLISION`,
+    so the colliding key's closures **do** exist when the `except ContractError`
+    retry leaves both maps uncleared. Modelled here with `resample_fns_by_key`
+    empty regardless — a fixture that pins the null-beside-`n_paired_clusters`
+    shape as a *value*, without claiming this input shape is what the collision
+    actually produces. `test_a_derived_key_collision_under_a_cluster_end_to_end`
+    below is the fixture that reproduces the real shape (populated closures,
+    reached through a genuine `run`) and pins the suppression that makes this
+    one's output the true one rather than a coincidence.
 
     **The decision: yes, `n_paired_clusters` belongs beside a null interval
     here, unchanged from what the code already does.** `n_paired` is written
@@ -3552,10 +3556,12 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
         clusters=dict(zip(keys, labels, strict=True)),
     )
     entry = block["s"]["pred"]
-    # The null half: nothing was computed, because `compute_of`/`compute_against`
-    # are both `None` (no callable survived the collision) and the derived
-    # branch's `if compute_of is not None and compute_against is not None:`
-    # guard never opens.
+    # The null half: nothing was computed, because this fixture hands the
+    # function an empty `resample_fns_by_key`, so `compute_of`/`compute_against`
+    # are both `None` and the derived branch's guard never opens — a value
+    # this direct call can produce, though not the reason the real collision
+    # produces it (see the docstring's correction, and the end-to-end test
+    # below for the real mechanism: the `clusters is not None` suppression).
     assert entry["delta"] is None
     assert entry["method"] is None
     assert entry["ci95"] is None
@@ -3563,6 +3569,61 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
     # The intersection half: present regardless, on the decision above.
     assert entry["n_paired"] == 12
     assert entry["n_paired_clusters"] == 3
+
+
+def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
+    """The whole-branch review's Critical, reproduced through a real `run` (not
+    a direct call with hand-built maps) and pinned so it cannot regress silently.
+
+    A clustered run whose template's `aggregate` returns a key colliding with
+    the recorded column `pred` (`aggregate_returns="pred"`) reaches
+    `_comparison_step_blocks` with BOTH `derived_by_key` and `resample_fns_by_key`
+    populated for the colliding key — `command_run` builds a closure for every
+    key in `derived` before the call that can raise `E-STEP-KEY-COLLISION`, and
+    the `except ContractError` retry that follows the collision clears neither
+    map. Before the clusters-guarded suppression this test pins, that left
+    `compute_of`/`compute_against` real and callable, so the derived branch
+    computed a genuine point estimate and drew a genuine (UNCLUSTERED)
+    percentile interval — `method: paired_percentile_over_units`, no
+    `_clustered` suffix — and published it beside `n_paired_clusters: 3`,
+    reading as if the cluster had been honoured when the number underneath it
+    was drawn as though every unit were independent. Verbatim the failure
+    `E-DATA-CLUSTER-CONTRAST` existed to prevent, on a path that refusal never
+    covered.
+
+    Both the generated `vs_baseline` delta and the declared `results.contrasts`
+    entry are asserted, since `_compute_vs_baseline` and
+    `_compute_declared_contrasts` are two call sites into the same function."""
+    doc = run_a_project(
+        tmp_path,
+        aggregate_returns="pred",
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CONTRAST_CLUSTER_ROSTER,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {"id": "c", "of": "method=spearman", "against": "baseline"},
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    vs_baseline_entry = next(
+        block["pred"]
+        for condition in run["results"]["conditions"]
+        for block in condition.get("vs_baseline", {}).values()
+    )
+    declared_entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    for entry in (vs_baseline_entry, declared_entry):
+        assert entry["delta"] is None
+        assert entry["method"] is None
+        assert entry["ci95"] is None
+        assert entry["cohens_d"] is None
+        assert entry["n_paired"] == 12
+        assert entry["n_paired_clusters"] == 3
 
 
 _CONTRAST_CLUSTER_ROSTER = "patient_id,site\n" + "".join(

@@ -2878,7 +2878,21 @@ its end-to-end fixture, add one that makes a template's `aggregate` return a der
 declared `cluster_by`, and decide whether `n_paired_clusters` beside a null interval is the record
 `reference.md` wants** — the batch 1 re-check and this one are the same corner, one hop further in.
 
-**Every site, enumerated by READING and then confirmed by grep** — that order, per `CLAUDE.md`
+**CORRECTION (whole-branch review, DO-NOT-MERGE Critical), appended after merge review found this
+paragraph's own reachability chain false.** "Read is unreachable today through `command_run`" rested
+on three links; the middle one is wrong. `resample_fns` **is** built for every derived key before the
+raising call — that link holds — but `summarize_step`'s retry does **not** drop the whole derived
+mapping before it reaches `aggregated` in the sense that matters here: it drops the mapping from
+`aggregated` (true, and what makes the recorded column's own per-condition interval stay
+cluster-robust) while leaving `derived_by_key` and `resample_fns_by_key` — the two maps a CONTRAST
+reads, built and populated earlier in the same call — untouched. Those two maps are what
+`_comparison_step_blocks` actually branches on, not `aggregated`, and they hold real, callable
+closures for the colliding key. So the chain's conclusion does not follow from its own true links,
+and this task's fixture (built against the wrong premise) modeled a state that does not occur end to
+end. Batch 4's own re-check of this same corner (task 14's fix round 1) repeated the identical error
+one level closer to the code, arguing from `resample_fns_by_key` being empty rather than checking
+whether it was. Only an end-to-end `run` — not a direct call with the maps hand-built — exposed the
+real shape, which is what closed it.
 § Answering a question with a proxy, and the grep filters the file list rather than the output. The
 enumeration below was taken at `82310b9`:
 

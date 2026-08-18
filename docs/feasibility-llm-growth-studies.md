@@ -1243,13 +1243,16 @@ C3's one stand-in `statistics.contrasts` entry each, are declared over the demo 
 | E4 | *(none)* | No — blocked on `io.reuse_from` |
 | E5 | *(none)* | **Yes** — no remaining core-side blocker |
 | E6 | *(none)* | No — blocked on `io.reuse_from` |
-| C1 | *(none)* | No — blocked on `io.reuse_from` |
-| C2 | *(none)* | No — blocked on `io.reuse_from` |
-| C3 | *(none)* | No — blocked on `io.reuse_from` |
+| C1 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
+| C2 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
+| C3 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
 
-Every one of the nine also reports `W-DATA-CLUSTER-UNDECLARED`, left out of the table for the same
-reason the Part B and H4b-1 entries excluded their own: an artifact of the synthetic roster's banded
-shape, not of a real roster, bearing on none of the codes this table answers for. **Can-fail
+The table's own "no remaining core-side blocker" annotation and the prose's count above answer for
+the same six rows, not three: C1–C3 carry it too, parenthetically, so a reader taking the table's
+`Yes` cells alone does not undercount. Every one of the nine also reports `W-DATA-CLUSTER-UNDECLARED`,
+left out of the table for the same reason the Part B and H4b-1 entries excluded their own: an artifact
+of the synthetic roster's banded shape, not of a real roster, bearing on none of the codes this table
+answers for. **Can-fail
 control**, on the same transplant: adding `cluster_by: age_band` to C1's `data.units` block beside its
 declared `weight_by` draws exactly `{E-DATA-WEIGHT-CLUSTER-CONTRAST}`; the same addition with
 `weight_by` stripped stays clean. A table that could not fail either way would not be a measurement.

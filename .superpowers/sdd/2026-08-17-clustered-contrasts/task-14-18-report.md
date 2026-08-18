@@ -281,3 +281,93 @@ exist before this round. This is the fixture the review's Major 2 explicitly ask
 compared against the reviewer's own reproduced shape; M1's date against `git show`; m1's mutations
 against the full suite; m6's new prose against the actual code state on this branch. No finding was
 left open.
+
+## Whole-branch fix round
+
+Review at `.superpowers/sdd/2026-08-17-clustered-contrasts/whole-branch-review.md`. Verdict:
+**DO NOT MERGE**, one Critical. Everything else held, including under two of the reviewer's own
+full-suite mutations and an independent digit-for-digit recomputation of the CR1 half-width.
+
+**C1 — a clustered run could publish an unclustered contrast interval, closed.** A derived key
+colliding with a recorded column's name left `derived_by_key` **and** `resample_fns_by_key`
+populated for it (`command_run` builds a closure for every key in `derived` before the call that can
+raise `E-STEP-KEY-COLLISION`, and the retry clears neither map), so
+`_comparison_step_blocks`'s derived branch had real callables and computed a genuine, unsuffixed
+`paired_percentile_over_units` delta/interval under a declared cluster — five times narrower than
+the cluster-robust per-condition interval beside it, with `n_paired_clusters` written next to it as
+if the cluster had been honoured. Newly reachable on this branch (confirmed against `main`, which
+exits 1 at `validate` before this code ever runs), and invisible to three prior direct-call reviews
+of the same corner because none of them ran a real `run`.
+
+**Fix:** clusters-guarded suppression in `_comparison_step_blocks`'s derived branch —
+`src/publishable/cli.py`, changed `if compute_of is not None and compute_against is not None:` to
+`if compute_of is not None and compute_against is not None and clusters is None:` — matching the
+containment `reference.md` § Contrasts, the `E-DATA-CLUSTER-DERIVED` § Errors row and the test's own
+docstring already claimed but nothing enforced. Deliberately **not** clearing both maps in the
+`except ContractError` retry, per the reviewer's explicit recommendation: that would also change the
+pre-existing unclustered collision path, out of this slice's scope.
+
+**Verified by running, before writing the fix:** reproduced the reviewer's shape with my own probe
+(10-unit, 3-cluster roster, an `aggregate` colliding with the recorded column `pred`, a declared
+contrast) through a real `main(["run", ...])` — pre-fix, `run.yaml` carried
+`method: paired_percentile_over_units`, `delta: 0.0`, `n_paired_clusters: 3` (my probe's own
+arithmetic gave a degenerate `0.0`, not the reviewer's `[4.4, 8.4]`, since the two are different
+fixtures — the failure *shape* is what was reproduced, not the reviewer's own numbers). Post-fix,
+the identical probe published `delta: None, method: None, ci95: None` beside `n_paired_clusters: 3`
+on both the `vs_baseline` entry and the `results.contrasts` entry.
+
+**Pinned end to end**, per the reviewer's explicit instruction that a direct call cannot see this:
+added `tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_end_to_end`, which runs a real
+project through `run_a_project`/`main(["run", ...])` with `aggregate_returns="pred"` (colliding with
+the scaffolded step's own recorded column), a declared `cluster_by`, and a declared
+`statistics.contrasts` entry, and asserts both the generated `vs_baseline` block and the declared
+`results.contrasts` entry.
+
+**Mutation, run against the full, unfiltered suite, foreground, reverted by editing back:** in
+`src/publishable/cli.py`, changed `if compute_of is not None and compute_against is not None and
+clusters is None:` back to `if compute_of is not None and compute_against is not None:` (dropping
+the `and clusters is None` clause). Outcome: **`tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_end_to_end`
+FAILED** — `assert entry["delta"] is None` got `0.0` — **and every other test in the suite passed**
+(1 failed, 2199 passed, 1 skipped, 2 xfailed). Reverted by editing the file back; `diff` against a
+pre-mutation copy confirmed byte-identical; re-ran green.
+
+**Closed the false grounds everywhere they were written**, per the reviewer's instruction to correct
+rather than rewrite around, and to append rather than retro-edit the dated/development-record files:
+
+- **`tests/test_cli.py:3489-3500`'s docstring** (the direct-call fixture from fix round 1): deleted
+  the false claim "`resample_fns_by_key` holds nothing callable for it, since the collision means no
+  derived closure was ever built for this run" and replaced it with the corrected mechanism, pointing
+  at the new end-to-end test as the one that reproduces the real shape. The stale comment inside the
+  test's body ("no callable survived the collision") was fixed the same way.
+- **`docs/reference.md:1040`** (`E-DATA-CLUSTER-DERIVED`'s § Errors row): the blanket "contained the
+  way a derived key collision is — the whole `derived` mapping is dropped" no longer stands alone;
+  rewritten to distinguish the AGGREGATED-level containment (true, unchanged) from the CONTRAST-level
+  suppression (now actually built, stated as what the code does rather than promised).
+- **`docs/reference.md`'s § Contrasts "separate, open corner" paragraph**: no longer open — states
+  the clusters-guarded suppression as the decided, built behavior.
+- **`docs/superpowers/spec-defects.md`'s H4b-2-task-4 entry**: appended a dated correction (not a
+  retro-edit) replacing the false premise of the fix-round-1 correction, naming both prior wrong
+  readings (batch 1's `aggregated`-level argument, batch 4's `resample_fns_by_key`-empty argument) and
+  recording what actually closed it.
+- **`docs/superpowers/plans/2026-08-17-clustered-contrasts.md:2867`** (task 14's appended plan
+  correction): appended a dated correction identifying which of its three reachability-chain links
+  was false ("the retry drops the whole derived mapping before it reaches `aggregated`" — true for
+  `aggregated`, false for the two maps a contrast actually reads) and why the chain's conclusion did
+  not follow from its own true links.
+
+**Minor closed — the § Executability entry's "no remaining core-side blocker" phrase now covers the
+same six rows in both the prose and the table.** Added a parenthetical to C1–C3's table cells ("no
+remaining core-side blocker either, per H4b-1") and a sentence stating the two now agree. Left
+H4b-1's and Part B's own dated sections untouched, per the reviewer's explicit instruction not to
+retro-edit them — the annotation was inherited verbatim from H4b-1's section, which is not this
+slice's to fix.
+
+**Counts re-verified, unchanged:** `grep -c "cluster_by: null"` on the feasibility file → 3 (2 real
+YAML declarations at lines 136/506, 1 self-citation in the new entry's own prose — unchanged from
+before this round); `weight_by` → 13. Zero configs unblocked, six with no remaining core-side
+blocker, three executable — all as before.
+
+**Gates:** `2200 passed, 1 skipped, 2 xfailed` (2199 + the new end-to-end pin), `ruff check` clean,
+`ruff format --check` 80 files, `mypy` clean on 45 files.
+
+**Nothing left open from this review.**

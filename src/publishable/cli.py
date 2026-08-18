@@ -952,7 +952,25 @@ def _comparison_step_blocks(
                 # metric the *previous* metric's draw pool, which nothing
                 # downstream could detect.
                 resampled = None
-                if compute_of is not None and compute_against is not None:
+                # **Clusters-guarded suppression.** `E-DATA-CLUSTER-DERIVED`'s own
+                # rule is that no clustered draw exists for a recomputed metric —
+                # `reference.md` § Contrasts and `docs/superpowers/spec-defects.md`'s
+                # H4b-2-task-4 entry both already claim this branch publishes
+                # `null` under a declared cluster, but nothing enforced it: a
+                # derived key that collides with a recorded column's name leaves
+                # `derived_by_key` AND `resample_fns_by_key` populated for it —
+                # `command_run` builds a closure for every key in `derived` before
+                # the raising call, and the `except ContractError` retry that
+                # follows the collision clears neither map — so `compute_of`/
+                # `compute_against` above are real callables and this branch would
+                # otherwise compute a genuine, UNCLUSTERED point estimate and draw
+                # for a metric whose per-condition sibling is cluster-robust, with
+                # nothing in the record saying which is which — verbatim the
+                # failure `E-DATA-CLUSTER-CONTRAST` existed to prevent. `clusters`
+                # is the roster-wide mapping (not `col_clusters`, which this branch
+                # never builds), so this reads the same declaration the `if
+                # clusters is not None:` block below reads for `n_paired_clusters`.
+                if compute_of is not None and compute_against is not None and clusters is None:
                     # Point estimate and interval from the same two calls over
                     # the same `base_keys`, so neither can drift onto a
                     # different unit set from the other.

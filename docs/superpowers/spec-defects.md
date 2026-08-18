@@ -6528,6 +6528,32 @@ write on `interval is not None` would turn `n_paired_clusters` into a claim abou
 which its own documentation does not make it. `reference.md` § Contrasts now states this decision
 directly rather than leaving it fully open.
 
+**CORRECTION (whole-branch review, DO-NOT-MERGE Critical), replacing the premise of the correction
+above — the null shape it pinned was right, but the reason it gave for reaching that shape was
+false, and false in a way that let a real defect through.** "`resample_fns_by_key` holding nothing
+for it — the state the collision's uncleared retry leaves" is not what the collision leaves.
+`command_run` builds a resample closure for **every** key in a step's `derived` mapping (gated on
+`if derived:`, before the call that can raise `E-STEP-KEY-COLLISION`), so a colliding key's closures
+survive in `resample_fns_by_key` exactly as its name survives in `derived_by_key` — both maps are
+populated, not one empty and one populated. `_comparison_step_blocks`'s derived branch therefore had
+real callables to compute with, and — verified by an end-to-end `run`, the direct-call fixture above
+cannot see this — it published a genuine, UNCLUSTERED `paired_percentile_over_units` delta and
+interval beside `n_paired_clusters: 3`, on a real project, with `validate` reporting zero errors.
+This is the exact failure decision 2 named as the reason the retirement had to come last, newly
+reachable on this branch because `E-DATA-CLUSTER-CONTRAST` no longer blocks the config from
+running at all.
+
+**Fixed, not merely re-diagnosed: a clusters-guarded suppression in `_comparison_step_blocks`'s
+derived branch** (`if compute_of is not None and compute_against is not None and clusters is None:`)
+— matching the intent this entry, `reference.md` § Contrasts and the test's own docstring already
+claimed, now actually enforced. Deliberately not "clear both maps in the `except ContractError`
+retry": that would also change the pre-existing **unclustered** collision path, out of this slice's
+scope. Pinned end to end by
+`tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_end_to_end`, which runs a real
+project through `main(["run", ...])` rather than a direct call, and fails on `entry["delta"]` when
+the suppression is removed — checked against the full, unfiltered suite (one failure, the pin
+itself; the shipped test's own name and premise corrected in the same commit).
+
 ## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
 
 Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
