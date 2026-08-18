@@ -6361,3 +6361,34 @@ separate the two.
 **H4c inherits the composition itself**, alongside the unpaired clustered forms.
 
 **Ruled by:** H4b-2, task 1. **Built by:** H4b-2, task 8.
+
+## RULED by H4b-2 task 4 — `E-DATA-CLUSTER-DERIVED` is re-owned to H4c, not built here
+
+`docs/superpowers/H4b-SCOPING.md` § 5 recommended that H4b-2 take the clustered derived draw
+"because the construction it needs is the same membership-aware derived draw". Re-measured at
+`82310b9`: it is emitted once, from `stats.summarize_step`, and its `reference.md` § Errors row
+justifies itself as *"Temporary, alongside `E-DATA-CLUSTER-CONTRAST`"* — a justification that dangles
+the moment H4b-2 task 14 retires that code.
+
+**Ruled: do not build it. Re-own it to H4c by name, and let the row state its own justification.**
+The missing construction is a per-condition percentile draw over clusters for a *recomputed* metric —
+each replicate drawing whole clusters and rebuilding a `UnitTable` from their pooled units — which is
+the same family as the unpaired clustered percentile form H4c already owns, and is not a contrast
+construction at all.
+
+**H4b-2 does not need it**, and that is measured rather than assumed: under `cluster_by` the whole
+`derived` mapping is dropped before it reaches `aggregated`, so `cli._comparison_step_blocks`' derived
+branch — selected by `metric_key in of_derived or metric_key in against_derived` — is unreachable in
+a clustered run. Pinned by
+`tests/test_cli.py::test_a_clustered_derived_metric_is_refused_rather_than_drawn`, which asserts
+`set(aggregated) == {"pred"}` and whose discriminating mutation — `summarize_step`'s own
+`seed is not None` guard — was run against the full suite here rather than assumed. That
+unreachability is also what makes every clustered
+contrast entry carry a `_clustered` `method`, which is the argument H4b-2 task 2 rests on for
+recording no `clustered_by` key.
+
+**The row's wording is repaired by H4b-2 task 15**, with every other citation of
+`E-DATA-CLUSTER-CONTRAST` that task 14 does not delete, as one sweep rather than two commits over one
+claim.
+
+**Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
