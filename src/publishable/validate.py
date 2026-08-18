@@ -5362,8 +5362,8 @@ def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None 
                         f"statistics.contrasts[{i}].within",
                         f"selects {stratum}, which {len(matched)} of {len(roster)} units "
                         f"match, below limits.min_reported_n ({floor}). The run counts "
-                        f"`n_paired` over the two sides' completed units, which attrition "
-                        f"can only make smaller",
+                        f"this comparison's own denominator over the two sides' completed "
+                        f"units, which attrition can only make smaller",
                     )
 
 

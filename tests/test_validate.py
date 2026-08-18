@@ -6688,6 +6688,35 @@ def test_a_thin_contrast_stratum_warns_before_the_run(write_config, tmp_path):
     assert "2 of 12 units" in message
 
 
+def test_the_validate_time_thin_warning_names_no_key_it_cannot_promise(write_config, tmp_path):
+    """The validate-side emit's message asserted "The run counts `n_paired` over
+    the two sides' completed units", which is false of an unpaired contrast — the
+    run counts `n_of` and `n_against` there. This check cannot tell the two apart:
+    it reads the roster units matching the stratum, before any condition exists.
+
+    So the false half is DELETED rather than rewritten into a conditional it
+    cannot evaluate — a rewrite invents and a deletion cannot — and the surviving
+    claim, that attrition can only make the denominator smaller, is true of both
+    readings. The stratum and the count stay asserted, because they are what the
+    warning is for.
+
+    Fixture copied from `test_a_thin_contrast_stratum_warns_before_the_run`, which
+    asserts `"2 of 12 units"` in this same message."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=2)),
+            "limits": {"min_reported_n": 10},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {"contrasts": _contrast_within("rare")},
+        }
+    )
+    message = messages_by_code(path)["W-STATS-CONTRAST-THIN"]
+    assert "units match" in message  # the control
+    assert "attrition can only make" in message
+    assert "n_paired" not in message
+
+
 def test_a_populated_contrast_stratum_does_not_warn(write_config, tmp_path):
     """Exactly at the floor is not below it — the same boundary
     `W-STATS-REPORTBY-THIN`'s `m` level pins. Without this, a check that dropped

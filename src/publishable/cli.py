@@ -1440,34 +1440,39 @@ def _comparison_step_blocks(
                     declaration_index=0,
                 )
             )
-            # Task 16 owns the per-side warning AND its message. Until then, this
-            # is a placeholder: the same `base_keys if is_derived else col_keys`
-            # count the paired arm already records as `n_paired` (deviation from
-            # the brief's literal `len(col_keys) if is_paired else ...`, which
-            # left `col_keys` unbound on a derived, paired, within-scoped metric —
-            # `test_a_derived_key_collision_under_a_cluster_still_carries_the_
-            # intersection_facts` and others hit it as `UnboundLocalError`), and
-            # the thinner of the two side counts on the unpaired arm, which is
-            # the reading that cannot under-report in the interim. The message
-            # text below still says `n_paired {reported_n}` on the unpaired arm,
-            # naming a key that entry does not carry — task 16's to reword, not
-            # this task's, since the message itself is explicitly its scope.
-            reported_n = (
-                (len(base_keys) if is_derived else len(col_keys))
-                if is_paired
-                else min(len(of_col), len(against_col))
-            )
-            if (
-                comp.within is not None
-                and min_reported_n is not None
-                and reported_n < min_reported_n
-            ):
-                findings.warn(
-                    "W-STATS-CONTRAST-THIN",
-                    "limits.min_reported_n",
-                    f"{where}, step {step_name!r} metric {metric_key!r}: n_paired "
-                    f"{reported_n} is below limits.min_reported_n ({min_reported_n})",
+            # § Validation keys this on the comparison's realized denominator, and an
+            # unpaired comparison has two — so it fires where EITHER is below the
+            # floor. § Contrasts grounds the row in "a stratified comparison is where
+            # a small denominator is easiest to miss and most disclosive", and the
+            # disclosive quantity is a thin denominator anywhere: a five-unit arm
+            # against a five-hundred-unit one is exactly what the limit exists to
+            # catch, and a rule reading one side or a total would pass it.
+            #
+            # ONE finding per metric entry, naming every denominator below the floor.
+            # The warning is about this entry's disclosure, and two findings for one
+            # entry would double-count in any consumer that counts them.
+            #
+            # Scoped to a comparison declaring a `within`, because that is the scope
+            # `reference.md` gives it three times over — § Contrasts, § The one config
+            # file's comment, and the § Validation row. `min_reported_n: 10` is in
+            # every generated config, so warning on every comparison would fire on
+            # any pilot under ten units for a comparison the document never scoped it
+            # to.
+            if comp.within is not None and min_reported_n is not None:
+                denominators = (
+                    (("n_paired", len(base_keys) if is_derived else len(col_keys)),)
+                    if is_paired
+                    else (("n_of", len(of_col)), ("n_against", len(against_col)))
                 )
+                thin = [f"{name} {value}" for name, value in denominators if value < min_reported_n]
+                if thin:
+                    findings.warn(
+                        "W-STATS-CONTRAST-THIN",
+                        "limits.min_reported_n",
+                        f"{where}, step {step_name!r} metric {metric_key!r}: "
+                        f"{' and '.join(thin)} — below limits.min_reported_n "
+                        f"({min_reported_n})",
+                    )
         if metric_block:
             block[step_name] = metric_block
     return block, members

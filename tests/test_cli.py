@@ -3158,6 +3158,7 @@ def _clustered_contrast_call(**extra):
     keys = [f"u{i:02d}" for i in range(12)]
     values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
     roster = UnitList([Unit(key=k) for k in keys])
+    comparison = extra.pop("_comparison", None) or Comparison(id="c", of=1, against=0)
     # `extra` OVERRIDES rather than adding, so a caller can pass `clusters=None`
     # or `resample_columns=True` without colliding with the defaults below.
     kwargs = dict(
@@ -3183,7 +3184,7 @@ def _clustered_contrast_call(**extra):
         clusters=dict(zip(keys, _CONTRAST_CLUSTER_LABELS, strict=True)),
     )
     kwargs.update(extra)
-    return _comparison_step_blocks(Comparison(id="c", of=1, against=0), **kwargs)
+    return _comparison_step_blocks(comparison, **kwargs)
 
 
 _UNPAIRED_OF = [17.0, 19.0, 20.0, 21.0, 23.0]
@@ -3467,6 +3468,110 @@ def test_an_unpaired_clustered_contrast_records_its_two_counts_and_a_cluster_rob
     # fixture A's values with a 3/4 cluster split, not fixture B, so the number
     # is new.
     assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(7.523292784674521)
+
+
+def test_an_unpaired_within_contrast_warns_when_either_side_is_thin():
+    """Decision 6. § Validation's row keys the warning on the comparison's realized
+    denominator, and an unpaired contrast has two — so the rule reading "either" is
+    the one that preserves the row's own reason: the disclosive quantity is a thin
+    denominator ANYWHERE, and a five-unit arm against a five-hundred-unit one is
+    exactly what the limit exists to catch.
+
+    The fixture is asymmetric on purpose: `of` keeps 3 units and `against` keeps 20,
+    with a floor of 10, so only ONE side is below it. A rule reading a total (23) or
+    the larger side would not warn at all, and a fixture where both sides were thin
+    could not tell those readings from this one."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    keep = set(of_keys[:3]) | set(against_keys[:20])
+    roster = UnitList(
+        [
+            Unit(key=k, attributes={"site": "north" if k in keep else "south"})
+            for k in of_keys + against_keys
+        ]
+    )
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=10,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    assert block["s"]["m"]["n_of"] == 3 and block["s"]["m"]["n_against"] == 20
+    thin = [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"]
+    assert len(thin) == 1
+    assert "n_of 3" in thin[0].message
+    assert "n_against" not in thin[0].message
+
+
+def test_an_unpaired_contrast_with_two_healthy_sides_does_not_warn():
+    """The control that must not report, paired with a presence: a check firing on
+    every unpaired contrast would pass the test above too. Both sides clear the
+    floor, and the entry is asserted present so the absence is not the absence of a
+    contrast."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(5)]
+    against_keys = [f"c{i:02d}" for i in range(25)]
+    roster = UnitList([Unit(key=k, attributes={"site": "north"}) for k in of_keys + against_keys])
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=3,
+        _comparison=Comparison(
+            id="arm_effect", of=1, against=0, within={"site": "north"}, declared=True
+        ),
+    )
+    assert block["s"]["m"]["n_of"] == 5  # the presence that must report
+    assert [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"] == []
+
+
+def test_an_unpaired_contrast_with_no_within_does_not_warn_even_when_thin():
+    """Mutation 4's discriminator, added because task 16's brief flags this fixture
+    is BLIND on the fixtures above: both healthy-sides tests above also pass under a
+    guard with `comp.within is not None` removed, since neither side is thin there.
+    A comparison with no `within` and a floor above its `n` is what actually
+    separates the two readings — `within` is a documented rule with three sources
+    (§ Contrasts, § The one config file's comment, § Validation), and this is its
+    test."""
+    from publishable.diagnostics import Collector
+
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(min_reported_n=20, findings=findings)
+    assert block["s"]["m"]["n_of"] == 5 and block["s"]["m"]["n_against"] == 25
+    assert [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"] == []
+
+
+def test_a_paired_within_contrast_still_warns_on_its_intersection():
+    """The regression half. One expression serves both readings, so the paired
+    reading must be unchanged: `n_paired` against the floor, named in the message.
+    A rule restructured for two sides that stopped reading the intersection would
+    silence every warning this code has ever emitted."""
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.units import Unit, UnitList
+
+    keys = [f"u{i:02d}" for i in range(12)]
+    roster = UnitList([Unit(key=k, attributes={"site": "north"}) for k in keys])
+    findings = Collector()
+    _clustered_contrast_call(
+        roster=roster,
+        findings=findings,
+        min_reported_n=20,
+        _comparison=Comparison(id="c", of=1, against=0, within={"site": "north"}),
+    )
+    thin = [f for f in findings.findings if f.code == "W-STATS-CONTRAST-THIN"]
+    assert len(thin) == 1
+    assert "n_paired 12" in thin[0].message
 
 
 def test_a_clustered_column_contrast_takes_the_cluster_robust_t():
