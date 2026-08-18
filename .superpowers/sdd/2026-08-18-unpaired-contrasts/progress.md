@@ -154,3 +154,43 @@ and no mutation was left applied across a transition. Recording it because the f
 to prevent losing track of an applied mutation, and an *involuntary* backgrounding is the same hazard
 arriving without the decision — the mitigation that worked was reading state before editing, not
 avoiding the transition.
+
+### Batch 1 — task review: spec compliance FAIL, task quality HIGH, three Majors, fix round 1 dispatched
+
+Review at `task-b1-review.md`. All three Majors are **documents-only**, one to three lines each, no
+code. Two results are worth carrying as positives, because a guard slice is judged on exactly them.
+
+**The blindness claim could not be overturned, and the true reason is stronger than the one given.**
+`Member.__post_init__` raises on both-set and `family_members` drops `ci95=None` members first, so
+**no legitimate fixture can discriminate `_corrected_bounds`' arm order** — structural, not
+fixture-dependent. The pre-flight ruling said naming a mutation blind in the plan is the claim being
+checked before it is trusted; this is the check passing and improving the grounds.
+
+**And task 21's pin closes the hole H4b-1 left.** It covers the corrected bound at its own α **and its
+own df** — verified independently, each *t* cell's corrected/raw ratio matching `t(df, 0.975)/t(df,
+0.95)` at its own df: 1.17815 at df 11, 1.44221 at df 2, 1.18293 at Kish 9.8, three distinct values
+against the shipped `_t_critical`. On H4b-1 that α was silently unpinned and only a reviewer's own
+mutation caught it; here the pin was built to cover it before anything moved.
+
+**Major 1 is the quantifier shape again, and inside the same commit that fixed its siblings.** The
+`_clustered` suffix sentence still specifies the unpaired clustered *t* as "over the arm-level ones
+when not", which **is** the `min(G)−1` reading task 1 named as rejected (35.65 and 26.37 against the
+correct 34.15). The rejected readings are named as rejected **only in `spec-defects.md`, the
+development record** — so the normative document still carries the wrong rule while the evidence file
+carries the right one. That inversion is worse than either error alone.
+
+**Major 2 is an orphaned obligation the reviewer had to read the plan to find.** Decision 6 said the
+row *and* the sentence are narrowed in task 2; the sentence was, the row was not, and **task 16's
+Files list excludes `docs/reference.md`**, so nothing downstream picks it up. § Contrasts and
+§ Validation now disagree.
+
+**Major 3 is a justification contradicting its own content.** The `r` → `abs_error` swap made the
+metric a **recorded column** and left both fields the old metric decided: `unpaired_percentile_over_units`
+needs a declared `resample` the worked example does not have, and `cohens_d` is owed and absent —
+while **task 2's own block four commits earlier invents `cohens_d: 0.31`**. The block whose repair was
+justified as "where a config can produce it" **still shows a record no config can produce**.
+
+**Also asked, and recorded because it is unresolved rather than closed:** the reviewer could not
+establish whether any harness-backgrounded run had a mutation live across the transition. The
+implementer was told to answer from its own record and, if it cannot tell, to **say so and re-run** —
+an unverifiable measurement is not a clean one.
