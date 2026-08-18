@@ -3467,8 +3467,7 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
     imbalance is visible only to a reader who crosses it against the arms list
     by hand — the silently-wrong class. The repo's own precedent is to refuse
     the COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-CLUSTER-CONTRAST`, `E-DATA-ALLOCATION-CONTRAST`,
-    `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
 
     **The `fold` half closes a defect that is live at this commit**, not a
     hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
@@ -3988,12 +3987,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
     # `summarize_step` gives every `basis: units` column a cluster-robust
-    # interval. What a clustered run may *not* yet do is publish a contrast
-    # (`_check_sweep` refuses that combination under `E-DATA-CLUSTER-CONTRAST`)
-    # or resample a derived metric (`stats.summarize_step` raises
-    # `E-DATA-CLUSTER-DERIVED` at run time, that one not being knowable from a
-    # declaration at all). Both refuse a combination rather than a
-    # declaration, which is why neither is here.
+    # interval. What a clustered run may *not* yet do is resample a derived
+    # metric (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run
+    # time, not being knowable from a declaration at all), which refuses a
+    # combination rather than a declaration and is why it is not here.
     #
     # `weight_by` is checked by `_check_weight_by`; `attrition` computes
     # Kish's effective size from it, and `summarize_step` weights every
@@ -4977,56 +4974,44 @@ def _check_sweep(
     # result avoids reporting that fault again for the cluster guard below.
     units_here = _units_declaration(doc.get("data") or {}, c) or {}
 
-    # A clustered design that publishes a contrast. `reference.md` § Statistical
-    # reporting: when `cluster_by` is declared each contrast construction "takes a
-    # `_clustered` suffix and reads the cluster as the draw" — the *t* forms
-    # cluster-robust with df = clusters − 1 "over the differenced values when
-    # paired and over the arm-level ones when not", and the percentile forms
-    # resampling whole clusters, "jointly across both sides when paired". **None
-    # of those five constructions exists in this build.** `stats.paired_t_over_units`
-    # takes a list of per-unit differences and nothing else;
-    # `paired_delta_of_derived` and `paired_percentile_of_derived` take rows and a
-    # seed and know nothing about membership; there is no unpaired form at all.
-    # So a clustered run's `vs_baseline` delta and its interval would be drawn as
-    # if every unit were an independent observation — which is the one thing the
-    # declaration says they are not — sitting beside per-condition intervals that
-    # *are* cluster-robust (`summarize_step` wires those), with nothing in the
-    # record distinguishing the two. § Clustered units calls exactly that interval
-    # "too narrow", and the delta is the number a reader acts on.
-    #
-    # **The guard reads the resolved family, not the declaration.** It fires on
-    # what `resolve_contrasts` will actually build: a `sweep.baseline` with no
-    # axis beside it expands to a single `is_baseline` row that is never a
-    # comparison's subject, so such a run publishes no delta and stays legal,
-    # while a declared `statistics.contrasts` entry over a sweep with no baseline
-    # publishes one and is caught. `statistics.report_by` is outside it on the
-    # same argument — a stratum repeats the per-condition aggregation, whose
-    # interval *is* clustered, and publishes no delta.
-    #
-    # Temporary, and narrowly so: H4 Statistics owns the `_clustered` contrast
-    # family and lifts this the moment those constructions exist. It refuses a
-    # *combination* rather than a declaration, so it carries a row in
-    # § Validation's registry and is not one of the `NOT BUILT` declarations
-    # § The one config file counts — `data.units.cluster_by` itself is built,
-    # and a clustered run publishing no contrast gets cluster-robust intervals
-    # on every `basis: units` column.
     cluster_by = units_here.get("cluster_by")
-    if comparisons > 0 and isinstance(cluster_by, str) and cluster_by:
-        plural = "" if comparisons == 1 else "s"
+
+    # A design declaring BOTH a weight and a cluster beside a comparison. H4b-2
+    # builds the two unweighted paired clustered constructions `reference.md`
+    # § Statistical reporting's suffix rule names, and deliberately not their
+    # weighted counterparts: a weighted clustered contrast takes its df from the
+    # CLUSTER COUNT and not from Kish's effective size — § Weighted samples,
+    # "`cluster_by` still decides the draw when both are declared" — and the two
+    # coincide in any fixture not built to separate them, so the wrong choice
+    # would be invisible. Refused rather than approximated, on the precedent
+    # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
+    #
+    # Reads the resolved family rather than the declaration: a `sweep.baseline`
+    # with no axis beside it publishes no delta, and this guard should not
+    # refuse a design that never reaches a comparison. It refuses a COMBINATION
+    # rather than a declaration, so it
+    # carries a § Validation row and is not one of the `NOT BUILT` declarations
+    # § The one config file counts: both `weight_by` and `cluster_by` are built,
+    # and a run declaring both publishes `weighted_t_over_units_clustered` per
+    # condition.
+    weight_by = units_here.get("weight_by")
+    if (
+        comparisons > 0
+        and isinstance(cluster_by, str)
+        and cluster_by
+        and isinstance(weight_by, str)
+        and weight_by
+    ):
         c.error(
-            "E-DATA-CLUSTER-CONTRAST",
-            "data.units.cluster_by",
-            f"makes the cluster the inferential draw for each condition's own interval, and "
-            f"this design also publishes {comparisons} comparison{plural}, which no "
-            "construction in this build clusters: a `vs_baseline` delta and a declared "
-            "`statistics.contrasts` entry are both computed over per-unit differences as "
-            "though the units were independent, so the delta's interval would be narrower "
-            "than the design supports while the values beside it are cluster-robust, with "
-            "nothing in the record saying so. Declare one or the other here: drop "
-            "`cluster_by` only if the units really are independent, or keep it and express "
-            "the difference as an `Estimate` returned by a `summary` step, which core "
-            "records as reported rather than recomputing. The combination will be honored "
-            "once the paired and unpaired estimators take clusters",
+            "E-DATA-WEIGHT-CLUSTER-CONTRAST",
+            "data.units.weight_by",
+            "and `data.units.cluster_by` are both declared beside a comparison, and no "
+            "construction in this build computes a weighted clustered delta: the weighted "
+            "paired forms take no membership and the clustered paired forms take no "
+            "weights. Declare one of the two here — the cluster if what the units share "
+            "is what threatens the interval, the weight if what they represent is — or "
+            "keep both and express the difference as an `Estimate` returned by a `summary` "
+            "step, which core records as reported rather than recomputing",
         )
 
     # A contrast whose two conditions were assigned to different arms of a
@@ -5044,15 +5029,15 @@ def _check_sweep(
     # true, "n_paired": 0, "ci95": null}` for every metric, with a `paired: true`
     # that is false and nothing saying so.
     #
-    # **Unlike `E-DATA-CLUSTER-CONTRAST` above, this guard does not fire on
-    # `comparisons > 0`.** A cluster affects every contrast alike, but a group
-    # axis does not: in a `groups × grid`
+    # **This guard reads each resolved comparison individually rather than
+    # firing on `comparisons > 0`,** because a group axis does not affect
+    # every contrast in the family alike: in a `groups × grid`
     # design, control-pearson vs. control-spearman shares the same arm's units
     # and is paired and computable, while control-pearson vs. treatment-pearson
     # is not. Firing on the resolved family's size alone would refuse the first
     # comparison along with the second and make "each arm analyzed several
-    # ways" unexpressible. So this reads each resolved comparison individually:
-    # `contrasts.differing_axes` gives the axes two conditions disagree on, and
+    # ways" unexpressible. `contrasts.differing_axes` gives the axes two
+    # conditions disagree on, and
     # intersecting that with either side's `selectors` — the group axes a
     # condition actually carries a value for — is what tells a cross-arm
     # comparison from a within-arm one. Imported at module scope, the same as

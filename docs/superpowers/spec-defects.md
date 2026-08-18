@@ -2362,9 +2362,28 @@ blocks; what each was missing is a named owner for the day its precondition brea
 | `correction.corrected_fields` dedupe unpinned | **H4 Statistics** — it is the slice that would build `Member` lists from somewhere other than `cli._comparison_step_blocks`, which is the condition the row names |
 | `_evidence_ratio`'s `assert` stripped under `python -O` | **No slice; closed as a convention question.** Third instance of the pattern, and the row itself says the next line raises loudly. A repo-wide convention on `assert` is not a slice's work and should not sit in a defect ledger pretending to be one |
 | `W-STATS-CORRECTED-THIN`'s message leads with `cond:1` | **No slice; closed.** `reference.md` § Exit codes and diagnostics makes the identifier the contract and the wording explicitly not, so this is a cosmetic harmonisation any slice may do opportunistically and none owes |
-| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — H4b-1 task 5 gave the function a `strata` parameter, sorting each stratum's pool independently rather than the whole pool once, which is a second route to an unsorted-pool input beside "a new percentile construction adds one"; H4b-2 is the nearer of the remaining paired-construction slices |
+| `paired_percentile_of_derived`'s sorted-pool precondition unasserted | **H4b-2** — the original condition restored: "a new percentile construction returning an unsorted pool would break it silently." H4b-2 is the nearer of the remaining paired-construction slices |
 | `PairedResample.pool` is a `list`, so the dataclass is unhashable | **No slice; closed.** Nothing keys on it and a tuple would copy per resample. Recorded so it is not re-litigated |
 | `Member.__post_init__` exempts `ci95 is None` | **No slice; closed.** Deliberate, documented, and pinned by `family_members` dropping such a member first |
+
+**AMENDED 2026-08-18 (H4b-2, task 16), two rows.**
+
+**The sorted-pool row.** Checked again at `82310b9`: both of `paired_percentile_of_derived`'s return
+paths sort the pool (`pool=sorted(values)` and `values.sort()` before `pool=values`), so a reading
+that treated the `strata` parameter's per-stratum key pools as "a second route to an unsorted-pool
+input" was wrong — those are a different object from `PairedResample.pool`, sorted independently and
+never returned as the interval's own pool. The row above restores the original condition rather than
+that reasoning. **H4b-2 task 7 was checked against it**: the clustered draw it added returns through
+the same two sorted paths, so it created no new unsorted-pool route either. The row stays open,
+owned by H4b-2 still, for the same reason it always was — a *future* percentile construction is what
+would break the precondition, and none has been added that does.
+
+**The `correction.corrected_fields` dedupe row.** Recorded as **not H4b-2's**, rather than moved:
+the row's condition is "the slice that would build `Member` lists from somewhere other than
+`cli._comparison_step_blocks`." H4b-2 widens `Member` with a `clusters` field (task 12) and builds no
+`Member` list anywhere but that one function — the condition is unmet, not satisfied narrowly. Owner
+stays **H4 Statistics** at large; recording this here is what stops the next scoping re-deriving the
+question of whether H4b-2 met it.
 
 ## New error identifier: `E-STATS-REPORTBY-UNKNOWN`
 
@@ -5341,6 +5360,14 @@ publishing `nan` under a false `resample_draws: n`. This is bigger than task 11'
 also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
 none of which check finiteness either, and none of which this entry claims to have surveyed.
 
+**AMENDED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** The prediction above — "H4b-2 is the next
+place a whole weight vector or value column is drawn as a unit" — did not come true, checked rather
+than assumed: the paired clustered *t* H4b-2 built (`paired_t_over_units_clustered`) delegates to
+`t_over_units_clustered`, which does no weight arithmetic at all, and the clustered percentile draw
+`paired_percentile_of_derived` gained pools rows it does not sum. Neither construction is a place
+this entry's finiteness gap can land. Re-owned to **H4c**, the next slice past this one to touch
+`summarize_step`'s column path.
+
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
 Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
@@ -5554,7 +5581,14 @@ the level path echo a declaration whose relevance to that one block a reader mus
 open half of the fix. The deferral, its owner, and the fix list above are unchanged by this
 amendment.
 
-## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
+**DECLINED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** Live on C1–C3 still, unchanged by this
+slice: the gap is created by neither a weight nor a cluster, and `docs/superpowers/H4b-SCOPING.md`
+§ 12 warned against folding a `report_by` hardening question into a sibling contrast-family slice for
+exactly this reason. Owner moves from the general "H4 Statistics" to **H4c** by name, the direction
+the scoping recommends, rather than staying a description any of H4's remaining slices could read as
+its own.
+
+## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
 finding added below by the whole-branch review at `d59316d`. Three
@@ -5564,9 +5598,10 @@ contrast-side hardening", a description rather than a slice, until the same revi
 are disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
 **Re-owned**, `H4b` having since split into H4b-1 (weights through contrasts) and H4b-2 (clusters
 through contrasts): Finding 2 is the general form of the gap H4b-1 task 5 closed the reachable
-instance of — see the entry below this one, `OPEN — a stratified paired draw can publish a
-zero-width contrast interval`, which names H4b-2 as owner for the same reason this one now does; the
-paired construction still has no content-based degenerate refusal at all, stratified or not.
+instance of — see the entry below this one, `CLOSED by H4b-2 task 9 — a stratified paired draw
+could publish a zero-width contrast interval`, which gives `paired_percentile_of_derived` the
+content-based degenerate refusal it lacked, over both the clustered and unclustered draws and the
+stratified and unstratified ones as one check.
 Findings 1 and 3 are general contrast-disclosure gaps that neither weights nor clusters created, so
 they stay with **H4b-2** as the nearer of the two contrast-family slices rather than being split a
 third way.
@@ -5585,12 +5620,17 @@ this shape since they were built; task 16 widens it to every recorded column und
 the comparison (`cond:<index>` / `contrast:<id>`, which `_comparison_step_blocks` already carries as
 `where_id`) and a registry row, and it should be built alongside Finding 2 rather than separately.
 
-**Finding 2 — `paired_percentile_of_derived` carries none of the content-based degenerate
-refusals its three siblings now have.** `percentile_over_units` (strata branch),
-`percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded one entry
-above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on the
-stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
-[honest]; reporting a point with no interval is honest." The paired construction has no such check.
+**Finding 2 — CLOSED by H4b-2 task 9.** ~~`paired_percentile_of_derived` carries none of the
+content-based degenerate refusals its three siblings now have.~~ `percentile_over_units` (strata
+branch), `percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded
+one entry above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on
+the stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
+[honest]; reporting a point with no interval is honest." ~~The paired construction has no such
+check.~~ It now does: `_drawable_content` and the check built around it in
+`paired_percentile_of_derived` (H4b-2, task 9) refuse a draw whose every drawable thing within every
+stratum carries the same pair of rows — a key's row pair by default, a whole cluster's sorted
+multiset of row pairs once `clusters` is given — covering the stratified/unstratified and
+clustered/unclustered cases as one expression rather than a fourth sibling refusal built separately.
 
 **Scoped by the whole-branch review (`d59316d`): each of those three refusals is on its stratified
 or clustered branch, and none of them is a general "core never publishes a zero-width percentile
@@ -5615,9 +5655,11 @@ the same zero-width interval before task 16 under a different `method` string. I
 cancels across two identical tables; here the delta is `0.0` beside it, so the record is internally
 consistent and a reader can see what happened. Task 16's own decision to pass `_column_mean` twice is
 sound for the same reason: the two tables are the two conditions' own collapsed data, not one table
-seen twice, so nothing cancels. What is owed is consistency — the paired construction is now the
+seen twice, so nothing cancels. ~~What is owed is consistency — the paired construction is now the
 fourth reachable from a recorded column and the only one the zero-width sweep never touched, and the
-sweep should finish rather than stop at three.
+sweep should finish rather than stop at three.~~ **CLOSED by H4b-2, task 9**: the paired
+construction now carries the identical content-based check its three siblings do, so the sweep
+covers all four.
 
 **Finding 3 — a contrast entry carries no resolved-`resample` echo, while every `aggregated` block
 beside it does.** Filed by the **H4a whole-branch review** (2026-08-15, at `d59316d`), which found
@@ -5643,6 +5685,13 @@ the result of an undocumented default" reason applies to equally.
 disclosure gaps, and a `where` that names the comparison is the thing Finding 1 needs and this one
 would reuse. Not a regression — no contrast entry ever carried the echo, the echo itself being H4a
 task 17's own addition.
+
+**DECLINED 2026-08-18 (H4b-2, task 16), re-owned to H4c.** Finding 1 is a contrast-scope thin
+finding needing a `where` and a registry row; Finding 3 is a contrast entry carrying no resolved-
+`resample` echo. Neither is a cluster question, and building either would mint a warning identifier
+and a § Warnings row this slice did not scope — H4b-2 added a third `method` spelling to the
+contrast entry (`paired_percentile_over_units_clustered`) and no new disclosure surface. Both stay
+deferred, re-owned to **H4c**.
 
 ## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 
@@ -5684,6 +5733,16 @@ paired constructions — and did not write § How a metric becomes a number; tas
 inherits a citation of it from `paired_t_over_units` rather than resolving it. Any slice editing
 `reference.md` § Statistical reporting can settle which reading is right; H4b-2 is next to touch
 that material.
+
+**DECLINED 2026-08-18 (H4b-2, task 16), a third time — in writing, so a fourth silent pass does not
+happen.** H4b-2 edited two docstrings citing this phantom section (`stats.py`'s
+`paired_t_over_units_clustered` and `paired_percentile_of_derived`) without resolving either, the
+same shape task 9 left. Writing § How a metric becomes a number is a documentation change of real
+size over material a statistics slice edits but does not own describing — deciding between the two
+readings § Documentation conventions requires is not H4b-2's decision to make in passing. **Owner:
+explicitly unassigned** — no slice in the spine is named "documentation", and inventing one here
+would be the same maintenance-obligation-nobody-owns mistake this file's own conventions warn
+against. Re-check on the next slice that edits `reference.md` § Statistical reporting, still.
 
 ## OPEN — `technical_n` is a whole-roster figure beside a test-partition `n`
 
@@ -6313,7 +6372,7 @@ narrowed by deletion in this task; both are deleted outright in H4b-1 task 13.
 
 **Found by:** H4b-SCOPING § 2.1. **Closed by:** H4b-1, task 1.
 
-## OPEN — a stratified paired draw can publish a zero-width contrast interval — **Owner: H4b-2**
+## CLOSED by H4b-2 task 9 — a stratified paired draw could publish a zero-width contrast interval
 
 H4b-1 task 5 gave `stats.paired_percentile_of_derived` a `strata` parameter, so
 `statistics.resample.stratify_by` is honoured on a contrast for the first time. Its three sibling
@@ -6340,3 +6399,191 @@ disclosure entry already defers to H4b-2.
 
 **Found by:** H4b-1, task 5. **Severity:** Minor — reachable only from a `stratify_by` whose strata
 are near-unique, which `validate` does not refuse.
+
+**AMENDED 2026-08-17 (H4b-2, task 3).** Ruled and specified: `reference.md` § Statistical reporting
+now states the rule — a contrast draw whose every stratum's drawable things carry the same pair of
+rows reports `ci95: null` — and H4b-2 task 9 gives it code inside
+`stats.paired_percentile_of_derived`, covering the clustered and unclustered draws and the stratified
+and unstratified ones as one check over the drawable item. **The entry is closed by that task, not by
+this one.**
+
+**CLOSED 2026-08-17 (H4b-2, task 9).** `stats.paired_percentile_of_derived` now refuses a draw whose
+every drawable thing within a stratum carries the same pair of rows, returning
+`PairedResample(interval=None, draws_used=0, pool=[])` — the shape its `len(keys) < 2` early return
+already had. Content-based rather than count-based, and over the **drawable thing** — a key by
+default, a whole cluster under `clusters` — so it covers the stratified and unstratified draws and
+the clustered and unclustered ones as one expression. The rule was stated in `reference.md`
+§ Statistical reporting first, by task 3.
+
+**What is closed and what is bounded.** The filed reachability — a near-unique `stratify_by` making
+every draw pick from an identical multiset — is closed outright: one drawable thing per stratum
+satisfies the check whatever the rows carry. The check compares **whole collapsed rows**, so a table
+holding several recorded columns can differ on a column a given metric's closure never reads, and
+that metric's draw can still be constant without the refusal firing. Bounded and stated rather than
+claimed away; a signature keyed on the metric the closure reads would close it, and no filed defect
+asks for that today.
+
+## RULED by H4b-2 task 1 — the weight × cluster combination is refused, not built
+
+`docs/superpowers/H4b-SCOPING.md` § 10 assigned the `weight_by` × `cluster_by` × comparison refusal
+to **H4b-1 by name** — "not to whichever ships first". H4b-1 did not mint it, and
+`E-DATA-WEIGHT-CONTRAST` was retired in the same slice, so at `82310b9` such a config earns
+`E-DATA-CLUSTER-CONTRAST` alone and `reference.md` § Statistical reporting's *"The `_clustered`
+suffix does not compose with either weighted form in this build"* is enforced by nothing else.
+
+**Ruled: mint `E-DATA-WEIGHT-CLUSTER-CONTRAST`, a documented narrow refusal carrying a § Errors row
+and a § Validation row.** Not a `-UNSUPPORTED` build-family code: this refuses a *combination*, which
+is what decides whether it outlives the slice that minted it. The grounds are that minting is the
+precedent H3a and H3b both set for a combination made reachable by retiring a broader refusal; that
+no config in `docs/feasibility-llm-growth-studies.md` declares `cluster_by`, so the composition
+unblocks nothing measurable; and that a weighted clustered *t* takes its df from the **cluster
+count** rather than from Kish's effective size, a distinction invisible in any fixture not built to
+separate the two.
+
+**H4c inherits the composition itself**, alongside the unpaired clustered forms.
+
+**Ruled by:** H4b-2, task 1. **Built by:** H4b-2, task 8.
+
+## RULED by H4b-2 task 4 — `E-DATA-CLUSTER-DERIVED` is re-owned to H4c, not built here
+
+`docs/superpowers/H4b-SCOPING.md` § 5 recommended that H4b-2 take the clustered derived draw
+"because the construction it needs is the same membership-aware derived draw". Re-measured at
+`82310b9`: it is emitted once, from `stats.summarize_step`, and its `reference.md` § Errors row
+justifies itself as *"Temporary, alongside `E-DATA-CLUSTER-CONTRAST`"* — a justification that dangles
+the moment H4b-2 task 14 retires that code.
+
+**Ruled: do not build it. Re-own it to H4c by name, and let the row state its own justification.**
+The missing construction is a per-condition percentile draw over clusters for a *recomputed* metric —
+each replicate drawing whole clusters and rebuilding a `UnitTable` from their pooled units — which is
+the same family as the unpaired clustered percentile form H4c already owns, and is not a contrast
+construction at all.
+
+**H4b-2 does not need it**, and that is measured rather than assumed: under `cluster_by` the whole
+`derived` mapping is dropped before it reaches `aggregated`, so `cli._comparison_step_blocks`' derived
+branch — selected by `metric_key in of_derived or metric_key in against_derived` — is unreachable in
+a clustered run. Pinned by
+`tests/test_cli.py::test_a_clustered_derived_metric_is_refused_rather_than_drawn`, which asserts
+`set(aggregated) == {"pred"}` and whose discriminating mutation — `summarize_step`'s own
+`seed is not None` guard — was run against the full suite here rather than assumed. That
+unreachability is also what makes every clustered
+contrast entry carry a `_clustered` `method`, which is the argument H4b-2 task 2 rests on for
+recording no `clustered_by` key.
+
+**The row's wording is repaired by H4b-2 task 15**, with every other citation of
+`E-DATA-CLUSTER-CONTRAST` that task 14 does not delete, as one sweep rather than two commits over one
+claim.
+
+**Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
+
+**CORRECTION, fix round 1 (task-b1 review, Major 2):** the "H4b-2 does not need it" paragraph above
+reasons from a proxy and overstates what it found. `_comparison_step_blocks` iterates
+`set(of_summary) & set(against_summary)` from **`aggregated`**, but the branch it takes —
+`is_derived = metric_key in of_derived or metric_key in against_derived` — reads **`derived_by_key`**,
+a different mapping. Those two disagree in one reachable state: `stats.summarize_step` raises
+`E-STEP-KEY-COLLISION` for a derived key shadowing a recorded column **before** its
+`clusters is not None and seed is not None` guard; `cli.command_run` assigns `derived_by_key` and
+`resample_fns_by_key` **before** calling `summarize_step`; and that call's `except ContractError`
+retry re-summarizes with no `derived` but never clears either mapping. So a clustered step whose
+derived key collides with a recorded column's name reaches `aggregated` holding the recorded column
+while `derived_by_key` still holds the name, and `_comparison_step_blocks` takes the derived branch —
+confirmed by a direct call producing `method: 'paired_percentile_over_units'`, unsuffixed, beside
+`ci95: [0.6, 0.6]` (task 3's zero-width shape, incidentally).
+
+**The ruling is unchanged** — re-own to H4c, do not build the clustered derived draw, on the
+construction-family argument, which this collision does not touch. What is narrowed is the reachability
+claim: the derived branch is unreachable in a clustered run **only through `validate` and `run`
+end-to-end, and only while `E-DATA-CLUSTER-CONTRAST` refuses cluster + contrast wholesale** — it is
+directly reachable today by calling `_comparison_step_blocks` itself, which is not a path `validate`
+closes. **Task 14, which retires `E-DATA-CLUSTER-CONTRAST`, must re-check this corner before treating
+it as closed** — the collision case, and with it whatever `method`/`ci95` shape a name-colliding
+clustered derived metric should record, is not decided by this entry and does not resolve itself when
+the wholesale refusal lifts.
+
+**CORRECTION (H4b-2 task 14, fix round 1), the re-check the paragraph above names, done and dated.**
+The wholesale refusal is now gone, so the reachability condition above no longer obtains: a real
+project whose template's `aggregate` returns a derived key colliding with a recorded column's, under
+a declared `cluster_by`, can now reach this corner through `validate` and a genuine `run` end to end
+— retiring `E-DATA-CLUSTER-CONTRAST` was exactly what stood between the collision and a real run, not
+merely between a direct call and one. Confirmed by reproducing the shape through
+`_comparison_step_blocks` directly (`derived_by_key` naming the collided key on both conditions,
+`resample_fns_by_key` holding nothing for it — the state the collision's uncleared retry leaves):
+
+```
+{'delta': None, 'basis': 'units', 'paired': True, 'method': None, 'n_paired': 12,
+ 'ci95': None, 'cohens_d': None, 'correction': None, 'n_paired_clusters': 3}
+```
+
+Pinned by `tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_facts`.
+
+**The decision the paragraph above deferred: `n_paired_clusters` beside a null interval is the record
+`reference.md` wants, and no code changes.** `n_paired` is written unconditionally in both branches of
+`_comparison_step_blocks` — a fact about the paired intersection, not about whether a construction
+ran, and the too-few-units and degenerate-draw shapes already publish it beside a null `method`/`ci95`
+with no cluster involved at all. `n_paired_clusters` is `reference.md` § Contrasts' own "scalar
+sibling of `n_paired`... a fact about the intersection `n_paired` counts" — the identical class of
+fact, so giving it the identical treatment (present whenever `clusters is not None`, regardless of
+what the construction that follows manages to compute) keeps the two intersection-facts in the same
+class rather than making the newer one conditional on something the older one ignores. Guarding the
+write on `interval is not None` would turn `n_paired_clusters` into a claim about the construction,
+which its own documentation does not make it. `reference.md` § Contrasts now states this decision
+directly rather than leaving it fully open.
+
+**CORRECTION (whole-branch review, DO-NOT-MERGE Critical), replacing the premise of the correction
+above — the null shape it pinned was right, but the reason it gave for reaching that shape was
+false, and false in a way that let a real defect through.** "`resample_fns_by_key` holding nothing
+for it — the state the collision's uncleared retry leaves" is not what the collision leaves.
+`command_run` builds a resample closure for **every** key in a step's `derived` mapping (gated on
+`if derived:`, before the call that can raise `E-STEP-KEY-COLLISION`), so a colliding key's closures
+survive in `resample_fns_by_key` exactly as its name survives in `derived_by_key` — both maps are
+populated, not one empty and one populated. `_comparison_step_blocks`'s derived branch therefore had
+real callables to compute with, and — verified by an end-to-end `run`, the direct-call fixture above
+cannot see this — it published a genuine, UNCLUSTERED `paired_percentile_over_units` delta and
+interval beside `n_paired_clusters: 3`, on a real project, with `validate` reporting zero errors.
+This is the exact failure decision 2 named as the reason the retirement had to come last, newly
+reachable on this branch because `E-DATA-CLUSTER-CONTRAST` no longer blocks the config from
+running at all.
+
+**Fixed, not merely re-diagnosed: a clusters-guarded suppression in `_comparison_step_blocks`'s
+derived branch** (`if compute_of is not None and compute_against is not None and clusters is None:`)
+— matching the intent this entry, `reference.md` § Contrasts and the test's own docstring already
+claimed, now actually enforced. Deliberately not "clear both maps in the `except ContractError`
+retry": that would also change the pre-existing **unclustered** collision path, out of this slice's
+scope. Pinned end to end by
+`tests/test_cli.py::test_a_derived_key_collision_under_a_cluster_end_to_end`, which runs a real
+project through `main(["run", ...])` rather than a direct call, and fails on `entry["delta"]` when
+the suppression is removed — checked against the full, unfiltered suite (one failure, the pin
+itself; the shipped test's own name and premise corrected in the same commit).
+
+## RULED by H4b-2 task 5 — H4b-2's two paired constructions are sufficient only while `E-DATA-ALLOCATION-CONTRAST` stands
+
+Measured at `82310b9`: `cli._comparison_step_blocks` writes `"paired": True` unconditionally at both
+metric branches, so no code path produces an unpaired contrast entry and every comparison reaching
+that function survived `E-DATA-ALLOCATION-CONTRAST`. That is why H4b-2 built
+`paired_t_over_units_clustered` and `paired_percentile_over_units_clustered` and no unpaired
+counterparts: they are unreachable, not merely unbuilt.
+
+**The dependency runs the other way for H4c.** The slice that retires
+`E-DATA-ALLOCATION-CONTRAST` must build `welch_t_over_units_clustered` and
+`unpaired_percentile_over_units_clustered` in the same slice, or a clustered cross-arm comparison
+will take a paired construction over an empty intersection. Two tripwires pin it, deliberately
+neither of them the obvious "assert `paired` is never `False`", which is a mutation whose branches
+cannot differ:
+
+- `tests/test_cli.py::test_a_contrast_entrys_paired_flag_is_written_unconditionally_at_every_branch`
+  fails the moment either literal becomes conditional. **Scope:** it reads
+  `inspect.getsource(_comparison_step_blocks)`, so it is defeated by extracting either `"paired": True`
+  write into a helper function — a real gap in the pin, not only a hypothetical one, since the source
+  it inspects is exactly one function body.
+- `tests/test_validate.py::test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal`
+  fails the moment the allocation refusal stops firing for a declared cross-arm contrast beside
+  `cluster_by`. (Fix round 1, Major/Minor review: a second test once duplicated this fixture under the
+  name `test_every_unpaired_comparison_shape_still_earns_the_allocation_refusal`, quantifying over
+  "every" shape while asserting only this one; it was deleted as non-discriminating rather than kept
+  beside an identical fixture. The other unpaired shape — a *generated* cross-arm comparison — is
+  pinned separately by two pre-existing tests, neither declaring `cluster_by`, named in this test's
+  own docstring. **Renamed again by H4b-2 task 14**, fix round 1: `E-DATA-CLUSTER-CONTRAST` retired,
+  so this fixture now draws the allocation refusal alone rather than both, and
+  `…_draws_both_refusals` became `…_draws_the_allocation_refusal` — this entry updated to the current
+  name, checked by `grep -c` against `tests/`.)
+
+**Ruled by:** H4b-2, task 5. **Owner of the obligation:** H4c.

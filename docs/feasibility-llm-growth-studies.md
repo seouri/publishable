@@ -1206,6 +1206,74 @@ reason Part B's entry gives.
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2159 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
 
+### Measured on 2026-08-18 against commit `dcb7ed0145851122270a1bc2c82bcedc1d4e18cf` — after H4b-2
+
+H4b-2 retires `E-DATA-CLUSTER-CONTRAST` and mints `E-DATA-WEIGHT-CLUSTER-CONTRAST`; this measurement
+was taken against the commit above, on its branch. Every one of the nine configs' `data`/`statistics`
+blocks was run through `validate_config`, the same discipline the Part B and H4b-1 entries set.
+
+**H4b-2 unblocks zero configs, and both counts stand unchanged: six with no remaining core-side
+blocker, three executable.** No config in this analysis declares `data.units.cluster_by` — measured
+on the file above, two hits and both `cluster_by: null` — so the refusal H4b-2 retires is one no
+experiment here hits, and a retired refusal is not an execution in any case.
+
+**The newly minted refusal reaches none of the nine either.** `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+requires both `weight_by` and `cluster_by` beside a comparison; C1, C2 and C3 declare the first and
+none of the nine declares the second.
+
+**Scope, narrowed the same way the Part B and H4b-1 entries narrowed it, and for a further reason
+specific to this build.** `entrypoint`/`experiment_type` again point at this repo's own scaffolded
+`generic` demo. `data.units.from` here is a **table-source stand-in**, not the hand-written resolver
+plugin the two prior entries installed: a 60-unit roster carrying every attribute any of the nine
+configs' `data.units.attributes`, `statistics.report_by` or `statistics.resample.stratify_by` names
+(`age_band`, `consensus_label`, `count_stratum`, `dx_family`, `record_source`, `sex`, `span_days`,
+`truth`, `visit_density`), banded three ways so every `stratify_by`/`report_by` target resolves.
+`data.units`'s other fields (`allocation`, `holdout`, `measurements`) and every config's own
+`statistics` block were carried over verbatim. `sweep`/`parameters`/`replication`/`hypotheses` were
+not, for the reason the two prior entries give: the demo entrypoint declares neither the real
+parameter names nor the real steps a real hypothesis names. E2's and C1's baseline, and C2's and
+C3's one stand-in `statistics.contrasts` entry each, are declared over the demo template's own
+`analysis.method` axis, exactly as the Part B and H4b-1 entries did.
+
+| Config | `validate` reports on the transplanted `data`/`statistics` blocks | Would execute? |
+|---|---|---|
+| E1 | *(none)* | **Yes** — no remaining core-side blocker |
+| E2 | *(none)* | **Yes** — no remaining core-side blocker |
+| E3 | *(none)* | No — blocked on `io.reuse_from` (invisible to `validate`; a step-level call) |
+| E4 | *(none)* | No — blocked on `io.reuse_from` |
+| E5 | *(none)* | **Yes** — no remaining core-side blocker |
+| E6 | *(none)* | No — blocked on `io.reuse_from` |
+| C1 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
+| C2 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
+| C3 | *(none)* | No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1) |
+
+The table's own "no remaining core-side blocker" annotation and the prose's count above answer for
+the same six rows, not three: C1–C3 carry it too, parenthetically, so a reader taking the table's
+`Yes` cells alone does not undercount. Every one of the nine also reports `W-DATA-CLUSTER-UNDECLARED`,
+left out of the table for the same reason the Part B and H4b-1 entries excluded their own: an artifact
+of the synthetic roster's banded shape, not of a real roster, bearing on none of the codes this table
+answers for. **Can-fail
+control**, on the same transplant: adding `cluster_by: age_band` to C1's `data.units` block beside its
+declared `weight_by` draws exactly `{E-DATA-WEIGHT-CLUSTER-CONTRAST}`; the same addition with
+`weight_by` stripped stays clean. A table that could not fail either way would not be a measurement.
+
+**What H4b-2 changes for a config that *did* declare a cluster**, stated as specification rather than
+as a measurement of these nine: a clustered comparison's delta takes
+`paired_t_over_units_clustered` or `paired_percentile_over_units_clustered`, its `method` says which,
+and `n_paired_clusters` travels beside `n_paired`. And one live defect closes for configs that
+declare **no** cluster at all: a contrast draw whose every stratum's rows are identical now reports
+`ci95: null` rather than a zero-width interval, which is reachable from a near-unique
+`resample.stratify_by` — all three C configs declare `stratify_by: [consensus_label,
+count_stratum]`, whose strata are not near-unique on the roster this analysis describes, so it is a
+closed hazard rather than a changed number for them.
+
+**Unchanged and still outstanding**, carried from the H4b-1 entry rather than re-derived: E3, E4, E6,
+C1, C2 and C3 remain blocked on `io.reuse_from`, which is unbuilt and unowned and invisible to
+`validate`; and all three C configs still meet a `report_by` level's recorded-column interval staying
+`t_over_units` under a declared `resample`, which H4b-2 declined in writing and re-owned to H4c.
+
+Full local `pytest`/`ruff`/`mypy` gates at this commit: 2198 passed + 1 skipped + 2 xfailed, ruff and
+mypy both clean.
 
 ## Cost and execution summary
 

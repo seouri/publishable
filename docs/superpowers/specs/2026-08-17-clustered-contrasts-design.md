@@ -273,3 +273,25 @@ new record key and each document-table edit is its own task. **Seven ordering co
 | Interactions, dose-response orderings, differences-in-differences | **Refused.** Contrasts do not nest |
 
 **Task count is 18.**
+
+---
+
+## Corrections against the code — appended 2026-08-17 while planning, at `82310b9`
+
+**Appended rather than edited into the body above**, per `CLAUDE.md`: a spec records what was decided
+when it was written, and retro-editing destroys the evidence it exists to hold. Each item below
+**replaces** the named claim; everything else in this document stands. Every one was found by reading
+the function or the test named beside it, at `82310b9`.
+
+| # | What the spec says | What the code says | What replaces it |
+|---|---|---|---|
+| 1 | § 5's table lists `paired_percentile_over_units_clustered` under "In `stats.py` — **No**", and task 7 names it as a construction to build | `paired_percentile_over_units` is **not a function**: it is a `method` string `paired_percentile_of_derived` emits through its `method=` parameter, which already serves two spellings because one construction is shared by a derived contrast and a recorded column's | Task 7 adds a `clusters` parameter to `paired_percentile_of_derived` and a **third `method` string**, not a fourth function. A separate function would duplicate the `strata` composition, the sorted-`keys` precondition and the degenerate refusal |
+| 2 | Task 11 describes "**the** `method`-selection branch", six-way on `weights` × `clusters` × `resample_columns` | It is **two sites**. The *t* arm's `method` comes from the construction it calls — each `stats` function stamps its own — while the percentile arm's comes from a `method=` argument the caller passes | The six-cell table stands as the specification of what must be written; the plan wires the *t* site in task 10 and the percentile site in task 11, and asserts all six cells together. An implementer looking for one branch will not find it |
+| 3 | Task 14 lists "six test assertions" and the scoping attributes three surviving comments to `_check_unimplemented`'s docstring, the `_check_assign` comment, and the allocation guard comment | `tests/test_validate.py` holds **seven** assertion lines naming the code, and `tests/test_cli.py::test_the_sibling_refusal_rows_state_their_own_reading` locates the § Errors row with `next(...)` — so it raises `StopIteration` when task 14 deletes the row. Of the three `src/` comments, one is in `_check_evaluation_split_cells`' **docstring** and one is a comment **inside `_check_unimplemented`** about what an assigned run may not do; only the allocation-guard attribution is right | The plan enumerates every site by **what the comment does** rather than by the function the scoping named, and task 14 owns `test_the_sibling_refusal_rows_state_their_own_reading` — **narrowed to the allocation row, never deleted**, the same ruling the spec makes for the co-reporting tests. A task scoped by function name would have missed two sites, which is the `E-TEMPLATE-UNKNOWN` misreading exactly |
+| 4 | § The discriminating fixture and § The traps both say a wrong clustering must give a different answer, and leave which mutations prove it to planning | The obvious alignment mutation — reversing the label vector against the 2 / 4 / 6 fixture — maps the three clusters onto a **different partition with the identical multiset of per-cluster residual sums**, so the half-width comes back 8.763214143637901 against 8.763214143637903. Verified numerically at `82310b9` | The plan names that mutation as **blind by arithmetic** so nobody prescribes it later, and prescribes instead a lexicographic key-order mutation, which gives 5.971123930019732. The fixture itself is unchanged and all five spec half-widths were confirmed by calling the shipped `t_over_units_clustered` |
+
+**Not a correction, recorded so it is not re-derived:** decision 6's reading of the sorted-pool
+filing was checked again at `82310b9` and **holds** — both of `paired_percentile_of_derived`'s return
+paths sort the pool, so the 2026-08-17 amendment's "second route to an unsorted-pool input" is about
+the stratum key pools, a different object. The plan's task 16 strikes the amendment and restores the
+entry's original condition, as decision 6 directs.

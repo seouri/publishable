@@ -10,7 +10,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from publishable.stats import interval_at, paired_t_over_units, weighted_paired_t_over_units
+from publishable.stats import (
+    interval_at,
+    paired_t_over_units,
+    paired_t_over_units_clustered,
+    weighted_paired_t_over_units,
+)
 
 ALPHA = 0.05
 
@@ -36,6 +41,14 @@ class Member:
     a modifier on that evidence rather than a third kind of it, so it travels
     alongside `diffs` and never alongside `pool`. `None` is the default and the
     shape every construction predating this field still builds.
+
+    `clusters`, when set, is one cluster label per difference, in the same order
+    as `diffs` — a modifier on that evidence for the same reason `weights` is
+    one, and never alongside `weights`: the two declarations never coexist
+    (`E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses the combination at `validate`), so
+    a member carrying both would be core's own bookkeeping error rather than a
+    config to resolve. `None` is the default and the shape every construction
+    predating this field still builds.
     """
 
     where: str
@@ -47,6 +60,7 @@ class Member:
     diffs: tuple[float, ...] | None
     declaration_index: int
     weights: tuple[Any, ...] | None = None
+    clusters: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
@@ -68,16 +82,21 @@ class Member:
         a reason that has nothing to do with the pool being too small, so
         `thin: True` would fire over a member that was never thin.
 
-        **`weights` is a modifier on `diffs`, not a third kind of evidence**, so
-        it does not enter the exactly-one rule and is checked separately. A
-        weighted column contrast's raw interval is `weighted_paired_t_over_units`
-        over those differences, and the corrected bound has to be the same
-        construction at a smaller α or it is a counterpart in name only. Beside
-        `pool` it would be applied twice — a percentile pool is already built
-        from weighted draws — and at a different length it is a misaligned vector,
-        the failure class that produces a plausible number rather than an error.
-        Both are `cli`'s bookkeeping to get right, so both raise `ValueError` for
-        the reason the rule above does.
+        **`weights` and `clusters` are both modifiers on `diffs`, not a third
+        kind of evidence**, so neither enters the exactly-one rule and both are
+        checked separately. A weighted column contrast's raw interval is
+        `weighted_paired_t_over_units` over those differences, and a clustered
+        one's is `paired_t_over_units_clustered`; either way the corrected bound
+        has to be the same construction at a smaller α or it is a counterpart in
+        name only. Beside `pool` either would be applied twice — a percentile
+        pool is already built from weighted or clustered draws — and at a
+        different length either is a misaligned vector, the failure class that
+        produces a plausible number rather than an error. The two modifiers also
+        never coexist: `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses a weighted
+        clustered comparison at `validate`, so a member carrying both is `cli`'s
+        bookkeeping error, not a plugin author's. All of this is `cli`'s
+        bookkeeping to get right, so it all raises `ValueError` for the reason
+        the rule above does.
         """
         if self.weights is not None:
             if self.pool is not None:
@@ -90,6 +109,23 @@ class Member:
                     "Member weights must be the same length as diffs, not "
                     f"{len(self.weights)} against "
                     f"{'no diffs' if self.diffs is None else len(self.diffs)}"
+                )
+        if self.clusters is not None:
+            if self.pool is not None:
+                raise ValueError(
+                    "Member clusters modify diffs, not a pool; a clustered percentile "
+                    "pool is already drawn from whole clusters"
+                )
+            if self.diffs is None or len(self.clusters) != len(self.diffs):
+                raise ValueError(
+                    "Member clusters must be the same length as diffs, not "
+                    f"{len(self.clusters)} against "
+                    f"{'no diffs' if self.diffs is None else len(self.diffs)}"
+                )
+            if self.weights is not None:
+                raise ValueError(
+                    "Member may not carry both weights and clusters; "
+                    "E-DATA-WEIGHT-CLUSTER-CONTRAST refuses that combination at validate"
                 )
         if self.ci95 is None:
             return
@@ -185,9 +221,11 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
 
     **What decides the construction is which field the member carries, not what
     kind of metric it is.** A member carrying per-unit differences re-runs
-    `paired_t_over_units` over them, or `weighted_paired_t_over_units` when the
-    member also carries `weights` — exact at any α either way. A member
-    carrying a draw pool reads a second rank pair off it. A derived metric always carries a
+    `paired_t_over_units` over them, `weighted_paired_t_over_units` when the
+    member also carries `weights`, or `paired_t_over_units_clustered` when it
+    carries `clusters` instead — exact at any α either way, and the two
+    modifiers never coexist. A member carrying a draw pool reads a second rank
+    pair off it. A derived metric always carries a
     pool; a recorded column carries differences by default and **carries a pool
     instead under a declared `statistics.resample`**, because its raw interval
     was then a percentile and a *t* corrected bound would be its counterpart in
@@ -201,17 +239,22 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     precisely the number a reader cannot tell is wrong.
     """
     if member.diffs is not None:
-        # The weights, when the member carries them, decide WHICH t construction
-        # rebuilds the bound — the same evidence at a smaller α either way. A
-        # weighted raw interval with an unweighted corrected counterpart is
-        # narrower or wider than the truth by construction rather than by
-        # evidence, which is the fault `__post_init__`'s exactly-one rule refuses
-        # one axis over and which no reader of `run.yaml` could detect.
-        got = (
-            paired_t_over_units(member.diffs, confidence=1.0 - level)
-            if member.weights is None
-            else weighted_paired_t_over_units(member.diffs, member.weights, confidence=1.0 - level)
-        )
+        # WHICH t construction rebuilds the bound is decided by the modifier the
+        # member carries — the same evidence at a smaller α either way. A
+        # cluster-robust raw interval with an unclustered corrected counterpart is
+        # narrower by construction rather than by evidence, which is the fault the
+        # exactly-one rule refuses one axis over and which no reader of `run.yaml`
+        # could detect. The two modifiers are mutually exclusive by
+        # `__post_init__`, so this order is a preference among impossible-to-have-both
+        # fields rather than a tie-break.
+        if member.clusters is not None:
+            got = paired_t_over_units_clustered(
+                member.diffs, member.clusters, confidence=1.0 - level
+            )
+        elif member.weights is not None:
+            got = weighted_paired_t_over_units(member.diffs, member.weights, confidence=1.0 - level)
+        else:
+            got = paired_t_over_units(member.diffs, confidence=1.0 - level)
         return None if got is None else (got.low, got.high)
     if member.pool is not None:
         return interval_at(member.pool, 1.0 - level)

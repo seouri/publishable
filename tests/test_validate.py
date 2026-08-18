@@ -145,6 +145,12 @@ def messages_by_code(path: Path) -> dict[str, str]:
     return {f.code: f.message for f in c.findings}
 
 
+def paths_by_code(path: Path) -> dict[str, str]:
+    c = Collector()
+    validate_config(path, c)
+    return {f.code: f.path for f in c.findings}
+
+
 def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
     installed, registries, write_config
 ):
@@ -7519,16 +7525,17 @@ def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path)
     assert "E-CONFIG-TYPE" in codes(path)
 
 
-# --- the clustered contrast family, which does not exist ----------------------
+# --- the clustered contrast family ---------------------------------------------
 #
 # H3b task 12 minted `E-DATA-CLUSTER-CONTRAST` in the place H2's
 # `E-SWEEP-SAMPLE-BASELINE` occupies: a narrow refusal of a *combination* that
 # retiring a broad declaration refusal had just made reachable. § Statistical
 # reporting gives each contrast construction a `_clustered` suffix under
 # `cluster_by` — cluster-robust *t* forms and percentile forms resampling
-# whole clusters "jointly across both sides when paired" — and none of those
-# five exists. The guard reads the *resolved* comparison family, not the
-# declaration, for the same reason the retired weighted guard did.
+# whole clusters "jointly across both sides when paired". H4b-2 retired the
+# refusal by building the two unweighted paired forms; the guard read the
+# *resolved* comparison family, not the declaration, for the same reason the
+# retired weighted guard did.
 
 
 def _clustered_units(**extra) -> dict:
@@ -7552,12 +7559,11 @@ def test_a_declared_cluster_by_is_no_longer_refused(write_config, tmp_path):
     assert codes(write_config({"data.units": _clustered_units()})) == set()
 
 
-def test_a_clustered_generated_comparison_is_refused(write_config, tmp_path):
-    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
-    `paired_t_over_units` takes a list of per-unit differences and nothing else —
-    no membership, so no cluster. The delta and its interval would be drawn as if
-    every unit were independent, beside per-condition intervals that are
-    cluster-robust, with nothing in the record saying which is which."""
+def test_a_clustered_comparison_now_validates_clean(write_config, tmp_path):
+    """The retirement itself. A clustered roster with a generated comparison
+    validates free of every finding — not merely free of the retired code, which is
+    what says the design is one core runs today rather than one whose refusal
+    happened to move."""
     _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
     path = write_config(
         {
@@ -7568,73 +7574,97 @@ def test_a_clustered_generated_comparison_is_refused(write_config, tmp_path):
             },
         }
     )
-    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
-    assert "publishes 2 comparisons," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+    assert codes(path) == set()
 
 
-def test_a_clustered_declared_contrast_is_refused(write_config, tmp_path):
-    """The other source of a comparison. A `statistics.contrasts` entry is named
-    rather than generated, so no baseline is involved at all — and it reaches the
-    same unclustered estimator, which is why the guard reads the resolved family
-    rather than `sweep.baseline`."""
+_WEIGHTED_SITE_BODY = "".join(f"p{i},{s},{1 + i % 2}\n" for i, s in enumerate("aaabbbcccddd"))
+
+
+def test_a_weighted_clustered_comparison_draws_its_own_refusal(write_config, tmp_path):
+    """H4b-2 task 1's ruling: the weight × cluster composition is refused, not
+    built. H4b-2 builds the two UNWEIGHTED paired clustered constructions, and a
+    weighted clustered contrast would need a df from the cluster count beside a
+    weighted mean — a fourth construction whose wrong choice (Kish's effective size
+    instead) is invisible in any fixture not built to separate the two.
+
+    Asserted as a total code set: `validate` collects rather than aborting, and a
+    clustered comparison now validates clean on its own, so this design draws
+    the weight × cluster refusal alone."""
+    _clustered_table(tmp_path, "patient_id,site,sampling_weight", _WEIGHTED_SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(
+                attributes=["site", "sampling_weight"], weight_by="sampling_weight"
+            ),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" in found
+    # The identity lives in `path`, house style for every other guard in this
+    # module (128 of 137 `c.error`/`c.warn` emits open their message as a
+    # continuation of the path line rather than restating it) — asserted here
+    # rather than left to the message alone, which is near-vacuous as a check
+    # of *which* field the field-and-message pair actually names.
+    assert paths_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"] == "data.units.weight_by"
+    message = messages_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"]
+    assert "cluster_by" in message
+
+
+def test_a_cluster_without_a_weight_draws_only_the_cluster_refusal(write_config, tmp_path):
+    """The under-firing control on one side: the new code reads BOTH declarations,
+    so a clustered comparison with no weight must not draw it. Without this, a
+    guard that ignored `weight_by` entirely would pass the test above."""
     _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
     path = write_config(
         {
             "data.units": _clustered_units(),
-            "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
-            "statistics": {
-                "contrasts": [
-                    {
-                        "id": "spearman_vs_pearson",
-                        "of": "method=spearman",
-                        "against": "method=pearson",
-                    }
-                ]
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
             },
         }
     )
-    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
-    # The singular, pinned as a whole word: `"1 comparison" in ...` would pass
-    # against `1 comparisons` too.
-    assert "publishes 1 comparison," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" not in codes(path)
 
 
-def test_a_clustered_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
-    """The edge that makes the guard narrower than `sweep.baseline` being declared,
-    and the one H3a's implementer found. A baseline with no axis beside it expands
-    to one condition, which `resolve_contrasts` skips as an `of` — the run publishes
-    no delta, so there is no too-narrow interval for the refusal to prevent."""
+def test_a_weighted_clustered_design_with_no_comparison_stays_legal(write_config, tmp_path):
+    """The under-firing control on the other side, and the one that says this
+    refuses a COMBINATION rather than a declaration: both declarations together,
+    with no baseline and no `statistics.contrasts`, validate free of both contrast
+    codes. A weighted clustered run publishing no delta gets
+    `weighted_t_over_units_clustered` per condition and nothing here is wrong."""
+    _clustered_table(tmp_path, "patient_id,site,sampling_weight", _WEIGHTED_SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(
+                attributes=["site", "sampling_weight"], weight_by="sampling_weight"
+            )
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" not in found
+
+
+def test_a_clustered_baseline_with_no_axis_beside_it_stays_legal(write_config, tmp_path):
+    """A baseline with no axis beside it expands to one condition, which
+    `resolve_contrasts` skips as an `of` — the run publishes no delta, so there
+    was never a too-narrow interval here for a retired refusal to have prevented.
+
+    The crossed control this test carried before task 14 — the same config with
+    a grid axis added, once refused under `E-DATA-CLUSTER-CONTRAST` — is gone:
+    that shape now validates clean too, on the same construction
+    `test_a_clustered_comparison_now_validates_clean` exercises, so it no longer
+    discriminates this baseline's shape from any other."""
     _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
     overrides = {
         "data.units": _clustered_units(),
         "sweep": {"baseline": {"analysis.method": "pearson"}},
     }
     assert codes(write_config(overrides)) == set()
-    # The control that must report: the same clustered config with one axis added
-    # generates a comparison and is refused, so the silence above is this
-    # baseline's shape rather than a guard that never fires.
-    crossed = dict(overrides)
-    crossed["sweep"] = {
-        "baseline": {"analysis.method": "pearson"},
-        "grid": {"analysis.method": ["spearman"]},
-    }
-    assert codes(write_config(crossed)) == {"E-DATA-CLUSTER-CONTRAST"}
-
-
-def test_an_unclustered_comparison_is_untouched(write_config, tmp_path):
-    """The neighbouring shape: the same sweep with no `cluster_by` is the ordinary
-    design, and nothing about it moved."""
-    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
-    path = write_config(
-        {
-            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
-            "sweep": {
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {"analysis.method": ["spearman", "kendall"]},
-            },
-        }
-    )
-    assert "E-DATA-CLUSTER-CONTRAST" not in codes(path)
 
 
 def test_a_clustered_report_by_is_not_a_contrast(write_config, tmp_path):
@@ -7853,11 +7883,10 @@ def test_the_cluster_warning_is_skipped_without_a_roster():
 # --- a contrast whose two sides differ on a group axis has no unpaired ------
 # construction ----------------------------------------------------------------
 #
-# `E-DATA-ALLOCATION-CONTRAST` is beside `E-DATA-CLUSTER-CONTRAST` above — a
-# refusal of a *combination* a resolved comparison family can carry, not of a
-# declaration. It differs from its sibling in the one way that matters: that
-# one fires on `comparisons > 0`, because a cluster affects every contrast in
-# the family alike. This one cannot — a `groups × grid` design's within-arm
+# `E-DATA-ALLOCATION-CONTRAST` refuses a *combination* a resolved comparison
+# family can carry, not a declaration. It reads each resolved comparison
+# individually rather than the family's size, because a group axis does not
+# affect every contrast alike — a `groups × grid` design's within-arm
 # comparisons (control-pearson vs. control-spearman) are paired and computable,
 # sharing the same arm's units, while its cross-arm ones (control-pearson vs.
 # treatment-pearson) are not, so the guard has to read each resolved comparison
@@ -7979,9 +8008,8 @@ def test_a_declared_contrast_across_arms_is_refused(write_config):
 # addendum — and it deliberately carries no `statistics.contrasts` and no
 # `sweep.baseline` beside the axis: the addendum's own correction to this
 # task's brief, because a natural `baseline: {arm: control}` here would publish
-# a cross-arm comparison and draw `E-DATA-CLUSTER-CONTRAST` *and*
-# `E-DATA-ALLOCATION-CONTRAST` instead of validating — a config this test is
-# not about.
+# a cross-arm comparison and draw `E-DATA-ALLOCATION-CONTRAST` instead of
+# validating — a config this test is not about.
 
 _GROUPS_CLUSTER_ARMS = {
     "control": ["c0", "c1", "c2", "c3", "c4", "c5", "c6"],
@@ -8056,24 +8084,35 @@ def test_groups_and_cluster_by_compose_with_no_comparison(write_config, tmp_path
     assert _error_codes(write_config(_groups_cluster_doc())) == set()
 
 
-def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_config, tmp_path):
+def test_a_contrast_beside_groups_and_cluster_by_draws_the_allocation_refusal(
+    write_config, tmp_path
+):
     """The can-fail control for the clean composition above: adding a declared
     `statistics.contrasts` entry across the two arms to the SAME fixture must
-    draw both `E-DATA-CLUSTER-CONTRAST` (task 12 — no clustered contrast
-    construction exists) and `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two
-    sides are disjoint arms), asserted as the exact set. After task 16b there
-    are two reporters over one comparison, not one, and this is checked rather
-    than assumed."""
+    draw `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two sides are disjoint
+    arms), asserted as the exact set — the combination of a `groups` axis and
+    `cluster_by` is itself legal, which this pins alongside the refusal it does
+    draw. `E-DATA-CLUSTER-CONTRAST` is gone as of task 14: a clustered
+    comparison now validates on its own, so this design's only remaining
+    finding is the cross-arm one.
+
+    This is also H4b-2 task 5's behavioural tripwire (fix round 1, Minor 1/2):
+    it is the shape a declared cross-arm contrast beside `cluster_by` takes,
+    and it is the one this repo's two-shape claim needs — a *generated*
+    cross-arm comparison earning the same allocation refusal is pinned
+    separately by
+    `test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not`
+    and `test_a_declared_contrast_across_arms_is_refused`, neither of which
+    declares `cluster_by`. A prior test duplicating this fixture under a name
+    that quantified over both shapes was deleted rather than kept beside it —
+    it discriminated nothing this one does not."""
     (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
     doc = _groups_cluster_doc(
         statistics={
             "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
         }
     )
-    assert _error_codes(write_config(doc)) == {
-        "E-DATA-CLUSTER-CONTRAST",
-        "E-DATA-ALLOCATION-CONTRAST",
-    }
+    assert _error_codes(write_config(doc)) == {"E-DATA-ALLOCATION-CONTRAST"}
 
 
 # --- a cluster and a weight must not vary within a unit's measurement rows ----

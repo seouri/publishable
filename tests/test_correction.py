@@ -3,13 +3,14 @@ import pytest
 from publishable.correction import (
     ALPHA,
     Member,
+    _corrected_bounds,
     corrected_fields,
     corrected_for,
     family_members,
     family_shape,
     rank_family,
 )
-from publishable.stats import paired_t_over_units
+from publishable.stats import paired_t_over_units, paired_t_over_units_clustered
 
 
 def _m(where="1", step="s", metric="r", delta=0.1, ci95=(0.0, 0.2), decl=0):
@@ -634,3 +635,68 @@ def test_a_pool_carrying_member_is_unaffected_by_the_weights_branch():
     )
     got = corrected_for([member], "bonferroni", 1, {"comparisons": 1, "metrics": 1})
     assert got[("cond:1", "s", "m")]["ci95_corrected"] is not None
+
+
+def test_a_clustered_members_corrected_bound_is_the_clustered_construction():
+    """The corrected interval is the raw one at a smaller α, from the same
+    evidence — so a member whose raw interval was cluster-robust must not get an
+    unclustered counterpart. `correction.py` is this construction's FIRST caller.
+
+    At α = 0.05 the bound is the plan's 8.7632 half-width; at α = 0.01 it is
+    t(0.995, df 2) = 9.924843 times the same standard error 2.0366934, i.e.
+    20.2139. The unclustered counterpart at α = 0.01 would be 2.7919 — two
+    numbers no rounding can confuse, and both are asserted so a construction that
+    ignored the level would fail as loudly as one that ignored the membership."""
+    diffs = tuple([1.0] * 2 + [5.0] * 4 + [9.0] * 6)
+    labels = tuple(["a"] * 2 + ["b"] * 4 + ["c"] * 6)
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=6.333333333333333,
+        ci95=(6.333333333333333 - 8.763214143637903, 6.333333333333333 + 8.763214143637903),
+        pool=None,
+        diffs=diffs,
+        declaration_index=0,
+        clusters=labels,
+    )
+    # The RAW half-width, independently constructed rather than read back off
+    # `member.ci95` (which is built from this same literal two lines above, so an
+    # assertion against it would be arithmetic on the test's own input, not a
+    # check on production code).
+    raw = paired_t_over_units_clustered(diffs, labels)
+    assert raw is not None
+    assert (raw.high - raw.low) / 2 == pytest.approx(8.763214143637903)
+    bounds = _corrected_bounds(member, 0.01)
+    assert bounds is not None
+    assert (bounds[1] - bounds[0]) / 2 == pytest.approx(20.213931212789273)
+
+
+def test_a_member_may_not_carry_clusters_beside_a_pool_or_a_weight():
+    """`clusters` is a modifier on `diffs`, so the same three rules `weights`
+    carries. Beside a pool it would be applied twice — a clustered percentile pool
+    is already drawn from clusters. Beside `weights` it names a combination
+    `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses at `validate` and
+    `_comparison_step_blocks` refuses again, so a member holding both is core's
+    bookkeeping error. At the wrong length it is a misaligned vector, which
+    produces a plausible number rather than an error."""
+    common = {
+        "where": "cond:1",
+        "step": "s",
+        "metric": "m",
+        "delta": 1.0,
+        "ci95": (0.0, 2.0),
+        "declaration_index": 0,
+    }
+    with pytest.raises(ValueError, match="clusters"):
+        Member(pool=(1.0, 2.0), diffs=None, clusters=("a", "b"), **common)
+    with pytest.raises(ValueError, match="clusters"):
+        Member(pool=None, diffs=(1.0, 2.0), clusters=("a",), **common)
+    with pytest.raises(ValueError, match="clusters"):
+        Member(
+            pool=None,
+            diffs=(1.0, 2.0),
+            clusters=("a", "b"),
+            weights=(1.0, 1.0),
+            **common,
+        )

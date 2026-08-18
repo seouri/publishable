@@ -432,6 +432,58 @@ def weighted_paired_t_over_units(
     return Interval(low=plain.low, high=plain.high, method="weighted_paired_t_over_units")
 
 
+def paired_t_over_units_clustered(
+    diffs: Sequence[float], labels: Sequence[str], confidence: float = 0.95
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the per-unit differences, df = clusters − 1.
+
+    `reference.md` § Statistical reporting: under a declared `cluster_by` each
+    unweighted contrast construction "takes a `_clustered` suffix and reads the
+    cluster as the draw", the *t* forms being "cluster-robust (CR1) with df =
+    clusters − 1, over the differenced values when paired". This is that form, and
+    the contrast's interval stays its own construction over the paired
+    intersection rather than a difference of the two sides' intervals —
+    `paired_t_over_units`' argument, unchanged by the clustering.
+
+    **The df is the construction**, not a detail of it: a cluster-robust interval
+    over positively correlated differences comes out wider than
+    `paired_t_over_units` whatever df it uses, so widening is not evidence the
+    cluster count reached the critical value. Only the number is.
+
+    Delegates to `t_over_units_clustered` and rewrites the `method`, exactly as
+    `paired_t_over_units` delegates to `t_over_units` and
+    `weighted_paired_t_over_units` to `weighted_t_over_units`. That is not
+    tidiness: it is what makes the `G/(G−1)` scaling, the df, the two floors and
+    the relabelling invariance properties of ONE construction rather than of two
+    that can drift apart. A hand-rolled sandwich here is how a paired interval and
+    a per-condition one come to disagree about what cluster-robust means.
+
+    **`labels` is one cluster label per difference, in the same order**, rather
+    than the `keys` + `membership` pair the per-condition form takes. Both callers
+    hold a per-difference vector and nothing else: `correction.Member` carries
+    `clusters` as a modifier on `diffs` for the same reason it carries `weights`
+    that way, and a mapping plus a key list would be two fields on a frozen
+    dataclass for one fact. The positional keys synthesized below are a
+    **bijection**, not a proxy for the real unit keys: `t_over_units_clustered`
+    uses a key for exactly one thing — looking its label up, and counting the
+    distinct labels through `units.cluster_count_of` — so distinct synthetic keys
+    carrying these labels are the same input to it, digit for digit. The real unit
+    keys are unrecoverable here and are also unused.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    diffs/labels length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+
+    Floors are inherited whole: `None` below two differences, and `None` below two
+    clusters, where df would be zero.
+    """
+    keys = [str(i) for i in range(len(diffs))]
+    plain = t_over_units_clustered(diffs, keys, dict(zip(keys, labels, strict=True)), confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="paired_t_over_units_clustered")
+
+
 def cohens_dz(diffs: Sequence[float]) -> float | None:
     """The mean of the per-unit differences over their standard deviation.
 
@@ -1210,6 +1262,36 @@ def paired_delta_of_derived(
     return None if math.isnan(delta) else delta
 
 
+def _drawable_content(
+    item: Sequence[str],
+    of: Mapping[str, Mapping[str, float]],
+    against: Mapping[str, Mapping[str, float]],
+) -> tuple[tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]], ...]:
+    """What a drawable thing contributes to a draw, as a comparable value.
+
+    The pair of rows each of its keys carries, sorted — so two things with the
+    same rows in a different key order are the same contribution, which is what
+    "the draw cannot vary" has to mean. The keys themselves are deliberately NOT
+    in the value: a draw that replaces one key with another carrying identical
+    rows produces an identical table, and a signature carrying the key would call
+    that a difference.
+
+    **This is the WHOLE row, not the column the compute closure reads**, and that
+    makes the refusal narrower than its per-condition siblings, whose own draws
+    carry one `(value, weight)` pair each. A collapsed table holding several
+    recorded columns can differ on a column this contrast's closure never touches,
+    and the refusal then does not fire though that metric's draw cannot vary. The
+    filed defect is still closed — a near-unique `stratify_by` puts one drawable
+    thing in each stratum, so the check holds however many columns the rows carry
+    — but the general case is bounded by this and is not claimed.
+    """
+    return tuple(
+        sorted(
+            (tuple(sorted(of[key].items())), tuple(sorted(against[key].items()))) for key in item
+        )
+    )
+
+
 def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
@@ -1221,6 +1303,7 @@ def paired_percentile_of_derived(
     confidence: float = 0.95,
     strata: dict[str, str] | None = None,
     method: str = "paired_percentile_over_units",
+    clusters: dict[str, str] | None = None,
 ) -> PairedResample:
     """Percentiles of the resampled difference, one draw applied to both sides.
 
@@ -1255,77 +1338,161 @@ def paired_percentile_of_derived(
     between them lives in the caller's own resample closure, not here.
 
     `strata`, when given, resamples within each stratum rather than over the
-    whole `keys` list — the same `resample.stratify_by` honoured per condition
-    by `percentile_over_units` and `percentile_of_derived`, honoured here for
-    the first time. **The pairing survives the stratification**: one drawn key
-    list still feeds both sides, so stratifying changes which keys are drawn
-    and never that the two sides see the same ones — drawing each side's strata
-    independently would resample the two conditions apart, the same failure the
-    unstratified draw's docstring above already argues about. `strata` is
-    indexed, not `.get`-ed, the discipline `percentile_of_derived`'s own
-    `strata` branch already keeps: a caller whose roster and mapping have come
-    to disagree about which units exist is a core defect, not a silent extra
-    stratum. Pools are ordered by their own sorted contents rather than by
+    whole set of drawable things — the same `resample.stratify_by` honoured per
+    condition by `percentile_over_units` and `percentile_of_derived`, honoured
+    here for the first time. **The pairing survives the stratification**: one
+    drawn key list still feeds both sides, so stratifying changes which keys are
+    drawn and never that the two sides see the same ones — drawing each side's
+    strata independently would resample the two conditions apart, the same
+    failure the unstratified draw's docstring above already argues about.
+    `strata` is indexed, not `.get`-ed, the discipline `percentile_of_derived`'s
+    own `strata` branch already keeps: a caller whose roster and mapping have
+    come to disagree about which units exist is a core defect, not a silent
+    extra stratum. Pools are ordered by their own sorted contents rather than by
     label, so renaming a stratum draws the identical sequence of tables — the
     same relabelling invariance `percentile_over_units` and
     `percentile_of_derived` keep.
 
-    **Not built here:** its siblings' content-based degenerate refusal — if
-    every key in every stratum carries the identical recorded row, the draw is
-    a constant and the interval has zero width. `paired_percentile_of_derived`
-    has none of those refusals to begin with (a deferred finding
-    `docs/superpowers/spec-defects.md` already records), and a stratified
-    contrast is where it first becomes reachable through a near-unique
-    `stratify_by`; that sweep is filed rather than built, with a named owner.
+    `clusters`, when given, makes the drawable thing a whole cluster rather than
+    a unit — `reference.md` § Clustered units: "`resample` resamples clusters,
+    not rows", and § Statistical reporting: "the percentile forms resample
+    whole clusters — jointly across both sides when paired". Each replicate
+    draws `G` clusters with replacement and pools their units, so a larger
+    cluster contributes more rows than a smaller one and a replicate's row
+    count varies — the same construction `percentile_over_units_clustered`
+    makes one level up, taken here over the paired draw instead. `clusters` and
+    `strata` compose: a cluster is drawn within its own stratum, and a stratum
+    must be constant within a cluster — a cluster carrying two stratum values
+    is indivisible and cannot be dealt to either, refused as
+    `E-STATS-RESAMPLE-STRATIFY-VARIES`, the same code
+    `percentile_over_units_clustered` raises for the identical fault one level
+    up (`reference.md` § Errors carries one row per code covering every emit
+    site). Clusters are ordered by their own sorted contents rather than by
+    label, the same relabelling invariance `percentile_over_units_clustered`
+    keeps, so a relabelled roster draws the identical sequence.
+
+    Returns `PairedResample(interval=None, draws_used=0, pool=[])` — the same
+    shape the `len(keys) < 2` early return already builds — when every drawable
+    thing within every stratum carries an identical pair of rows: the draw is
+    then a constant, and the interval would otherwise be `[x, x]`, a zero-width
+    95 % interval `reference.md` § Statistical reporting refuses in those terms.
+    Content, not count: two clusters per stratum carrying identical rows clear
+    any count floor and are still degenerate. See `_drawable_content` for what
+    "identical" compares and what it deliberately does not.
     """
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
-    n = len(keys)
-    # One pool per stratum, built by walking `keys` — which `paired_keys` returns
-    # sorted — so each pool's own contents come out sorted, and the pools are then
-    # ordered by those contents rather than by label. That is the same
-    # relabelling-invariance `percentile_over_units` and `percentile_of_derived`
-    # keep for the same reason: a renamed stratum must draw the identical sequence
-    # of tables. `strata` is indexed, not `.get`-ed, the discipline `weights` and
-    # `clusters` follow elsewhere here — a caller whose roster and mapping have
-    # come to disagree about which units exist is a core defect, not a silent
-    # extra stratum. It need not be exactly `keys`' set: a caller passing a
-    # roster-wide mapping simply never has the extra entries looked up.
-    #
-    # **`keys` must already be sorted ascending when `strata` is given.**
-    # `grouped`'s label order is first-occurrence order over this walk, and the
-    # relabelling invariance above holds only because that first-occurrence
-    # order coincides with content order whenever `keys` is ascending — the same
-    # precondition `percentile_of_derived` enforces itself by calling
-    # `sorted(collapsed)` rather than trusting its caller. This function trusts
-    # `paired_keys`, which returns its intersection sorted, so it checks instead
-    # of silently sorting: a caller that has stopped passing a sorted list is a
-    # bookkeeping error worth raising on, not one worth correcting quietly.
-    pools: list[list[str]] | None = None
-    if strata is not None:
+    # ONE uniform draw shape: a list of stratum groups, each holding the DRAWABLE
+    # things that stratum owns, each of those a list of keys. A unit is the
+    # drawable thing by default; a whole cluster is, once `clusters` is given
+    # (`reference.md` § Clustered units: "`resample` resamples clusters, not
+    # rows"), which is the same move `percentile_over_units_clustered` makes one
+    # level up. Written as one shape rather than four branches because the
+    # clustered/unclustered and stratified/unstratified paths must not drift
+    # apart — and it is RNG-IDENTICAL to the two branches it replaces: with no
+    # clusters and no strata it is one group of `n` single-key items, so
+    # `randrange(n)` is called `n` times in the same order; with strata the group
+    # order and the per-group counts are today's, each key merely wrapped.
+    if clusters is None:
+        # `keys` order preserved rather than sorted — the unstratified draw
+        # indexed `keys` directly, and sorting here would move an unsorted
+        # caller's draw sequence.
+        items = [[key] for key in keys]
+    else:
+        by_cluster: dict[str, list[str]] = {}
+        for key in keys:
+            # Indexed, not `.get`-ed, the discipline `t_over_units_clustered`
+            # states: a key the roster doesn't hold is a core defect, and a
+            # cluster of its own for it would raise the count the interval rests
+            # on.
+            by_cluster.setdefault(clusters[key], []).append(key)
+        # Ordered by their own sorted contents rather than by label, so a
+        # relabelled roster draws the identical sequence —
+        # `percentile_over_units_clustered`'s own invariance, for the same
+        # reason.
+        items = sorted(sorted(group) for group in by_cluster.values())
+    pools: list[list[list[str]]]
+    if strata is None:
+        pools = [items]
+    else:
+        # **`keys` must already be sorted ascending when `strata` is given.**
+        # This is a caller-contract assertion, not a correctness requirement:
+        # `pools = [sorted(group) for group in grouped.values()]` followed by
+        # `pools.sort()` below makes the whole partition a pure function of
+        # CONTENT, so the relabelling invariance holds regardless of the order
+        # `keys` arrives in or the order strata are first encountered while
+        # walking it — verified by running with this check disabled, a shuffled
+        # `keys` list under `strata` draws the identical sequence a sorted one
+        # does. What the check buys instead is the same discipline
+        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
+        # than trusting its caller): this function trusts `paired_keys`, which
+        # returns its intersection sorted, so a caller that has stopped doing
+        # that is a bookkeeping regression worth raising on rather than
+        # correcting quietly and never being told about.
         if keys != sorted(keys):
             raise ValueError(
                 "paired_percentile_of_derived requires keys sorted ascending "
-                "when strata is given, since the stratum pools' relabelling "
-                "invariance depends on first-occurrence order coinciding with "
-                "content order"
+                "when strata is given, matching the contract `paired_keys` "
+                "already satisfies — not because the result would otherwise "
+                "differ, but because a caller that has stopped supplying a "
+                "sorted list is a regression worth raising on rather than "
+                "correcting silently"
             )
-        grouped: dict[str, list[str]] = {}
-        for key in keys:
-            grouped.setdefault(strata[key], []).append(key)
-        pools = sorted(sorted(group) for group in grouped.values())
+        grouped: dict[str, list[list[str]]] = {}
+        for item in items:
+            rendered = strata[item[0]]
+            for key in item:
+                # A stratum must be CONSTANT within a drawable thing. With no
+                # clusters an item is one key and this cannot fire; with
+                # clusters it is the composition of two declarations rather than
+                # a third rule, and it is the same fault
+                # `percentile_over_units_clustered` raises under the same code —
+                # § Errors carries one row per code covering every emit site.
+                if strata[key] != rendered:
+                    # Only reachable when `clusters` was given: with no clusters
+                    # every item is a single key, and `strata[item[0]] == rendered`
+                    # trivially, so this branch can never fire for `item`'s one key.
+                    assert clusters is not None
+                    raise ContractError(
+                        f"cluster {clusters[key]!r} carries stratum values "
+                        f"{rendered!r} and {strata[key]!r}. A resample draws "
+                        "whole clusters, so a cluster cannot be drawn within one "
+                        "stratum while carrying two; stratify on an attribute "
+                        "that is constant within a cluster, or drop `cluster_by` "
+                        "if the units really are independent",
+                        code="E-STATS-RESAMPLE-STRATIFY-VARIES",
+                    )
+            grouped.setdefault(rendered, []).append(item)
+        pools = [sorted(group) for group in grouped.values()]
+        pools.sort()
+    # Content-based, not count-based, and applied whether or not `strata` or
+    # `clusters` were given. If every drawable thing within a stratum carries the
+    # same pair of rows (a stratum holding one of them trivially so), drawing any
+    # of them with replacement reproduces the same table on every replicate, so no
+    # draw can differ from any other whatever count that stratum holds — and the
+    # interval would be `[x, x]`, which `reference.md` § Statistical reporting
+    # refuses in those terms. This is `percentile_over_units`'s and
+    # `percentile_over_units_clustered`'s own refusal, taken over the paired
+    # form's two collapsed tables instead of one column. A count floor answers a
+    # different question: two clusters per stratum with identical rows clear it
+    # and are still degenerate.
+    if all(len({_drawable_content(item, of, against) for item in group}) <= 1 for group in pools):
+        return PairedResample(interval=None, draws_used=0, pool=[])
     values: list[float] = []
     for _ in range(draws):
-        # ONE drawn key list, feeding BOTH sides — under strata exactly as
-        # without. Stratifying changes which keys are drawn and never that the two
-        # sides see the same ones; drawing each side's strata independently would
-        # resample the two conditions apart and destroy the pairing, which is the
-        # failure this function's docstring argues about the unstratified draw.
-        if pools is None:
-            drawn = [keys[rng.randrange(n)] for _ in range(n)]
-        else:
-            drawn = [group[rng.randrange(len(group))] for group in pools for _ in range(len(group))]
+        # Each stratum contributes exactly as many DRAWABLE THINGS as it holds,
+        # and each contributes all of its keys — "pools their units", so a large
+        # cluster contributes more rows than a small one and a replicate's row
+        # count varies. ONE drawn key list feeds BOTH sides, under clusters and
+        # strata exactly as without: drawing each side independently would
+        # resample the two conditions apart and destroy the pairing.
+        drawn = [
+            key
+            for group in pools
+            for _ in range(len(group))
+            for key in group[rng.randrange(len(group))]
+        ]
         table_a = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
         table_b = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:
@@ -1821,9 +1988,9 @@ def summarize_step(
     its recorded columns. **Dropped, not published with `ci95: null`** — that state
     already means "no resample callable, or no seed", and reusing it would
     reintroduce the ambiguity `resample_draws`' `0`-versus-`null` distinction
-    exists to remove. H4 Statistics lifts this with the clustered contrast family
-    (`E-DATA-CLUSTER-CONTRAST`), which is the same missing construction one level
-    over.
+    exists to remove. What is still missing is a clustered draw for a
+    *recomputed* metric — the same construction one level over that H4b-2 built
+    for a recorded contrast.
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as

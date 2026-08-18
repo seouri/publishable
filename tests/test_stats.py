@@ -23,6 +23,7 @@ from publishable.stats import (
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
+    paired_t_over_units_clustered,
     percentile_of_derived,
     percentile_over_units,
     percentile_over_units_clustered,
@@ -1450,6 +1451,207 @@ def test_the_weighted_sandwich_reduces_to_the_unweighted_one_at_equal_weights():
     assert weighted.low == plain.low
     assert weighted.high == plain.high
     assert weighted.method == "weighted_t_over_units_clustered"
+
+
+_CLUSTERED_DIFFS = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+_CLUSTERED_LABELS = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+
+
+def test_the_paired_clustered_t_is_cr1_over_the_differences():
+    """12 per-unit differences in 3 clusters of 2/4/6 — `1.0 ×2`, `5.0 ×4`,
+    `9.0 ×6`. Mean 76/12 = 6.3333…; per-cluster residual sums −10.6667, −5.3333,
+    +16.0, so the meat is 398.2222, V = (3/2)·398.2222/144 and the half-width is
+    t(0.975, df 2) = 4.302653 times its root.
+
+    **The delta is the same number under every reading** — clustering moves the
+    variance, not the point estimate — so the half-width is the whole assertion.
+    Four wrong readings give four other numbers, none of them adjacent: the same
+    meat at df 11 gives 4.4827, the IID variance at df 2 gives 3.8678, a cluster
+    count of 4 gives 6.1110, and the unclustered form gives 1.9786. The correct
+    answer is the extreme of no single dimension, which is what makes an assertion
+    on the number discriminate all four rather than merely detect "wider"."""
+    interval = paired_t_over_units_clustered(_CLUSTERED_DIFFS, _CLUSTERED_LABELS)
+    assert interval is not None
+    assert interval.method == "paired_t_over_units_clustered"
+    centre = (interval.low + interval.high) / 2
+    half = (interval.high - interval.low) / 2
+    assert centre == pytest.approx(6.333333333333333)
+    assert half == pytest.approx(8.763214143637903)
+
+
+def test_the_paired_clustered_t_is_not_the_unclustered_one_on_the_same_differences():
+    """The control that must report, and the number a membership-ignoring mutant
+    lands on. The same differences through `paired_t_over_units` give 1.9786 — a
+    factor of four narrower, and the same centre, which is why a test asserting the
+    centre alone is blind to clustering entirely."""
+    plain = paired_t_over_units(_CLUSTERED_DIFFS)
+    assert plain is not None
+    assert (plain.high - plain.low) / 2 == pytest.approx(1.9785385229565593)
+    assert plain.method == "paired_t_over_units"
+
+
+def test_the_paired_clustered_t_refuses_the_degenerate_inputs_its_sibling_refuses():
+    """Both floors are inherited rather than restated, which is the point of
+    delegating: `None` below two differences, and `None` below two clusters, where
+    df would be zero. The second is the one a singleton-cluster fixture can never
+    see — one unit per cluster makes `clusters − 1` equal `n_paired − 1`, so the
+    clustered and unclustered forms coincide exactly and a mutant ignoring
+    membership passes. Hence the third case: 12 singleton clusters return an
+    interval identical to the unclustered one, which is correct and is exactly why
+    no other test here may use that shape."""
+    assert paired_t_over_units_clustered([1.0], ["a"]) is None
+    assert paired_t_over_units_clustered([1.0, 5.0, 9.0], ["a", "a", "a"]) is None
+    singletons = paired_t_over_units_clustered(_CLUSTERED_DIFFS, [f"c{i}" for i in range(12)])
+    plain = paired_t_over_units(_CLUSTERED_DIFFS)
+    assert singletons is not None and plain is not None
+    assert (singletons.high - singletons.low) == pytest.approx(plain.high - plain.low)
+
+
+def _paired_cluster_fixture() -> tuple[dict, dict, list[str], dict[str, str]]:
+    """12 keys in 3 clusters of 2/4/6, `of` minus `against` giving 1.0/5.0/9.0.
+
+    Unequal sizes are load-bearing twice over: they make a replicate's pooled row
+    count VARY (6 to 18) where a unit-drawing mutant returns a fixed 12, and they
+    keep the correct and buggy cluster counts different. Equal sizes make both
+    discriminators invisible."""
+    keys = [f"u{i:02d}" for i in range(12)]
+    labels = ["a"] * 2 + ["b"] * 4 + ["c"] * 6
+    values = [1.0] * 2 + [5.0] * 4 + [9.0] * 6
+    of = {k: {"m": v} for k, v in zip(keys, values, strict=True)}
+    against = {k: {"m": 0.0} for k in keys}
+    return of, against, keys, dict(zip(keys, labels, strict=True))
+
+
+def test_the_paired_clustered_percentile_draws_whole_clusters():
+    """`reference.md` § Statistical reporting: under `cluster_by` "the percentile
+    forms resample whole clusters — jointly across both sides when paired".
+
+    The row count is asserted directly rather than inferred from the interval,
+    because it is the discriminator a mutant drawing UNITS cannot fake: three
+    clusters drawn with replacement from sizes 2/4/6 pool between 6 and 18 rows,
+    and every count is one of the sums those sizes can make. A unit-drawing mutant
+    returns exactly 12 every time.
+
+    The `method` is the caller's string, as it is for the two spellings this
+    construction already emits."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(list(table.unit)))
+        return sum(table.m) / len(table.m)
+
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        compute,
+        seed=11,
+        draws=400,
+        method="paired_percentile_over_units_clustered",
+        clusters=clusters,
+    )
+    assert got.interval is not None
+    assert got.interval.method == "paired_percentile_over_units_clustered"
+    reachable = {2, 4, 6}
+    assert set(seen) != {12}
+    assert min(seen) == 6 and max(seen) == 18
+    assert all(
+        count in {x + y + z for x in reachable for y in reachable for z in reachable}
+        for count in seen
+    )
+
+
+def test_the_paired_clustered_percentile_draws_a_cluster_within_its_stratum():
+    """`stratify_by` says what an independent draw is, `cluster_by` says the draw
+    IS a cluster, and composed, a cluster is drawn within its own stratum — the
+    equality `percentile_over_units_clustered` already keeps one level up.
+
+    Stratum `A` holds the two small clusters (2 and 4 units) and stratum `B` the
+    one large one (6). Each stratum contributes as many clusters as it holds, so
+    every replicate pools 6 rows from `B` (its one cluster, redrawn with
+    replacement, always contributes 6) and — drawing 2 clusters with replacement
+    from {2, 4} — one of 4, 6, or 8 from `A`: the row count is confined to
+    {10, 12, 14}, which an unstratified clustered draw (6 to 18, and 18 is
+    reachable) is not."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    strata = {k: ("A" if clusters[k] in {"a", "b"} else "B") for k in keys}
+    seen: list[int] = []
+
+    def compute(table):
+        seen.append(len(list(table.unit)))
+        return sum(table.m) / len(table.m)
+
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        compute,
+        compute,
+        seed=11,
+        draws=400,
+        strata=strata,
+        method="paired_percentile_over_units_clustered",
+        clusters=clusters,
+    )
+    assert got.interval is not None
+    assert set(seen) <= {10, 12, 14}
+    assert len(set(seen)) > 1  # the control: the draw really varies
+
+
+def test_a_cluster_carrying_two_stratum_values_is_refused_on_a_contrast_draw_too():
+    """The same fault `percentile_over_units_clustered` raises per condition, at
+    the same code — § Errors carries one row per code covering every emit site, so
+    this needs no new identifier. A cluster is indivisible, so one carrying two
+    stratum values can be dealt to neither."""
+    of, against, keys, clusters = _paired_cluster_fixture()
+    strata = {k: ("A" if k < "u06" else "B") for k in keys}
+    strata[keys[7]] = "A"  # inside cluster `c`, whose other units are `B`
+    with pytest.raises(ContractError) as exc:
+        paired_percentile_of_derived(
+            of,
+            against,
+            keys,
+            lambda t: sum(t.m) / len(t.m),
+            lambda t: sum(t.m) / len(t.m),
+            seed=11,
+            draws=400,
+            strata=strata,
+            clusters=clusters,
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+
+
+def test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was():
+    """The regression the uniform draw shape owes. With `clusters=None` and no
+    strata the drawn key list must be `[keys[rng.randrange(n)] for _ in range(n)]`
+    against a fresh `random.Random(seed)` — same count of `randrange` calls, same
+    bounds, same order. Asserted against a recomputed sequence rather than against
+    a captured constant, so it pins the RNG contract instead of one seed's output.
+
+    `keys` is deliberately **not** sorted ascending — the H4b-2 batch 2 review
+    (Major 4) found the sorted-fixture form blind to a mutant that sorts `items`
+    before drawing (`items = sorted([key] for key in keys)`): with `clusters=None`
+    and no `strata` the `ValueError` guard never fires (it only checks under
+    `strata`), so an unsorted `keys` list is legal here and the mutant's sorted
+    order diverges from this fixture's own, which is what makes the mutation
+    discriminate."""
+    of, against, keys, _ = _paired_cluster_fixture()
+    keys = keys[::-1]
+    drawn: list[list[str]] = []
+
+    def compute_of(table):
+        drawn.append(list(table.unit))
+        return sum(table.m) / len(table.m)
+
+    def compute_against(table):
+        return sum(table.m) / len(table.m)
+
+    paired_percentile_of_derived(of, against, keys, compute_of, compute_against, seed=5, draws=200)
+    rng = random.Random(5)
+    expected = [[keys[rng.randrange(12)] for _ in range(12)] for _ in range(200)]
+    assert drawn == expected
 
 
 def test_the_weighted_clustered_interval_is_the_weighted_cr1_sandwich():
@@ -3934,13 +4136,14 @@ def test_a_stratum_mapping_missing_a_drawn_key_is_a_core_defect():
 
 
 def test_an_unsorted_key_list_with_strata_is_a_core_defect():
-    """The relabelling invariance above depends on `grouped`'s first-occurrence
-    order coinciding with pool content order, which holds only when `keys` is
-    ascending — the same precondition `percentile_of_derived` enforces itself by
-    sorting its own `collapsed` keys rather than trusting a caller. This
-    function trusts `paired_keys` to hand it a sorted list instead of sorting
-    defensively, so a caller that stops doing so is a bookkeeping error worth
-    raising on."""
+    """Not a correctness requirement — `pools.sort()` makes the whole partition
+    a pure function of content, so a shuffled `keys` list under `strata` draws
+    the identical sequence a sorted one does once past this check. What the
+    check buys is the caller-contract discipline `percentile_of_derived`
+    already keeps for itself (sorting its own `collapsed` keys rather than
+    trusting a caller): this function trusts `paired_keys` to hand it a sorted
+    list instead of sorting defensively, so a caller that stops doing so is a
+    bookkeeping regression worth raising on rather than correcting silently."""
     from publishable.stats import paired_percentile_of_derived
 
     with pytest.raises(ValueError, match="sorted"):
@@ -3953,6 +4156,29 @@ def test_an_unsorted_key_list_with_strata_is_a_core_defect():
             seed=7,
             draws=10,
             strata=_PAIRED_STRATA,
+        )
+
+
+def test_an_unsorted_key_list_with_strata_and_clusters_is_a_core_defect_too():
+    """The composition Minor 4 of the H4b-2 batch 2 review found untested: the
+    guard reads `keys` itself, before `clusters` groups it into drawable
+    things, so an unsorted `keys` list raises identically whether or not
+    `clusters` is also given — this pins that `clusters` does not somehow
+    exempt the check."""
+    from publishable.stats import paired_percentile_of_derived
+
+    clusters = {"u0": "c0", "u1": "c0", "u2": "c1", "u3": "c2", "u4": "c2", "u5": "c3"}
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            ["u3", "u4", "u5", "u0", "u1", "u2"],
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata=_PAIRED_STRATA,
+            clusters=clusters,
         )
 
 
@@ -4117,3 +4343,58 @@ def test_a_weighted_paired_t_returns_none_when_kish_falls_below_two():
     from publishable.stats import weighted_paired_t_over_units
 
     assert weighted_paired_t_over_units([1.0, 2.0, 3.0, 10.0], [1, 1, 1, 9]) is None
+
+
+@pytest.mark.parametrize("clustered", [False, True])
+@pytest.mark.parametrize("stratified", [False, True])
+def test_a_paired_draw_that_cannot_vary_reports_no_interval(clustered, stratified):
+    """The defect H4b-1 filed against H4b-2 by name, closed for all four draw
+    shapes at once. Every drawable thing in every stratum carries the same pair of
+    rows, so every replicate reproduces the same difference, both percentile ranks
+    land on it, and the interval would be `[x, x]` — a zero-width 95 % interval
+    § Statistical reporting refuses in those terms, indistinguishable from a
+    genuine narrow one.
+
+    Content, not count: the clustered cells hold TWO clusters per stratum, which
+    clears any count floor and is still degenerate."""
+    keys = [f"u{i:02d}" for i in range(8)]
+    of = {k: {"m": 3.0} for k in keys}
+    against = {k: {"m": 1.0} for k in keys}
+    clusters = {k: f"c{i // 2}" for i, k in enumerate(keys)} if clustered else None
+    strata = {k: ("A" if k < "u04" else "B") for k in keys} if stratified else None
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        lambda t: sum(t.m) / len(t.m),
+        lambda t: sum(t.m) / len(t.m),
+        seed=3,
+        draws=400,
+        strata=strata,
+        clusters=clusters,
+    )
+    assert got.interval is None
+    assert got.draws_used == 0
+    assert got.pool == []
+
+
+def test_a_paired_draw_that_can_vary_still_reports():
+    """The control that must report, without which every assertion above passes
+    identically against a construction that returns `None` for everything. One key
+    differs from its neighbours in a single column, which is the smallest content
+    difference the refusal must let through."""
+    keys = [f"u{i:02d}" for i in range(8)]
+    of = {k: {"m": 3.0} for k in keys}
+    of["u00"] = {"m": 9.0}
+    against = {k: {"m": 1.0} for k in keys}
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        lambda t: sum(t.m) / len(t.m),
+        lambda t: sum(t.m) / len(t.m),
+        seed=3,
+        draws=400,
+    )
+    assert got.interval is not None
+    assert got.interval.high > got.interval.low

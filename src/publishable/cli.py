@@ -70,6 +70,7 @@ from publishable.stats import (
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
+    paired_t_over_units_clustered,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -97,6 +98,7 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
+    cluster_count_of,
     clusters_of,
     fold_basis,
     holdout_for,
@@ -782,20 +784,26 @@ def _comparison_step_blocks(
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
 
     `weights` is `command_run`'s roster-wide `{unit key: weight}` mapping, or
-    `None` when `data.units.weight_by` is undeclared, and `strata` its resolved
-    `statistics.resample.stratify_by` mapping. Both are defaulted rather than
-    required: the direct call sites in the test suite would otherwise take an edit
-    with no behavioural content, and "no weight declared" and "this caller has not
-    been taught about weights" are the same fact. `strata` reaches both percentile
+    `None` when `data.units.weight_by` is undeclared; `strata` its resolved
+    `statistics.resample.stratify_by` mapping; and `clusters` its roster-wide
+    `{unit key: cluster label}` mapping, or `None` when `data.units.cluster_by` is
+    undeclared. All three are defaulted rather than required: the direct call
+    sites in the test suite would otherwise take an edit with no behavioural
+    content, and "no weight/cluster declared" and "this caller has not been taught
+    about weights/clusters" are the same fact. `strata` reaches both percentile
     branches, because a declaration honoured for a derived metric and dropped for
     a recorded column would be the asymmetry § Weighted samples' pairing of
-    `weight_by` with `resample.stratify_by` exists to rule out.
+    `weight_by` with `resample.stratify_by` exists to rule out. `weights` and
+    `clusters` never arrive together — refused above as
+    `E-DATA-WEIGHT-CLUSTER-CONTRAST` — so every branch below is a choice among
+    mutually exclusive declarations rather than a combination to compose.
 
     Under a declared weight, a recorded column's `delta` is the weighted mean of
     the differences and `cohens_d` is `weighted_cohens_dz(diffs, col_weights)` —
@@ -813,11 +821,13 @@ def _comparison_step_blocks(
     arrangement a weighted condition gets from `summarize_step`.
 
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences — `weighted_paired_t_over_units` instead, under a declared
-    weight — unless `resample_columns` is set **and the pairing has at least
+    differences — `weighted_paired_t_over_units` under a declared weight, or
+    `paired_t_over_units_clustered` under a declared cluster (the two never
+    coexist) — unless `resample_columns` is set **and the pairing has at least
     two units**, when it instead takes `paired_percentile_of_derived` over its
-    own column mean (weighted inside the closure when a weight is declared),
-    the same construction a derived metric uses. A derived
+    own column mean (weighted inside the closure when a weight is declared, or
+    drawing whole clusters under a declared one), the same construction a
+    derived metric uses. A derived
     metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
@@ -885,6 +895,18 @@ def _comparison_step_blocks(
     non-empty, the same test the refusal runs today — rather than leaving
     `True` hard-coded against a comparison validation no longer rejects.
     """
+    # `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses this combination at `validate`, and
+    # `cli` always validates before running — so both being set is core's own
+    # bookkeeping error, not a config. Raised rather than resolved by precedence:
+    # preferring one would publish a `method` naming a construction the other
+    # declaration contradicts, and no reader of `run.yaml` could tell. `ValueError`
+    # for the reason `Member.__post_init__` gives — nothing here came from outside
+    # core.
+    if weights is not None and clusters is not None:
+        raise ValueError(
+            "a weighted clustered comparison has no construction in this build; "
+            "E-DATA-WEIGHT-CLUSTER-CONTRAST refuses the combination at validate"
+        )
     differs_on = differing_axes(conditions_by_index[comp.of], conditions_by_index[comp.against])
     confounded = len(differs_on) > 1
     allowed = units_matching(roster, comp.within)
@@ -914,6 +936,7 @@ def _comparison_step_blocks(
             # there would make an unrelated refactor of that expression silently
             # load-bearing.
             col_weights: list[Any] | None = None
+            col_clusters: list[str] | None = None
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
@@ -929,7 +952,25 @@ def _comparison_step_blocks(
                 # metric the *previous* metric's draw pool, which nothing
                 # downstream could detect.
                 resampled = None
-                if compute_of is not None and compute_against is not None:
+                # **Clusters-guarded suppression.** `E-DATA-CLUSTER-DERIVED`'s own
+                # rule is that no clustered draw exists for a recomputed metric —
+                # `reference.md` § Contrasts and `docs/superpowers/spec-defects.md`'s
+                # H4b-2-task-4 entry both already claim this branch publishes
+                # `null` under a declared cluster, but nothing enforced it: a
+                # derived key that collides with a recorded column's name leaves
+                # `derived_by_key` AND `resample_fns_by_key` populated for it —
+                # `command_run` builds a closure for every key in `derived` before
+                # the raising call, and the `except ContractError` retry that
+                # follows the collision clears neither map — so `compute_of`/
+                # `compute_against` above are real callables and this branch would
+                # otherwise compute a genuine, UNCLUSTERED point estimate and draw
+                # for a metric whose per-condition sibling is cluster-robust, with
+                # nothing in the record saying which is which — verbatim the
+                # failure `E-DATA-CLUSTER-CONTRAST` existed to prevent. `clusters`
+                # is the roster-wide mapping (not `col_clusters`, which this branch
+                # never builds), so this reads the same declaration the `if
+                # clusters is not None:` block below reads for `n_paired_clusters`.
+                if compute_of is not None and compute_against is not None and clusters is None:
                     # Point estimate and interval from the same two calls over
                     # the same `base_keys`, so neither can drift onto a
                     # different unit set from the other.
@@ -978,6 +1019,15 @@ def _comparison_step_blocks(
                 # keeps every unweighted construction on exactly the arithmetic it
                 # had.
                 col_weights = None if weights is None else [weights[k] for k in col_keys]
+                # The intersection's OWN cluster labels, in `col_keys` order, so
+                # nothing downstream groups a unit the difference beside it did not
+                # come from. Indexed, not `.get`-ed, the discipline
+                # `t_over_units_clustered` states: a key the roster doesn't hold is
+                # a core defect, and a cluster of its own for it would raise the
+                # group count and narrow the interval. The roster-wide mapping is
+                # safe to index — `col_keys` is a subset of it — and this is not
+                # the Kish seam, which had to be narrowed because it SUMS.
+                col_clusters = None if clusters is None else [clusters[k] for k in col_keys]
                 resampled = None
                 if resample_columns and n_paired >= 2:
                     # `col_keys`, NOT `base_keys`. The derived branch above uses
@@ -1040,25 +1090,36 @@ def _comparison_step_blocks(
                         seed,
                         draws=draws,
                         strata=strata,
+                        # One spelling per declaration, and the weighted-clustered
+                        # cell is unreachable — the `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+                        # guard above refuses it before either branch runs. The
+                        # construction is ONE function serving three `method`
+                        # strings, so the string is the caller's to pass:
+                        # `paired_percentile_of_derived` is shared with the derived
+                        # branch, which core neither weights nor clusters.
                         method=(
-                            "paired_percentile_over_units"
-                            if weights is None
+                            "paired_percentile_over_units_clustered"
+                            if clusters is not None
                             else "weighted_paired_percentile_over_units"
+                            if weights is not None
+                            else "paired_percentile_over_units"
                         ),
+                        clusters=(None if clusters is None else {k: clusters[k] for k in col_keys}),
                     )
                     interval = resampled.interval
                 else:
-                    # The general case, and it is off the payoff path: a config
-                    # declaring `resample` never reaches here. Weighted when a
-                    # weight is declared, because the delta above already is —
-                    # `weighted_paired_t_over_units` takes its df from Kish's
-                    # effective size over this intersection, which is the
-                    # `n_paired_effective` recorded beside it.
-                    interval = (
-                        paired_t_over_units(diffs)
-                        if col_weights is None
-                        else weighted_paired_t_over_units(diffs, col_weights)
-                    )
+                    # The general case, off the resample path. One arm per
+                    # declaration, and the weighted-clustered cell is unreachable —
+                    # the `E-DATA-WEIGHT-CLUSTER-CONTRAST` guard above refuses it
+                    # before either branch runs, so this is a three-way choice
+                    # over two independent declarations rather than a four-cell
+                    # one with a cell missing.
+                    if col_clusters is not None:
+                        interval = paired_t_over_units_clustered(diffs, col_clusters)
+                    elif col_weights is not None:
+                        interval = weighted_paired_t_over_units(diffs, col_weights)
+                    else:
+                        interval = paired_t_over_units(diffs)
                 metric_block[metric_key] = {
                     # The (weighted, when `col_weights` is not `None`) mean of
                     # the per-unit differences over `col_keys` — the same unit
@@ -1105,6 +1166,34 @@ def _comparison_step_blocks(
                 metric_block[metric_key]["n_paired_effective"] = kish_effective_n(
                     [weights[k] for k in (base_keys if is_derived else col_keys)]
                 )
+            # The one fact a cluster adds to a contrast entry, and it moves with
+            # the interval and the `method`: § Contrasts requires it, and a
+            # cluster-robust delta beside a `method` that does not say so is a
+            # declaration accepted whose effect is half delivered. Absent — not
+            # null — when nothing is clustered, the same absent-not-null shape
+            # `weighted_by` has.
+            #
+            # `cluster_count_of` is the SINGLE counting expression — the one
+            # `attrition`'s `n.clusters` and `t_over_units_clustered`'s df both
+            # read. `len(set(...))` here would be a second authority for one
+            # number.
+            #
+            # Over the keys the difference was actually computed over, never the
+            # roster-wide mapping: a ragged column's clusters are its own, and a
+            # count over the roster would describe units the delta never saw.
+            if clusters is not None:
+                # Written in the same `base_keys if is_derived else col_keys`
+                # shape the `weighted_by`/`n_paired_effective` block above uses,
+                # so the two never disagree about which key set a fact is
+                # computed over. A fact about the paired INTERSECTION, not about
+                # whether a construction ran — the same reason `n_paired` itself
+                # is written whether or not `method`/`delta`/`ci95` came back
+                # non-null (`docs/superpowers/spec-defects.md`'s H4b-2 task 4
+                # entry records the decision, for the derived-key-collision
+                # corner where this fires with every other field `None`).
+                metric_block[metric_key]["n_paired_clusters"] = cluster_count_of(
+                    clusters, base_keys if is_derived else col_keys
+                )
             if confounded:
                 # Marked, not merely reported: a delta mixing two axes is the
                 # factorial main-effects problem, which core refuses to
@@ -1148,6 +1237,12 @@ def _comparison_step_blocks(
                     weights=(
                         None if corrected_from_pool or col_weights is None else tuple(col_weights)
                     ),
+                    # `corrected_from_pool` is the single decision, read once for
+                    # all three fields, so `pool`, `weights` and `clusters` cannot
+                    # disagree about which evidence this member carries.
+                    clusters=(
+                        None if corrected_from_pool or col_clusters is None else tuple(col_clusters)
+                    ),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
@@ -1186,6 +1281,7 @@ def _compute_vs_baseline(
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -1229,6 +1325,7 @@ def _compute_vs_baseline(
             weights=weights,
             strata=strata,
             weighted_by=weighted_by,
+            clusters=clusters,
         )
         if block:
             out[comp.of] = block
@@ -1254,6 +1351,7 @@ def _compute_declared_contrasts(
     weights: dict[str, Any] | None = None,
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1305,6 +1403,7 @@ def _compute_declared_contrasts(
             weights=weights,
             strata=strata,
             weighted_by=weighted_by,
+            clusters=clusters,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -1570,8 +1669,13 @@ def command_run(config_path: Path) -> int:
     # `cluster_by` makes the cluster the inferential draw"; § Clustered units calls
     # it "the effective sample size alongside the unit count"). So it travels in
     # `attrition`'s counts, exactly where `effective` goes, rather than in
-    # `beside_n` — the two routes `stats.summarize_step` describes, and nothing in
-    # the documents shows a `clustered_by` sibling of `weighted_by`.
+    # `beside_n` — the two routes `stats.summarize_step` describes. There is no
+    # `clustered_by` sibling of `weighted_by` on a CONTRAST entry either, and here
+    # the reason is not silence but a second disclosure: a contrast's `method`
+    # already carries the `_clustered` suffix, which discloses the clustering by
+    # itself, so a name naming the same attribute again would be a second
+    # disclosure of one fact. The count is a new fact no `method` string carries,
+    # so it travels on its own as `n_paired_clusters`.
     #
     # The membership mapping itself goes to `summarize_step` as well, for the reason
     # `weights` does: a ragged column's clusters are its own, and only the call that
@@ -2697,6 +2801,7 @@ def command_run(config_path: Path) -> int:
                 weights=weights,
                 strata=resample_strata,
                 weighted_by=weight_by if weights else None,
+                clusters=clusters,
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2713,6 +2818,7 @@ def command_run(config_path: Path) -> int:
                 weights=weights,
                 strata=resample_strata,
                 weighted_by=weight_by if weights else None,
+                clusters=clusters,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:
