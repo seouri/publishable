@@ -5564,9 +5564,9 @@ contrast-side hardening", a description rather than a slice, until the same revi
 are disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
 **Re-owned**, `H4b` having since split into H4b-1 (weights through contrasts) and H4b-2 (clusters
 through contrasts): Finding 2 is the general form of the gap H4b-1 task 5 closed the reachable
-instance of — see the entry below this one, `OPEN — a stratified paired draw can publish a
-zero-width contrast interval`, which names H4b-2 as owner for the same reason this one now does; the
-paired construction still has no content-based degenerate refusal at all, stratified or not.
+instance of — see the entry below this one, `CLOSED by H4b-2 task 9 — a stratified paired draw
+could publish a zero-width contrast interval`, which closes the paired construction's
+content-based degenerate refusal for both the stratified and unstratified draws.
 Findings 1 and 3 are general contrast-disclosure gaps that neither weights nor clusters created, so
 they stay with **H4b-2** as the nearer of the two contrast-family slices rather than being split a
 third way.
@@ -6313,7 +6313,7 @@ narrowed by deletion in this task; both are deleted outright in H4b-1 task 13.
 
 **Found by:** H4b-SCOPING § 2.1. **Closed by:** H4b-1, task 1.
 
-## OPEN — a stratified paired draw can publish a zero-width contrast interval — **Owner: H4b-2**
+## CLOSED by H4b-2 task 9 — a stratified paired draw could publish a zero-width contrast interval
 
 H4b-1 task 5 gave `stats.paired_percentile_of_derived` a `strata` parameter, so
 `statistics.resample.stratify_by` is honoured on a contrast for the first time. Its three sibling
@@ -6347,6 +6347,22 @@ rows reports `ci95: null` — and H4b-2 task 9 gives it code inside
 `stats.paired_percentile_of_derived`, covering the clustered and unclustered draws and the stratified
 and unstratified ones as one check over the drawable item. **The entry is closed by that task, not by
 this one.**
+
+**CLOSED 2026-08-17 (H4b-2, task 9).** `stats.paired_percentile_of_derived` now refuses a draw whose
+every drawable thing within a stratum carries the same pair of rows, returning
+`PairedResample(interval=None, draws_used=0, pool=[])` — the shape its `len(keys) < 2` early return
+already had. Content-based rather than count-based, and over the **drawable thing** — a key by
+default, a whole cluster under `clusters` — so it covers the stratified and unstratified draws and
+the clustered and unclustered ones as one expression. The rule was stated in `reference.md`
+§ Statistical reporting first, by task 3.
+
+**What is closed and what is bounded.** The filed reachability — a near-unique `stratify_by` making
+every draw pick from an identical multiset — is closed outright: one drawable thing per stratum
+satisfies the check whatever the rows carry. The check compares **whole collapsed rows**, so a table
+holding several recorded columns can differ on a column a given metric's closure never reads, and
+that metric's draw can still be constant without the refusal firing. Bounded and stated rather than
+claimed away; a signature keyed on the metric the closure reads would close it, and no filed defect
+asks for that today.
 
 ## RULED by H4b-2 task 1 — the weight × cluster combination is refused, not built
 

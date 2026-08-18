@@ -4308,3 +4308,58 @@ def test_a_weighted_paired_t_returns_none_when_kish_falls_below_two():
     from publishable.stats import weighted_paired_t_over_units
 
     assert weighted_paired_t_over_units([1.0, 2.0, 3.0, 10.0], [1, 1, 1, 9]) is None
+
+
+@pytest.mark.parametrize("clustered", [False, True])
+@pytest.mark.parametrize("stratified", [False, True])
+def test_a_paired_draw_that_cannot_vary_reports_no_interval(clustered, stratified):
+    """The defect H4b-1 filed against H4b-2 by name, closed for all four draw
+    shapes at once. Every drawable thing in every stratum carries the same pair of
+    rows, so every replicate reproduces the same difference, both percentile ranks
+    land on it, and the interval would be `[x, x]` — a zero-width 95 % interval
+    § Statistical reporting refuses in those terms, indistinguishable from a
+    genuine narrow one.
+
+    Content, not count: the clustered cells hold TWO clusters per stratum, which
+    clears any count floor and is still degenerate."""
+    keys = [f"u{i:02d}" for i in range(8)]
+    of = {k: {"m": 3.0} for k in keys}
+    against = {k: {"m": 1.0} for k in keys}
+    clusters = {k: f"c{i // 2}" for i, k in enumerate(keys)} if clustered else None
+    strata = {k: ("A" if k < "u04" else "B") for k in keys} if stratified else None
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        lambda t: sum(t.m) / len(t.m),
+        lambda t: sum(t.m) / len(t.m),
+        seed=3,
+        draws=400,
+        strata=strata,
+        clusters=clusters,
+    )
+    assert got.interval is None
+    assert got.draws_used == 0
+    assert got.pool == []
+
+
+def test_a_paired_draw_that_can_vary_still_reports():
+    """The control that must report, without which every assertion above passes
+    identically against a construction that returns `None` for everything. One key
+    differs from its neighbours in a single column, which is the smallest content
+    difference the refusal must let through."""
+    keys = [f"u{i:02d}" for i in range(8)]
+    of = {k: {"m": 3.0} for k in keys}
+    of["u00"] = {"m": 9.0}
+    against = {k: {"m": 1.0} for k in keys}
+    got = paired_percentile_of_derived(
+        of,
+        against,
+        keys,
+        lambda t: sum(t.m) / len(t.m),
+        lambda t: sum(t.m) / len(t.m),
+        seed=3,
+        draws=400,
+    )
+    assert got.interval is not None
+    assert got.interval.high > got.interval.low

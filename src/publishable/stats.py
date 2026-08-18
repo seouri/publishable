@@ -1262,6 +1262,36 @@ def paired_delta_of_derived(
     return None if math.isnan(delta) else delta
 
 
+def _drawable_content(
+    item: Sequence[str],
+    of: Mapping[str, Mapping[str, float]],
+    against: Mapping[str, Mapping[str, float]],
+) -> tuple[tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]], ...]:
+    """What a drawable thing contributes to a draw, as a comparable value.
+
+    The pair of rows each of its keys carries, sorted — so two things with the
+    same rows in a different key order are the same contribution, which is what
+    "the draw cannot vary" has to mean. The keys themselves are deliberately NOT
+    in the value: a draw that replaces one key with another carrying identical
+    rows produces an identical table, and a signature carrying the key would call
+    that a difference.
+
+    **This is the WHOLE row, not the column the compute closure reads**, and that
+    makes the refusal narrower than its per-condition siblings, whose own draws
+    carry one `(value, weight)` pair each. A collapsed table holding several
+    recorded columns can differ on a column this contrast's closure never touches,
+    and the refusal then does not fire though that metric's draw cannot vary. The
+    filed defect is still closed — a near-unique `stratify_by` puts one drawable
+    thing in each stratum, so the check holds however many columns the rows carry
+    — but the general case is bounded by this and is not claimed.
+    """
+    return tuple(
+        sorted(
+            (tuple(sorted(of[key].items())), tuple(sorted(against[key].items()))) for key in item
+        )
+    )
+
+
 def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
@@ -1341,13 +1371,14 @@ def paired_percentile_of_derived(
     label, the same relabelling invariance `percentile_over_units_clustered`
     keeps, so a relabelled roster draws the identical sequence.
 
-    **Not built here:** its siblings' content-based degenerate refusal — if
-    every key in every stratum carries the identical recorded row, the draw is
-    a constant and the interval has zero width. `paired_percentile_of_derived`
-    has none of those refusals to begin with (a deferred finding
-    `docs/superpowers/spec-defects.md` already records), and a stratified
-    contrast is where it first becomes reachable through a near-unique
-    `stratify_by`; that sweep is filed rather than built, with a named owner.
+    Returns `PairedResample(interval=None, draws_used=0, pool=[])` — the same
+    shape the `len(keys) < 2` early return already builds — when every drawable
+    thing within every stratum carries an identical pair of rows: the draw is
+    then a constant, and the interval would otherwise be `[x, x]`, a zero-width
+    95 % interval `reference.md` § Statistical reporting refuses in those terms.
+    Content, not count: two clusters per stratum carrying identical rows clear
+    any count floor and are still degenerate. See `_drawable_content` for what
+    "identical" compares and what it deliberately does not.
     """
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
@@ -1429,6 +1460,19 @@ def paired_percentile_of_derived(
             grouped.setdefault(rendered, []).append(item)
         pools = [sorted(group) for group in grouped.values()]
         pools.sort()
+    # Content-based, not count-based, and applied whether or not `strata` or
+    # `clusters` were given. If every drawable thing within a stratum carries the
+    # same pair of rows (a stratum holding one of them trivially so), drawing any
+    # of them with replacement reproduces the same table on every replicate, so no
+    # draw can differ from any other whatever count that stratum holds — and the
+    # interval would be `[x, x]`, which `reference.md` § Statistical reporting
+    # refuses in those terms. This is `percentile_over_units`'s and
+    # `percentile_over_units_clustered`'s own refusal, taken over the paired
+    # form's two collapsed tables instead of one column. A count floor answers a
+    # different question: two clusters per stratum with identical rows clear it
+    # and are still degenerate.
+    if all(len({_drawable_content(item, of, against) for item in group}) <= 1 for group in pools):
+        return PairedResample(interval=None, draws_used=0, pool=[])
     values: list[float] = []
     for _ in range(draws):
         # Each stratum contributes exactly as many DRAWABLE THINGS as it holds,
