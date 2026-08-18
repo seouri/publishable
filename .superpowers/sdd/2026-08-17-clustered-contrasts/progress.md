@@ -265,3 +265,30 @@ deletes are recorded in the plan's appended correction table, where task 14 will
 `clusters` to the contrast path and the clustered *t* selected; the `method` branch, six cells
 counted rather than carried; `Member.clusters` and the corrected bound; `n_paired_clusters` on every
 affected entry.
+
+## Batch 3 — tasks 10, 11, 12, 13 — the threading and the record — complete, review dispatched
+
+Commits `c51e049` (the clustered column contrast takes the cluster-robust paired *t*), `6b9d8a7`
+(every reachable contrast cell writes its own `method` string), `61d95bd` (a clustered member's
+corrected bound is the clustered construction), `84db48f` (`n_paired_clusters` on the entry).
+Suite 2179 → **2196** passed, 1 skipped, 2 xfailed — deltas +3, +8, +3, +3, each matching its task's
+prediction. Four gates clean. `E-DATA-CLUSTER-CONTRAST` alive; every new test calls
+`_comparison_step_blocks` **directly**.
+
+**Ruling carried out of task 12 (the spec's named trap, H4b-1's decision 4 one axis over):**
+`Member` gains `clusters: tuple[str, ...] | None = None` as a **modifier on `diffs`** — the exact
+treatment `weights` got — checked in its own `__post_init__` block (never beside `pool`, length must
+match `diffs`, never beside `weights`), leaving the exactly-one `pool`/`diffs` invariant untouched.
+`_corrected_bounds` picks `clusters` → `weights` → plain, which is safe **because `__post_init__`
+already guarantees the two modifiers are mutually exclusive** — the guarantee doing the work is
+stated rather than assumed. **Cost if wrong:** a clustered raw interval beside an unclustered
+corrected one, which passes every existing test, which is why the reviewer was told to verify the
+bound **moves** rather than that a field is threaded.
+
+**Recorded: this is the first batch on the slice to report NO brief/code disagreements**, against
+four found by the plan author before execution, two by batch 1 and three by batch 2. The reviewer
+was told to treat that as a hypothesis rather than a result, and to check the batch-2 interfaces
+these tasks consume — "already built exactly as described" is the claim carrying the weight.
+
+Both blind-mutation predictions held, including task 10's roster-order mutation, which **task 13's
+ragged fixture then caught as the plan promised** — the disposition working end to end.
