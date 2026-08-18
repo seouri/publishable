@@ -3,6 +3,7 @@ import pytest
 from publishable.correction import (
     ALPHA,
     Member,
+    UnpairedEvidence,
     _corrected_bounds,
     corrected_fields,
     corrected_for,
@@ -37,7 +38,7 @@ def test_a_member_with_an_interval_rejects_both_pool_and_diffs():
     """Both set would let `_corrected_bounds` silently take the `diffs`
     branch and build a *t* interval as the corrected counterpart of a
     *percentile* raw one — wrong by construction, not by evidence."""
-    with pytest.raises(ValueError, match="both"):
+    with pytest.raises(ValueError, match="pool, diffs"):
         Member(
             where="1",
             step="s",
@@ -51,10 +52,10 @@ def test_a_member_with_an_interval_rejects_both_pool_and_diffs():
 
 
 def test_a_member_with_an_interval_rejects_neither_pool_nor_diffs():
-    """Neither set would make `_corrected_bounds` return `None` for a reason
-    that has nothing to do with the pool being too small, so `thin: True`
+    """None of the three set would make `_corrected_bounds` return `None` for a
+    reason that has nothing to do with the pool being too small, so `thin: True`
     would fire over a member that was never thin."""
-    with pytest.raises(ValueError, match="neither"):
+    with pytest.raises(ValueError, match="none of the three"):
         Member(
             where="1",
             step="s",
@@ -65,6 +66,93 @@ def test_a_member_with_an_interval_rejects_neither_pool_nor_diffs():
             diffs=None,
             declaration_index=0,
         )
+
+
+def test_unpaired_evidence_carries_two_vectors_and_validates_its_own_alignment():
+    """A Welch interval's evidence is neither a pool nor a difference vector: it is
+    two per-side value vectors, plus two per-side label vectors when clustered. The
+    alignment invariant lives HERE rather than on `Member`, because a modifier's
+    length check belongs to the object that defines the vectors it aligns against —
+    a flat `clusters` pair beside `sides` would be one field with two admissible
+    shapes, which is the misaligned-vector class that produces a plausible number
+    rather than an error.
+
+    Both sides are checked, because a check reading one passes any fixture whose
+    other side happens to align."""
+    plain = UnpairedEvidence(of=(1.0, 2.0), against=(3.0, 4.0, 5.0))
+    assert plain.clusters is None
+    clustered = UnpairedEvidence(
+        of=(1.0, 2.0), against=(3.0, 4.0, 5.0), clusters=(("a", "b"), ("c", "c", "d"))
+    )
+    assert clustered.clusters == (("a", "b"), ("c", "c", "d"))
+    with pytest.raises(ValueError, match="of"):
+        UnpairedEvidence(of=(1.0, 2.0), against=(3.0, 4.0), clusters=(("a",), ("c", "d")))
+    with pytest.raises(ValueError, match="against"):
+        UnpairedEvidence(of=(1.0, 2.0), against=(3.0, 4.0), clusters=(("a", "b"), ("c",)))
+
+
+def test_a_member_carries_exactly_one_of_pool_diffs_and_sides():
+    """The rule counted over three rather than extended from an equality. Today's
+    `(pool is None) == (diffs is None)` does not generalize, and a second equality
+    beside it would admit a member carrying two kinds — which would let
+    `_corrected_bounds` build a *t* corrected bound for a percentile raw interval,
+    narrower or wider than the truth by construction rather than by evidence.
+
+    All three pairs are asserted plus the empty case, because a count that tested
+    `<= 1` would admit none and a count testing `>= 1` would admit all three."""
+    common = dict(where="1", step="s", metric="m", delta=1.0, ci95=(0.0, 2.0), declaration_index=0)
+    sides = UnpairedEvidence(of=(1.0, 2.0), against=(3.0, 4.0))
+    Member(pool=None, diffs=None, sides=sides, **common)  # the control: one is fine
+    with pytest.raises(ValueError, match="pool, sides"):
+        Member(pool=(1.0, 2.0), diffs=None, sides=sides, **common)
+    with pytest.raises(ValueError, match="diffs, sides"):
+        Member(pool=None, diffs=(1.0, 2.0), sides=sides, **common)
+    with pytest.raises(ValueError, match="pool, diffs"):
+        Member(pool=(1.0,), diffs=(1.0,), sides=None, **common)
+    with pytest.raises(ValueError, match="none of the three"):
+        Member(pool=None, diffs=None, sides=None, **common)
+
+
+def test_a_member_may_not_carry_a_modifier_beside_sides():
+    """Both modifiers are modifiers on `diffs`, and neither composes with `sides`.
+    `weights` because `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses the weighted
+    unpaired composition at `validate`, so a member carrying both is `cli`'s
+    bookkeeping error exactly as `E-DATA-WEIGHT-CLUSTER-CONTRAST` makes the other
+    pair's. `clusters` because unpaired membership is PER SIDE and lives inside
+    `UnpairedEvidence` — a flat label vector beside `sides` could not say which
+    side it belongs to, and a construction reading it would align it against
+    whichever vector came first.
+
+    Asserted with `ci95=None` as well as with an interval, because both modifier
+    checks run BEFORE the exactly-one rule's early return and must not become
+    reachable only through it."""
+    common = dict(where="1", step="s", metric="m", delta=1.0, declaration_index=0)
+    sides = UnpairedEvidence(of=(1.0, 2.0), against=(3.0, 4.0))
+    with pytest.raises(ValueError, match="sides"):
+        Member(pool=None, diffs=None, sides=sides, weights=(1.0, 1.0), ci95=(0.0, 2.0), **common)
+    with pytest.raises(ValueError, match="sides"):
+        Member(pool=None, diffs=None, sides=sides, clusters=("a", "b"), ci95=(0.0, 2.0), **common)
+    with pytest.raises(ValueError, match="sides"):
+        Member(pool=None, diffs=None, sides=sides, weights=(1.0, 1.0), ci95=None, **common)
+
+
+def test_a_member_with_no_interval_may_carry_sides_and_is_not_corrected():
+    """The exemption `pool` and `diffs` already have, read for the third kind: a
+    member with no `ci95` is dropped by `family_members` before any evidence field
+    is read, and it is not required to carry none — a contrast whose construction
+    came back below its floor still holds the two side vectors it was computed
+    from.
+
+    `family_members` reads `ci95` and nothing else, which is why it needs no change
+    for this field; that is asserted here rather than left as a claim in a task
+    report."""
+    common = dict(where="1", step="s", metric="m", delta=1.0, declaration_index=0)
+    sides = UnpairedEvidence(of=(1.0,), against=(3.0,))
+    thin = Member(pool=None, diffs=None, sides=sides, ci95=None, **common)
+    assert thin.sides is sides
+    assert family_members([thin]) == []
+    fat = Member(pool=None, diffs=None, sides=sides, ci95=(0.0, 2.0), **common)
+    assert family_members([thin, fat]) == [fat]  # the presence that must report
 
 
 def test_a_member_with_no_interval_is_not_in_the_family():
