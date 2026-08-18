@@ -5039,11 +5039,14 @@ def _check_sweep(
     # would be invisible. Refused rather than approximated, on the precedent
     # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
     #
-    # Reads the resolved family, for the reason its sibling above does. It refuses
-    # a COMBINATION rather than a declaration, so it carries a § Validation row
-    # and is not one of the `NOT BUILT` declarations § The one config file counts:
-    # both `weight_by` and `cluster_by` are built, and a run declaring both
-    # publishes `weighted_t_over_units_clustered` per condition.
+    # Reads the resolved family rather than the declaration, the same way its
+    # sibling guard does — a `sweep.baseline` with no axis beside it publishes no
+    # delta, and neither guard should refuse a design that never reaches a
+    # comparison. It refuses a COMBINATION rather than a declaration, so it
+    # carries a § Validation row and is not one of the `NOT BUILT` declarations
+    # § The one config file counts: both `weight_by` and `cluster_by` are built,
+    # and a run declaring both publishes `weighted_t_over_units_clustered` per
+    # condition.
     weight_by = units_here.get("weight_by")
     if (
         comparisons > 0
@@ -5055,13 +5058,13 @@ def _check_sweep(
         c.error(
             "E-DATA-WEIGHT-CLUSTER-CONTRAST",
             "data.units.weight_by",
-            "`data.units.weight_by` and `data.units.cluster_by` are both declared beside a "
-            "comparison, and no construction in this build computes a weighted clustered "
-            "delta: the weighted paired forms take no membership and the clustered paired "
-            "forms take no weights. Declare one of the two here — the cluster if what the "
-            "units share is what threatens the interval, the weight if what they represent "
-            "is — or keep both and express the difference as an `Estimate` returned by a "
-            "`summary` step, which core records as reported rather than recomputing",
+            "and `data.units.cluster_by` are both declared beside a comparison, and no "
+            "construction in this build computes a weighted clustered delta: the weighted "
+            "paired forms take no membership and the clustered paired forms take no "
+            "weights. Declare one of the two here — the cluster if what the units share "
+            "is what threatens the interval, the weight if what they represent is — or "
+            "keep both and express the difference as an `Estimate` returned by a `summary` "
+            "step, which core records as reported rather than recomputing",
         )
 
     # A contrast whose two conditions were assigned to different arms of a

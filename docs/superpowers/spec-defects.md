@@ -5554,7 +5554,7 @@ the level path echo a declaration whose relevance to that one block a reader mus
 open half of the fix. The deferral, its owner, and the fix list above are unchanged by this
 amendment.
 
-## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
+## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
 finding added below by the whole-branch review at `d59316d`. Three
@@ -5565,8 +5565,9 @@ are disclosure/refusal gaps on a path task 16 widened rather than created, and n
 **Re-owned**, `H4b` having since split into H4b-1 (weights through contrasts) and H4b-2 (clusters
 through contrasts): Finding 2 is the general form of the gap H4b-1 task 5 closed the reachable
 instance of — see the entry below this one, `CLOSED by H4b-2 task 9 — a stratified paired draw
-could publish a zero-width contrast interval`, which closes the paired construction's
-content-based degenerate refusal for both the stratified and unstratified draws.
+could publish a zero-width contrast interval`, which gives `paired_percentile_of_derived` the
+content-based degenerate refusal it lacked, over both the clustered and unclustered draws and the
+stratified and unstratified ones as one check.
 Findings 1 and 3 are general contrast-disclosure gaps that neither weights nor clusters created, so
 they stay with **H4b-2** as the nearer of the two contrast-family slices rather than being split a
 third way.
@@ -5585,12 +5586,17 @@ this shape since they were built; task 16 widens it to every recorded column und
 the comparison (`cond:<index>` / `contrast:<id>`, which `_comparison_step_blocks` already carries as
 `where_id`) and a registry row, and it should be built alongside Finding 2 rather than separately.
 
-**Finding 2 — `paired_percentile_of_derived` carries none of the content-based degenerate
-refusals its three siblings now have.** `percentile_over_units` (strata branch),
-`percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded one entry
-above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on the
-stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
-[honest]; reporting a point with no interval is honest." The paired construction has no such check.
+**Finding 2 — CLOSED by H4b-2 task 9.** ~~`paired_percentile_of_derived` carries none of the
+content-based degenerate refusals its three siblings now have.~~ `percentile_over_units` (strata
+branch), `percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded
+one entry above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on
+the stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
+[honest]; reporting a point with no interval is honest." ~~The paired construction has no such
+check.~~ It now does: `_drawable_content` and the check built around it in
+`paired_percentile_of_derived` (H4b-2, task 9) refuse a draw whose every drawable thing within every
+stratum carries the same pair of rows — a key's row pair by default, a whole cluster's sorted
+multiset of row pairs once `clusters` is given — covering the stratified/unstratified and
+clustered/unclustered cases as one expression rather than a fourth sibling refusal built separately.
 
 **Scoped by the whole-branch review (`d59316d`): each of those three refusals is on its stratified
 or clustered branch, and none of them is a general "core never publishes a zero-width percentile
@@ -5615,9 +5621,11 @@ the same zero-width interval before task 16 under a different `method` string. I
 cancels across two identical tables; here the delta is `0.0` beside it, so the record is internally
 consistent and a reader can see what happened. Task 16's own decision to pass `_column_mean` twice is
 sound for the same reason: the two tables are the two conditions' own collapsed data, not one table
-seen twice, so nothing cancels. What is owed is consistency — the paired construction is now the
+seen twice, so nothing cancels. ~~What is owed is consistency — the paired construction is now the
 fourth reachable from a recorded column and the only one the zero-width sweep never touched, and the
-sweep should finish rather than stop at three.
+sweep should finish rather than stop at three.~~ **CLOSED by H4b-2, task 9**: the paired
+construction now carries the identical content-based check its three siblings do, so the sweep
+covers all four.
 
 **Finding 3 — a contrast entry carries no resolved-`resample` echo, while every `aggregated` block
 beside it does.** Filed by the **H4a whole-branch review** (2026-08-15, at `d59316d`), which found

@@ -3133,6 +3133,19 @@ below names what the comment *does*:
 | `docs/reference.md` § Statistical reporting, the compose sentence | Task 8 already re-pointed it at `E-DATA-WEIGHT-CLUSTER-CONTRAST` | **Verify, do not edit.** If it still names the retired code, task 8 was applied wrong |
 | `docs/reference.md` § Statistical reporting, the derived-metric resample paragraph | Names `E-DATA-CLUSTER-DERIVED`, not the retired code | **Leave.** Listed so it is not "fixed" |
 
+**Correction, appended 2026-08-18 after batch 2 (tasks 6–9), at `c846601`.** Task 8 built after this
+table was enumerated and added two forward-dangling citations of `E-DATA-CLUSTER-CONTRAST` that this
+list does not name, found by the batch 2 review (Minor 2):
+
+| Where | What it says | This task |
+|---|---|---|
+| `docs/reference.md:515`, `E-DATA-WEIGHT-CLUSTER-CONTRAST`'s § Errors row | "read the same way `E-DATA-CLUSTER-CONTRAST` above reads it" — a citation of the sibling row's *reading*, not of the code itself, but it goes stale the moment task 14 deletes that row | **State the reading directly**: both guards read the resolved comparison family, not the declaration |
+| `src/publishable/validate.py:5044`, the weight × cluster guard's comment | "Reads the resolved family, for the reason its sibling above does" — a positional locator ("above") for the `E-DATA-CLUSTER-CONTRAST` emit block task 14 removes | **State the reason inline** rather than pointing at a block that will no longer be there |
+
+Both belong in task 15's sweep and its Step 1 grep, alongside the six rows the original table names;
+neither was in scope for task 8's own brief, which built the code and the two doc rows the design
+specifies and did not anticipate task 14 deleting a sibling block two tasks later.
+
 - [ ] **Step 1: Sweep, and prove the sweep can fail.**
 
 ```

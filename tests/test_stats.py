@@ -1570,9 +1570,11 @@ def test_the_paired_clustered_percentile_draws_a_cluster_within_its_stratum():
 
     Stratum `A` holds the two small clusters (2 and 4 units) and stratum `B` the
     one large one (6). Each stratum contributes as many clusters as it holds, so
-    every replicate pools 6 rows from `B` and between 4 and 8 from `A`: the row
-    count is confined to {10, 12, 14, 16}, which an unstratified clustered draw
-    (6 to 18, and 18 is reachable) is not."""
+    every replicate pools 6 rows from `B` (its one cluster, redrawn with
+    replacement, always contributes 6) and — drawing 2 clusters with replacement
+    from {2, 4} — one of 4, 6, or 8 from `A`: the row count is confined to
+    {10, 12, 14}, which an unstratified clustered draw (6 to 18, and 18 is
+    reachable) is not."""
     of, against, keys, clusters = _paired_cluster_fixture()
     strata = {k: ("A" if clusters[k] in {"a", "b"} else "B") for k in keys}
     seen: list[int] = []
@@ -1594,7 +1596,7 @@ def test_the_paired_clustered_percentile_draws_a_cluster_within_its_stratum():
         clusters=clusters,
     )
     assert got.interval is not None
-    assert set(seen) <= {10, 12, 14, 16}
+    assert set(seen) <= {10, 12, 14}
     assert len(set(seen)) > 1  # the control: the draw really varies
 
 
@@ -1626,8 +1628,17 @@ def test_the_unclustered_paired_draw_is_the_same_sequence_it_always_was():
     strata the drawn key list must be `[keys[rng.randrange(n)] for _ in range(n)]`
     against a fresh `random.Random(seed)` — same count of `randrange` calls, same
     bounds, same order. Asserted against a recomputed sequence rather than against
-    a captured constant, so it pins the RNG contract instead of one seed's output."""
+    a captured constant, so it pins the RNG contract instead of one seed's output.
+
+    `keys` is deliberately **not** sorted ascending — the H4b-2 batch 2 review
+    (Major 4) found the sorted-fixture form blind to a mutant that sorts `items`
+    before drawing (`items = sorted([key] for key in keys)`): with `clusters=None`
+    and no `strata` the `ValueError` guard never fires (it only checks under
+    `strata`), so an unsorted `keys` list is legal here and the mutant's sorted
+    order diverges from this fixture's own, which is what makes the mutation
+    discriminate."""
     of, against, keys, _ = _paired_cluster_fixture()
+    keys = keys[::-1]
     drawn: list[list[str]] = []
 
     def compute_of(table):
@@ -4125,13 +4136,14 @@ def test_a_stratum_mapping_missing_a_drawn_key_is_a_core_defect():
 
 
 def test_an_unsorted_key_list_with_strata_is_a_core_defect():
-    """The relabelling invariance above depends on `grouped`'s first-occurrence
-    order coinciding with pool content order, which holds only when `keys` is
-    ascending — the same precondition `percentile_of_derived` enforces itself by
-    sorting its own `collapsed` keys rather than trusting a caller. This
-    function trusts `paired_keys` to hand it a sorted list instead of sorting
-    defensively, so a caller that stops doing so is a bookkeeping error worth
-    raising on."""
+    """Not a correctness requirement — `pools.sort()` makes the whole partition
+    a pure function of content, so a shuffled `keys` list under `strata` draws
+    the identical sequence a sorted one does once past this check. What the
+    check buys is the caller-contract discipline `percentile_of_derived`
+    already keeps for itself (sorting its own `collapsed` keys rather than
+    trusting a caller): this function trusts `paired_keys` to hand it a sorted
+    list instead of sorting defensively, so a caller that stops doing so is a
+    bookkeeping regression worth raising on rather than correcting silently."""
     from publishable.stats import paired_percentile_of_derived
 
     with pytest.raises(ValueError, match="sorted"):
@@ -4144,6 +4156,29 @@ def test_an_unsorted_key_list_with_strata_is_a_core_defect():
             seed=7,
             draws=10,
             strata=_PAIRED_STRATA,
+        )
+
+
+def test_an_unsorted_key_list_with_strata_and_clusters_is_a_core_defect_too():
+    """The composition Minor 4 of the H4b-2 batch 2 review found untested: the
+    guard reads `keys` itself, before `clusters` groups it into drawable
+    things, so an unsorted `keys` list raises identically whether or not
+    `clusters` is also given — this pins that `clusters` does not somehow
+    exempt the check."""
+    from publishable.stats import paired_percentile_of_derived
+
+    clusters = {"u0": "c0", "u1": "c0", "u2": "c1", "u3": "c2", "u4": "c2", "u5": "c3"}
+    with pytest.raises(ValueError, match="sorted"):
+        paired_percentile_of_derived(
+            _PAIRED_OF,
+            _PAIRED_AGAINST,
+            ["u3", "u4", "u5", "u0", "u1", "u2"],
+            _mean_of_m,
+            _mean_of_m,
+            seed=7,
+            draws=10,
+            strata=_PAIRED_STRATA,
+            clusters=clusters,
         )
 
 

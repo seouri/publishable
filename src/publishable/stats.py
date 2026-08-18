@@ -1383,16 +1383,6 @@ def paired_percentile_of_derived(
     if len(keys) < 2:
         return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
-    # **`keys` must already be sorted ascending when `strata` is given.**
-    # `grouped`'s label order is first-occurrence order over this walk, and the
-    # relabelling invariance above holds only because that first-occurrence
-    # order coincides with content order whenever `keys` is ascending — the same
-    # precondition `percentile_of_derived` enforces itself by calling
-    # `sorted(collapsed)` rather than trusting its caller. This function trusts
-    # `paired_keys`, which returns its intersection sorted, so it checks instead
-    # of silently sorting: a caller that has stopped passing a sorted list is a
-    # bookkeeping error worth raising on, not one worth correcting quietly.
-    #
     # ONE uniform draw shape: a list of stratum groups, each holding the DRAWABLE
     # things that stratum owns, each of those a list of keys. A unit is the
     # drawable thing by default; a whole cluster is, once `clusters` is given
@@ -1426,12 +1416,28 @@ def paired_percentile_of_derived(
     if strata is None:
         pools = [items]
     else:
+        # **`keys` must already be sorted ascending when `strata` is given.**
+        # This is a caller-contract assertion, not a correctness requirement:
+        # `pools = [sorted(group) for group in grouped.values()]` followed by
+        # `pools.sort()` below makes the whole partition a pure function of
+        # CONTENT, so the relabelling invariance holds regardless of the order
+        # `keys` arrives in or the order strata are first encountered while
+        # walking it — verified by running with this check disabled, a shuffled
+        # `keys` list under `strata` draws the identical sequence a sorted one
+        # does. What the check buys instead is the same discipline
+        # `percentile_of_derived` keeps for itself (`sorted(collapsed)` rather
+        # than trusting its caller): this function trusts `paired_keys`, which
+        # returns its intersection sorted, so a caller that has stopped doing
+        # that is a bookkeeping regression worth raising on rather than
+        # correcting quietly and never being told about.
         if keys != sorted(keys):
             raise ValueError(
                 "paired_percentile_of_derived requires keys sorted ascending "
-                "when strata is given, since the stratum pools' relabelling "
-                "invariance depends on first-occurrence order coinciding with "
-                "content order"
+                "when strata is given, matching the contract `paired_keys` "
+                "already satisfies — not because the result would otherwise "
+                "differ, but because a caller that has stopped supplying a "
+                "sorted list is a regression worth raising on rather than "
+                "correcting silently"
             )
         grouped: dict[str, list[list[str]]] = {}
         for item in items:

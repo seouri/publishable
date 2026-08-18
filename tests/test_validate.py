@@ -145,6 +145,12 @@ def messages_by_code(path: Path) -> dict[str, str]:
     return {f.code: f.message for f in c.findings}
 
 
+def paths_by_code(path: Path) -> dict[str, str]:
+    c = Collector()
+    validate_config(path, c)
+    return {f.code: f.path for f in c.findings}
+
+
 def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
     installed, registries, write_config
 ):
@@ -7628,8 +7634,13 @@ def test_a_weighted_clustered_comparison_draws_its_own_refusal(write_config, tmp
     found = codes(path)
     assert "E-DATA-WEIGHT-CLUSTER-CONTRAST" in found
     assert "E-DATA-CLUSTER-CONTRAST" in found  # deleted by task 14, not narrowed
+    # The identity lives in `path`, house style for every other guard in this
+    # module (128 of 137 `c.error`/`c.warn` emits open their message as a
+    # continuation of the path line rather than restating it) — asserted here
+    # rather than left to the message alone, which is near-vacuous as a check
+    # of *which* field the field-and-message pair actually names.
+    assert paths_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"] == "data.units.weight_by"
     message = messages_by_code(path)["E-DATA-WEIGHT-CLUSTER-CONTRAST"]
-    assert "weight_by" in message
     assert "cluster_by" in message
 
 
