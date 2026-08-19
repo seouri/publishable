@@ -244,3 +244,75 @@ subsumed by the Critical 1 rewrite), `apparatus.py` ("`_observe_one` below" →
 ### Findings not closed, and why
 
 None. All eight findings (one Critical, three Major, four Minor) were addressed in this round.
+
+---
+
+## Fix round 2
+
+Three items, all the same shape — a correct fix shipped unpinned, or a test that claimed a
+guarantee it did not witness. Fix commit: `f67cbfd`.
+
+**Test summary:** `uv run pytest` → **2410 passed, 1 skipped, 2 xfailed** (2409 + 1 new test;
+items 2 and 3 strengthened existing tests rather than adding new ones). `ruff check`, `ruff
+format --check`, `mypy` (46 source files) all clean.
+
+### Item 1 — the dispatch-site `KeyboardInterrupt` carve-out was unpinned
+
+**Changed:** added `test_a_probe_dispatch_keyboard_interrupt_propagates_with_no_message` in
+`tests/test_cli.py`. Registers a probe name via the `installed` fixture (so `validate` does not
+refuse before `run` reaches the lock), then monkeypatches `cli.apparatus._probe_for` to raise a
+`KeyboardInterrupt` carrying a constructed message, and asserts it propagates through
+`main`/`run_a_project` with `excinfo.value.args == ()`.
+
+**Mutation, exact text:** removed
+```
+                if isinstance(exc, KeyboardInterrupt):
+                    raise KeyboardInterrupt from None
+```
+from `command_run`'s dispatch wrapper (the two-line carve-out fix round 1 added around
+`apparatus._probe_for`). **Verified:** `uv run pytest tests/test_cli.py -k
+"probe_dispatch_keyboard_interrupt"` → `Failed: DID NOT RAISE KeyboardInterrupt` (the
+`KeyboardInterrupt` fell through to the diagnostic branch instead of propagating, and
+`command_run` returned `EXIT_WRONG` normally). Reverted by editing back; re-ran, passes.
+
+### Item 2 — `E-APPARATUS-FACT-CREDENTIAL` was the one `APPARATUS_CODES` member left unpinned
+
+**Changed:** `test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no_run_yaml`
+now calls `_assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-CREDENTIAL")`
+instead of a bare `"E-APPARATUS-FACT-CREDENTIAL" in output` check. The reviewer's diagnosis was
+exact: `check_facts`'s credential-check message interpolates the credential's *name* and the
+fact's *key*, never its value, so the code string and the value's absence both held whether the
+diagnostic went through the wrapper or escaped raw to `main`.
+
+**Mutation, exact text:** deleted `"E-APPARATUS-FACT-CREDENTIAL",` from the `APPARATUS_CODES`
+frozenset in `src/publishable/apparatus.py`. **Verified:** the test now FAILS on
+`assert "experiment_type" in output` — the diagnostic reached `main`'s bare handler
+(`f"  error   {code:<20} {exc}"`, no path field, no `"N problem(s)"` line) instead of
+`command_run`'s `Collector`. Reverted by editing back; re-ran, passes; full suite unaffected.
+
+### Item 3 — the decorator-mismatch test's docstring claimed a guarantee it didn't witness
+
+**Changed:** `test_a_probe_s_entry_point_decorator_mismatch_is_a_diagnostic_not_a_traceback` now
+calls the same `_assert_went_through_the_containment_wrapper(output, "E-PLUGIN-DECORATOR")`
+helper item 1's Critical-1 sibling test uses, instead of a bare `"E-PLUGIN-DECORATOR" in output`
+check that only pinned `exc.code` passthrough.
+
+**Verified:** restored the pre-round-1 `cli.py` (dispatch fully outside the containment wrapper,
+`/tmp/cli_before_fix1.py`) and re-ran this one test — FAILED on
+`assert "experiment_type" in output`, confirming the original assertion passed vacuously with
+the wrapper entirely reverted, exactly as the review found. Restored the fixed `cli.py`; re-ran,
+passes.
+
+### The positional locators introduced in fix round 1
+
+**Changed:** `src/publishable/cli.py`'s comment ("dispatch failures are resolved, and redacted,
+above") now names the sibling directly — `apparatus._probe_for`'s own `try/except`. Three
+occurrences of `"the leak check below would be vacuous"` in `tests/test_cli.py` (Fixture K,
+K2, and the load-failing-probe tests) reworded to `"the per-file credential-absence check would
+be vacuous"` — no position, just what the next lines check. `"the fix above"` in the
+decorator-mismatch docstring reworded to name
+`test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run` directly.
+
+### Findings not closed, and why
+
+None. All three items plus the positional-locator cleanup were closed in this round.
