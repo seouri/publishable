@@ -14133,6 +14133,52 @@ def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_dr
     assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none
 
 
+_LOUD_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("loud_probing")
+class LoudProbing(BaseTemplate):
+    apparatus_probe = "loud_probe"
+    parameter_spec = {}
+"""
+
+
+def test_no_validate_path_calls_a_declared_probe(
+    installed, registries, git_repo, write_config, tmp_path
+):
+    """The probe writes a flag file and then raises: a call core made cannot be
+    silent, and a call it made and swallowed would still leave the flag on disk.
+    The findings-set assertion is the control that must REPORT — an exact set,
+    because `validate` collects rather than aborting and a refusal elsewhere never
+    makes a later check unreachable, so a control asserting only the flag's
+    absence would pass identically if `validate` never got far enough to resolve
+    the probe at all. THE CONTROL is that set: it is exactly `set()`, the same
+    empty set a `generic` golden config produces (`write_config()` above), which
+    says `validate` reached and passed every other check — including
+    `_check_probe`'s metadata scan, which resolves `loud_probe` successfully —
+    without ever invoking it.
+    """
+    flag = tmp_path / "probe_called.flag"
+    site = installed("dist-one", "1.0", {"publishable.probes": {"loud_probe": "loud_p14:probe"}})
+    (site / "loud_p14.py").write_text(
+        "from pathlib import Path\n"
+        "from publishable import Apparatus, register_probe\n\n\n"
+        '@register_probe("loud_probe")\n'
+        "def probe(cfg):\n"
+        f"    Path({str(flag)!r}).write_text('called')\n"
+        "    raise RuntimeError('a validate path called the probe')\n"
+    )
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "loud_probing.py").write_text(_LOUD_PROBE_TEMPLATE)
+
+    found = codes(write_config({"experiment_type": "loud_probing", "parameters": {}}))
+
+    assert not flag.exists()
+    assert found == set()
+
+
 def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
     """`units.resolve_units` tests `glob` first, so a mapping carrying both keys
     would silently resolve as a glob — this refusal is what stops that instead
