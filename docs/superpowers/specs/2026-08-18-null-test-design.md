@@ -516,3 +516,88 @@ That is a specification-integrity payoff, not an execution payoff, and it must b
 | Interactions, dose-response orderings, differences-in-differences | **Refused.** Contrasts do not nest |
 
 **Task count is 29.**
+
+---
+
+## Corrections against the code
+
+**Appended 2026-08-18 by the implementation plan's author
+([`plans/2026-08-18-null-test.md`](../plans/2026-08-18-null-test.md)), measured against `main` at
+`a207702`. The body above is not edited** — a spec records what was decided when it was written, and
+a retro-edit destroys the evidence. Each entry names what it replaces and how it was verified. Six of
+the seven change a task's contents; none changes the task count, the ordering constraints or the
+payoff answer.
+
+**1. `percentile_of_derived`'s structure cannot express a permutation, because the roster's
+attributes are re-applied on every draw.** § Task decomposition's task 12 reads *"The derived
+counterpart — relabel, re-run `aggregate`, collect the null — the `percentile_of_derived` structure
+one construction over"*. Measured: `cli._make_resample_fn` builds `lambda units:
+tmpl.aggregate(_attributed(units, attrs), cfg)`, and `cli._attributed` merges
+`attributes.get(row["unit"], {})` **over** each row, so a relabelling written into the table's rows
+is erased before `aggregate` sees it. **Verified by probe**, not by reading alone: relabelling two
+rows and passing them through `_attributed` with the original roster mapping returned the original
+labels. A `permutation_of_derived` built on a one-argument `compute` would therefore report
+`p_value: 1.0` for every derived metric in every run — which is § The discriminating fixtures'
+*"reuses the observed assignment"* mutant arriving as the default behaviour. **Replaces task 12's
+structural claim:** the construction takes `compute(table, labels)`, and `cli` builds a second
+closure family (`_make_null_fn`) rather than reusing the resample one. Propagates to tasks 14, 15
+and 20 through the `Interfaces` blocks in the plan. **One benefit: fixture C2 needs no prescribed
+mutation for this property — the pre-fix behaviour is the mutant.**
+
+**2. Decision 9's closed form does not reproduce decision 9's own integers.** The decision states
+`min_honest_permutations(level) = ceil(1/level) − 1` **and** `n ≥ 20 at α = 0.05` **and** a family
+bound at `20 × m`, *"stated together here so they cannot drift"*. **Verified by computation** at
+`a207702`: `ceil(1/0.05) − 1 = 19` and `ceil(1/0.025) − 1 = 39`, against the stated 20 and 40.
+`floor(1/level)` reproduces both, and it is what the stated **strict** inequality gives —
+`1/(n+1) < level ⟺ n > 1/level − 1`. The closed form is the expression for the **non-strict** reading
+`1/(n+1) ≤ level`, which the decision's own prose rejects. **Replaces the expression, not the
+inequality or either integer:** `min_honest_permutations(level) = math.floor(1.0 / level)`. One
+measured caveat recorded with it: at `level = 0.05/7` a brute-force scan of the inequality answers
+139 because `1/140` and `0.05/7` differ by one ulp, where `floor` answers the exact-arithmetic 140 —
+which is why the plan writes the expression rather than a search.
+
+**3. Three shipped comments claim what decision 4's widening makes false.** Decision 4 rules that
+`family_members` widens; it does not name the comments that assert the old predicate. **Verified by
+reading all three at `a207702`:** `correction.Member.__post_init__`'s docstring — *"excluded by
+`family_members` before any of the three fields is ever read"*; `correction._evidence_ratio`'s inline
+comment — *"family_members dropped the others"*; and `cli._comparison_step_blocks`' comment at the
+`Member(` call — *"An entry with no `ci95` is dropped by `family_members` before any of the three
+fields is ever read"*. **Adds to task 16**, with `CLAUDE.md`'s rule that a claim is preferably
+deleted rather than rewritten.
+
+**4. `units.stratum_varies_within_cluster` cannot supply the level derivation.**
+§ `E-STATS-NULLTEST-LEVEL`'s ground says the refusal *"shares its derivation with task 13"*, and the
+nearest shipped expression is that function. **Verified by reading:** it returns *the first offending
+cluster with its values, or `None`*, which separates "varies somewhere" from "constant everywhere"
+and **cannot** separate "varies in every cluster" (a legal within-cluster null) from "varies in some"
+(the ambiguity the row refuses). **Adds a new shared function to task 9**,
+`units.null_test_level(roster, cluster_by, shuffle) -> tuple[str, tuple[str, str] | None]`, minted
+there and consumed by task 13 — H4c's task-9-mints-the-predicate precedent. The sharing the spec
+requires is preserved; the function it would have been shared through is not the right one.
+
+**5. `corrected_for`'s `thin` flag fires for a p-only member under `holm` and `bonferroni`.** Task 18
+names *"`W-STATS-CORRECTED-THIN`'s interaction with a `None` level"* — the `fdr_bh` half. **Verified
+by reading `corrected_for` and `_corrected_bounds`:** `thin = level is not None and bounds is None`,
+and `_corrected_bounds` falls through to `None` for a member carrying none of the three evidence
+kinds. So under `holm` a widened p-only member sets `thin: True`, and `cli` emits a warning whose
+message says the **resample's draws** could not support the level — false of a member that never had
+an interval. **Adds a condition to task 17's `thin` expression** (`and member.ci95 is not None`) and a
+test asserting the flag is `False`, pinned on the flag rather than on the warning, since the flag is
+where the fault lives.
+
+**6. `rank_family`'s tuple key must short-circuit `_evidence_ratio`.** Decision 4 rules the key is
+`(has_interval, -ratio, declaration_index)` and separately notes the assert becomes reachable; it
+does not connect the two. **Verified by reading `_evidence_ratio`'s `assert member.ci95 is not
+None`:** a key expression evaluating `-_evidence_ratio(m)` for every member evaluates it **eagerly**
+and raises during the sort. **Adds the short-circuiting form to task 16's code block**, and it is the
+spec's own *"a mutation caught by a crash is not a pin"* trap arriving as an implementation bug
+rather than as a test-design one.
+
+**7. `hypotheses.evaluate`'s three-state corrected-bound logic moves by exactly one field.** Named by
+neither the decisions nor task 21. **Verified by reading `evaluate`, `_tested_number`,
+`verdict_for` and `_observed_block`:** `corrected_unavailable` is set from a falsy `ci95_corrected`,
+so a counted hypothesis whose member is p-only now receives a `fields` entry where it previously
+received none. **What moves is `observed.ci95_corrected`, from absent to `null`. What does not move:**
+`supported` (a bound test had no raw interval to read either, and `evaluate_on: observed` bypasses
+the flag) and `family_size` (it is `len(counted)`). **Recorded at that size in task 17's step 5**,
+with one test asserting exactly it — an inflated claim here would be worse than none.
