@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4c → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4d → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -90,8 +90,8 @@ string at all**, so the vocabulary was minted in `reference.md` before any code 
 weighted contrast **whose metric is derived** is the exception: core hands the template the weight
 column and does not weight the delta itself, so the `method` stays unweighted and `cohens_d` is `null`
 while `weighted_by` and the effective size travel regardless. Out of scope with their routes: clusters
-through contrasts, **which H4b-2 has since retired** — see the entry below; the unpaired forms are
-H4c; `null_test` is H4d.
+through contrasts, **which H4b-2 has since retired** — see the entry below; the unpaired forms,
+**which H4c has since retired** — see its entry below too; `null_test` is H4d.
 
 **H4b-2 (clusters through contrasts) merged on 2026-08-18.** `E-DATA-CLUSTER-CONTRAST` is retired,
 and `E-DATA-WEIGHT-CLUSTER-CONTRAST` is minted for the one combination still refused: a design
@@ -115,6 +115,27 @@ before the `summarize_step` call whose `except ContractError` retry clears neith
 was given four wrong grounds in four separate commits**, each an answer from a proxy rather than from
 the state the code branches on, and the last of them cited a row rewritten in the same breath. Only an
 end-to-end `run` exposed it; every direct-call probe hand-built the maps and so never reached it.
+
+**H4c (unpaired contrasts) merged on 2026-08-18.** `E-DATA-ALLOCATION-CONTRAST` is retired: a contrast
+across a declared `sweep.groups` axis is computed. § Statistical reporting had named unpaired
+constructions **in the present tense that did not exist** — `welch_t_over_units`,
+`unpaired_percentile_over_units` and their `_clustered` spellings now do, with `cohens_ds`.
+`E-DATA-WEIGHT-ALLOCATION-CONTRAST` is minted for the weighted unpaired pair, deliberately not built.
+**It unblocks zero configs** and both counts stay where H4b-1 left them — six with no remaining
+core-side blocker, three executable — because the nine configs declare `allocation: within` with
+`groups: []`. Four things worth carrying. **`Member` gained a third evidence *kind*, `sides`** — the
+exactly-one rule became a count over three, where both prior slices had added modifiers instead;
+a Welch interval's evidence is two per-side value vectors, neither a pool nor differences.
+**`paired` is now derived**, which was the last hard-coded claim in the contrast record, and the
+regression pin guarding that change was captured **before** anything moved and covers each cell's α
+*and* its own df — the hole H4b-1 left. **`n_paired` is absent, not null, on an unpaired entry** —
+the first conditional write of a record key here, because `0` already means *pairing failed* — with
+`n_of`/`n_against` and `n_clusters_of`/`n_clusters_against` beside it. And the unpaired clustered df
+is **Welch-Satterthwaite over two cluster-robust per-side variances**, each contributing `G_s − 1`;
+`min(G)−1` and `G_total−2` are named as rejected readings, and a real `run` confirmed a non-integer
+df of 3.735 rather than either. **The derived-collision corner was given a fifth wrong ground here**,
+in a comment asserting `sides` was unreachable from a function that builds it fifty lines later —
+five wrong grounds across two slices, every one an answer from a proxy.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
