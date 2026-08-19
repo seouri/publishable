@@ -58,6 +58,7 @@ from publishable.units import (
     holdout_sizes,
     holdout_values_fault,
     is_measurement_numeric,
+    null_test_level,
     resolve_units,
     rule_for,
     stratum_names,
@@ -6173,19 +6174,23 @@ def _check_resample(
 
 
 def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """Checks `statistics.null_test` gets so far — task 9 adds two more to this
-    enumeration (`E-STATS-NULLTEST-REPORTBY`, `E-STATS-NULLTEST-LEVEL`); this
-    docstring names only what this function currently does, not what the
-    finished check will:
+    """Every check `statistics.null_test` gets — the enumeration is the list, not a
+    sample of it:
 
     - `E-STATS-NULLTEST-UNITS` — a `null_test` with no `data.units` at all.
     - `E-STATS-NULLTEST-METHOD` — the `method` enum.
     - `E-STATS-NULLTEST-N` — the `n` floor, `stats.min_honest_permutations`.
     - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` naming neither a declared unit
       attribute NOR a declared `sweep.groups` axis.
+    - `E-STATS-NULLTEST-REPORTBY` — a `shuffle` naming a `statistics.report_by`
+      attribute.
+    - `E-STATS-NULLTEST-LEVEL` — **reads `roster`**: a `shuffle` that varies
+      within some clusters and not others, so neither a within-cluster nor a
+      whole-cluster null applies.
 
-    `roster` is accepted now and unused, ahead of task 9's level derivation,
-    which is the one check here that will read it.
+    **One of the six reads `roster`**, and it carries its own `roster is not None`
+    guard rather than leaning on a caller; a check added here must state which side
+    of that line it is on.
 
     **`shuffle` is checked against `data.units.attributes` UNION the declared
     `sweep.groups` axis names**, and the union is the load-bearing half rather than
@@ -6273,6 +6278,45 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
             f"{', '.join(sorted(declared)) or 'none'}; `sweep.groups` declares "
             f"{', '.join(sorted(axes)) or 'none'}",
         )
+    report_by = {a for a in (statistics.get("report_by") or []) if isinstance(a, str)}
+    if isinstance(shuffle, str) and shuffle in report_by:
+        c.error(
+            "E-STATS-NULLTEST-REPORTBY",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, which `statistics.report_by` also names. A permutation "
+            "of that attribute moves units between strata, so each drawn stratum holds a "
+            "different set of units and the null describes a different partition rather "
+            "than the same estimate under a null hypothesis. Shuffle an attribute the "
+            "reporting strata do not use, or drop the level from `report_by` and read "
+            "the contrast instead",
+        )
+    cluster_by = ((doc.get("data") or {}).get("units") or {}).get("cluster_by")
+    # The one check here that reads `roster`, guarded on its own rather than on
+    # the no-units exit above having not fired: `data.units` can be declared and
+    # fail to resolve, and `_check_units` owns that finding.
+    if roster is not None and isinstance(shuffle, str) and shuffle in (declared | axes):
+        try:
+            level, witnesses = null_test_level(
+                roster, cluster_by if isinstance(cluster_by, str) else None, shuffle
+            )
+        except ContractError:
+            # A unit carrying no cluster value (`E-DATA-CLUSTER-UNKNOWN`), which
+            # `_check_cluster_by` or `_check_units` usually reports beside this
+            # and sometimes does not — the same swallow `_check_resample`'s
+            # `fold_basis` call makes, and for its reason: this check cannot
+            # proceed without a readable grouping, and this module collects.
+            level, witnesses = "rows", None
+        if level == "ambiguous" and witnesses is not None:
+            c.error(
+                "E-STATS-NULLTEST-LEVEL",
+                "statistics.null_test.shuffle",
+                f"names `{shuffle}`, which varies within `{cluster_by}` {witnesses[0]} and "
+                f"is constant within {witnesses[1]} — so neither a within-cluster null "
+                "(permuting labels inside each cluster) nor a whole-cluster one "
+                "(relabelling clusters entire) applies to this roster. Shuffle an "
+                "attribute that is either constant within every cluster or varying "
+                "within every one",
+            )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

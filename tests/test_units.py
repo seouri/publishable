@@ -31,6 +31,7 @@ from publishable.units import (
     holdout_seed_for,
     holdout_sizes,
     holdout_values_fault,
+    null_test_level,
     partition_units,
     resolve_units,
     stratum_varies_within_cluster,
@@ -3123,6 +3124,84 @@ def test_the_stratum_check_reads_cluster_membership_from_the_one_authority():
     with pytest.raises(ContractError) as e:
         stratum_varies_within_cluster(roster, "animal_id", "label")
     assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+def _roster_of(rows: dict[str, dict[str, str]]) -> UnitList:
+    """A mapping of key → attributes, as a `UnitList` — the shape `null_test_level`'s
+    own tests need and no existing helper in this module supplies directly."""
+    return UnitList([Unit(key=key, paths=(), attributes=attrs) for key, attrs in rows.items()])
+
+
+def test_the_null_test_level_is_within_cluster_when_the_label_varies_inside_every_one():
+    """Fixture C's own shape: 10 matched sets of 5, `arm` varying inside each.
+    That is the matched case-control null `reference.md` § Clustered units names —
+    a case/control swap inside each matched set."""
+    roster = _roster_of(
+        {
+            f"u{c}_{i}": {"match_set": f"M{c:02d}", "arm": "of" if i >= 3 else "against"}
+            for c in range(1, 11)
+            for i in range(5)
+        }
+    )
+    assert null_test_level(roster, "match_set", "arm") == ("within_cluster", None)
+
+
+def test_the_null_test_level_is_whole_cluster_when_the_label_is_constant_inside_every_one():
+    """A cluster-randomized trial: the arm is a property of the cluster, so whole
+    clusters are relabelled. Two clusters per arm, and UNEQUAL in size, so a
+    construction that happened to work only for balanced clusters cannot pass."""
+    roster = _roster_of(
+        {
+            "a1": {"site": "S1", "arm": "of"},
+            "a2": {"site": "S1", "arm": "of"},
+            "a3": {"site": "S1", "arm": "of"},
+            "b1": {"site": "S2", "arm": "against"},
+            "b2": {"site": "S2", "arm": "against"},
+            "c1": {"site": "S3", "arm": "of"},
+            "d1": {"site": "S4", "arm": "against"},
+            "d2": {"site": "S4", "arm": "against"},
+        }
+    )
+    assert null_test_level(roster, "site", "arm") == ("whole_cluster", None)
+
+
+def test_the_null_test_level_is_ambiguous_when_some_clusters_vary_and_others_do_not():
+    """§ Validation's own worked example, built as written: `status` varies within
+    `M07` and is constant within `M12`, so neither null applies. **Both witnesses
+    are returned**, because a message naming only the varying one reads as though
+    the constant one were fine."""
+    roster = _roster_of(
+        {
+            "p1": {"match_set": "M07", "status": "case"},
+            "p2": {"match_set": "M07", "status": "control"},
+            "p3": {"match_set": "M12", "status": "control"},
+            "p4": {"match_set": "M12", "status": "control"},
+        }
+    )
+    assert null_test_level(roster, "match_set", "status") == ("ambiguous", ("M07", "M12"))
+
+
+def test_the_null_test_level_is_rows_with_no_cluster_declared():
+    """No `cluster_by` is not a third clustering answer — it is the absence of
+    one, and the draw is over rows."""
+    roster = _roster_of({"p1": {"status": "case"}, "p2": {"status": "control"}})
+    assert null_test_level(roster, None, "status") == ("rows", None)
+
+
+def test_a_unit_carrying_no_value_for_the_shuffled_attribute_is_its_own_level():
+    """`no value` is a level like any other — `_stratum_groups` and
+    `stratum_varies_within_cluster` both render an absent value that way, so this
+    agrees with them rather than treating the absence as a fault. A cluster whose
+    units are split between a value and no value VARIES."""
+    roster = _roster_of(
+        {
+            "p1": {"match_set": "M01", "status": "case"},
+            "p2": {"match_set": "M01"},
+            "p3": {"match_set": "M02", "status": "case"},
+            "p4": {"match_set": "M02"},
+        }
+    )
+    assert null_test_level(roster, "match_set", "status") == ("within_cluster", None)
 
 
 def test_holdout_sizes_is_the_single_authority_for_the_split_sizes():

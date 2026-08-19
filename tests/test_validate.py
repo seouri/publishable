@@ -4313,6 +4313,88 @@ def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
+def _level_doc(**null_test) -> dict:
+    """A config declaring `cluster_by: match_set` and a `null_test` shuffling
+    `status` — the shared fixture both the ambiguity test and its control use."""
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["match_set", "status"],
+            "cluster_by": "match_set",
+        },
+        "statistics": {
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "status", **null_test}
+        },
+    }
+
+
+def test_an_ambiguous_shuffle_level_is_refused(write_config, tmp_path):
+    """§ Validation's *Shuffle level is unambiguous*, given a check. The row's own
+    worked example: one matched set whose `status` varies and one whose does not,
+    so neither a within-cluster nor a whole-cluster null applies.
+
+    Roster-time, so the fixture writes a real CSV: the fault is a property of the
+    resolved units and no declaration can express it. **The CONTROL is the same
+    config with `M12` made to vary**, which must NOT draw the code — without it
+    the refusal could be firing on the declaration rather than on the roster."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,status\np1,M07,case\np2,M07,control\np3,M12,control\np4,M12,control\n"
+    )
+    found = codes(write_config(_level_doc()))
+    assert "E-STATS-NULLTEST-LEVEL" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,status\np1,M07,case\np2,M07,control\np3,M12,case\np4,M12,control\n"
+    )
+    clean = codes(write_config(_level_doc()))
+    assert "E-STATS-NULLTEST-LEVEL" not in clean
+
+
+def test_a_shuffle_naming_a_report_by_attribute_is_refused(write_config):
+    """`E-STATS-NULLTEST-REPORTBY`, minted by task 5 as a standing narrow refusal.
+    Relabelling a stratifying attribute changes which units a stratum holds, so
+    the null is of a different partition rather than of the same estimate.
+
+    The CONTROL is the same config shuffling the OTHER declared attribute, which
+    `report_by` does not name: the refusal is about the overlap, not about
+    declaring both blocks."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label", "site"],
+                },
+                "statistics": {
+                    "report_by": ["site"],
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "site"},
+                },
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-REPORTBY" in found
+
+    clean = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label", "site"],
+                },
+                "statistics": {
+                    "report_by": ["site"],
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+                },
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-REPORTBY" not in clean
+
+
 def test_declared_report_by_is_checked_rather_than_refused(write_config):
     """S4d retires the blanket refusal and checks the declaration for real: with
     no `data.units.attributes` declared at all, `sex` is not among them, so this
