@@ -5220,6 +5220,12 @@ match the naming this task settled on rather than the `E-REPL-FOLD-K` name once 
 reporting without returning, so a roster-independent `null_test` shape fault (its own `shuffle`
 checks) still surfaces in the same pass.
 
+**CLOSED by H4d task 8 (2026-08-18).** `_check_null_test` reports `E-STATS-NULLTEST-UNITS` from the
+declaration, without returning, so a roster-independent shape fault in the same block still surfaces
+in the same pass — pinned by
+`tests/test_validate.py::test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report`,
+whose fixture carries a sub-floor `n` beside the missing roster for exactly that reason.
+
 ## A column metric's `resample_draws` records the requested `n`, not a survivor count
 
 Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Interval` where

@@ -6173,11 +6173,12 @@ def _check_resample(
 
 
 def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """Checks `statistics.null_test` gets so far — tasks 8 and 9 add three more
-    to this enumeration (`E-STATS-NULLTEST-UNITS`, `E-STATS-NULLTEST-REPORTBY`,
-    `E-STATS-NULLTEST-LEVEL`); this docstring names only what this function
-    currently does, not what the finished check will:
+    """Checks `statistics.null_test` gets so far — task 9 adds two more to this
+    enumeration (`E-STATS-NULLTEST-REPORTBY`, `E-STATS-NULLTEST-LEVEL`); this
+    docstring names only what this function currently does, not what the
+    finished check will:
 
+    - `E-STATS-NULLTEST-UNITS` — a `null_test` with no `data.units` at all.
     - `E-STATS-NULLTEST-METHOD` — the `method` enum.
     - `E-STATS-NULLTEST-N` — the `n` floor, `stats.min_honest_permutations`.
     - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` naming neither a declared unit
@@ -6204,6 +6205,32 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
     null_test = statistics.get("null_test")
     if not isinstance(null_test, dict) or not null_test:
         return
+    # No roster at all, worth its own finding independent of everything below.
+    # `reference.md` § The one config file marks `units:` "required by fold,
+    # resample, null_test", and § Where units come from says a `null_test` "isn't
+    # available" without one. The precedent is `_check_resample`'s own
+    # `E-STATS-RESAMPLE-UNITS` and `_check_replication`'s `E-REPL-FOLD-NO-UNITS` —
+    # the same `not (doc.get("data") or {}).get("units")` expression.
+    #
+    # Read from the DECLARATION, not from `roster is None`: the roster is also
+    # `None` when `data.units` is declared and failed to resolve, and that fault
+    # already has `_check_units`' own finding.
+    #
+    # No `return`, matching both twins. Of the checks below, only the level
+    # derivation reads `roster`, and it requires `roster is not None` itself
+    # rather than leaning on this early-exit having not fired — so this comment's
+    # job is to explain the absence of a `return`, not to promise the rest are
+    # roster-independent.
+    if not ((doc.get("data") or {}).get("units")):
+        c.error(
+            "E-STATS-NULLTEST-UNITS",
+            "statistics.null_test",
+            "is declared and `data.units` is not, so there is no unit table to relabel "
+            "and no metric core could recompute under a relabelling — a declaration "
+            "that changes no behavior. Declare `data.units`, or drop `null_test` and "
+            "report over repeats, which is honest for a design whose executions are the "
+            "observations",
+        )
     method = null_test.get("method")
     if method is not None and isinstance(method, str) and method not in NULL_TEST_METHODS:
         c.error(

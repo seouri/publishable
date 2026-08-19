@@ -4298,6 +4298,21 @@ def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
     assert "E-STATS-NULLTEST-SHUFFLE" not in found
 
 
+def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(write_config):
+    """The filed gap (`spec-defects.md`, "`statistics.null_test` has no no-units
+    check"), claimed. Probed at `2a4dc53`: a `null_test` with the whole `data.units`
+    block removed earned `{E-STATS-NULLTEST-UNSUPPORTED}` alone.
+
+    **Reports without returning**, which is the half a `return` would silently
+    lose: this config ALSO carries a sub-floor `n`, and both findings must be
+    present in one pass. `validate` collects rather than aborting, and a reader
+    who fixes the roster should not then meet the `n` fault on a second pass."""
+    found = codes(write_config({"statistics": {"null_test": {"method": "permutation", "n": 3}}}))
+    assert "E-STATS-NULLTEST-UNITS" in found
+    assert "E-STATS-NULLTEST-N" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
 def test_declared_report_by_is_checked_rather_than_refused(write_config):
     """S4d retires the blanket refusal and checks the declaration for real: with
     no `data.units.attributes` declared at all, `sex` is not among them, so this
