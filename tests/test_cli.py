@@ -14009,3 +14009,63 @@ def test_the_hash_does_not_cover_unobserved_or_the_probe_name():
     h2 = apparatus_hash(dict(facts))
     assert h1 == h2
     assert h1.startswith("sha256:")
+
+
+# --- H7d Part A task 13: the recorded block is publishable as-is -----------
+
+_ORDINARY_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    # Deliberately does NOT read `PUBLISHABLE_TEST_TOKEN` — the property
+    # under test is that a run whose TEMPLATE declares a credential still
+    # publishes an apparatus block carrying no credential value, not that a
+    # probe returning one gets caught (Fixture K, task 9, covers that raise
+    # path already).
+    return Apparatus(facts={"model_revision": "seq-4000", "firmware": "3.11.2"})
+"""
+
+
+def test_the_recorded_apparatus_block_carries_no_credential_value(
+    installed, registries, tmp_path, capsys
+):
+    """Two assertions, and neither alone is the property. First: the run
+    COMPLETES and the block is populated — a block that is `null` because
+    nothing ran would pass an absence sweep trivially. Second: no declared
+    credential value appears in the block's RAW YAML text, sliced out of
+    `run.yaml` rather than re-serialized, because a defect in how a value is
+    written is one a parsing reader undoes before the assertion.
+
+    The credential is DECLARED and PRESENT in the environment for this run —
+    a sweep for a value core never read would pass whatever the code did.
+
+    **What this does NOT prove**: it is the RECORD's property, not the
+    ledger's and not the terminal's. Fixture K
+    (`test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no_run_yaml`)
+    covers a probe that DOES return the credential, and Fixture K2
+    (`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`) covers the
+    raise path — both in task 9, both unaffected by this test either way.
+    """
+    site = installed(
+        "dist-t13", "1.0", {"publishable.probes": {"h7d_cred_probe": "t13_probe_mod:probe"}}
+    )
+    (site / "t13_probe_mod.py").write_text(_ORDINARY_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+    )
+    run_yaml_text = (doc["run_dir"] / "run.yaml").read_text()
+    run = yaml.safe_load(run_yaml_text)
+    block = run["provenance"]["apparatus"]
+    assert block is not None
+    assert block["facts"], "the block must be populated, not merely absent"
+
+    assert _ORDINARY_CRED_VALUE not in run_yaml_text
