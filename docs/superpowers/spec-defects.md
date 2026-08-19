@@ -5407,6 +5407,7 @@ re-check and which the original entry already flagged as unsurveyed) is more tha
 work. **Owner: H4d**, the last remaining slice whose surface is the `statistics` block — the same
 terminal reasoning the `report_by`/`resample_columns` entry below carries.
 
+
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
 Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
@@ -5661,7 +5662,7 @@ correction family. **The code is unchanged**, which is what "limitation" means h
 fix and must not be read as one. `W-STATS-REPORTBY-THIN`'s whole-roster-versus-arm gap is a
 *different* half of this entry and is left as § What isn't a repeat already records it.
 
-## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
+## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
 finding added below by the whole-branch review at `d59316d`. Three
@@ -5795,6 +5796,21 @@ warning that the loss came from a thin pool rather than a thin `n_of`/`n_against
 the original finding named for the paired case. **Owner: H4d**, the same slice Finding 3 and the
 `report_by`/`resample_columns` entry below are owned by — the last remaining slice whose surface is
 the `statistics` block, so a fifth deferral past it is not available.
+
+**CLAIMED 2026-08-19 (H4d, task 22) — both findings, in the same commit.** Finding 3:
+`_comparison_step_blocks` now takes a `resample_echo` parameter (`_resolved_resample`'s own
+`{method, n, stratify_by}` dict, the same one `cli` merges into every `aggregated` block as
+`weighted_beside["resample"]`), threaded through `_compute_vs_baseline` and
+`_compute_declared_contrasts`, and written onto every metric entry — derived and column, paired and
+unpaired alike — absent, not null, when nothing is declared. Finding 1: `W-STATS-CONTRAST-RESAMPLE-THIN`
+is minted, emitted from `_comparison_step_blocks` with `where_id` (`cond:<index>` / `contrast:<id>`)
+whenever a resampled comparison's `draws_used` falls below what was requested, distinct from
+`W-STATS-CONTRAST-THIN`'s `limits.min_reported_n` path so the two cannot collide on one `where`.
+Verified by a direct call with a 3-unit fixture, two of whose units carry `nan` for the recorded
+column: most of 400 bootstrap draws fail `math.isnan` and are dropped, landing below the 80-draw
+floor and publishing `ci95: null` alongside the new warning. Pinned by a mutation that suppresses the
+emit (`if False and resampled is not None...`): the assertion on the warning's presence fails by a
+named `AssertionError`, not a crash, and the mutation is reverted in the same commit.
 
 ## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 

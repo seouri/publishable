@@ -3353,6 +3353,91 @@ def test_a_paired_comparison_carries_neither_p_value_nor_null_test():
     assert members[0].p_value is None
 
 
+def test_a_contrast_entry_carries_the_resolved_resample_echo():
+    """Finding 3 (`spec-defects.md`, "the contrast path discloses nothing
+    about its resample"): every `aggregated` metric block gets the resolved
+    `{method, n, stratify_by}` echo when `statistics.resample` is declared,
+    and a contrast entry carried none at all — `_comparison_step_blocks`
+    built each entry as a literal mapping with no route for it. `resample`
+    threads a second `resample_echo` parameter for exactly that reason."""
+    block, _ = _clustered_contrast_call(
+        resample_echo={"method": "bootstrap", "n": 2000, "stratify_by": []}
+    )
+    entry = block["s"]["m"]
+    assert entry["resample"] == {"method": "bootstrap", "n": 2000, "stratify_by": []}
+
+
+def test_a_contrast_entry_carries_no_resample_echo_when_none_is_declared():
+    """Absent, not null — the same rule `weighted_by` follows: a contrast built
+    with `resample_echo=None` (the default every direct call in this suite
+    already uses) must not acquire a `resample` key it never had before this
+    task. A control asserting only an absence would pass identically if the
+    write above were deleted entirely; paired with the presence test above,
+    the two together prove the key really depends on the argument."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert "resample" not in entry
+
+
+def test_a_thin_contrast_resample_warns_with_a_where():
+    """Finding 1 (`spec-defects.md`): a declared `resample` whose surviving
+    draws fall below `min_honest_draws` publishes `ci95: null` where a
+    `paired_t_over_units` interval used to stand, and nothing warned — the one
+    emit site, `W-STATS-RESAMPLE-THIN`, lives in the per-condition
+    `summarize_step` loop and is never reached from a comparison built here.
+
+    Two of three units carry `nan` for the recorded column `m`, so any
+    bootstrap draw touching either fails `math.isnan` and is dropped
+    (`paired_percentile_of_derived`'s own per-draw `continue`) — most of 400
+    draws, at seed 7, landing below the 80-draw floor and publishing `ci95:
+    null`. `W-STATS-CONTRAST-RESAMPLE-THIN` must carry `where_id`
+    (`cond:1`) rather than the `limits.min_reported_n` path
+    `W-STATS-CONTRAST-THIN` uses — the two warnings address different things
+    and must not collide on one `where`."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    nan = float("nan")
+    keys = ["a", "b", "c"]
+    of_vals = {"a": 1.0, "b": nan, "c": nan}
+    against_vals = {"a": 0.0, "b": nan, "c": nan}
+    roster = UnitList([Unit(key=k) for k in keys])
+    comparison = Comparison(id="c", of=1, against=0)
+    findings = Collector()
+    block, _ = _comparison_step_blocks(
+        comparison,
+        roster=roster,
+        aggregated={1: {"s": {"m": 1.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in of_vals.items()},
+            (0, "s"): {k: {"m": v} for k, v in against_vals.items()},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=findings,
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="m=x", values={"analysis.method": "x"}),
+        },
+        resample_columns=True,
+    )
+    entry = block["s"]["m"]
+    assert entry["ci95"] is None
+    codes = [d.code for d in findings.findings]
+    assert "W-STATS-CONTRAST-RESAMPLE-THIN" in codes
+    thin = next(d for d in findings.findings if d.code == "W-STATS-CONTRAST-RESAMPLE-THIN")
+    assert thin.path == "cond:1"
+    assert "resample draws produced a value" in thin.message
+
+
 def test_the_null_closure_moves_with_the_drawn_labels_not_the_roster():
     """Task 20's erasure property, pinned against the REAL closure
     (`cli._make_null_fn`) rather than a hand-built proxy that could not catch

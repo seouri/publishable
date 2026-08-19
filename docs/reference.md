@@ -383,6 +383,7 @@ Each row states the condition, not the wording.
 | [`replication.repeats`](#a-batch-says-when-not-what) declares a `batch` level but no step in the pipeline sets `nondeterministic = True` | `W-REPL-DETERMINISTIC` |
 | `replication.repeats`'s total across every declared level is below the template's `default_repeats`, checked only once every level's count is resolvable — a floor warning derived from an already-invalid design would be noise | `W-REPL-FLOOR` |
 | A template's `aggregate` produced no usable value for a completed condition and step — it raised, a returned key collided with one a step already recorded, or every resample draw of it was degenerate. Reported at `run` time; the recorded columns' own summaries are unaffected, and only the derived metric is lost | `W-STATS-AGGREGATE-FAILED` |
+| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline)'s declared `resample` produced fewer surviving draws than were requested, though not zero — the contrast's interval is still reported, or is `ci95: null` when the count falls below the honest floor, but rests on less than it claims. The contrast-side sibling of `W-STATS-RESAMPLE-THIN`, on the same disclosure ground, since neither the `n_paired` denominator nor a thin pool are the same fact | `W-STATS-CONTRAST-RESAMPLE-THIN` |
 | A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized denominator is below it: `n_paired` where the contrast is paired, and `n_of` or `n_against` — either side — where it is not | `W-STATS-CONTRAST-THIN` |
 | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
 | `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, its `shuffle` names no axis any comparison in the family crosses, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
@@ -2741,6 +2742,14 @@ A contrast whose axis is a `groups` axis and whose design declares a
 beside its `ci95_corrected` under every correction method that reports one. Both are absent — not
 `null` — where no `null_test` was declared, and `p_value` alone is `null` where the null was built
 and could not vary.
+
+**Every contrast entry carries the resolved `resample` echo beside it, whenever
+[`statistics.resample`](#weighted-samples) is declared** — the same `{method, n, stratify_by}` an
+`aggregated` metric block already carries, "so the number is never the result of an undocumented
+default." One route builds both: every arm, derived and column, paired and unpaired, whenever a
+`resample` is declared at all — not only the arms whose interval actually drew from it — because the
+declaration is a fact about the run, not about which construction one metric happened to route
+through. Absent, not null, on the same rule `weighted_by` follows.
 
 **Under [`weight_by`](#weighted-samples) a contrast entry carries two more keys**, and they are the
 same two facts a weighted per-condition block carries, arranged for a record that has no `n` mapping

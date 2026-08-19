@@ -842,6 +842,7 @@ def _comparison_step_blocks(
     weighted_by: str | None = None,
     clusters: dict[str, str] | None = None,
     null_test: dict[str, Any] | None = None,
+    resample_echo: dict[str, Any] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
@@ -878,6 +879,17 @@ def _comparison_step_blocks(
     `p_value_corrected` is never written here, because the correction pass
     merges it in afterward from the family it belongs to, not from this one
     comparison's own view of itself.
+
+    `resample_echo`, when given, is `_resolved_resample`'s `{method, n,
+    stratify_by}` dict, the same one `cli` merges into every `aggregated`
+    metric block as `weighted_beside["resample"]`. It is written onto every
+    metric entry here too — every arm, derived and column, paired and
+    unpaired alike — because the fact it discloses ("this run's resample was
+    declared, at this `n`") is true of the whole run and not of which
+    construction a particular metric happened to route through
+    (`spec-defects.md`'s "the contrast path discloses nothing about its
+    resample", Finding 3). Absent, not null, when no `resample` is declared —
+    the same rule the `aggregated` echo already follows.
 
     Under a declared weight, a recorded column's `delta` is the weighted mean of
     the differences and `cohens_d` is `weighted_cohens_dz(diffs, col_weights)` —
@@ -1485,6 +1497,13 @@ def _comparison_step_blocks(
                 # separate. `differs_on` names them so a reader knows which.
                 metric_block[metric_key]["confounded"] = True
                 metric_block[metric_key]["differs_on"] = list(differs_on)
+            # Finding 3 (`spec-defects.md`): every `aggregated` metric block
+            # carries the resolved `resample` echo when one is declared, and a
+            # contrast entry carried none. Absent, not null, matching
+            # `weighted_by`'s own rule — `resample_echo` is `None` exactly when
+            # `statistics.resample` is undeclared.
+            if resample_echo is not None:
+                metric_block[metric_key]["resample"] = dict(resample_echo)
             # `Member` requires exactly one of `pool`/`diffs`/`sides` wherever
             # there is an interval to correct: the draws a percentile interval
             # was read off, the per-unit differences a *t* interval was computed
@@ -1570,6 +1589,33 @@ def _comparison_step_blocks(
             # against a five-hundred-unit one is exactly what the limit exists to
             # catch, and a rule reading one side or a total would pass it.
             #
+            # Finding 1 (`spec-defects.md`, "the contrast path discloses nothing
+            # about its resample"): a resample thin enough that
+            # `paired_percentile_of_derived`/`unpaired_percentile_of_sides`
+            # returned `interval=None` publishes `ci95: null` here with
+            # nothing warning it came from a thin pool rather than a thin
+            # `n_paired`/`n_of`/`n_against` — `W-STATS-RESAMPLE-THIN` is
+            # emitted from exactly one site, the per-condition
+            # `summarize_step` loop, and never reaches a comparison built
+            # here. `resampled` is bound (to `None` or a `PairedResample`) on
+            # every arm above, so this one check covers the derived and the
+            # column-resample branches alike, carrying `where_id` — the
+            # addressing `W-STATS-CONTRAST-THIN` below does not, since that
+            # warning's own `"where"` argument is `limits.min_reported_n`.
+            if resampled is not None and resampled.draws_used < draws:
+                floor = min_honest_draws()
+                findings.warn(
+                    "W-STATS-CONTRAST-RESAMPLE-THIN",
+                    where_id,
+                    f"{where}, step {step_name!r} metric {metric_key!r}: "
+                    f"{resampled.draws_used} of {draws} resample draws produced a "
+                    "value"
+                    + (
+                        f"; below the {floor} an interval can honestly be read off, so ci95 is null"
+                        if resampled.draws_used < floor
+                        else ""
+                    ),
+                )
             # ONE finding per metric entry, naming every denominator below the floor.
             # The warning is about this entry's disclosure, and two findings for one
             # entry would double-count in any consumer that counts them.
@@ -1619,6 +1665,7 @@ def _compute_vs_baseline(
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
     clusters: dict[str, str] | None = None,
+    resample_echo: dict[str, Any] | None = None,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -1672,6 +1719,7 @@ def _compute_vs_baseline(
             strata=strata,
             weighted_by=weighted_by,
             clusters=clusters,
+            resample_echo=resample_echo,
         )
         if block:
             out[comp.of] = block
@@ -1699,6 +1747,7 @@ def _compute_declared_contrasts(
     weighted_by: str | None = None,
     clusters: dict[str, str] | None = None,
     null_test: dict[str, Any] | None = None,
+    resample_echo: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1756,6 +1805,7 @@ def _compute_declared_contrasts(
             weighted_by=weighted_by,
             clusters=clusters,
             null_test=null_test,
+            resample_echo=resample_echo,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -2540,6 +2590,15 @@ def command_run(config_path: Path) -> int:
             # above — a stratum's own units were resampled under the same
             # declared `resample` as the whole roster.
             weighted_beside.update(resample_beside)
+            # `_comparison_step_blocks`' own `resample_echo` parameter — the
+            # same resolved dict, threaded a second route because a contrast
+            # entry is built by `_comparison_step_blocks`, not by
+            # `summarize_step`'s `beside_n` (`spec-defects.md`'s "the contrast
+            # path discloses nothing about its resample", Finding 3). `None`,
+            # not `{}`, when nothing is declared, so the callee's own
+            # absent-not-null check reads a real absence rather than an empty
+            # dict that happens to be falsy for the same reason.
+            contrast_resample_echo = resample_beside.get("resample")
             # One stratum LABEL per unit, composed once for the run: several
             # declared names mean the stratum is their cross — `reference.md`
             # § Weighted samples' own `stratify_by: [dx_status, count_stratum]`
@@ -3256,6 +3315,7 @@ def command_run(config_path: Path) -> int:
                 strata=resample_strata,
                 weighted_by=weight_by if weights else None,
                 clusters=clusters,
+                resample_echo=contrast_resample_echo,
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -3274,6 +3334,7 @@ def command_run(config_path: Path) -> int:
                 weighted_by=weight_by if weights else None,
                 clusters=clusters,
                 null_test=null_test_spec,
+                resample_echo=contrast_resample_echo,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:
