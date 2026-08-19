@@ -31,6 +31,7 @@ from publishable.stats import (
     percentile_of_derived,
     percentile_over_units,
     percentile_over_units_clustered,
+    permutation_of_derived,
     permutation_over_units,
     repeat_spread,
     resample_seed,
@@ -5149,3 +5150,129 @@ def test_a_draw_that_ties_the_observed_statistic_counts_against_it():
     p = permutation_over_units(values, labels, "of", seed=3, n=999)
     assert p is not None
     assert 0.75 < p < 0.9
+
+
+def _c_collapsed() -> dict[str, dict[str, float]]:
+    """Fixture C as a collapsed table: 50 units, `y` only. The LABEL is not in the
+    table — it travels as the `labels` mapping, which is what a relabelling
+    permutes and what `cli`'s closure merges back in."""
+    return {f"u{c:02d}_{i}": {"y": float(100 * c + i)} for c in range(1, 11) for i in range(5)}
+
+
+def _c_labels() -> dict[str, str]:
+    return {
+        f"u{c:02d}_{i}": ("of" if i >= 3 else "against") for c in range(1, 11) for i in range(5)
+    }
+
+
+def _c_compute(table, labels):
+    """`mean(y | of) − mean(y | against)`, read through the LABELS ARGUMENT.
+
+    This is the shape `cli`'s null-test closure has and the shape
+    `percentile_of_derived`'s `compute` cannot express: a one-argument closure
+    would have to read the label off the row, and `cli._attributed` overwrites it
+    from the roster on every call."""
+    of = [row["y"] for row in table if labels[row["unit"]] == "of"]
+    against = [row["y"] for row in table if labels[row["unit"]] != "of"]
+    if not of or not against:
+        return None
+    return sum(of) / len(of) - sum(against) / len(against)
+
+
+def test_a_derived_permutation_relabels_and_recomputes_through_the_labels_argument():
+    """Fixture C, unclustered and derived. The observed delta is 2.5; free
+    relabelling lets `of` hold the global top 20 (delta 500), so the observed sits
+    near the centre of the null and the p is near 0.5 — the same number the
+    unclustered COLUMN construction gives, which is what says the two agree about
+    what one draw is.
+
+    The load-bearing assertion is the SURVIVOR COUNT: 500 requested, 500
+    surviving, because every relabelling of this fixture leaves both arms
+    non-empty. A count below the request would say draws were being dropped, which
+    on this fixture can only mean the closure was handed something it could not
+    read."""
+    p, survivors = permutation_of_derived(_c_collapsed(), _c_labels(), _c_compute, seed=7, n=500)
+    assert p is not None
+    assert 0.3 < p < 0.7
+    assert survivors == 500
+
+
+def test_a_derived_permutation_drops_a_degenerate_draw_and_still_reports_its_count():
+    """`None`, `nan` and a raise are one situation from three libraries.
+
+    **Corrected from the brief's own fixture**, which raised on "any draw whose
+    `of` arm holds fewer than two units": a permutation null holds the LABEL
+    MULTISET fixed (`rng.shuffle(pool)` only reorders it), so the `of` arm's
+    *count* is exactly 3 on every one of the 200 draws here, identical to the
+    observed labelling's — the raise's own guard could therefore never fire, and
+    the fixture failed the same constraint a fixture "whose numbers agree with
+    the bug" fails. Measured directly: at this fixture and seed, `survivors ==
+    200` for the count-based guard, not `0 < survivors < 200`.
+
+    **This fixture instead conditions on the SUM of the `of` arm's values**,
+    which *does* vary across draws even though the count does not — six units
+    valued `0..5`, three always labelled `of`, and `sum(of)` ranges `3..12`
+    over the twenty possible label arrangements with roughly half below 8 and
+    half at or above it (enumerated with `itertools.combinations`: sums
+    `[3, 4, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 11, 12]`, ten of
+    twenty below 8). Some draws raise and some don't, and the count says how
+    many survived — the distinction `percentile_of_derived`'s own second
+    return value exists to make.
+
+    The count is asserted as a strict inequality on BOTH sides: `0 < survivors <
+    200`. A test asserting only `survivors < 200` would pass if every draw were
+    dropped, which is the 'a control asserting only absences' shape."""
+
+    def fragile(table, labels):
+        of = [row["y"] for row in table if labels[row["unit"]] == "of"]
+        if sum(of) < 8.0:
+            raise ZeroDivisionError("degenerate draw")
+        against = [row["y"] for row in table if labels[row["unit"]] != "of"]
+        return sum(of) / len(of) - sum(against) / len(against)
+
+    collapsed = {f"u{i}": {"y": float(i)} for i in range(6)}
+    labels = {"u0": "against", "u1": "against", "u2": "against", "u3": "of", "u4": "of", "u5": "of"}
+    p, survivors = permutation_of_derived(collapsed, labels, fragile, seed=5, n=200)
+    assert 0 < survivors < 200
+    assert p is not None
+
+
+def test_a_derived_permutation_reports_no_p_value_when_the_metric_cannot_move():
+    """Decision 8, one construction over from task 11's. A closure ignoring the
+    labels entirely — the exact shape a one-argument `compute` degenerates into —
+    reproduces the observed statistic on every draw, and that is reported as
+    `None` rather than as 1.0. **The survivor count still comes back**, which is
+    what says the null ran."""
+    p, survivors = permutation_of_derived(
+        _c_collapsed(), _c_labels(), lambda table, labels: 1.0, seed=1, n=100
+    )
+    assert p is None
+    assert survivors == 100
+
+
+def test_a_derived_permutation_whose_unpermuted_call_declines_reports_nothing():
+    """No observed statistic, no test. Distinguished from the degenerate-null case
+    by the survivor count, which is 0 here and `n` there — the two states
+    `percentile_of_derived`'s own count exists to separate."""
+    p, survivors = permutation_of_derived(
+        _c_collapsed(), _c_labels(), lambda table, labels: None, seed=1, n=100
+    )
+    assert p is None
+    assert survivors == 0
+
+
+def test_a_derived_permutation_lets_the_unpermuted_calls_failure_out():
+    """The other half of the survivor rule, and the one a closure returning
+    `None` cannot exercise: a RAISE on the unpermuted call is a fault in the
+    metric's own definition for this table, so it propagates rather than being read
+    as a degenerate draw. `percentile_of_derived` leaves its single unresampled
+    call uncontained for that reason, and `cli.py` is where the containment lives.
+
+    Without this test the docstring's claim and the body could disagree silently —
+    the test above passes whether or not that call is wrapped in a `try`."""
+
+    def explodes(table, labels):
+        raise ZeroDivisionError("the metric's own definition failed")
+
+    with pytest.raises(ZeroDivisionError):
+        permutation_of_derived(_c_collapsed(), _c_labels(), explodes, seed=1, n=10)

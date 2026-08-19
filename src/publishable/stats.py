@@ -1548,6 +1548,92 @@ def percentile_of_derived(
     )
 
 
+def permutation_of_derived(
+    collapsed: dict[str, dict[str, float]],
+    labels: dict[str, str],
+    compute: "Callable[[UnitTable, dict[str, str]], float | None]",
+    seed: int,
+    n: int = 5000,
+) -> tuple[float | None, int]:
+    """A permutation p-value for a metric a template derived, and the number of
+    draws it rests on.
+
+    A derived metric has no per-unit value to relabel directly — `aggregate`
+    returned one number for the whole table — so this is `percentile_of_derived`'s
+    situation one construction over: recompute the metric under each relabelling
+    and count how many recomputations reach the observed value.
+
+    **`compute` takes the table AND the relabelled label mapping, and that second
+    argument is the whole difference from `percentile_of_derived`.** A one-argument
+    closure of that function's shape cannot express a permutation here: `cli`
+    re-applies each unit's declared attributes from the roster on every call
+    (`_attributed`, which merges the roster's values OVER the row), so a
+    relabelling written into the table's rows is erased before `aggregate` sees it
+    and every draw reproduces the observed statistic. That is not a hypothetical —
+    it is the shape the existing resample closure has, and it would report
+    `p_value: 1.0` for every derived metric in every run. Handing the labels
+    through instead makes the relabelling the closure's own input, which is the
+    only place it cannot be overwritten.
+
+    The table is rebuilt from a row list carrying the REAL unit keys, exactly as
+    `percentile_of_derived` does and for its reason: a template that legitimately
+    reads `unit` must see the roster it was drawn from. Unlike a bootstrap this
+    draw repeats no unit, so the keys are unique — the row-list construction is
+    kept anyway so the two functions hand `compute` the same shape of table.
+
+    Units are sorted by key before the labels are permuted, for the row-order
+    invariance `percentile_over_units` explains: a fixed seed permutes a fixed
+    sequence of positions, so an unsorted roster would make the p-value depend on
+    iteration order rather than on the multiset of units.
+
+    A draw on which `compute` returns `None`, returns `nan`, or *raises* is dropped
+    rather than counted — the three are the same situation from three different
+    libraries, and which one `aggregate` happens to call is not a fact about
+    whether the draw was degenerate. **The single unpermuted call that produces the
+    observed statistic is not made robust that way**: it is the metric's real
+    definition for this table, so a failure there is a fault to surface rather than
+    a degenerate draw to skip, and `cli.py` contains it exactly as it contains the
+    unresampled `aggregate` call — which is `percentile_of_derived`'s own rule,
+    cited rather than restated in new words.
+
+    The second return value is the surviving count **always**, even when the
+    p-value is `None`, which is what lets a caller tell "the null was attempted and
+    every draw was degenerate" from "no null was attempted at all" — two states
+    that otherwise reach `run.yaml` byte-identical.
+    """
+    keys = sorted(collapsed)
+    rows = [{"unit": key, **collapsed[key]} for key in keys]
+    table = unit_table_from_rows(rows)
+    # NOT wrapped in `try`, and the docstring above says why: a failure in the
+    # metric's own definition for this table is a fault to surface, exactly as
+    # `percentile_of_derived` leaves its single unresampled call uncontained.
+    observed = compute(table, dict(labels))
+    if observed is None or math.isnan(float(observed)):
+        return None, 0
+    rng = random.Random(seed)
+    pool = [labels[key] for key in keys]
+    reached = 0
+    survivors = 0
+    varied = False
+    for _ in range(n):
+        rng.shuffle(pool)
+        drawn_labels = dict(zip(keys, pool, strict=True))
+        try:
+            drawn = compute(table, drawn_labels)
+        except Exception:
+            continue
+        if drawn is None or math.isnan(float(drawn)):
+            continue
+        survivors += 1
+        if float(drawn) != float(observed):
+            varied = True
+        if float(drawn) >= float(observed):
+            reached += 1
+    if not varied or survivors == 0:
+        return None, survivors
+    return (1 + reached) / (n + 1), survivors
+
+
 def paired_delta_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
