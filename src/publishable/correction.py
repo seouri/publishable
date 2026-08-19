@@ -518,6 +518,21 @@ def corrected_for(
             adjusted = None
         elif method == "bonferroni":
             adjusted = min(1.0, member.p_value * family_size)
+        elif member.ci95 is None:
+            # Holm's `i` is the EVIDENCE rank `_evidence_ratio` orders — a value a
+            # p-only member does not have. `rank_family`'s tier places it after
+            # every interval-carrying member so the sort has a total order, but
+            # that placement is a tie-break for the sort, not a claim about where
+            # its evidence sits: publishing `min(1, p × (m − i + 1))` at that
+            # fabricated `i` makes two members with bit-identical raw p differ by
+            # `declaration_index` alone, which is nothing about either member's
+            # evidence. § Corrections item 5's identical argument, one field over
+            # — "false of a member that never had an interval" — and withheld the
+            # same way `thin` is, rather than published at a rank the tier
+            # invented. Bonferroni needs no rank (`family_size` alone) and `fdr_bh`
+            # ranks on the ascending p-value itself, so only Holm's per-member
+            # expression is affected.
+            adjusted = None
         else:
             adjusted = min(1.0, member.p_value * (family_size - rank + 1))
         if adjusted is not None:

@@ -286,3 +286,126 @@ historical record of what was claimed at the time; this section is the correctio
 `ruff check .`, `ruff format --check .`, `mypy` all clean after the fix round. Full suite before this
 round: 2348 passed, 1 skipped, 2 xfailed. Four new tests added (M2 ×2, M3 ×1, M7 ×1); M4, M6, M8
 rewrote or renamed existing tests without changing the count.
+
+## Whole-branch fix round
+
+Addresses `.superpowers/sdd/2026-08-18-null-test/whole-branch-review.md`, tip `095717a`, verdict DO
+NOT MERGE on one Critical. Critical fixed and pinned first; two Majors, three Minors follow (Minor 4
+and Minor 6 required code changes, Minor 5 and Minor 7 needed test/doc-only fixes, Major 3 was closed
+by adding the missing test rather than re-filing it).
+
+### Critical 1 — `holm` published `p_value_corrected` at a fabricated rank for a p-only member
+
+**Fixed.** `correction.corrected_for`'s `holm` branch now withholds `p_value_corrected` when
+`member.ci95 is None` — Holm's `i` is the evidence rank `_evidence_ratio` orders, which a p-only
+member has no value for; `rank_family`'s tier places it after every interval-carrying member purely
+so the sort has a total order, and that placement is a tie-break, not a claim about the member's own
+evidence. `bonferroni` (needs only `family_size`) and `fdr_bh` (ranks on ascending p directly) are
+both unaffected — the branch is `holm`-only, matching the reviewer's diagnosis exactly.
+
+**Pinned end to end** (at the `corrected_for` level, mirroring the reviewer's own reproduction
+shape): `test_holm_withholds_p_value_corrected_for_a_p_only_member_rather_than_fabricating_its_rank`
+in `tests/test_correction.py` builds two p-only members at bit-identical raw p
+(`0.16976604679064186`, the reviewer's own reproduced value) and asserts `p_value_corrected` is
+absent from both, in BOTH declaration orders — the order-independence the review's remedy names as
+the required property.
+
+**Verified by mutation:** reverted the new `elif member.ci95 is None: adjusted = None` branch back to
+the original single `else`. The new test FAILS: `AssertionError: assert 'p_value_corrected' not in
+{...}` on the forward-order case (an assertion, not a crash — the guard change is caught by the exact
+check the review asked for). Reverted by editing the file back; `tests/test_correction.py` returns to
+61 passed.
+
+### Major 1 — `docs/reference.md:2189`'s false "no rank" claim
+
+**Fixed by replacing the false clause with a true one, not by a bare deletion** — Major 2 (below)
+independently requires the tier's rule to live somewhere normative, and the review's own remedy
+offers exactly this combined fix as its second option. The sentence "since a member with no interval
+takes no rank" (false: a p-only member IS ranked, in a tier) is replaced with: "A member with no
+interval has no such ratio to compute — it is ranked in a tier below every member that does, ties
+within that tier breaking by declaration order the same way ties within the interval-carrying tier
+do, so the tier answers where such a member sorts without inventing an evidence value for it." This
+no longer contradicts the family-count paragraph it links to ("A metric carrying a p-value and no
+interval is counted") — the member is still counted and still ranked, just in the lower tier, which
+is what `rank_family`'s code actually does. **Verified by:** re-reading the edited paragraph for
+internal consistency and against `rank_family`'s implementation; no test exercises documentation
+prose directly, so verification here is by reading rather than by running, per the class of finding.
+
+### Major 2 — the p-only ranking tier existed only in a docstring
+
+**Closed by the same edit as Major 1** — the tier and its consequence (rank exists, no evidence
+value is invented, ties break by declaration order) are now stated in `docs/reference.md` §
+Statistical reporting rather than only in `correction.rank_family`'s comment.
+
+### Major 3 — the `bonferroni` `thin` pin gap was "filed" only in a report
+
+**Closed by adding the test, not by writing a real filing** — per the review's own stated
+alternative ("or add the two-line `bonferroni` arm and drop the filing"), which is cheaper and leaves
+no second ledger line for a future reader to distrust.
+`test_a_p_only_member_does_not_report_a_thin_correction_under_bonferroni_either` added to
+`tests/test_correction.py`, the exact fixture and check the batch-5 report already specified,
+against `bonferroni` rather than `holm`. **Verified by running:** passes; the guard itself was
+already confirmed correct by the review's own mutation, so no new mutation was needed to establish
+what this test pins — it closes the record-integrity gap, not a behavioral one.
+
+### Minor 4 — `of_strata`/`against_strata` had zero callers
+
+**Fixed by deletion.** Removed both parameters from `stats.permutation_over_contrast`'s signature and
+the internal `strata` composition that only they fed; the delegated call to `permutation_over_units`
+no longer passes `strata` at all (matching its default). Added a docstring paragraph explaining why
+they were dead rather than merely unreachable: a declared contrast names its two conditions by
+label, and a condition is one cell of the full group cross, so every OTHER group axis is already
+constant on both sides of any comparison the function can be asked about — the § What isn't a
+repeat rule is satisfied structurally, not by a stratified draw this function needed to perform.
+**Verified by:** grepping every call site in `src/` and `tests/` for `of_strata`/`against_strata`
+(zero, confirming nothing broke) and running `tests/test_stats.py` (316 passed) and `mypy` (clean).
+
+### Minor 5 — the parameter-axis disjunct of `W-STATS-CORRECTION-INAPPLICABLE` was still unfailable
+
+**Fixed** by adding a message-content assertion to both
+`test_the_inapplicable_correction_warning_still_fires_for_a_parameter_axis_contrast` and (for
+symmetry and to keep the two disjuncts distinguishable from each other by test) M3's
+`..._fires_when_shuffle_names_no_crossed_axis` — asserting `"differs only on a parameter axis"` and
+`"is not a group axis any comparison"` respectively, since the review's own diagnosis was that only
+the MESSAGE, not the code-presence, can tell the two branches apart when `crossed_by_any_comparison`
+is empty (the third branch's condition is then vacuously true too). **Verified by mutation:**
+`elif not crossed_by_any_comparison:` → `elif False:` — the parameter-axis test now FAILS on the
+message assertion (`AssertionError`, the message read back is the wrong-shuffle wording, not the
+parameter-axis wording), where before this fix the same mutation left the suite green. Reverted by
+editing the line back; all four `inapplicable_correction` tests re-pass.
+
+### Minor 6 — task 20's positive path was never exercised by `run`
+
+**Fixed.** New end-to-end test `test_fixture_c2_null_test_runs_end_to_end_with_a_p_value_when_
+unclustered` in `tests/test_cli.py`, beside the existing suppressed-shape test, over the identical
+roster and local template with `cluster_by` simply dropped from `units_overrides` — the one change
+that flips `stats.summarize_step`'s gate. Reproduces the reviewer's own independently-built config
+and confirms `p_value` present (asserted as a range, `0.3 < p < 0.7`, since the run's own
+digest-derived seed differs from any fixed-seed direct-call test), `null_draws == 5000`, the
+`null_test` echo at `level: rows`, no `p_value_corrected`, and the recorded column (`seen`) still
+carrying none — decision 5 and decision 7 both confirmed through a real `run` rather than only by
+direct call. **Verified by running:** passes; `tests/test_cli.py` at 319 passed (up from 313 before
+this batch's earlier fix round; the delta includes this test plus the batch's other additions).
+
+### Minor 7 — the plan file was edited in place
+
+**A correction appended, not a retro-edit reverted** (git history cannot be unwritten, and the
+review's author judged the original edit not to be the forbidden retro-edit since it named its
+source and argument — the coordinator's instruction asked for a correction regardless, so one is
+added). `docs/superpowers/plans/2026-08-18-null-test.md`, task 28 step 4, now carries a note
+identifying commit `1273247` as an in-place edit of the site list, naming what it replaced verbatim
+("§ Bootstrap and permutation, § Matched case-control and § Allocation," with no § Between-subjects
+and none of the two argumentative sentences that followed it) — so a later reader has the original
+text without needing `git show`.
+
+### Gates and count
+
+`ruff check .`, `ruff format --check .`, `mypy` all clean. Full suite before this round: 2359
+passed, 1 skipped, 2 xfailed. This round adds three tests (Critical 1's pin, Major 3's `bonferroni`
+arm, Minor 6's positive-path run) with no test deletions; Minor 5's fix widened two existing tests'
+assertions without adding new test functions.
+
+### No sentence in this round claims the slice unblocks a config
+
+Every number in this round's own prose stays at zero/six/three, per the constraint restated in the
+coordinator's message.

@@ -4493,17 +4493,29 @@ def test_the_inapplicable_correction_warning_is_silent_where_a_p_value_can_be_ca
 def test_the_inapplicable_correction_warning_still_fires_for_a_parameter_axis_contrast(
     write_config, tmp_path
 ):
-    """The third disjunct, which `contrasts.crossed_group_axes` is what answers:
-    two conditions differing only on a parameter axis were computed from the same
-    units, so their null is a per-unit sign flip rather than a relabelling and
-    `shuffle` cannot express it. A `null_test` declared beside such a family
-    supplies no p-value to adjust, and the warning is still correct."""
+    """The disjunct `not crossed_by_any_comparison`, which `contrasts.crossed_
+    group_axes` is what answers: two conditions differing only on a parameter
+    axis were computed from the same units, so their null is a per-unit sign
+    flip rather than a relabelling and `shuffle` cannot express it. A
+    `null_test` declared beside such a family supplies no p-value to adjust,
+    and the warning is still correct.
+
+    Whole-branch review Minor 5: the CODE is unfailable by code-presence alone
+    — when `crossed_by_any_comparison` is empty, the next `elif` (`shuffle not
+    in crossed_by_any_comparison`) is vacuously true too, so disabling this
+    branch alone still fires the warning through the other one. Only the
+    MESSAGE can tell them apart, so the message is asserted here rather than
+    only the code — a mutation neutering this specific branch now changes the
+    reason text even though the code still fires."""
     (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
     doc = _parameter_axis_null_test_doc()
-    found = codes(write_config(doc))
+    path = write_config(doc)
+    found = codes(path)
     assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
     assert "E-DATA-ALLOCATION-NO-ARMS" not in found
     assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+    message = messages_by_code(path)["W-STATS-CORRECTION-INAPPLICABLE"]
+    assert "differs only on a parameter axis" in message
 
 
 _GROUP_AXIS_WRONG_SHUFFLE_ROSTER = "patient_id,arm,site\n" + "".join(
@@ -4550,10 +4562,13 @@ def test_the_inapplicable_correction_warning_fires_when_shuffle_names_no_crossed
     family), so only this fixture can tell disjunct 2 apart from either."""
     (tmp_path / "input" / "index.csv").write_text(_GROUP_AXIS_WRONG_SHUFFLE_ROSTER)
     doc = _group_axis_wrong_shuffle_doc()
-    found = codes(write_config(doc))
+    path = write_config(doc)
+    found = codes(path)
     assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
     assert "E-DATA-ALLOCATION-NO-ARMS" not in found
     assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+    message = messages_by_code(path)["W-STATS-CORRECTION-INAPPLICABLE"]
+    assert "is not a group axis any comparison" in message
 
 
 def _family_null_test_doc(n: int) -> dict:

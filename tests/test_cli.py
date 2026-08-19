@@ -5460,6 +5460,63 @@ def test_fixture_c2_null_test_runs_end_to_end_and_confirms_the_filed_clustered_g
     assert "p_value_corrected" not in metric
 
 
+def test_fixture_c2_null_test_runs_end_to_end_with_a_p_value_when_unclustered(tmp_path, capsys):
+    """Whole-branch review Minor 6. The spec's own ordering constraint says
+    tasks 19 and 20 must be verified BY `run`, never by direct call alone —
+    task 19 got fixture C1's end-to-end test above; task 20's two end-to-end
+    fixtures were both negative (C1 as a paired control, and C2 with
+    `cluster_by` declared, which pins the SUPPRESSED shape). Nothing in the
+    suite ran C2 with `cluster_by` dropped to confirm the POSITIVE path a real
+    `run` actually produces.
+
+    Same roster and template as the suppressed-shape test above, `cluster_by`
+    removed from `units_overrides` — the one change that flips
+    `stats.summarize_step`'s `clusters is None` gate. The reviewer built and
+    ran this exact config independently and got `p_value 0.479`, `null_draws
+    5000`, echo `level: rows`, no `p_value_corrected` — reproduced here as a
+    suite pin rather than left as an unrepeatable manual finding."""
+    rows = "\n".join(
+        f"{key},{label},{value}"
+        for key, label, value in zip(_C1_KEYS, _C1_LABELS, _C1_VALUES, strict=True)
+    )
+    roster_csv = f"patient_id,label,y\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C2_NOOP_STEP,
+        _local_template=_C2_LOCAL_TEMPLATE,
+        units_overrides={"attributes": ["label", "y"]},
+        statistics={
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "holm",
+        },
+        experiment_type="cred_assay",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["delta_y"]
+    assert metric["value"] == pytest.approx(2.5)
+    # The positive shape the suppressed-shape test's sibling never exercised:
+    # a range rather than a literal, since the run's own digest-derived seed
+    # differs from any fixed seed a direct-call test would choose — the free
+    # (unclustered) relabelling's own answer for this roster, `test_stats.py`'s
+    # own pin at a fixed seed (`0.3 < p < 0.7`).
+    assert metric["p_value"] is not None
+    assert 0.3 < metric["p_value"] < 0.7
+    assert metric["null_draws"] == 5000
+    assert metric["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "label",
+        "level": "rows",
+    }
+    assert "p_value_corrected" not in metric
+    # Decision 7's other half, still true here: the recorded column gets none.
+    seen = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["seen"]
+    assert "p_value" not in seen
+
+
 def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_run(tmp_path, capsys):
     """Decision 8, and it is verified by `run` rather than by direct call for a
     measured reason: on H4b-2 the neighbouring corner survived four task batches and

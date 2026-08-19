@@ -1480,6 +1480,41 @@ def test_a_p_only_member_does_not_report_a_thin_correction():
     assert fields[("cond:1", "s", "m")]["ci95_corrected"] is None
 
 
+def test_a_p_only_member_does_not_report_a_thin_correction_under_bonferroni_either():
+    """Whole-branch review Major 3: the same fixture as `..._does_not_report_a_
+    thin_correction`, over `bonferroni` rather than `holm` — the method-
+    independent `thin` expression (`and member.ci95 is not None`) was pinned
+    for only one of the two methods that use a real `level`, and this closes
+    the gap directly (per the review's remedy) rather than leaving a second
+    report-only note nobody downstream reads."""
+    members = [
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=0,
+            p_value=0.02,
+        ),
+        Member(
+            where="cond:2",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=(0.4, 0.6),
+            pool=None,
+            diffs=(0.4, 0.5, 0.6),
+            declaration_index=1,
+        ),
+    ]
+    fields = corrected_for(members, "bonferroni", 2, {"comparisons": 2, "metrics": 1})
+    assert fields[("cond:1", "s", "m")]["thin"] is False
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] is None
+
+
 def test_bh_over_a_partial_member_set_at_the_larger_declared_m_is_the_conservative_direction():
     """Task 17's owed measurement, made directly against `corrected_for` rather
     than transferred as an argument from `family_shape`'s docstring.
@@ -1538,3 +1573,56 @@ def test_bh_over_a_partial_member_set_at_the_larger_declared_m_is_the_conservati
     # produce.
     assert at_declared_three[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.06)
     assert at_present_two[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.04)
+
+
+def test_holm_withholds_p_value_corrected_for_a_p_only_member_rather_than_fabricating_its_rank():
+    """Whole-branch review Critical 1. `rank_family`'s tier places every p-only
+    member after every interval-carrying one, purely to give the sort a total
+    order — that placement is a tie-break, not a claim about where the member's
+    evidence sits. Publishing Holm's `min(1, p × (m − i + 1))` at that
+    fabricated `i` let two members with BIT-IDENTICAL raw p diverge by
+    `declaration_index` alone: reproduced end to end by the whole-branch
+    reviewer (one unit in `arm=of`, five in `against`, two recorded columns,
+    `shuffle: arm`, `correction: holm`) — `y` and `z` shared `p_value:
+    0.16976604679064186` and published `p_value_corrected` 0.3395 and 0.1698
+    respectively, differing only by which column was declared first.
+
+    Two p-only members at equal raw p is the discriminating fixture: if either
+    got a real (non-`None`) `p_value_corrected`, reordering them would move
+    which one is `0.3395` and which is `0.1698` — the exact failure this test
+    exists to catch. Withheld (`None`/absent) is the only order-independent
+    answer available under `holm`, matching `thin`'s own precedent for the
+    identical member shape."""
+    p_only_first = Member(
+        where="cond:first",
+        step="s",
+        metric="y",
+        delta=87.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.16976604679064186,
+    )
+    p_only_second = Member(
+        where="cond:second",
+        step="s",
+        metric="z",
+        delta=261.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=1,
+        p_value=0.16976604679064186,
+    )
+    forward = corrected_for(
+        [p_only_first, p_only_second], "holm", 2, {"comparisons": 2, "metrics": 1}
+    )
+    reversed_order = corrected_for(
+        [p_only_second, p_only_first], "holm", 2, {"comparisons": 2, "metrics": 1}
+    )
+    for fields in (forward, reversed_order):
+        assert "p_value_corrected" not in fields[("cond:first", "s", "y")]
+        assert "p_value_corrected" not in fields[("cond:second", "s", "z")]
+        assert fields[("cond:first", "s", "y")]["ci95_corrected"] is None
+        assert fields[("cond:second", "s", "z")]["ci95_corrected"] is None

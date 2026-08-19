@@ -1088,8 +1088,6 @@ def permutation_over_contrast(
     n: int = 5000,
     of_clusters: Sequence[str] | None = None,
     against_clusters: Sequence[str] | None = None,
-    of_strata: Sequence[str] | None = None,
-    against_strata: Sequence[str] | None = None,
     level: str = "rows",
 ) -> float | None:
     """The permutation p-value for a cross-arm contrast.
@@ -1114,6 +1112,18 @@ def permutation_over_contrast(
 
     `level` is `units.null_test_level`'s answer, derived by the caller from the
     roster for the reason the clustered draw states.
+
+    **No `strata` parameter, on purpose — whole-branch review Minor 4.** A prior
+    version took `of_strata`/`against_strata` and stratified the unclustered
+    branch by them, on the ground that `reference.md` requires a group-axis
+    null to be "permuted within cells of every other group axis." No caller,
+    production or test, ever supplied either: a declared contrast names its
+    two conditions by label, and a condition is one cell of the full group
+    cross, so every OTHER group axis is already constant on both sides of any
+    comparison — the rule is satisfied structurally by which two conditions a
+    contrast can even name, not by a stratified draw. Removed rather than left
+    as dead surface a docstring implied delivered something it was never
+    reachable to deliver.
     """
     values = list(of) + list(against)
     labels = ["of"] * len(of) + ["against"] * len(against)
@@ -1132,12 +1142,7 @@ def permutation_over_contrast(
             n=n,
             level=level,
         )
-    strata = (
-        None
-        if of_strata is None or against_strata is None
-        else list(of_strata) + list(against_strata)
-    )
-    return permutation_over_units(values, labels, "of", seed, n=n, strata=strata)
+    return permutation_over_units(values, labels, "of", seed, n=n)
 
 
 def percentile_over_units(
