@@ -163,3 +163,28 @@ undetermined**, so tasks 19 and 20 would each guess. Settled now rather than dow
 **Two Minors are insertion damage, and both are named rules:** a positional locator introduced by
 task 1, and a "The second row…" reference **pushed away from its table** by the same insertions — the
 check-every-row-an-insertion-moves rule, which has produced Majors on three consecutive slices.
+
+**Fix round 1 — all findings closed** (`96815f9`, `acccda7`, `1273247`, `6a22630`, `071f3da`),
+confirmed by a scoped re-review that **went past the report on the one that mattered.** It re-ran the
+`family_members` mutation (10 failures, up from 8, with all three method arms failing) — but then did
+what a mutation on that function cannot do: **it hand-added a spurious `p_value_corrected: None` to
+every block `corrected_for` returns and confirmed the widened pin FAILS on the inner-key-set
+assertion in all three arms**, where the old pin would have passed silently. That is the property the
+widening was for, established **directly rather than by proxy** — which is the distinction this
+repo's whole mutation discipline turns on. It also independently recomputed the two new baselines
+(bonferroni all at 0.05/3; `fdr_bh` all `None`) and matched.
+
+**And it verified the three confirmed-rather-fixed Minors by reading the plan itself**, not the
+report's claim about the plan: task 28's site list now names § Between-subjects with the stale clause,
+task 5+24 mints the `E-STATS-NULLTEST-REPORTBY` row as its own deliverable, and task 28 step 1
+restates the § Validation row. **A record that an owner exists is not the same as the owner's brief
+carrying the work** — that difference has cost this project a filing before.
+
+Suite 2280 passed, 1 skipped, 2 xfailed. Batch 1 complete; the slice's guard now covers all three
+correction methods and their inner key sets **before** the functions it guards are touched.
+
+## Batch 2 dispatched — tasks 5+24, 6, 7, 8, 9
+
+The closed schema and the decomposed refusals: one code that today returns for five distinct faults
+becomes five, `statistics.null_test` is closed one level in on `resample`'s and `holdout`'s precedent,
+and `units.null_test_level` supplies the three-state answer `stratum_varies_within_cluster` cannot.
