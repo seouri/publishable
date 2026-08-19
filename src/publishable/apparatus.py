@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from publishable.coercion import coerce_scalars
+from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
@@ -180,3 +181,89 @@ def check_facts(
                 code="E-APPARATUS-FACT-MISSING",
             )
     return checked
+
+
+class Observations:
+    """Every observation this run made, and the two documents derived from them.
+
+    One accumulator, two projections, no second source of truth (§ Corrections
+    against the code, correction 3). Neither published mapping can supply
+    `W-APPARATUS-UNANSWERED` at its own grain: `provenance.apparatus.facts` is
+    the first *answered* observation of each fact, so a fact answered on some
+    calls and omitted on others shows no `null` at all; `provenance.apparatus.
+    unobserved` aggregates over every condition, so it carries no condition to
+    name. This class keeps per-(condition, fact) null and total counts —
+    strictly more than either published mapping holds — and `facts_document`,
+    `unobserved` and `warn_unanswered` are all projections of those counts.
+    """
+
+    def __init__(self) -> None:
+        self._first_answered: dict[tuple[str, str], Any] = {}
+        self._null_counts: dict[tuple[str, str], int] = {}
+        self._total_counts: dict[tuple[str, str], int] = {}
+        self._conditions: list[str] = []
+        self._facts_by_condition: dict[str, list[str]] = {}
+
+    def record(self, condition_key: str, facts: Mapping[str, Any]) -> None:
+        """One probe call's worth of facts, for one condition."""
+        if condition_key not in self._facts_by_condition:
+            self._facts_by_condition[condition_key] = []
+            self._conditions.append(condition_key)
+        seen = self._facts_by_condition[condition_key]
+        for fact, value in facts.items():
+            if fact not in seen:
+                seen.append(fact)
+            pair = (condition_key, fact)
+            self._total_counts[pair] = self._total_counts.get(pair, 0) + 1
+            if value is None:
+                self._null_counts[pair] = self._null_counts.get(pair, 0) + 1
+            elif pair not in self._first_answered:
+                # The FIRST answered observation wins — a fact whose first call
+                # answered `null` and whose second answered a value records the
+                # answer; a fact that never answers stays `null`. A build that
+                # kept the LAST observation instead cannot be told apart from
+                # this one by any fixture with fewer than three observations.
+                self._first_answered[pair] = value
+
+    def facts_document(self) -> dict[str, dict[str, Any]]:
+        """`provenance.apparatus.facts` — the first answered value per
+        (condition, fact), `null` for a fact that never answered."""
+        return {
+            condition: {
+                fact: self._first_answered.get((condition, fact))
+                for fact in self._facts_by_condition[condition]
+            }
+            for condition in self._conditions
+        }
+
+    def unobserved(self, declared: Sequence[str]) -> dict[str, dict[str, int]]:
+        """`provenance.apparatus.unobserved` — declared facts only, each
+        summed over every condition's counts, matching § The apparatus core
+        can only observe's own example (`reagent_lot: {null_probes: 3,
+        total_probes: 15}`)."""
+        out: dict[str, dict[str, int]] = {}
+        for fact in declared:
+            null_probes = sum(n for (_, f), n in self._null_counts.items() if f == fact)
+            total_probes = sum(n for (_, f), n in self._total_counts.items() if f == fact)
+            out[fact] = {"null_probes": null_probes, "total_probes": total_probes}
+        return out
+
+    def warn_unanswered(self, c: Collector) -> None:
+        """`W-APPARATUS-UNANSWERED`, once per (condition, fact) pair with at
+        least one `null` observation, read off the counts rather than emitted
+        per call — a per-call emission would print the same flaky pair's line
+        once for every probe that missed it. Never changes an exit code, on
+        `W-ENV-UNLOCKED`'s existing precedent."""
+        for condition in self._conditions:
+            for fact in self._facts_by_condition[condition]:
+                pair = (condition, fact)
+                nulls = self._null_counts.get(pair, 0)
+                if not nulls:
+                    continue
+                total = self._total_counts.get(pair, 0)
+                c.warn(
+                    "W-APPARATUS-UNANSWERED",
+                    "apparatus",
+                    f"condition `{condition}`'s fact `{fact}` came back `null` on "
+                    f"{nulls} of {total} probes",
+                )

@@ -294,3 +294,87 @@ def test_a_value_core_never_read_is_not_matched():
     returned = Apparatus(facts={"operator_note": "lab7"})
     checked = check_facts(returned, [], probe_name="p", credentials={})
     assert checked == {"operator_note": "lab7"}
+
+
+def test_the_first_answered_observation_wins_and_a_never_answered_fact_stays_null():
+    """Three observations of one fact — null, then a value, then a different
+    value — and the recorded entry is the SECOND. A fixture with two
+    observations could not tell "first answered" from "last seen"."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00_baseline", {"model_revision": None})
+    obs.record("00_baseline", {"model_revision": "r1"})
+    obs.record("00_baseline", {"model_revision": "r2"})
+    obs.record("00_baseline", {"never_answers": None})
+    doc = obs.facts_document()
+    assert doc["00_baseline"]["model_revision"] == "r1"
+    assert doc["00_baseline"]["never_answers"] is None
+
+
+def test_a_partially_answered_fact_records_its_answer_and_still_counts_its_nulls():
+    """The flaky case the null rule exists for, and the one `facts` alone cannot
+    see: the recorded entry holds the value AND the pair's null count is 2. A
+    build that derived the counts from `facts` would report 0."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00_baseline", {"reagent_lot": None})
+    obs.record("00_baseline", {"reagent_lot": "lot-9"})
+    obs.record("00_baseline", {"reagent_lot": None})
+    doc = obs.facts_document()
+    assert doc["00_baseline"]["reagent_lot"] == "lot-9"
+    unobserved = obs.unobserved(["reagent_lot"])
+    assert unobserved["reagent_lot"]["null_probes"] == 2
+    assert unobserved["reagent_lot"]["total_probes"] == 3
+
+
+def test_unobserved_counts_declared_facts_only_and_counts_every_probe():
+    """The undeclared fact must have NO entry, asserted beside the declared
+    ones' presence: an absence assertion alone passes if nothing was recorded.
+    `unobserved` is the per-condition counts summed, asserted against a
+    hand-computed total over the observations this test recorded."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00_baseline", {"model_revision": "r1", "undeclared_diag": "x"})
+    obs.record("01_variant", {"model_revision": None, "undeclared_diag": "y"})
+    unobserved = obs.unobserved(["model_revision"])
+    assert set(unobserved) == {"model_revision"}
+    assert unobserved["model_revision"] == {"null_probes": 1, "total_probes": 2}
+
+
+def test_the_warning_is_one_finding_per_condition_and_fact_including_the_flaky_pair():
+    """Two conditions × three declared facts over six observations, arranged as
+    Fixture N: one never-answered pair, two partially answered pairs, and three
+    pairs with no null at all. Exactly THREE findings, asserted as a count and as
+    the exact set of (condition, fact) pairs — per-call emission would produce
+    eight, and a warning derived from `facts` alone would produce one."""
+    from publishable.apparatus import Observations
+    from publishable.diagnostics import Collector
+
+    obs = Observations()
+    # 00_baseline: fact_a clean, fact_b flaky (1 null of 2), fact_c never answers
+    obs.record("00_baseline", {"fact_a": "va", "fact_b": "vb", "fact_c": None})
+    obs.record("00_baseline", {"fact_a": "va", "fact_b": None, "fact_c": None})
+    # 01_variant: fact_a clean, fact_b clean, fact_c flaky (1 null of 2)
+    obs.record("01_variant", {"fact_a": "va", "fact_b": "vb", "fact_c": "vc"})
+    obs.record("01_variant", {"fact_a": "va", "fact_b": "vb", "fact_c": None})
+
+    c = Collector()
+    obs.warn_unanswered(c)
+    findings = [f for f in c.findings if f.code == "W-APPARATUS-UNANSWERED"]
+    assert len(findings) == 3
+    pairs = set()
+    for f in findings:
+        if "00_baseline" in f.message and "fact_b" in f.message:
+            pairs.add(("00_baseline", "fact_b"))
+        elif "00_baseline" in f.message and "fact_c" in f.message:
+            pairs.add(("00_baseline", "fact_c"))
+        elif "01_variant" in f.message and "fact_c" in f.message:
+            pairs.add(("01_variant", "fact_c"))
+    assert pairs == {
+        ("00_baseline", "fact_b"),
+        ("00_baseline", "fact_c"),
+        ("01_variant", "fact_c"),
+    }
