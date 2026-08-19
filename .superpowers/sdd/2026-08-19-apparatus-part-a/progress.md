@@ -268,3 +268,42 @@ diff touched, which is why the rule is to name what a sibling *does*.
 before and passed after, plus the four positional locators round 1 had introduced. Suite **2410**
 passed, 1 skipped, 2 xfailed; four gates clean. **Batch 3 complete** — the first batch where a real
 `run` calls user code, and the batch that produced this slice's only Critical so far.
+
+## Batch 4 — tasks 11, 12, 13 — the record
+
+Commits `e833070` (`provenance.apparatus`'s five sub-keys, **replacing `cli.py`'s unconditional
+`"apparatus": None`** — the OPEN filing this slice was named to close), `e36b5b3` (the fingerprint),
+`c8ecd83` (publishable-as-is), report `ec16254`. Suite 2410 → **2417**.
+
+**The guard pin held, and held without being touched.** `tests/test_cli.py` has **zero deleted lines**
+across the batch and `cli.py` exactly **one** — the literal `None` this slice existed to remove — and the
+pin's body is **byte-identical to its capture at `7568a34`.** It stayed green because template `generic`
+declares no probe, which is the state it was built to hold, so tasks 11 and 12 **added a second state
+beside it rather than replacing it.** Re-verified still discriminating under the rejected `probe: null`
+spelling. That outcome is the argument for capturing a pin from a real run before the code exists: the
+one I expected to have to argue about updating needed no update at all.
+
+**Ruling on the task 11/12 split, which the reviewer correctly said was owed a ledger line.**
+`apparatus_hash` was written in **task 11's** commit, because `Observer.block()` cannot produce a `hash`
+key without it, leaving **task 12's commit tests-only** (confirmed: `e36b5b3` adds no production code).
+**That is the right split and it was disclosed rather than hidden.** The alternative — a `block()` that
+omits `hash` for one commit — would have shipped a record shape no decision describes, and the guard pin
+asserts a **key list**, so an intermediate shape would have had to be pinned and then unpinned. **Cost if
+wrong:** a task boundary that does not match a commit boundary, which the report states plainly.
+
+### Review: spec compliance PASS, task quality PASS with findings — all prose, none behavioural
+
+Decisions 7, 8 and 10 verified **by running**: the three record shapes (no probe → whole block `null`; a
+probe returning nothing → five sub-keys with `unobserved: {}`; a raise → no `run.yaml`), no new
+absent-vs-`null` convention minted, **the hash is not a fourth hash** (`hashes.py` untouched slice-wide,
+`HASHED_TREES` unchanged), `sort_keys` genuinely load-bearing **and non-blind** because the fixture
+inserts `zeta_field` before `alpha_field`, and `warn_unanswered`'s new caller correct on all four
+properties — the **fresh** `Collector` proven by a second render printing "3 problems" rather than 4.
+
+**The Major is the third instance of one pattern on this project: a "zero disagreements" report falsified
+by a claim carried from a brief and never checked.** A docstring asserted its row was one "which no other
+test reaches" — three tests in `test_apparatus.py` reach it, dated by `git log -S` to tasks 5 and 7. The
+transferable form: **a brief's prose about other tests is a claim about the code, and it is checkable by
+grep.** A second, milder divergence went unreported in the same batch — a docstring claiming a sweep was
+"sliced out of `run.yaml`" where the body sweeps the whole file, which is the harmless direction and
+still a divergence.
