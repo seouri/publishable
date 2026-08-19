@@ -309,3 +309,38 @@ assertable, a tie fixture measured at 0.828 against a guessed 0.16, and this one
 **And a site outside a task's stated file list, found while preparing:** `validate.py` carries a
 comment calling `E-DATA-CLUSTER-DERIVED` "a construction that does not exist", which **becomes false
 the moment 15a/15b land**. Task 15b's file list does not name `validate.py`. Carried forward.
+
+### Batch 3 — task review: spec compliance FAILS on a Critical; quality strong on measurement
+
+Review at `task-b3-review.md`. Commits `691773a` (12), `de0dcd7` (13), `3b5230e` (14), `5c1a297`
+(15a), `4ea6f97` (15b — `E-DATA-CLUSTER-DERIVED` retired), report `d97ec9c`. Suite 2306 → **2321**.
+Three fixture defects were **found by computing and fixed without weakening an assertion**, and both
+brief errors were adjudicated correctly. The reviewer's summary: **strong on measurement, weakest
+exactly where it mattered.**
+
+**Critical: the `_clustered` label and the clustered draw are decoupled, and nothing pins them
+together.** Verified by running — editing **only the argument** (`clusters=None`, label untouched)
+leaves the full suite **green at 2321**, and the record then reads
+`method: paired_percentile_over_units_clustered` with `n_paired_clusters: 3` **over a unit-level
+draw**. That is **verbatim the shape of the Critical H4b-2's whole-branch review found** — the corner
+already given **five wrong grounds across two slices**, every one an answer from a proxy. **This is the
+sixth.**
+
+**The cause is a fixture, and the reasoning error is the transferable part.** The only fixture reaching
+that branch yields **`[0.0, 0.0]` under both constructions**, and the batch read that as "a genuine
+clustered interval." **A zero-width interval is the one value identical under every construction**, so
+it can verify nothing about which construction ran — the same class as a Welch interval coinciding with
+a pooled one. The batch's own 15b mutation exercised only a **string literal**, which is why this
+survived a mutation that was run and reported green. **Ruling: the pin is the argument-only mutation
+against a non-degenerate fixture**, and the reviewer supplied the discriminating widths — 100.0
+clustered against 49.95 unit-level.
+
+**Major 2 is a pre-existing defect propagated by the commit that cited it as evidence.** The corner
+declared closed publishes `delta: 0.0, ci95: [0.0, 0.0]` **and `ci95_corrected: [0.0, 0.0]`** beside
+per-condition widths of 19.4, with zero errors — which `reference.md` § Statistical reporting refuses
+in those terms. Not introduced here; the identical shape reproduces on the unclustered path at HEAD.
+But **15b extended it to a second path, cited it as its verification, and filed nothing.**
+
+**And the guard removed here was H4b-2's fix for that Critical.** The ruling that the property is now
+protected *by construction* rather than by suppression may still be right — but it was asserted from a
+degenerate fixture, so it was unverified either way until the reviewer built the discriminating one.
