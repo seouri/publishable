@@ -250,3 +250,32 @@ validate clean**.
 A fail-open closed without a test that fails when the fix is removed is the shape this repo has
 shipped five times across three slices. The discriminating roster for Major 1 already exists in the
 review — the shuffled axis varying inside one cluster and constant inside another.
+
+**Fix round 1 — both Majors and all three Minors closed** (`7495036`, `9a3c9bb`), confirmed by a
+scoped re-review that **rebuilt each fail-open's discriminating case rather than reading the fix**.
+
+Major 1: `shuffle: arm` now yields `E-STATS-NULLTEST-LEVEL` beside `-UNSUPPORTED` with a message
+naming the axis, while `shuffle: label` **on the identical roster** still earns the pre-existing
+ambiguity refusal naming both match sets — the two-sided check, since a fix that refuses everything
+is not a fix. Mutating the new guard reproduced **the reviewer's original bug exactly**
+(`-UNSUPPORTED` alone, no `-LEVEL`), failing one named test.
+
+Major 2: both an **absent** `shuffle` and `shuffle: ""` now yield `E-STATS-NULLTEST-SHUFFLE`
+**alongside** `-UNSUPPORTED` — refused by something **other than the code task 21 retires**, which was
+the point rather than a detail. Mutating the presence check made both new tests fail, each showing
+the pre-fix set.
+
+**And the +3 test delta was audited rather than accepted**: one test pins Major 1 carrying its own
+attribute control, and **two** pin Major 2 — absent and empty **separately**, so an `is None`-only
+guard still fails one. That is the check that distinguishes "two fail-opens covered" from "one
+covered twice", and it was asked for because +3 for two Majors and three Minors is thin on its face.
+
+Suite 2300 passed, 1 skipped, 2 xfailed. Batch 2 complete.
+
+## Batch 3 dispatched — tasks 11, 12, 13, 14, 15a, 15b
+
+The permutation constructions themselves, and the `compute(table, labels)` signature the plan author
+found by **probe**: `_attributed` merges roster attributes **over** each row, so a relabelling written
+into the table is **erased before `aggregate` sees it** — a one-argument `compute` would report
+`p_value: 1.0` for every derived metric in every run, which is the spec's own "reuses the observed
+assignment" mutant arriving as **default behaviour**.
