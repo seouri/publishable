@@ -494,15 +494,14 @@ def apparatus_hash(facts_document: Mapping[str, Any]) -> str:
     function lives here, beside the builder of the mapping it hashes —
     `manifest_hash` beside `build_manifest` in `manifest.py`, `allocation_hash`
     beside `build_allocation_document` in `artifacts.py` are the shipped
-    precedent — and not in `hashes.py`, which holds hashes over the three
-    identity trees.
+    precedent — and not in `hashes.py`.
 
     **The hash is over the mapping, not over any file's bytes.** `run.yaml`
     renders this same mapping through `yaml.safe_dump` and the ledger renders
     individual observations through `json.dumps`; neither encoding reproduces
     this digest. A reader checking it must re-canonicalize the *parsed*
-    `facts` mapping with the exact `json.dumps` arguments above, not hash
-    either file's rendered text.
+    `facts` mapping with the exact `json.dumps` arguments this function uses,
+    not hash either file's rendered text.
     """
     canonical = json.dumps(
         facts_document, sort_keys=True, separators=(",", ":"), ensure_ascii=False

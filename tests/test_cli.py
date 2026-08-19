@@ -13781,12 +13781,15 @@ def test_a_declared_probe_records_the_five_sub_keys_per_condition(
     assert set(block) == {"probe", "ledger", "hash", "facts", "unobserved"}
     assert block["probe"] == "h7d_nullable_probe"
     assert block["ledger"] == "apparatus/probes.jsonl"
+    # The recorded string actually resolves — joins the record to the file it
+    # names rather than comparing two independent spellings to each other.
+    assert (doc["run_dir"] / block["ledger"]).is_file()
 
     ledger = [
         json.loads(line)
         for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
     ]
-    assert len(ledger) == 6, "run_start (2) + pre_execution (4, two conditions x two repeats)"
+    assert len(ledger) == 6, "run_start (2) + pre_execution (4, two conditions × two repeats)"
 
     for key, model in by_key.items():
         assert block["facts"][key]["calibration_id"] == f"CAL-{model}"
@@ -13818,9 +13821,9 @@ def probe(cfg):
 def test_the_undeclared_fact_is_recorded_and_has_no_unobserved_entry(
     installed, registries, tmp_path, capsys
 ):
-    """Decision 4's fourth row, which no other test reaches. The presence
-    assertion and the absence assertion are one pair: the absence alone would
-    pass if the probe had never run."""
+    """Decision 4's fourth row, reached end to end through
+    `provenance.apparatus`. The presence assertion and the absence assertion
+    are one pair: the absence alone would pass if the probe had never run."""
     site = installed(
         "dist-t11b", "1.0", {"publishable.probes": {"h7d_probe": "t11b_probe_mod:probe"}}
     )
@@ -13995,7 +13998,7 @@ def test_two_runs_with_identical_facts_share_a_hash_and_one_changed_fact_moves_i
     assert run3["provenance"]["apparatus"]["hash"] != run1["provenance"]["apparatus"]["hash"]
 
 
-def test_the_hash_does_not_cover_unobserved_or_the_probe_name():
+def test_apparatus_hash_s_signature_admits_only_a_facts_mapping():
     """Direct call: two facts documents that differ in nothing hash the same,
     and the argument is the facts mapping alone — the assertion is on the
     function's signature-level behaviour rather than on a comment claiming
@@ -14034,9 +14037,11 @@ def test_the_recorded_apparatus_block_carries_no_credential_value(
     """Two assertions, and neither alone is the property. First: the run
     COMPLETES and the block is populated — a block that is `null` because
     nothing ran would pass an absence sweep trivially. Second: no declared
-    credential value appears in the block's RAW YAML text, sliced out of
-    `run.yaml` rather than re-serialized, because a defect in how a value is
-    written is one a parsing reader undoes before the assertion.
+    credential value appears anywhere in `run.yaml`'s RAW text, read whole
+    rather than re-serialized, because a defect in how a value is written is
+    one a parsing reader undoes before the assertion — and sweeping the
+    whole file rather than a slice of the apparatus block is the stronger
+    check, since a leak anywhere else in the document would still fail it.
 
     The credential is DECLARED and PRESENT in the environment for this run —
     a sweep for a value core never read would pass whatever the code did.

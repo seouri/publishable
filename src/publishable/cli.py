@@ -3582,10 +3582,10 @@ def command_run(config_path: Path) -> int:
 
         # `W-APPARATUS-UNANSWERED`, once at run end: `run.yaml` has no
         # diagnostics channel of its own — the same reason `aggregate_c`'s
-        # findings print to stdout above rather than joining the document —
-        # so this is a FRESH `Collector` (never `c`, already rendered and
+        # findings print to stdout rather than joining the document — so
+        # this is a FRESH `Collector` (never `c`, already rendered and
         # printed) rendered to stdout. A warning never changes the exit code,
-        # on `W-ENV-UNLOCKED`'s own precedent above.
+        # on `W-ENV-UNLOCKED`'s own precedent.
         if observer is not None:
             warn_c = Collector()
             warn_c.credentials = credentials
