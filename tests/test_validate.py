@@ -11756,6 +11756,34 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
     assert hits == []
 
 
+def test_the_worked_examples_intervals_are_not_narrowed_by_the_null_test_work():
+    """`CLAUDE.md` § The worked example: these were checked numerically against a
+    synthetic 228-unit table and must not be narrowed back. H4d adds a `p_value`
+    to two `reference.md` sections that hold worked-example numbers, and an edit
+    that re-derived an interval to "agree" with a p-value is the failure this
+    catches. Read from `__file__` rather than a bare relative path, and guarded
+    against an empty read so it cannot pass vacuously.
+
+    Only three of the four literals CLAUDE.md's worked example names are present
+    in `reference.md` as literal text — the fourth, kendall's own per-condition
+    `[0.347, 0.477]`, appears in README.md's demo table but not here, where the
+    worked example only ever spells out kendall's baseline delta
+    (`[-0.213, -0.125]`) rather than its raw per-condition interval. Verified at
+    `a207702` with `grep -c '0.347' docs/reference.md` returning 0. A pin
+    asserting a string that was never there passes for the wrong reason the
+    moment someone adds it, so it is left out here rather than included."""
+    import pathlib
+
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "reference.md").read_text()
+    assert len(text) > 100000
+    for literal in (
+        "ci95: [-0.007, 0.059]",
+        "[0.488, 0.661]",
+        "[0.517, 0.683]",
+    ):
+        assert literal in text, f"worked-example interval {literal!r} is gone or narrowed"
+
+
 def _holdout(block, **extra) -> dict:
     """`write_config`'s whole-block override for a config declaring a holdout.
 

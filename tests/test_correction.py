@@ -981,3 +981,79 @@ def test_a_member_may_not_carry_clusters_beside_a_pool_or_a_weight():
             weights=(1.0, 1.0),
             **common,
         )
+
+
+_PIN_MEMBERS = [
+    Member(
+        where="cond:1", step="s", metric="m", delta=0.026, ci95=(-0.007, 0.059),
+        pool=None, diffs=tuple(0.026 + 0.01 * k for k in range(-5, 6)), declaration_index=0,
+    ),
+    Member(
+        where="cond:2", step="s", metric="m", delta=-0.169, ci95=(-0.213, -0.125),
+        pool=None, diffs=tuple(-0.169 + 0.005 * k for k in range(-5, 6)), declaration_index=1,
+    ),
+    Member(
+        where="cond:3", step="s", metric="m", delta=0.0, ci95=(-0.5, 0.5),
+        pool=None, diffs=tuple(0.1 * k for k in range(-5, 6)), declaration_index=2,
+    ),
+    Member(
+        where="cond:4", step="s", metric="m", delta=1.0, ci95=None,
+        pool=None, diffs=(1.0, 1.0, 1.0), declaration_index=3,
+    ),
+]
+
+
+def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The regression pin, captured at `a207702` before any H4d change.
+
+    Three properties in one family, and each would move under a different fault.
+    The RANK ORDER is asserted first because a level is a function of a rank:
+    `cond:3` has `delta` exactly 0 with a finite width, so `_evidence_ratio`
+    returns exactly `0.0` for it — a REAL member at the value a p-only member
+    would be handed by any sentinel. It must keep rank 3 of 3, which is what
+    says the new tier sorts below every interval-carrying member rather than
+    among them.
+
+    The three levels are alpha/3, alpha/2 and alpha, which is Holm at m = 3 —
+    so a family that admitted `cond:4` would show 4, and every bound would move.
+    """
+    ranked = [m.where for m in rank_family(family_members(_PIN_MEMBERS))]
+    assert ranked == ["cond:2", "cond:1", "cond:3"]
+
+    fields = corrected_fields(_PIN_MEMBERS, "holm")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    assert fields[("cond:2", "s", "m")]["correction_level"] == pytest.approx(0.05 / 3)
+    assert fields[("cond:2", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.18335036277829492),
+        pytest.approx(-0.1546496372217051),
+    ]
+    assert fields[("cond:1", "s", "m")]["correction_level"] == pytest.approx(0.025)
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.00033766915711599607),
+        pytest.approx(0.05233766915711599),
+    ]
+    assert fields[("cond:3", "s", "m")]["correction_level"] == pytest.approx(0.05)
+    assert fields[("cond:3", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.22281388519862744),
+        pytest.approx(0.22281388519862744),
+    ]
+    assert [v["thin"] for v in fields.values()] == [False, False, False]
+
+
+def test_a_member_with_no_interval_and_no_p_value_is_still_outside_the_family():
+    """The property decision 4 rests on: widening `family_members` must be a no-op
+    for every config that declares no `null_test`.
+
+    `cond:4` carries `diffs` and no `ci95` — the shape `cli` builds for a thin
+    pool, a too-short draw or a degenerate column. It must not be counted, and
+    the assertion is on the family SIZE rather than on its absence: a member
+    wrongly admitted inflates `m`, which tightens every level and narrows every
+    corrected interval in the run, in the direction no reader can check.
+    """
+    counted = family_members(_PIN_MEMBERS)
+    assert [m.where for m in counted] == ["cond:1", "cond:2", "cond:3"]
+    assert family_shape(counted) == (3, {"comparisons": 3, "metrics": 1})
