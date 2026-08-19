@@ -5407,6 +5407,42 @@ re-check and which the original entry already flagged as unsurveyed) is more tha
 work. **Owner: H4d**, the last remaining slice whose surface is the `statistics` block — the same
 terminal reasoning the `report_by`/`resample_columns` entry below carries.
 
+**MEASURED 2026-08-19 (H4d, task 23) — the permutation half of the same finiteness surface, claimed;
+the resample half named above stays open.** H4d recomputes metrics over relabelled tables, which is
+the identical unchecked-finiteness surface one construction over, so the premise was measured rather
+than inherited a fourth time. Probed directly at `a207702`:
+
+```
+permutation_over_units([1.0, 2.0, 3.0, float('nan')], ['of','of','against','against'], 'of', seed=1, n=100)
+  -> 0.009900990099009901
+permutation_of_derived({'a': {'y': 1.0}, 'b': {'y': float('inf')}, 'c': {'y': 2.0}, 'd': {'y': 3.0}},
+                        {'a':'of','b':'of','c':'against','d':'against'},
+                        lambda t, l: sum(r['y'] for r in t) / len(list(t)), seed=1, n=100)
+  -> (None, 100)
+```
+
+`permutation_of_derived` already drops a `nan` draw — its survivor discipline checks `math.isnan` —
+so the derived path was clean before this task touched it. `permutation_over_units` had no such
+check: an unguarded `nan` observed statistic makes every `>=` comparison `False`, reported as
+`p_value = 1/(n+1) = 0.0099...` — a small, real-looking p-value from a table nobody could compute a
+mean of, worse than the existing `Interval(nan, nan)` this filing's original entry names for the
+resample path. **Claimed**: `stats._label_delta` — the one function both the observed statistic and
+every draw's recomputation pass through, for both `permutation_over_units` and
+`permutation_over_units_clustered` — now returns `None` whenever the computed delta is `nan`, the
+same honest absence an empty arm already gets. Re-probed after the fix: both calls above now return
+`None`. Pinned by
+`tests/test_stats.py::test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one`,
+with a mutation removing the guard (the assertion then reads `0.009900990099009901`, a value rather
+than a crash).
+
+**The resample (column-bootstrap) half this entry was originally about is untouched and stays open**
+— `percentile_over_units` and its siblings still have no finiteness check, and
+`tests/test_stats.py::test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap` and
+`::test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap` are unchanged and
+still pin it. This slice narrowed the filing to the resample half only; it is not closed, and H4d
+being the last slice whose surface is the `statistics` block means no further slice can inherit it —
+**it stays open with no owner**, which is worth stating plainly rather than leaving the heading above
+to imply otherwise.
 
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 

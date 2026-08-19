@@ -880,12 +880,23 @@ def _label_delta(values: Sequence[float], labels: Sequence[str], of_level: str) 
 
     `None` for an empty arm, which is not a delta of zero: `reference.md`
     § Contrasts refuses that reading one construction over.
+
+    `None` too when the delta itself is `nan` — `docs/superpowers/spec-defects.md`'s
+    "a column resample is only ever defined given finite inputs" filing, claimed
+    for this construction rather than re-declined a fourth time: an unguarded
+    `nan` observed statistic makes every `>=` comparison `False`, which
+    `permutation_over_units` would report as a small, real-looking p-value —
+    `1/(n + 1)` — from a table nobody could compute a mean of, which is worse
+    than the honest absence an empty arm already gets. Checked here rather
+    than at each caller, since both the observed statistic and every draw's
+    recomputation pass through this one function.
     """
     of = [v for v, label in zip(values, labels, strict=True) if label == of_level]
     against = [v for v, label in zip(values, labels, strict=True) if label != of_level]
     if not of or not against:
         return None
-    return sum(of) / len(of) - sum(against) / len(against)
+    delta = sum(of) / len(of) - sum(against) / len(against)
+    return None if math.isnan(delta) else delta
 
 
 def permutation_over_units(

@@ -3813,7 +3813,14 @@ def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
     given finite inputs, and this is the reachable counterexample without that
     condition. `low <= high` is `False` for `nan`, which is exactly what the
     adversarial test above would have caught immediately had it varied value
-    DOMAIN rather than only column shape."""
+    DOMAIN rather than only column shape.
+
+    This resample (column-bootstrap) half of the filing stays open at H4d
+    task 23, which claimed only the sibling permutation half
+    (`stats._label_delta`, over in
+    `test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one`)
+    — H4d is the last slice whose surface is the `statistics` block, so this
+    gap now has no owner to inherit it."""
     got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)
     assert got is not None
     assert math.isnan(got.low) and math.isnan(got.high)
@@ -3826,7 +3833,11 @@ def test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap
     letter for letter — but Σw over these four weights overflows `float`, and
     the resulting weighted mean is `nan`. Finite-and-positive per weight is not
     the same fact as finite-when-summed, and the docstring's argument silently
-    assumed the latter followed from the former."""
+    assumed the latter followed from the former.
+
+    Also still open at H4d task 23, for the reason the sibling test above
+    gives — the permutation half of this finiteness surface closed; this
+    resample half did not."""
     got = percentile_over_units(
         [1.0, 2.0, 3.0, 4.0], seed=1, draws=100, weights=[1e308, 1e308, 1e308, 1e308]
     )
@@ -5166,6 +5177,19 @@ def test_a_relabelling_that_empties_an_arm_reports_no_p_value():
     the shape task 13's wrong-level mutant produces, which is why it is pinned
     here rather than only there."""
     assert permutation_over_units([1.0, 2.0, 3.0], ["against"] * 3, "of", seed=1, n=200) is None
+
+
+def test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one():
+    """H4d task 23, claimed rather than re-declined a fourth time
+    (`docs/superpowers/spec-defects.md`, "a column resample is only ever
+    defined given finite inputs"). Before `_label_delta`'s guard, an
+    unrecoverable `nan` observed statistic made every `>=` comparison `False`
+    and this call reported `0.009900990099009901` — a small, real-looking
+    p-value from a table nobody could compute a mean of. `None` is the honest
+    absence, the same one an emptied arm already gets."""
+    values = [1.0, 2.0, 3.0, float("nan")]
+    labels = ["of", "of", "against", "against"]
+    assert permutation_over_units(values, labels, "of", seed=1, n=100) is None
 
 
 def test_the_permutation_p_value_is_reproducible_from_its_seed():
