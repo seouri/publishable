@@ -3214,6 +3214,13 @@ results:
 
 **The verdict records which number it compared, because the [hypothesis family](#sweeps-and-repeats) is corrected separately from the sweep's.** `family_size` and `family` carry it in the same idiom every other family uses, with a single breakout key because a hypothesis family multiplies nothing: it counts the confirmatory hypotheses whose observations core computed, where a sweep's family counts comparisons × metrics. A reader can check the level without re-deriving it, exactly as `family` beside a `vs_baseline` delta is auditable rather than asserted. Correction reaches a verdict only through a bound: a hypothesis evaluating on `observed` compares a point estimate, which has no α to adjust, while one evaluating on `ci95_lower` or `ci95_upper` reads the corrected bound at the level *this* family implies. `verdict_evaluated_on` names which of the three the comparison actually used — spelled out rather than echoing the config's `evaluate_on`, since a record field one letter from a config field is a typo waiting to be read as agreement. So a verdict is never a number a reader has to reconstruct from `evaluate_on` plus a correction rule.
 
+**`evaluate_on` names three bounds — `observed`, `ci95_lower`, `ci95_upper` — and none of them is a
+p-value, so no verdict ever rests on one.** A counted hypothesis's entry still records
+`p_value_corrected` when its member carries a p-value, computed at the hypothesis family's own size
+rather than the sweep's, for the same reason `ci95_corrected` is: `corrected_for` is the same
+function called at a different `m`, and a reader auditing one bound alongside the other must not find
+them corrected at two different family sizes.
+
 **In the worked example the two available answers differ, and the field is what makes that legible.** The observed delta of 0.026 clears the declared threshold of 0.02, so `h1` is supported on `observed` — while the same delta's interval over 228 units, [−0.007, 0.059], does not exclude zero, so the same hypothesis written `evaluate_on: ci95_lower` would come back `supported: false`. Neither verdict is wrong; they answer different questions, and a reader who can see which one was asked can decide what the run showed. A record that reported only `supported: true` would be the version worth distrusting. See [What a hypothesis is tested against](#what-a-hypothesis-is-tested-against) for when to declare which.
 
 **`supported` has three states, and the third is not a failure.** `true` and `false` mean the
