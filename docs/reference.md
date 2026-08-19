@@ -2571,6 +2571,25 @@ echo does. An arm the relabelling emptied is reported the same way, for the same
 
 One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name — [`E-STATS-RESAMPLE-METHOD`](#errors-validate-reports) — rather than a value silently ignored. The method strings in the two construction tables above are what core **emits** into `run.yaml`, not values a config may name here.
 
+**Null test methods.** One value, and the table exists so that adding a second is a documented change
+rather than a silent one — the same reason [`resample.method`](#statistical-reporting) has one.
+
+| `null_test.method` | What one draw is | What it reports |
+|---|---|---|
+| `permutation` (default) | One relabelling of the shuffled attribute, at the [level the roster implies](#clustered-units) | `p_value`, the proportion of relabellings whose statistic reaches the observed one |
+
+**`null_test.n` has its own floor, and it is not `resample`'s.** `min_honest_draws` is about a
+percentile interval's two ranks being interior; a permutation p-value's resolution is `1/(n + 1)`,
+which is the smallest value it can take. The floor is therefore the smallest `n` at which the
+p-value can fall **strictly below** the level being tested: `1/(n + 1) < level` gives
+`n > 1/level − 1`, so `n ≥ ⌊1/level⌋` — **20 at α = 0.05**, and `validate` refuses less. Derived from
+`level` rather than written as a literal, the way `min_honest_draws` is derived from `confidence`, so
+a family tested at a corrected level moves the floor with it.
+
+**And because a corrected member is tested at α/m rather than at α**, `validate` warns when a
+declared `n` is below `20 × m` for a family of `m` comparisons — the same shape and the same lower
+bound as the resample family's own warning, on the same declared count.
+
 **`resample_draws` says how many draws the interval actually rests on**, recorded beside every derived metric in `aggregated`. Resampling a derived metric means [recomputing it](#templates-where-parameters-are-defined), and a draw can legitimately have no answer: a resampled table with no variance makes a correlation `nan`, makes a hand-rolled ratio raise, and makes a careful `aggregate` return `None`. Which library the template happened to call is not a fact about whether the draw was degenerate, so all three are dropped alike and the percentiles are read off what survived. The field is `null` when resampling was never attempted, `0` when it was attempted and every draw was degenerate, and otherwise the surviving count — three different facts that `ci95: null` alone cannot tell apart.
 
 **A recorded column carries `resample_draws` too, once `statistics.resample` is declared, but with different provenance and only two of the three values a derived metric's own `null`/`0`/*n* scheme uses.** A column has the `t_over_units` fallback the derived-metric asymmetry paragraph contrasts it with, so `resample_draws` is **absent** entirely — not `null` — when no `resample` is declared: nothing was attempted, and the key says so by not appearing, the same way the field is absent from a run predating H4a. Once declared, the value is **`null`** whenever `ci95` is (fewer than two units, or too few draws for the confidence level), and otherwise the **requested** `n` — never a lesser count, **given finite recorded values and finite weights**: a column's draw statistic is a mean, or a weighted mean, over a non-empty sample, and under that condition it is always defined once an interval exists at all, with no per-draw failure to survive-count the way a derived metric's recompute can fail draw by draw — so the derived metric's `0` bucket ("attempted, every draw individually degenerate") is unreachable for a column given finite inputs. **Nothing on this path checks that condition today**: a `nan` among the recorded values, or a weight vector whose sum overflows, reaches `ci95` and `resample_draws: n` exactly as a clean sample would, rather than the refusal a non-finite input should get — a known, unfixed gap `docs/superpowers/spec-defects.md` records rather than this build closing. The field is genuinely two-valued for a column (`null` or the requested `n`) against the derived metric's three-valued scheme given that same finiteness condition, and that asymmetry is real rather than smoothed over — it is a fact about what a mean can fail at, not an inconsistency in how core reports it.
