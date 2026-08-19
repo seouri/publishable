@@ -14226,3 +14226,4 @@ def test_the_yield_checks_are_not_sited_at_dry_run_alone():
     assert "warning at `dry-run`" not in reference
     assert "`dry-run` warns instead of the run failing" not in designs
     assert "wherever a probe runs" in reference
+    assert "warns, wherever a probe runs, instead of the run failing" in designs

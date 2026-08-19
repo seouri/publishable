@@ -92,3 +92,26 @@ def test_a_probe_whose_module_declares_a_different_name_is_E_PLUGIN_DECORATOR(
     assert excinfo.value.code == "E-PLUGIN-DECORATOR"
     assert "llm_deployment" in str(excinfo.value)
     assert "llm_screen" in str(excinfo.value)
+
+
+def test_a_decorator_only_registration_with_no_entry_point_is_still_E_PROBE_UNKNOWN(registries):
+    """Decision 11's central claim, pinned: two sources of truth exist for "is
+    this probe registered" — the entry-point metadata scan and the `PROBES`
+    mapping `register_probe` fills at import — and reading `PROBES` alone
+    would resolve a registration `validate` never saw, because `validate`
+    only ever asks the metadata scan. The fixture: a name registered by
+    decorator only, claimed by **no** installed distribution at all. Without
+    this, a fail-open reading `PROBES` before the scan passes the whole suite
+    silently, because no other test leaves `PROBES` populated under a name no
+    entry point also claims."""
+    from publishable import Apparatus, register_probe
+    from publishable.apparatus import _probe_for
+    from publishable.errors import ContractError
+
+    @register_probe("decorator_only_probe")
+    def probe(cfg):
+        return Apparatus(facts={})
+
+    with pytest.raises(ContractError) as excinfo:
+        _probe_for("decorator_only_probe")
+    assert excinfo.value.code == "E-PROBE-UNKNOWN"

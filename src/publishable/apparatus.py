@@ -24,13 +24,16 @@ class Apparatus:
 
     **Not validated here.** `Apparatus` is constructed inside the probe's own
     body, so a refusal raised in `__init__` would be indistinguishable from any
-    other exception a probe's body raises — and would be reported as
-    `E-APPARATUS-RAISED`, a code whose § Errors row describes a different
-    fault. `Unit` is the shipped precedent for exactly this split: it freezes
-    its attributes and validates nothing, and `units._from_resolver` is where a
-    yielded non-`Unit` is refused, under `E-RESOLVER-YIELD`. The value contract
-    for `facts` — `str` keys, scalar values — is enforced the same way, at
-    core's boundary, once a probe has already returned.
+    other exception a probe's body raises. `Unit` is the shipped precedent for
+    exactly this split: `Unit.__post_init__` validates nothing (it freezes
+    `attributes` into a read-only view, which stops a caller from mutating a
+    roster shared across every condition — a property this class does not
+    need, since nothing downstream holds one `Apparatus` across two callers),
+    and `units._from_resolver` is where a yielded non-`Unit` is refused, under
+    `E-RESOLVER-YIELD`. The value contract for `facts` — `str` keys, scalar
+    values — is enforced the same way, at core's boundary, once a probe has
+    already returned. `frozen=True` stops `facts` from being *rebound*; the
+    mapping it holds is not itself made read-only, unlike `Unit.attributes`.
     """
 
     facts: Mapping[str, Any] = field(default_factory=dict)
@@ -46,9 +49,9 @@ def _probe_for(name: str) -> Callable[..., Any]:
     - **The name**, answered from package metadata alone (`scan_group`), so a
       name no installed distribution registers costs no import at all.
       `E-PROBE-UNKNOWN`, naming every member of the group it did find, because
-      the ordinary cause is a spelling. This code is dual-surface —
-      `validate._check_probe` reports it from the same metadata scan, and this
-      function raises it at dispatch — and § Errors carries one row for both.
+      the ordinary cause is a spelling. `validate._check_probe` reports the
+      same code from the same metadata scan; this function raises it at
+      dispatch.
     - **The object**, through `load_entry_point`, the one function in `plugins`
       that calls `EntryPoint.load()`. Every way a plugin's top level can fail
       arrives as `E-PLUGIN-LOAD`, including `SystemExit`.
