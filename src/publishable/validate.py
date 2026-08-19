@@ -3897,10 +3897,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     had not landed as of commit `2fdc957` (H4a task 12, the wholesale
     refusal's retirement): check `cli.command_run`'s `derived_metric_draws`
     directly rather than trusting this sentence, since two tasks after that
-    commit close exactly this gap. `.null_test` is still refused the same way
-    the whole family used to be: a declared 5000-draw permutation that runs
-    and reports nothing is the silent-no-op class, and `p_value` exists
-    nowhere in this build. A top-level `hypotheses` block is refused the same
+    commit close exactly this gap. `statistics.null_test` is no longer in this
+    family either: `_check_null_test` now checks the declaration for real —
+    the `method` enum, the `n` floor, `shuffle`, the level derivation, and the
+    no-roster and `report_by` refusals — and `cli.command_run` computes and
+    records a p-value at both p-value homes (H4d tasks 7–20). A top-level
+    `hypotheses` block is refused the same
     way too — a pre-registered hypothesis that runs and reports success while
     honoring neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
@@ -4009,10 +4011,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cli.py` narrows the denominator to the test partition and writes
     # `allocation.json` and `provenance.allocation_hash`.
 
-    # `statistics.null_test` validates clean today and is read by nothing —
-    # the same silent-no-op class as the fields above. `statistics.resample`
-    # left this loop with H4a: `_check_resample` now checks its declaration
-    # for real instead of refusing the block wholesale.
     # `statistics.contrasts`, `statistics.report_by` and the top-level
     # `hypotheses` block used to be in this list too; they are now checked for
     # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
@@ -4022,20 +4020,9 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # reason: `cli.py` applies it, so a declared correction changes the record —
     # the correction checks further down this module check its *value* instead,
     # and warn only on `none`, which corrects nothing by request.
-    # `materialize.py` writes only one of these keys into a generated config —
-    # `statistics.correction` — plus a top-level `hypotheses: []`, so
-    # `null_test` is simply absent there; the check below fires on a real
-    # declaration either way, never on a key's mere presence or on the empty
-    # list `hypotheses` is generated as.
-    statistics = doc.get("statistics") or {}
-    if statistics.get("null_test"):
-        c.error(
-            "E-STATS-NULLTEST-UNSUPPORTED",
-            "statistics.null_test",
-            "is specified but not implemented in this build — no null distribution is "
-            "computed, and a declaration that changes no behavior is the failure this "
-            "refusal exists to prevent; it will be honored in a later slice",
-        )
+    # `statistics.null_test` is not in it either, as of H4d: `_check_null_test`
+    # checks it for real (above this function's own docstring) and
+    # `cli.command_run` computes and records the p-value it declares.
 
 
 def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
@@ -5959,6 +5946,10 @@ def _check_resample(
     # `E-REPL-FOLD-NO-UNITS` — the same `not (doc.get("data") or {}).get("units")`
     # expression, refusing a `fold` level for the identical reason. (Not
     # `E-REPL-FOLD-K`: that is the unrelated `k: all`-basis-unknowable fault.)
+    # `null_test`'s own no-roster fault is `_check_null_test`'s
+    # `E-STATS-NULLTEST-UNITS` (H4d task 8) — the same expression, checked
+    # there rather than here, since the two declarations are independent and
+    # a config can carry either without the other.
     #
     # Read from the DECLARATION, not from `roster is None`: the roster is also
     # `None` when `data.units` is declared and failed to resolve, and that fault

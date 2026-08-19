@@ -5277,6 +5277,189 @@ def test_a_clustered_cross_arm_contrast_runs_and_records_a_cluster_robust_interv
     assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(4.548314238705341)
 
 
+_C1_ECHO_Y_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"y": float(unit.attributes["y_src"])}})
+        return {{}}
+"""
+
+
+def test_fixture_c1_null_test_runs_end_to_end_with_a_p_value_and_fdr_bh(tmp_path, capsys):
+    """Task 25 step 6(a) — fixture C1
+    (`docs/superpowers/specs/2026-08-18-null-test-design.md` § Fixture C), run
+    through a real `run` rather than a direct call to
+    `_comparison_step_blocks`: a `groups` axis, `assign` by attribute,
+    `cluster_by: match_set`, a declared contrast crossing the axis, and a
+    `null_test` whose `shuffle` names it — decision 6's group-axis p-value
+    home. **This is the verification tasks 19 and 20 owe that is not a
+    proxy** — a direct-call probe hand-builds `derived_by_key` and
+    `resample_fns_by_key` and never reaches the state `command_run` branches
+    on, which is how one corner in `_comparison_step_blocks` collected five
+    wrong grounds across two slices.
+
+    `1/5001` is `test_stats.py`'s own pin: fixture C's within-cluster
+    relabelling is the unique maximum over all 10^10 relabellings, so `b = 0`
+    deterministically. Carried here rather than re-derived. Under
+    `correction: fdr_bh` with exactly one comparison in the family, BH's own
+    adjustment is `min(1, (1/1) * p) = p`, so `p_value_corrected` equals
+    `p_value` while `ci95_corrected` stays `null` by fdr_bh's own design."""
+    rows = "\n".join(
+        f"{key},{cluster},{label},{value}"
+        for key, cluster, label, value in zip(
+            _C1_KEYS, _C1_CLUSTERS, _C1_LABELS, _C1_VALUES, strict=True
+        )
+    )
+    roster_csv = f"patient_id,match_set,arm,y_src\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C1_ECHO_Y_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "match_set", "y_src"],
+            "cluster_by": "match_set",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["against", "of"]}]},
+        statistics={
+            "contrasts": [{"id": "arm_effect", "of": "arm=of", "against": "arm=against"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "fdr_bh",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    entry = next(c for c in contrasts if c["id"] == "arm_effect")["step01_summarize_units"]["y"]
+    assert entry["p_value"] == pytest.approx(1.0 / 5001.0)
+    assert entry["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "arm",
+        "level": "within_cluster",
+    }
+    assert entry["p_value_corrected"] == pytest.approx(1.0 / 5001.0)
+    assert entry["ci95_corrected"] is None
+
+
+_C2_LOCAL_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("cred_assay")\n'
+    "class LabelDelta(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        of = [float(row["y"]) for row in units if row.get("label") == "of"]\n'
+    '        against = [float(row["y"]) for row in units if row.get("label") == "against"]\n'
+    "        if not of or not against:\n"
+    "            return {}\n"
+    '        return {"delta_y": sum(of) / len(of) - sum(against) / len(against)}\n'
+)
+
+
+_C2_NOOP_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # A per-unit record is what makes `collapsed_by_key[(cond, step)]`
+        # non-empty — `aggregate`'s `units` argument is built from it, and an
+        # empty `collapsed` gives `aggregate` zero rows however many
+        # attributes the roster declares. `LabelDelta.aggregate` reads
+        # `label`/`y` off the merged attributes rather than this column, but
+        # the value still has to VARY per unit: a constant recorded column
+        # (every unit the identical `1.0`) is what
+        # `percentile_of_derived_clustered`'s own content-based degenerate
+        # check reads, over the RECORDED columns rather than the merged
+        # attributes — so a constant placeholder there refuses every draw as
+        # degenerate before `aggregate` (which reads the varying attributes,
+        # not this column) ever runs.
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"seen": float(i)}})
+        return {{}}
+"""
+
+
+def test_fixture_c2_null_test_runs_end_to_end_and_confirms_the_filed_clustered_gap(
+    tmp_path, capsys
+):
+    """Task 25 step 6(b) — fixture C2, the per-condition derived home: the
+    SAME 50-unit roster as C1 (`docs/superpowers/specs/2026-08-18-null-test-
+    design.md` § Fixture C — "the same roster serves both p-value homes"),
+    with `label` an ORDINARY attribute rather than a group axis, a
+    project-local template's `aggregate` computing `mean(y|of) -
+    mean(y|against)`, and `cluster_by: match_set`. Blocked until H4d task 15
+    claimed `E-DATA-CLUSTER-DERIVED` — without it a derived metric under a
+    declared `cluster_by` is dropped and there is no metric block for a
+    p-value to land on at all.
+
+    **This is NOT the `p_value ≈ 1/5001` the design spec's own § Fixture C
+    describes for this home, and the brief's step 6(b) asked for that
+    number.** `stats.summarize_step`'s docstring and
+    `docs/superpowers/spec-defects.md`'s OPEN "a derived metric's permutation
+    null has no clustered construction" entry both say why, in terms rather
+    than in silence: `permutation_of_derived` (task 12) takes no cluster
+    argument and no clustered counterpart exists in this build, so
+    `summarize_step` gates the whole write — `p_value`, `null_draws`, the
+    `null_test` echo — on `clusters is None` rather than publish the free
+    (wrong-stratum) relabelling beside a `level: within_cluster` claim it did
+    not earn. Measured directly here rather than asserted from the filing:
+    the SAME roster and arithmetic that gives C1 `1/5001` through the
+    contrast-side write (which delegates to the clustered construction, task
+    13) gives C2 no `p_value` at all, because the per-condition write has no
+    clustered construction to delegate to. `delta_y` still computes (`2.5`,
+    same as C1) and still resamples (`E-DATA-CLUSTER-DERIVED` claimed) — only
+    the null is missing, and it is missing in the shape the filing's own
+    "second, live half" names: indistinguishable from a run that declared no
+    `null_test` at all."""
+    rows = "\n".join(
+        f"{key},{cluster},{label},{value}"
+        for key, cluster, label, value in zip(
+            _C1_KEYS, _C1_CLUSTERS, _C1_LABELS, _C1_VALUES, strict=True
+        )
+    )
+    roster_csv = f"patient_id,match_set,label,y\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C2_NOOP_STEP,
+        _local_template=_C2_LOCAL_TEMPLATE,
+        units_overrides={
+            "attributes": ["label", "match_set", "y"],
+            "cluster_by": "match_set",
+        },
+        statistics={
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "holm",
+        },
+        experiment_type="cred_assay",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["delta_y"]
+    # The claimed half: computes and resamples despite the declared cluster.
+    assert metric["value"] == pytest.approx(2.5)
+    assert metric["method"] == "percentile_of_derived_clustered"
+    # The filed gap, confirmed rather than assumed: a declared `cluster_by`
+    # suppresses the whole null-test write, leaving this block
+    # indistinguishable from one that declared no `null_test` at all.
+    assert "p_value" not in metric
+    assert "null_draws" not in metric
+    assert "null_test" not in metric
+    assert "p_value_corrected" not in metric
+
+
 def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_run(tmp_path, capsys):
     """Decision 8, and it is verified by `run` rather than by direct call for a
     measured reason: on H4b-2 the neighbouring corner survived four task batches and

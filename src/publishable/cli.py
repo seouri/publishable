@@ -799,10 +799,9 @@ def _make_null_fn(
 
     Module-level, not a nested `def` closed over `command_run`'s locals — the
     earlier shape, moved out so a test can build and call this closure
-    directly rather than only through a `run` no config can reach yet
-    (`E-STATS-NULLTEST-UNSUPPORTED` gates every declaration until tasks 25+26).
-    `aggregate_where` therefore arrives as a parameter rather than a captured
-    name.
+    directly as well as through a real `run` now that `E-STATS-NULLTEST-
+    UNSUPPORTED` is retired (H4d tasks 25+26). `aggregate_where` therefore
+    arrives as a parameter rather than a captured name.
     """
 
     def null_fn(units: UnitTable, labels: dict[str, str]) -> float | None:

@@ -5400,12 +5400,11 @@ def test_a_report_by_level_block_carries_no_p_value_while_its_condition_does():
     condition's own block, computed over the same roster, carries one.
 
     Called here at two direct `summarize_step` calls, not against
-    `command_run` itself: an end-to-end `run` cannot reach this ruling yet,
-    since `E-STATS-NULLTEST-UNSUPPORTED` gates every declaration until tasks
-    25+26, so this test shows only that `summarize_step` behaves differently
-    when handed different keywords — it does not pin that `command_run`
-    calls it that way. That pin belongs to task 25's `run`-verified test,
-    named there.
+    `command_run` itself: this test shows only that `summarize_step` behaves
+    differently when handed different keywords — it does not pin that
+    `command_run` calls it that way. That pin is
+    `tests/test_cli.py`'s end-to-end `run`-verified fixture, built once
+    `E-STATS-NULLTEST-UNSUPPORTED` retired (H4d tasks 25+26).
 
     Both halves in one test: asserting the level alone would pass identically
     if the null had failed to run for the whole condition."""

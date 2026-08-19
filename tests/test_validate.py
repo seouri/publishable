@@ -2602,25 +2602,24 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"statistics": {"null_test": {"method": "permutation", "n": 5000}}},
-    ],
-)
-def test_every_unsupported_message_defers_rather_than_scolds(write_config, overrides):
+def test_every_unsupported_message_defers_rather_than_scolds(installed, write_config):
     """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
     'your config is wrong'. Every message in this family must say so explicitly, or a
-    user has no way to tell a refusal from a validation error. `allocation: between` and
-    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals,
-    `data.units.holdout` left with task 18, and `data.units.from.resolver` left with
-    H7b Part B — each now draws a real, behavior-specific finding instead
-    (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, and so
-    on, or validates clean), not a deferral. `E-STATS-NULLTEST-UNSUPPORTED` is what
-    remains of the family."""
-    found = messages_by_code(write_config(overrides))
+    user has no way to tell a refusal from a validation error. `allocation: between`,
+    `assign`, `data.units.holdout`, `data.units.from.resolver` and, as of H4d task 25,
+    `statistics.null_test` have each left this family in turn — every one now draws a
+    real, behavior-specific finding instead (`E-DATA-ALLOCATION-NO-ARMS`,
+    `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, the five `E-STATS-NULLTEST-*` codes,
+    and so on, or validates clean), not a deferral.
+
+    `E-TEMPLATE-INSTALLED-UNSUPPORTED` is what remains of the family — reparametrized
+    onto it rather than left with an empty `parametrize` or a permanently red
+    assertion, on the scoping's own confirmation that `installed_template_message`
+    contains this exact phrase."""
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+    found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
-    assert unsupported, f"expected an -UNSUPPORTED finding for {overrides}"
+    assert unsupported, "expected an -UNSUPPORTED finding for an installed-only template name"
     for code, message in unsupported.items():
         assert "later slice" in message, f"{code} message does not defer: {message!r}"
 
@@ -2687,15 +2686,26 @@ def test_validate_config_refuses_a_resolver_reading_a_swept_parameter(
     assert "E-RESOLVER-SWEPT-PARAM" in found
 
 
-def test_the_unsupported_family_is_down_to_null_test(write_config):
-    """`E-DATA-RESOLVER-UNSUPPORTED` is gone from every surface, and the family it
-    left is not empty — a sweep asserting only an absence would pass identically if
-    the whole family had been deleted."""
+def test_the_unsupported_declaration_family_is_empty_and_the_family_is_not(installed, write_config):
+    """`E-STATS-NULLTEST-UNSUPPORTED` retires here (H4d task 25), the same way
+    `E-DATA-RESOLVER-UNSUPPORTED` did before it — and the *declaration* family it
+    leaves behind is now empty: nothing left in § The one config file's config
+    example draws an `-UNSUPPORTED` code. The family itself is not empty, though,
+    on the same ground the earlier version of this test named — 'a sweep asserting
+    only an absence would pass identically if the whole family had been deleted' —
+    so a control that still draws one is asserted beside the absence:
+    `E-TEMPLATE-INSTALLED-UNSUPPORTED` refuses a name only an installed
+    distribution's entry point claims, which is not a declaration at all and so is
+    not one this retirement could have touched."""
     found = messages_by_code(
         write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
     )
     unsupported = {code for code in found if code.endswith("-UNSUPPORTED")}
-    assert unsupported == {"E-STATS-NULLTEST-UNSUPPORTED"}
+    assert unsupported == set()
+
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+    still_live = codes(write_config({"experiment_type": "vendor_assay"}))
+    assert "E-TEMPLATE-INSTALLED-UNSUPPORTED" in still_live
 
 
 def test_a_null_subfield_is_not_a_declaration(write_config):
@@ -4162,29 +4172,41 @@ def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_con
     assert "W-STATS-RESAMPLE-CLUSTERS" not in above
 
 
-def test_a_declared_null_test_is_refused(write_config):
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
-        write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
+def test_a_well_formed_null_test_validates_clean(write_config, tmp_path):
+    """`statistics.null_test` was refused wholesale (`E-STATS-NULLTEST-UNSUPPORTED`)
+    until H4d task 25 retired that refusal. A declaration naming a real attribute
+    now validates clean rather than drawing it, or any of the five narrow codes
+    minted in its place."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,of\np2,against\n")
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label"],
+                },
+                "statistics": {
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"}
+                },
+            }
+        )
     )
+    assert not [c for c in found if c.startswith("E-STATS-NULLTEST")]
 
 
 def test_a_typo_among_the_null_tests_fixed_keys_is_reported(write_config):
     """`shufle` for `shuffle`. Probed at `2a4dc53`: this earned
     `{E-STATS-NULLTEST-UNSUPPORTED}` alone, so the typo was unreachable by any
     check — and would have turned from latent to live at the moment the wholesale
-    refusal retired. Closed here first, on the ground `envelope.py` states for
-    `resample` and `holdout` both.
-
-    Asserted ALONGSIDE the wholesale refusal, never on a total code set: the
-    refusal is alive until task 25, and `validate` collects rather than aborting,
-    so both findings are present at once."""
+    refusal retired (H4d task 25, since landed). Closed here first, on the
+    ground `envelope.py` states for `resample` and `holdout` both."""
     found = codes(
         write_config(
             {"statistics": {"null_test": {"method": "permutation", "n": 5000, "shufle": "label"}}}
         )
     )
     assert "E-CONFIG-KEY-UNKNOWN" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_a_wrong_typed_null_test_child_is_reported_by_the_envelope(write_config):
@@ -4197,7 +4219,6 @@ def test_a_wrong_typed_null_test_child_is_reported_by_the_envelope(write_config)
         write_config({"statistics": {"null_test": {"method": "permutation", "n": "lots"}}})
     )
     assert "E-CONFIG-TYPE" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
     # The second case, over `shuffle`: this is the fixture that makes a mutation
     # removing `"statistics.null_test.shuffle": str` from `LEAF_TYPES` visible.
@@ -4208,7 +4229,6 @@ def test_a_wrong_typed_null_test_child_is_reported_by_the_envelope(write_config)
         write_config({"statistics": {"null_test": {"method": "permutation", "shuffle": 5}}})
     )
     assert "E-CONFIG-TYPE" in shuffle_found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in shuffle_found
 
 
 def test_a_scalar_null_test_block_is_still_a_type_fault(write_config):
@@ -4245,11 +4265,10 @@ _NULL_TEST_ROSTER = "patient_id,label,site\n" + "".join(
 
 def test_an_out_of_enum_null_test_method_is_refused(write_config, tmp_path):
     """Probed at `2a4dc53`: `method: bootsrap` earned `{E-STATS-NULLTEST-UNSUPPORTED}`
-    alone. Alongside, never instead — the wholesale refusal is alive until task 25."""
+    alone, so the typo was unreachable by any check — closed here."""
     (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
     found = codes(write_config(_null_test_doc(method="bootsrap", shuffle="label")))
     assert "E-STATS-NULLTEST-METHOD" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_a_sub_floor_null_test_n_is_refused_and_the_floor_is_the_permutation_one(
@@ -4264,14 +4283,12 @@ def test_a_sub_floor_null_test_n_is_refused_and_the_floor_is_the_permutation_one
     assert "E-STATS-NULLTEST-N" in refused
     clean = codes(write_config(_null_test_doc(n=20, shuffle="label")))
     assert "E-STATS-NULLTEST-N" not in clean
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in clean
 
 
 def test_a_shuffle_naming_nothing_declared_is_refused(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
     found = codes(write_config(_null_test_doc(shuffle="nope_not_an_attr")))
     assert "E-STATS-NULLTEST-SHUFFLE" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_an_absent_shuffle_is_refused(write_config, tmp_path):
@@ -4284,7 +4301,6 @@ def test_an_absent_shuffle_is_refused(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
     found = codes(write_config(_null_test_doc()))
     assert "E-STATS-NULLTEST-SHUFFLE" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_an_empty_shuffle_is_refused(write_config, tmp_path):
@@ -4295,7 +4311,6 @@ def test_an_empty_shuffle_is_refused(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
     found = codes(write_config(_null_test_doc(shuffle="")))
     assert "E-STATS-NULLTEST-SHUFFLE" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
@@ -4361,7 +4376,6 @@ def test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused(write_confi
     }
     axis_messages = messages_by_code(write_config(axis_doc))
     assert "E-STATS-NULLTEST-LEVEL" in axis_messages
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in axis_messages
     # Distinguishes this refusal from the ordinary ambiguity one below: the
     # axis-domain message never claims to have read the roster's clustering at
     # all, and names the axis rather than a pair of witness clusters.
@@ -4374,7 +4388,6 @@ def test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused(write_confi
     }
     attribute_messages = messages_by_code(write_config(attribute_doc))
     assert "E-STATS-NULLTEST-LEVEL" in attribute_messages
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in attribute_messages
     # The pre-existing ambiguity refusal, unaffected by this fix: it names both
     # witness clusters rather than an axis.
     assert "M07" in attribute_messages["E-STATS-NULLTEST-LEVEL"]
@@ -4393,7 +4406,6 @@ def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(
     found = codes(write_config({"statistics": {"null_test": {"method": "permutation", "n": 3}}}))
     assert "E-STATS-NULLTEST-UNITS" in found
     assert "E-STATS-NULLTEST-N" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 _GROUP_AXIS_NULL_TEST_ROSTER = "patient_id,arm\n" + "".join(
@@ -4602,7 +4614,6 @@ def test_an_ambiguous_shuffle_level_is_refused(write_config, tmp_path):
     )
     found = codes(write_config(_level_doc()))
     assert "E-STATS-NULLTEST-LEVEL" in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id,match_set,status\np1,M07,case\np2,M07,control\np3,M12,case\np4,M12,control\n"
@@ -4757,29 +4768,6 @@ def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     found = codes(write_config({"data.units": units}))
     assert "E-UNITS-SOURCE-MISSING" not in found
-
-
-def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
-    write_config, tmp_path
-):
-    """`statistics.null_test` is refused wholesale, but it is not read by
-    `resolve_units` at all — a duplicate key in the roster is a real,
-    independent defect and must still be reported alongside the refusal, not
-    swallowed by it. `holdout` no longer serves this example: task 18 retired
-    its wholesale refusal, so `statistics.null_test` is the field that still
-    validates clean while changing no behavior."""
-    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
-    units = {"from": "index.csv", "key": "patient_id"}
-    found = codes(
-        write_config(
-            {
-                "data.units": units,
-                "statistics": {"null_test": {"method": "permutation", "n": 5000}},
-            }
-        )
-    )
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
-    assert "E-UNITS-KEY-DUPLICATE" in found
 
 
 def test_a_string_units_block_is_reported_not_raised(write_config):
@@ -7307,9 +7295,9 @@ def test_an_unset_parameter_is_named_only_when_the_version_moved(write_config):
 
 
 def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(write_config):
-    """A config declaring `statistics.null_test` reaches this warning — the block is
-    refused (`E-STATS-NULLTEST-UNSUPPORTED`) but `validate` collects rather than
-    stopping — and the message used to tell that config its `null_test` was
+    """A config declaring `statistics.null_test` reaches this warning — `validate`
+    collects rather than stopping, so whatever else the declaration draws does not
+    suppress it — and the message used to tell that config its `null_test` was
     undeclared. The condition is unchanged and still over-broad against the row it
     implements; what this pins is only that the message asserts nothing false."""
     path = write_config(
@@ -7321,7 +7309,6 @@ def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(wri
     c = Collector()
     validate_config(path, c)
     found = {f.code: f.message for f in c.findings}
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "undeclared" not in found["W-STATS-CORRECTION-INAPPLICABLE"]
 
 
@@ -8362,9 +8349,7 @@ def test_no_cluster_warning_once_cluster_by_declares_the_column(write_config, tm
 
 def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tmp_path):
     """One of the exclusions: a cluster is what shuffling *respects*, not what it
-    names. Reported through `validate_config` even though `statistics.null_test`
-    is itself refused in this build — the refusal is a finding beside this one,
-    not a substitute for it."""
+    names."""
     _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
     path = write_config(
         {
@@ -8374,7 +8359,6 @@ def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tm
     )
     found = codes(path)
     assert "W-DATA-CLUSTER-UNDECLARED" not in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_no_cluster_warning_for_an_attribute_something_stratifies_on(write_config, tmp_path):
@@ -12244,6 +12228,21 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
     files = list(src_root.rglob("*.py"))
     assert len(files) > 20
     hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
+    assert hits == []
+
+
+def test_the_retired_nulltest_unsupported_code_appears_nowhere_in_src():
+    """H4d task 25's own retirement, on H4a's precedent above: a retired
+    `-UNSUPPORTED` code is retired wholesale, so nothing in `src/` may still
+    emit or cite `E-STATS-NULLTEST-UNSUPPORTED`. Filtering the FILE LIST rather
+    than the sweep's output, and guarded against an empty scan, for the same
+    reason the resample sweep above is."""
+    import pathlib
+
+    src_root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    files = list(src_root.rglob("*.py"))
+    assert len(files) > 20
+    hits = [path for path in files if "E-STATS-NULLTEST-UNSUPPORTED" in path.read_text()]
     assert hits == []
 
 

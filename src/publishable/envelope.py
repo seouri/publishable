@@ -43,9 +43,9 @@ from typing import Any
 # `null_test`) are fixed, so leaving either block whole would make a typo
 # among them unreachable by any check. Unlike `measurements`, `resample` was
 # closed before its own wholesale refusal retired (H4a task 12), not after.
-# `null_test` is closed the same way, but its own wholesale refusal has not
-# retired yet — that is H4d task 25's, still ahead — so this is validating the
-# shape ahead of a retirement rather than before one that already happened.
+# `null_test` was closed the same way, before its own wholesale refusal
+# retired (H4d task 25) rather than after — the shape was validated ahead
+# of the retirement in both cases, not after one that already happened.
 # See the comment at each one's `LEAF_TYPES` entry for why validating the
 # shape had to precede honouring the values.
 #

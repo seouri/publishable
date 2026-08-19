@@ -6923,6 +6923,17 @@ either way.
 `permutation_of_derived` returned ≈0.4845 instead. Reported rather than adjusted: `CLAUDE.md`'s own
 rule is to report a fixture that disagrees with the code, not to force the fixture to agree.
 
+**RECONFIRMED 2026-08-19 (H4d task 25, end to end).** Task 25's own run-verified fixture C2
+(`tests/test_cli.py::test_fixture_c2_null_test_runs_end_to_end_and_confirms_the_filed_clustered_gap`)
+runs fixture C2 through a real `run` — a project-local template's `aggregate`, not a direct call —
+and confirms both halves of this gap on live output: `delta_y` computes `2.5` and resamples
+(`method: percentile_of_derived_clustered`, `E-DATA-CLUSTER-DERIVED` claimed), and its block carries
+none of `p_value`, `null_draws`, or `null_test` — the disclosure half's own "indistinguishable from a
+run that declared no `null_test` at all," reproduced rather than assumed. Fixture C1's
+`1/5001` (the contrast-side write, task 19) is unaffected and asserted in the sibling test. Still
+**unowned**: H4d is the last slice whose surface is the `statistics` block, so this gap has no
+successor to fall to.
+
 ## OPEN — the contrast-side `null_test` write carries no `null_draws` — **Owner: unassigned**
 
 `docs/reference.md` § Statistical reporting: *"`null_draws` is what the p-value actually rests on …
