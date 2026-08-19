@@ -1992,11 +1992,17 @@ stratum holds, so the null is of a different partition rather than of the same e
 aggregated:                                    # shuffle names an ordinary attribute
   step03_screen:
     enrichment: {value: 0.71, basis: units, method: percentile_over_units, ci95: [0.66, 0.76],
-                 p_value: 0.0004, resample_draws: 2000,
+                 p_value: 0.0004, resample_draws: 2000, null_draws: 4998,
                  null_test: {method: permutation, n: 5000, shuffle: label, level: rows}}
 ```
 
-The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
+`null_draws: 4998` here is a derived metric's own draw count falling two short of `null_test.n:
+5000` — two relabelled tables where the shuffle put no unit in one arm, so `aggregate` had nothing
+to recompute on those draws, the same survivor discipline `resample_draws` already carries. A
+recorded column's `null_draws` instead equals `null_test.n` exactly, by the same construction that
+makes its own `resample_draws` two-valued rather than three.
+
+The [`groups`](#expansion-modes)-axis row isn't an exception to the ordinary-attribute row so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
 
 **A *parameter*-axis contrast stays out of reach.** Two conditions differing only on `analysis.method` were computed from the same units, so the null for their paired difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. That contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form it's reported in anyway.
 
@@ -2183,8 +2189,9 @@ supplies the p-value.
 
 **Where it does have them, `fdr_bh` ranks on the ascending p-value, and that creates no second
 ordering.** Benjamini-Hochberg's *i* is definitionally the rank in ascending p, and under this method
-no interval is ever built at a rank — `ci95_corrected` is `null` for every member, by the row above —
-so the evidence ratio decides nothing in an `fdr_bh` run. The family is unchanged: **m is the whole
+no interval is ever built at a rank — `ci95_corrected` is `null` for every member, which is what
+the `correction` table's `fdr_bh` row states — so the evidence ratio decides nothing in an
+`fdr_bh` run. The family is unchanged: **m is the whole
 family**, counted exactly as it is under every other method, while *i* runs over the members that
 carry a p-value. A larger m is the conservative direction, which is the direction this section is
 held to throughout. Each member's adjusted value is `min(1, m/i × p)` taken as a running minimum from
@@ -2543,10 +2550,12 @@ absent-not-null shape `resample` follows. `level` is the one resolved value the 
 it is **derived** from the roster — `rows` with no [`cluster_by`](#clustered-units), `within_cluster`
 when the shuffled attribute varies inside a cluster, `whole_cluster` when it does not — and it is
 recorded for exactly that reason, since a derived value a reader cannot recompute from the config is
-the kind this record exists to carry. `null_test.n` is what was *requested*; **`null_draws` beside it
-is what the p-value actually rests on**, on `resample_draws`' precedent — equal for a recorded column
-by construction, and smaller for a derived metric whenever a relabelled table's `aggregate` declined
-to produce a value.
+the kind this record exists to carry. `null_test.n` is what was *requested*; **`null_draws` is what
+the p-value actually rests on**, on `resample_draws`' own precedent and at the same place in the
+record: a metric-block sibling of `null_test`, not a key inside it — `resample_draws` sits beside
+`resample` rather than inside its map, and `null_draws` sits beside `null_test` the same way. Equal
+for a recorded column by construction, and smaller for a derived metric whenever a relabelled table's
+`aggregate` declined to produce a value.
 
 **A relabelling permutes the label and never the weights.** Under a declared
 [`data.units.weight_by`](#weighted-samples) each unit keeps its own weight through every draw: the
