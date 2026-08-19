@@ -135,3 +135,31 @@ defect worth filing, since `CLAUDE.md` § The worked example names all three doc
 experiment. And task 2's brief offered a can-fail control that **is not present in two of the four
 documents** it claims — harmless to the sweep, but a recipe stating its own control wrongly is the
 shape that makes a sweep unfalsifiable.
+
+### Batch 1 — task review: both verdicts pass with one Major each; fix round 1 dispatched
+
+Review at `task-b1-review.md`. **The pin's literals are exact, its mutation discriminates, and each
+member's own α is pinned** — the hole H4b-1 left, where an α moved silently, is closed from the first
+commit of this slice. Two implementer judgement calls were checked and **upheld**: the floor
+recomputed independently (`floor(1/level)` 20/40/60 against `ceil−1` 19/39/59, with a brute-force
+strict scan agreeing and reproducing the one-ulp caveat at `0.05/7`), and the dropped pin literal —
+`[0.347, 0.477]` exists **only** in `README.md`, and **the worked example's distribution across the
+three documents is legitimate, not a defect**.
+
+**Major 2 is a guard that goes green while the thing it guards changes shape.** The pin asserts
+`set(fields)` — **member identities, not inner keys** — so tasks 17 and 18 can emit
+`p_value_corrected`, **even a spurious `None`**, with the pin passing. And it covers **`holm` alone**,
+while task 18 rewrites `corrected_for` for `fdr_bh` and task 16 widens `family_members`. The reviewer
+captured the missing baselines (bonferroni all at 0.0166…, `fdr_bh` `None`/`None`).
+**Ruling: widen the pin to the inner key set and to all three methods before any of them moves.** A
+guard read as coverage that does not cover is worse than none — and this one guards the two functions
+the slice exists to rewrite.
+
+**Major 1 is the record-key-with-no-example shape.** `null_draws` is prose with **one hit across the
+four documents**, and batch 1 re-authored **the sole p-value example** — a derived metric, exactly
+where `null_draws` can differ from `n` — showing `resample_draws` and not it. Its **placement is
+undetermined**, so tasks 19 and 20 would each guess. Settled now rather than downstream.
+
+**Two Minors are insertion damage, and both are named rules:** a positional locator introduced by
+task 1, and a "The second row…" reference **pushed away from its table** by the same insertions — the
+check-every-row-an-insertion-moves rule, which has produced Majors on three consecutive slices.
