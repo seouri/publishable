@@ -263,3 +263,8 @@ already added.**
 **One regression introduced while closing a Minor:** the round that removed four positional locators
 **added four more**, one of them in shipped source prose. Locators have been wrong twice here in rows no
 diff touched, which is why the rule is to name what a sibling *does*.
+
+**Fix round 2 — all three unpinned items closed** (`f67cbfd`, `1ed3cd8`), each by a mutation that failed
+before and passed after, plus the four positional locators round 1 had introduced. Suite **2410**
+passed, 1 skipped, 2 xfailed; four gates clean. **Batch 3 complete** — the first batch where a real
+`run` calls user code, and the batch that produced this slice's only Critical so far.
