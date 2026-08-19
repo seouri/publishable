@@ -161,3 +161,128 @@ bug was found — the difference is what construction they now feed.
   in. Read both fully before touching either again — the direct-call test's null output is correct
   only on its own narrower premise (no resample closures at all), not because the collision is still
   suppressed.
+
+## Fix round 1 (review at `task-b3-review.md`, commit `33f5753`)
+
+**Own the reasoning error, as asked.** I read `ci95: [0.0, 0.0]` as "a genuine clustered
+interval" while writing task 15b's own end-to-end verification. A zero-width interval is the one
+value identical under every construction — it verifies nothing about which construction produced
+it, the same class as a Welch interval that happens to coincide with a pooled one. My own 15b
+mutation exercised a string literal (`method`) rather than the arithmetic, which is exactly why it
+could not have caught this. That is the transferable lesson and I take it as such.
+
+### Critical 1 — the `_clustered` label and the clustered draw were decoupled
+
+**Changed:** `cli._comparison_step_blocks`'s derived-paired branch now computes ONE variable,
+`base_col_clusters`, and both the `method` ternary and the `clusters=` argument read from it —
+previously two independently-written ternaries, each keyed off `clusters is not None` separately,
+which is exactly how a one-line edit to either could drift from the other. Same fix applied to the
+unpaired recorded-column branch (`unpaired_percentile_of_sides`'s call site), which had the
+identical shape (`method` keyed off `clusters`, the two `*_clusters` arguments keyed off it too —
+three independent reads of one fact).
+
+**Verified by:** a new end-to-end fixture,
+`test_a_derived_key_collision_under_a_cluster_computes_the_clustered_width` (`tests/test_cli.py`),
+built from the reviewer's own numbers — `_CLUSTER_CONTRAST_STEP` (non-degenerate `pred`, varying by
+site) combined with `aggregate_returns="pred"` so the derived recompute collides with the recorded
+column AND varies with which clusters a draw pools. Measured directly before trusting it: clustered
+`ci95 == [1.0, 9.0]`, unit-level (clusters argument alone nulled) `ci95 == [4.666…, 8.0]` —
+categorically different, unlike the batch's own degenerate `[0.0, 0.0]` fixture. **The
+argument-only mutation** — `clusters=base_col_clusters` → `clusters=None`, every `method` ternary
+left untouched — now FAILS this test on the `ci95` assertion (`[4.666666666666667, 8.0]` where
+`[1.0, 9.0]` was asserted). Reverted by editing the line back; re-ran to confirm PASS. This is the
+pin the review asked for, not the string-literal one 15b shipped.
+
+### Major 2 — the zero-width interval and corrected interval, filed
+
+**Changed:** nothing in code (the reviewer confirmed it is not introduced by this batch — the
+identical shape reproduces unclustered at `d97ec9c`). Filed a new `spec-defects.md` entry:
+*"`paired_percentile_of_derived`'s degenerate-draw refusal is row-content-based, and a
+compute-cancellation still publishes a zero-width interval and a zero-width corrected interval"*.
+Named the gap precisely (`_drawable_content` checks ROW identity, not the identity of the
+COMPUTED VALUES two colliding formulas produce), named why it survived 15b's own citation of it as
+verification, and named the owner: unassigned, the next slice touching this function's
+degenerate-draw refusal, with the exact check that owner must make (a value-level content check
+over the resample pool, run after the draw loop, alongside the existing row-level one).
+
+### Major 3 — `n.clusters` disagreeing with the draw it rests on
+
+**Changed:** `stats.summarize_step`'s derived branch now recomputes `n.clusters` from
+`collapsed`'s own keys (`cluster_count_of(clusters, collapsed)`, computed once per step rather than
+passed through from `counts` unmodified) — mirroring the recorded-column branch's own discipline,
+and making `percentile_of_derived_clustered`'s docstring guarantee ("cannot disagree with the
+`n.clusters` a caller prints") true rather than aspirational.
+
+**Verified by:** a new direct-call test,
+`test_a_clustered_derived_metrics_n_clusters_matches_the_draw_it_actually_rests_on`
+(`tests/test_stats.py`), handing `counts["clusters"] = 4` beside a `collapsed` table spanning only
+2 of those 4 clusters — the exact mismatch shape the reviewer probed. **Mutation:** reverted the
+fix (dropped the `derived_n["clusters"] = derived_clusters_n` line) — FAILS on `4 == 2`. Reverted
+by editing back; re-ran to confirm PASS. As the review noted, I did not construct reachability
+through a real `run` (would need a step recording for a proper subset of completed units) — the
+direct-call claim is the one verified, and I say so rather than implying the stronger one.
+
+### Major 4 — no zero-width refusal on `percentile_of_derived_clustered`
+
+**Changed:** added the content-based degenerate-draw refusal `percentile_over_units_clustered`
+already makes "whether or not `strata` is declared" to `percentile_of_derived_clustered` — checked
+unconditionally (not gated on `strata`, matching the clustered family rule rather than
+`percentile_of_derived`'s own narrower, strata-only version of the same check). Updated
+`reference.md`'s scoping paragraph to name both derived forms alongside the column forms it already
+named, rather than leaving `percentile_of_derived`/`percentile_of_derived_clustered` as an
+undocumented member of the family the paragraph describes.
+
+**Verified by:** a new test, `test_a_clustered_derived_draw_over_constant_content_reports_no_interval`
+(`tests/test_stats.py`) — 20 units of identical content in 4 clusters, `interval is None`.
+**Mutation:** the new `if all(...)` block replaced with `if False:` — FAILS
+(`Interval(low=5.0, high=5.0, ...)` returned where `None` was asserted). Reverted by editing back;
+re-ran to confirm PASS.
+
+### Minor 5 — stale "two callers" count
+
+**Changed:** deleted the count rather than updating it to three, per `CLAUDE.md`'s own rule
+against call-site enumerations. `_draw_pools`' docstring now says "a percentile construction's
+callers" and states the shared contract without naming how many there are.
+
+### Minor 6 — "an identity" claim on the moved RNG stream
+
+**Changed:** the docstring paragraph (kept; the duplicate inline comment deleted — see Minor 7) now
+distinguishes the STRUCTURAL sameness (one group covering every position, same domain as before)
+from the RNG-IDENTICAL claim it was wrongly implying, and states the measured before/after values
+(`0.48050` → `0.47351` at `seed=7, n=5000`) plainly rather than asserting an identity that isn't
+one. Added `test_the_unstratified_permutation_walk_is_pinned_at_a_literal_seed`
+(`tests/test_stats.py`) pinning `0.473505298940212` at that seed — the pin the review said was
+missing, so the next such refactor is no longer invisible.
+
+### Minor 7 — one claim at two sites
+
+**Changed:** deleted the inline comment duplicate of the docstring paragraph above (`strata`
+confinement rationale), rather than maintaining both. One statement of the claim, in the docstring.
+
+### Minor 8 — rewritten rather than deleted, and the two rewrites' own invented claims
+
+The two comments the review names (`stats.summarize_step`'s derived-cluster paragraph,
+`cli._comparison_step_blocks`'s suppression comment) were rewritten in the original 15b commit
+where the brief said delete, and two of the invented sentences became Findings 1 and 3. Both
+paragraphs needed further correction this round regardless, because the CODE they describe changed
+today (Critical 1's shared-variable fix, Major 3's `n.clusters` recompute) — so I re-read each in
+full rather than patching around the flagged sentence, and found a THIRD stale claim my own
+original rewrite had left behind: `stats.summarize_step`'s docstring said "this loop's own
+`clusters` only ever reaches the RECORDED-column branches" — false as of today's Major 3 fix, which
+makes the derived branch read `clusters` too. Deleted that clause rather than rewriting it again,
+and rewrote the surrounding paragraph's factual claim (effective vs. clusters no longer take
+identical treatment for a derived metric) to state what is now true, since the underlying code
+itself changed and the paragraph must track it. `cli._comparison_step_blocks`'s comment was
+re-read in full and found still accurate against today's changes — no edit needed there.
+
+## Fix round 1 — test summary
+
+2321 → **2325 passed, 1 skipped, 2 xfailed.** Four new tests: the Critical 1 end-to-end pin, the
+Major 3 direct-call pin, the Major 4 content-refusal pin, and the Minor 6 RNG-stream pin. All four
+gates clean (`ruff check`, `ruff format --check`, `mypy`, `pytest`) after the commit.
+
+## Findings not closed
+
+None. All four Majors/Critical and all four Minors from the review are addressed above, each with
+a mutation confirming the fix is not blind (except Minor 5/6/7, which are documentation/duplication
+fixes with no code behavior to mutate — Minor 6's claim is instead pinned by a literal seed value).
