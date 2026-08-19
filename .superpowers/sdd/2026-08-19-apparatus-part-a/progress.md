@@ -189,3 +189,47 @@ value is a real narrowing question on decision 6's scope, filed **unassigned wit
 than the forbidden vague-owner form. And the ordering between `append_observation` and `check_facts`
 is **hand-forwarded to batch 3 in both a docstring and a filing** — batch 3 being the first caller of
 both, so it is the first position from which the question can be answered rather than guessed.
+
+## Batch 3 — tasks 9, 10, 15 — the first batch where a real `run` calls user code
+
+Commits `d645b0d` (the run-start round and a probe failure as a redacted diagnostic), `64f343f` (a probe
+before every execution), `6d828e7` (the call-count contract), report `f912bce`. Suite 2395 → **2402**.
+
+**The ordering handed forward from batch 2 was ruled and closed:** `check_facts` runs **before**
+`append_observation`, so a credential-carrying fact is refused **before a byte reaches the ledger** —
+verified by running, with the first condition's line on disk and the second refused.
+
+### Review: BOTH verdicts FAIL, on a Critical — a credential leak at `run`, the third of its class here
+
+**`_probe_for` sat OUTSIDE the containment `try`.** A probe entry-point module raising at import with a
+declared credential in its message printed it **straight to stderr**, verified by running. Reachable on
+**the first run of an unchanged machine**, because `validate._check_probe` reads metadata only and never
+loads — so `E-PLUGIN-LOAD`/`E-PLUGIN-DECORATOR` get **no verdict from `validate` at all**.
+
+**The tell is that the identical fixture through a resolver IS redacted**, because `_resolver_for` sits
+inside `command_run`'s roster wrapper. Same shape, one line's difference in placement — which is the
+whole reason this class keeps recurring.
+
+**And the reasoning failure is the entry worth keeping.** The exclusion rests on **the plan's own
+correction 10**, whose ground is *"no fixture in this plan reaches it and none easily can"* — **a
+three-line fixture falsifies it**, and the batch wrote **two comments** from that claim without testing
+it. `CLAUDE.md`: *a safety argument in a comment is a claim needing a mutation.* **So the plan asserted
+unreachability, the implementer inherited it, and neither made it happen** — the same division of labour
+that produced the previous two leaks. It also makes a `spec-defects.md` sentence — *"the demonstrated
+path into it is closed"* — **false**.
+
+**Major 2 is the unpinned-membership shape:** deleting **three of five** `APPARATUS_CODES` members
+together leaves the full suite at **2402 passed, unchanged**, under a docstring asserting all five are
+pinned. All three *are* reachable at `run` — the reviewer built three end-to-end runs — so the narrowing
+was correct and only the pinning was absent. **Minor 5's redaction rests on that membership**, which is
+why an unpinned enumeration is not a cosmetic finding.
+
+**Major 4: the substituted assertion cannot fail.** Restricting the reconstruction to `run_start` lines
+leaves the test passing, because it iterates the whole ledger and those lines already carry both keys —
+**and it never reads `run.yaml`, so it will not begin failing when task 11 lands**, which was the exact
+risk the deviation was accepted against.
+
+**Deviation 2 is vindicated, and recorded as such:** the reduced fixture does **not** mask the mixed
+case, because task 15's test uses a mixed plan. But decision 3's *motivating* case — a `summary`-scoped
+execution — **is in no fixture**; the reviewer built it (`C=3, E_c=6, E_none=1` → **12** lines, summary
+probed once per condition, last) and the rule holds.
