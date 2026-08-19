@@ -5090,19 +5090,77 @@ def _check_sweep(
             "each records `correction: null` to say so",
         )
     if comparisons > 0 and correction == "fdr_bh":
-        c.warn(
-            "W-STATS-CORRECTION-INAPPLICABLE",
-            "statistics.correction",
-            # The parenthetical this replaces asserted "`statistics.null_test` is
-            # undeclared", which is false of a config that declares one — and such
-            # a config reaches here, drawing `E-STATS-NULLTEST-UNSUPPORTED` and
-            # this warning together. Removing a false assertion is independent of
-            # the condition, which still fires on `fdr_bh` over a non-empty family
-            # and is narrowed by whichever slice implements `null_test`.
-            "`fdr_bh` adjusts p-values, and no comparison in this family can carry one in "
-            "this build — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
-            "whose corrections are interval-shaped",
-        )
+        # Task 10. The three disjuncts of § Validation's *Correction can be
+        # applied*: no `null_test` is declared at all, its `shuffle` names no
+        # axis any comparison in this family crosses, or every comparison here
+        # is a parameter-axis one (paired, and so has no relabelling null to
+        # carry a p-value from). `contrasts.crossed_group_axes` is the same
+        # expression the pairing derivation above already reads, so this
+        # cannot disagree with it about which comparisons are unpaired.
+        null_test = (doc.get("statistics") or {}).get("null_test")
+        declared_null_test = isinstance(null_test, dict) and bool(null_test)
+        shuffle = null_test.get("shuffle") if isinstance(null_test, dict) else None
+        crossed_by_any_comparison: set[str] = set()
+        for comp in resolved_contrasts:
+            of_cond = conditions_by_index.get(comp.of)
+            against_cond = conditions_by_index.get(comp.against)
+            if of_cond is None or against_cond is None:
+                continue
+            crossed_by_any_comparison.update(crossed_group_axes(of_cond, against_cond))
+        if not declared_null_test:
+            reason = "no `statistics.null_test` is declared, so no comparison carries a p-value"
+        elif not crossed_by_any_comparison:
+            reason = (
+                "every comparison in this family differs only on a parameter axis, so its "
+                "null is a per-unit sign flip rather than a relabelling and `shuffle` cannot "
+                "express it"
+            )
+        elif shuffle not in crossed_by_any_comparison:
+            reason = (
+                f"`statistics.null_test.shuffle` names `{shuffle}`, which is not a group "
+                "axis any comparison in this family crosses"
+            )
+        else:
+            reason = None
+        if reason is not None:
+            c.warn(
+                "W-STATS-CORRECTION-INAPPLICABLE",
+                "statistics.correction",
+                f"`fdr_bh` adjusts p-values, and {reason} — every `ci95_corrected` will "
+                "be null. Use `holm` or `bonferroni`, whose corrections are interval-shaped",
+            )
+    null_test = (doc.get("statistics") or {}).get("null_test")
+    if comparisons > 0 and isinstance(null_test, dict) and null_test:
+        # `W-STATS-RESAMPLE-FAMILY`'s twin: Holm's tightest level is still α/m at
+        # rank 1, and a permutation p-value is only as fine-grained as `1/(n+1)` —
+        # `stats.min_honest_permutations` — so a family this size needs at least
+        # `min_honest_permutations(ALPHA / comparisons)` draws or its own tightest
+        # corrected p can never fall below the level demanded of it. `m` is
+        # `comparisons × metrics` and the metric count is unknowable here by the
+        # same design `_check_resample`'s comment gives, so this bounds against
+        # `comparisons` alone — always true when it fires, silent when it might
+        # not be.
+        n = null_test.get("n")
+        if n is None:
+            effective_n = 5000
+        elif isinstance(n, int) and not isinstance(n, bool):
+            effective_n = n
+        else:
+            effective_n = None
+        if effective_n is not None:
+            needed = min_honest_permutations(ALPHA / comparisons)
+            if effective_n < needed:
+                plural = "" if comparisons == 1 else "s"
+                n_desc = f"is {n}" if n is not None else "is unset, so defaults to 5000,"
+                c.warn(
+                    "W-STATS-NULLTEST-FAMILY",
+                    "statistics.null_test.n",
+                    f"{n_desc} and this design resolves to {comparisons} comparison{plural}, "
+                    f"so the tightest corrected p this family can ever report needs at least "
+                    f"{needed} permutations — a p-value cannot fall below `1/(n+1)`. This is a "
+                    "lower bound: the family is comparisons × metrics and the metric count is "
+                    "not knowable before the run, so the real requirement is at least this",
+                )
 
 
 def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None = None) -> None:

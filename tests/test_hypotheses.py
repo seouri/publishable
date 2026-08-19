@@ -744,3 +744,44 @@ def test_no_correction_at_all_still_tests_the_raw_bound():
     got = _thin_verdict("ci95_lower", method="none")
     assert got["supported"] is True  # raw lower bound 0.01 > 0.0
     assert "ci95_corrected" not in got["observed"]
+
+
+def test_a_counted_hypothesis_on_a_p_only_member_records_an_unavailable_corrected_bound():
+    """The one thing decision 4's widening moves on the hypothesis side, sized
+    honestly: `observed.ci95_corrected` goes from absent to `null`, which says the
+    level was demanded and the bound could not be built. `supported` does not move
+    — a bound test had no raw interval to read either — and `family_size` does not
+    move, being `len(counted)`."""
+    hyp = {
+        "id": "h",
+        "kind": "confirmatory",
+        "metric": "s.m",
+        "compare": {"contrast": "y"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    p_only_member = Member(
+        where="contrast:y",
+        step="s",
+        metric="m",
+        delta=0.10,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.05,
+    )
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[{"id": "y", "s": {"m": {"delta": 0.10}}}],
+        summary={},
+        members=[p_only_member],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert got["family_size"] == 1
+    assert got["observed"]["ci95_corrected"] is None
+    assert got["supported"] is True

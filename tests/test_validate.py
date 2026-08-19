@@ -4396,6 +4396,104 @@ def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
+_GROUP_AXIS_NULL_TEST_ROSTER = "patient_id,arm\n" + "".join(
+    f"p{i},{'treatment' if i % 2 else 'control'}\n" for i in range(8)
+)
+
+
+def _group_axis_null_test_doc(**extra) -> dict:
+    """Task 7's group-axis shape (`groups` + `between` + `by_attribute`), plus a
+    declared contrast that crosses the axis and a `null_test` whose `shuffle`
+    names it — the only shape decision 6 makes a p-value home for — under
+    `correction: fdr_bh`."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "statistics": {
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def _parameter_axis_null_test_doc(**extra) -> dict:
+    """A `grid` + `baseline` shape — every resolved comparison paired, since a
+    parameter axis alone shares its units across conditions — with a `null_test`
+    over an ordinary attribute and `correction: fdr_bh`. The third disjunct of
+    § Validation's *Correction can be applied*: a paired contrast's null is a
+    per-unit sign flip, not a relabelling, so `null_test` supplies no p-value
+    whatever its `shuffle` names."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label"],
+        },
+        "sweep": {
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        "statistics": {
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_the_inapplicable_correction_warning_is_silent_where_a_p_value_can_be_carried(
+    write_config, tmp_path
+):
+    """Task 10. The warning's three disjuncts, per § Validation's *Correction can be
+    applied*: no `null_test`, a `shuffle` reaching no comparison, or every member a
+    parameter-axis contrast. A design declaring `fdr_bh` with a `null_test` whose
+    `shuffle` names the group axis its comparison crosses meets none of them, so
+    the warning must NOT fire.
+
+    The CONTROL is the same config with the `null_test` dropped, which must still
+    warn — without it this test would pass identically against a warning that had
+    simply been deleted."""
+    (tmp_path / "input" / "index.csv").write_text(_GROUP_AXIS_NULL_TEST_ROSTER)
+    doc = _group_axis_null_test_doc()
+    found = codes(write_config(doc))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" not in found
+
+    without = _group_axis_null_test_doc()
+    without["statistics"].pop("null_test")
+    without_found = codes(write_config(without))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in without_found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in without_found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in without_found
+
+
+def test_the_inapplicable_correction_warning_still_fires_for_a_parameter_axis_contrast(
+    write_config, tmp_path
+):
+    """The third disjunct, which `contrasts.crossed_group_axes` is what answers:
+    two conditions differing only on a parameter axis were computed from the same
+    units, so their null is a per-unit sign flip rather than a relabelling and
+    `shuffle` cannot express it. A `null_test` declared beside such a family
+    supplies no p-value to adjust, and the warning is still correct."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    doc = _parameter_axis_null_test_doc()
+    found = codes(write_config(doc))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+
+
 def _level_doc(**null_test) -> dict:
     """A config declaring `cluster_by: match_set` and a `null_test` shuffling
     `status` — the shared fixture both the ambiguity test and its control use."""

@@ -422,6 +422,39 @@ def _family(members: Sequence[Member]) -> list[Member]:
     return list({(m.where, m.step, m.metric): m for m in family_members(members)}.values())
 
 
+def _bh_adjusted(members: Sequence[Member], family_size: int) -> dict[tuple[str, str, str], float]:
+    """Benjamini-Hochberg's adjusted p-values, over the members that carry one.
+
+    `reference.md` § Statistical reporting: BH ranks on the ascending p-value, `m`
+    is the whole family, and each member's value is `min(1, m/i × p)` taken as a
+    running minimum from the largest *i* down. **The suffix minimum is the whole
+    reason this is a second pass** — every other adjustment this module computes is
+    a function of `(m, i)` alone, and this one is not.
+
+    *i* runs over the members PRESENT rather than over `family_size`, which matters
+    for `hypotheses.py`: its `size` is the declared count while its member list
+    drops counted hypotheses with no `Member`. Larger `m` with smaller *k* is the
+    conservative direction, and it is the same over-counting `family_shape`'s
+    docstring already licenses — "the product exceeds the number of members. That
+    is deliberate and conservative" — cited rather than restated as a second rule.
+    """
+    # Bound as `(p, index, member)` triples rather than sorted on `m.p_value`
+    # directly: the field is `float | None`, `mypy` refuses an ordering over it,
+    # and an `assert` inside the loop would be a narrowing the sort key already
+    # needed one line earlier.
+    carrying = sorted(
+        ((m.p_value, m.declaration_index, m) for m in members if m.p_value is not None),
+        key=lambda triple: (triple[0], triple[1]),
+    )
+    out: dict[tuple[str, str, str], float] = {}
+    running = float("inf")
+    for i in range(len(carrying), 0, -1):
+        p_value, _, member = carrying[i - 1]
+        running = min(running, family_size / i * p_value)
+        out[(member.where, member.step, member.metric)] = min(1.0, running)
+    return out
+
+
 def corrected_for(
     members: Sequence[Member],
     method: str,
@@ -449,6 +482,7 @@ def corrected_for(
     family = _family(members)
     if method == "none" or not family:
         return {}
+    bh = _bh_adjusted(family, family_size) if method == "fdr_bh" else {}
     out: dict[tuple[str, str, str], dict[str, Any]] = {}
     for rank, member in enumerate(rank_family(family), start=1):
         level = _level_for(method, family_size, rank)
@@ -459,8 +493,35 @@ def corrected_for(
             "correction_level": level,
             "family_size": family_size,
             "family": dict(shape),
-            "thin": level is not None and bounds is None,
+            # A member carrying only a p-value has no interval to rebuild, so a
+            # `None` bound there is not thinness: `W-STATS-CORRECTED-THIN`'s
+            # message says the resample's draws could not support the level, which
+            # is false of a member that never had a pool. `ci95` rather than the
+            # three evidence fields, because that is what `cli` writes the entry's
+            # own `ci95` from. Under `fdr_bh`, `level` is already `None` (`_level_for`
+            # implies no per-comparison level at all), so this can never fire there
+            # either — correctly rather than accidentally, since nothing was demanded
+            # that the draws could not support; `ci95_corrected: null` beside
+            # `correction: fdr_bh` already says what happened, with no warning owed.
+            "thin": level is not None and bounds is None and member.ci95 is not None,
         }
+        # `p_value_corrected` is the p at the level this member's interval was
+        # corrected at — `min(1, p × m)` under bonferroni and `min(1, p × (m − i +
+        # 1))` under holm, both per-member functions of `(m, i)`. Only BH's is an
+        # accumulation, computed above. ABSENT, not null, where there is no
+        # p-value: an explicit null would claim an adjustment was attempted and
+        # found nothing to do, which is the distinction `ci95_corrected` already
+        # makes under `correction: none`.
+        if method == "fdr_bh":
+            adjusted = bh.get((member.where, member.step, member.metric))
+        elif member.p_value is None:
+            adjusted = None
+        elif method == "bonferroni":
+            adjusted = min(1.0, member.p_value * family_size)
+        else:
+            adjusted = min(1.0, member.p_value * (family_size - rank + 1))
+        if adjusted is not None:
+            out[(member.where, member.step, member.metric)]["p_value_corrected"] = adjusted
     return out
 
 
