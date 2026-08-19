@@ -85,3 +85,37 @@ def _probe_for(name: str) -> Callable[..., Any]:
     fn = load_entry_point(ep)
     check_registration(ep, declared_names(PROBE_GROUP, fn))
     return cast("Callable[..., Any]", fn)
+
+
+def observe_once(probe: Callable[..., Any], cfg: Any, *, probe_name: str) -> Apparatus:
+    """Call a probe with ONE condition's cfg and return what it gave back.
+
+    Three clauses, every one H7b Part B's shipped resolver path
+    (`cli.command_run`'s roster `except BaseException` block), cited rather
+    than re-derived: `except BaseException` so a probe calling `sys.exit()`
+    is covered — `except Exception` would let a `SystemExit` end the command
+    with no diagnostic at all; `KeyboardInterrupt` is re-raised **fresh and
+    argument-less, `from None`**, so Ctrl-C still stops the command and a
+    `KeyboardInterrupt("…secret…")` a probe body constructed never reaches
+    Python's own printer; anything else becomes a coded `ContractError`
+    carrying the probe's own message, `E-APPARATUS-RAISED`, the sibling of
+    `E-RESOLVER-RAISED`.
+
+    The redaction is NOT here. This function builds the message; the call
+    site turns it into a diagnostic through a fresh `Collector` carrying
+    `credentials`, which is what redacts — one mechanism per surface,
+    deliberately, so each has its own mutation to catch it.
+
+    The return value's shape — whether it is an `Apparatus` at all — is task
+    5's boundary check, `check_facts`, not this function's job.
+    """
+    try:
+        returned = probe(cfg)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        raise ContractError(
+            f"probe `{probe_name}` raised {type(exc).__name__}: {exc}",
+            code="E-APPARATUS-RAISED",
+        ) from exc
+    return cast("Apparatus", returned)

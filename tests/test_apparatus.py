@@ -115,3 +115,49 @@ def test_a_decorator_only_registration_with_no_entry_point_is_still_E_PROBE_UNKN
     with pytest.raises(ContractError) as excinfo:
         _probe_for("decorator_only_probe")
     assert excinfo.value.code == "E-PROBE-UNKNOWN"
+
+
+def test_a_probe_that_raises_becomes_a_coded_refusal_carrying_its_message():
+    """`E-APPARATUS-RAISED`, the sibling of `E-RESOLVER-RAISED`. The message is
+    asserted to CARRY the probe's own text: the redaction that removes a
+    credential from it happens at the call site, and a message emptied here
+    would leave nothing for that redaction to be observed on."""
+    from publishable.apparatus import observe_once
+    from publishable.errors import ContractError
+
+    def probe(cfg):
+        raise RuntimeError("instrument offline at bay 3")
+
+    with pytest.raises(ContractError) as excinfo:
+        observe_once(probe, None, probe_name="llm_deployment")
+    assert excinfo.value.code == "E-APPARATUS-RAISED"
+    assert "instrument offline at bay 3" in str(excinfo.value)
+    assert "llm_deployment" in str(excinfo.value)
+
+
+def test_a_probe_calling_sys_exit_is_contained_too():
+    """`SystemExit` is a `BaseException`; `except Exception` would let it end
+    the command with no diagnostic at all."""
+    from publishable.apparatus import observe_once
+    from publishable.errors import ContractError
+
+    def probe(cfg):
+        raise SystemExit("bye")
+
+    with pytest.raises(ContractError) as excinfo:
+        observe_once(probe, None, probe_name="llm_deployment")
+    assert excinfo.value.code == "E-APPARATUS-RAISED"
+
+
+def test_a_keyboard_interrupt_is_re_raised_fresh_and_argument_less():
+    """Ctrl-C still stops the command, and a `KeyboardInterrupt("secret")` a
+    probe body constructed does not reach Python's printer with its message.
+    Assert BOTH: that `KeyboardInterrupt` propagates, and that `str(exc) == ""`."""
+    from publishable.apparatus import observe_once
+
+    def probe(cfg):
+        raise KeyboardInterrupt("secret-token-abc123")
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        observe_once(probe, None, probe_name="llm_deployment")
+    assert str(excinfo.value) == ""
