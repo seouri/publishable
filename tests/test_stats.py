@@ -29,6 +29,7 @@ from publishable.stats import (
     paired_t_over_units,
     paired_t_over_units_clustered,
     percentile_of_derived,
+    percentile_of_derived_clustered,
     percentile_over_units,
     percentile_over_units_clustered,
     permutation_of_derived,
@@ -5425,3 +5426,81 @@ def test_a_contrast_permutation_over_disjoint_sides_with_no_cluster_is_the_row_d
     against = [1.0, 2.0, 3.0, 4.0]
     direct = permutation_over_units(of + against, ["of"] * 3 + ["against"] * 4, "of", seed=6, n=999)
     assert permutation_over_contrast(of, against, seed=6, n=999) == direct
+
+
+def test_a_clustered_derived_draw_rests_on_the_cluster_count_not_the_row_count():
+    """`reference.md` § Clustered units: "300 cells from 10 animals give a 10-draw
+    interval". The fixture is 4 clusters of unequal size holding 20 units, and the
+    discriminating property is that the interval is WIDER than the unit-level one
+    over the same table — a unit-level draw of clustered data is "too narrow to
+    believe", which is the whole reason this construction exists.
+
+    Asserted as a relation between two widths rather than as two literals: a
+    literal pins one construction twice and cannot see that the other moved."""
+    collapsed = {f"c{c}_{i}": {"y": float(10 * c + i)} for c in range(1, 5) for i in range(c + 2)}
+    clusters = {key: key.split("_")[0] for key in collapsed}
+
+    def mean_y(table):
+        rows = [row["y"] for row in table]
+        return sum(rows) / len(rows)
+
+    clustered, survivors = percentile_of_derived_clustered(
+        collapsed, clusters, mean_y, seed=3, draws=500
+    )
+    unit_level, _ = percentile_of_derived(collapsed, mean_y, seed=3, draws=500)
+    assert clustered is not None and unit_level is not None
+    assert survivors == 500
+    assert (clustered.high - clustered.low) > (unit_level.high - unit_level.low)
+
+
+def test_a_clustered_derived_draw_pools_units_rather_than_averaging_cluster_means():
+    """ "Pools their units", and the "varying row count" that follows. A large
+    cluster contributes more rows than a small one, so a cluster drawn twice
+    contributes its units twice.
+
+    **Corrected from the brief's own two-cluster fixture** (one `A` cluster of a
+    single unit, one `B` cluster of five): with only `G = 2` clusters, drawing 2
+    with replacement gives just four equally-likely outcomes (`AA`, `AB`, `BA`,
+    `BB`), whose means are `100.0`, `18.33…`, `18.33…`, `2.0` — a percentile
+    interval read off that four-point distribution spans `[2.0, 100.0]` and
+    brackets BOTH the pooled mean and the cluster-mean-average reading, so the
+    fixture cannot discriminate. Measured directly before trusting it, per the
+    brief's own warning.
+
+    **Widened to 10 `A` clusters and 10 `B` clusters** (`G = 20`), each `A` a
+    single unit valued 100 and each `B` five units valued `0..4` — same disjoint
+    ranges and the same size asymmetry per pair, but enough clusters for the
+    percentile interval to concentrate near the true pooled mean rather than
+    spanning the full four-point support. Confirmed at five seeds (1 through 5)
+    that the interval always brackets the pooled reading and always excludes the
+    cluster-mean-average one before trusting this fixture."""
+    collapsed = {f"a{a}": {"y": 100.0} for a in range(10)}
+    clusters = {f"a{a}": f"A{a}" for a in range(10)}
+    for b in range(10):
+        for i in range(5):
+            collapsed[f"b{b}_{i}"] = {"y": float(i)}
+            clusters[f"b{b}_{i}"] = f"B{b}"
+
+    def mean_y(table):
+        rows = [row["y"] for row in table]
+        return sum(rows) / len(rows)
+
+    interval, _ = percentile_of_derived_clustered(collapsed, clusters, mean_y, seed=1, draws=2000)
+    assert interval is not None
+    # Pooled: (10*100 + 10*(0+1+2+3+4)) / (10 + 50) = 18.333…; the cluster-mean
+    # reading would give (100*10 + 2.0*10)/20 = 51.0. The interval must contain
+    # the first and exclude the second.
+    assert interval.low <= 18.333333333333332 <= interval.high
+    assert not (interval.low <= 51.0 <= interval.high)
+
+
+def test_a_clustered_derived_draw_returns_its_survivor_count_even_when_degenerate():
+    """The three-valued discipline `percentile_of_derived` established, inherited
+    rather than reinvented: `None` and `0` are different facts."""
+    collapsed = {"a1": {"y": 1.0}, "b1": {"y": 2.0}}
+    clusters = {"a1": "A", "b1": "B"}
+    interval, survivors = percentile_of_derived_clustered(
+        collapsed, clusters, lambda table: None, seed=1, draws=50
+    )
+    assert interval is None
+    assert survivors == 0

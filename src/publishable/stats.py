@@ -1721,6 +1721,74 @@ def percentile_of_derived(
     )
 
 
+def percentile_of_derived_clustered(
+    collapsed: dict[str, dict[str, float]],
+    clusters: dict[str, str],
+    compute: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
+) -> tuple[Interval | None, int]:
+    """A percentile interval for a derived metric, resampling whole clusters, and
+    the number of draws it actually rests on.
+
+    `reference.md` states the construction twice, and this docstring does not
+    add a third wording: each replicate draws `G` clusters with replacement and
+    rebuilds a unit table from their pooled units, so its row count varies per
+    draw — `G` being `units.cluster_count_of`'s answer, so this cannot disagree
+    with the `n.clusters` a caller prints beside the interval. `compute` is run
+    on the pooled table exactly as `percentile_of_derived` runs it on its own
+    resampled table; every other rule this function follows — the survivor
+    discipline, the real-keys row-list construction, the uncontained unpermuted
+    call — is `percentile_of_derived`'s, cited rather than restated.
+
+    Built through `_draw_pools`, the one draw shape a percentile construction's
+    other two callers already share, rather than a second notion of what a
+    cluster draw is: with no `strata` this is one group holding every cluster
+    (`G` clusters, drawn `G` times with replacement, pooling their units); with
+    `strata` each stratum draws exactly as many clusters as it holds, the
+    composition `_draw_pools` already enforces for its other two callers.
+
+    The two ways to get this wrong both produce a plausible number: drawing `G`
+    *units* and repairing the groups afterwards would be a resample whose
+    independent draw count is really the row count, not the cluster count — a
+    "too narrow" interval in exactly the sense `reference.md` § Clustered units
+    names; averaging the drawn clusters' own means, rather than pooling their
+    units, would give every cluster equal say regardless of size, where "pools
+    their units" and the row count that varies with it says a large cluster
+    contributes more rows than a small one.
+    """
+    keys = sorted(collapsed)
+    if len(keys) < 2:
+        return None, 0
+    pools = _draw_pools(keys, strata, clusters)
+    rng = random.Random(seed)
+    values: list[float] = []
+    for _ in range(draws):
+        drawn: list[str] = []
+        for group in pools:
+            for _ in range(len(group)):
+                drawn.extend(group[rng.randrange(len(group))])
+        table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
+        try:
+            value = compute(table)
+        # Degenerate, not caught for the real call; see `percentile_of_derived`.
+        except Exception:
+            continue
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            continue
+        values.append(float(value))
+    if len(values) < min_honest_draws(confidence):
+        return None, len(values)
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return (
+        Interval(low=values[lo], high=values[hi], method="percentile_of_derived_clustered"),
+        len(values),
+    )
+
+
 def permutation_of_derived(
     collapsed: dict[str, dict[str, float]],
     labels: dict[str, str],
