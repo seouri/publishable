@@ -13868,3 +13868,144 @@ def test_the_unanswered_warning_fires_once_per_condition_and_fact_with_a_null(
     out = doc["stdout"] or ""
     warn_lines = [line for line in out.splitlines() if "W-APPARATUS-UNANSWERED" in line]
     assert len(warn_lines) == 3, out
+
+
+# --- H7d Part A task 12: provenance.apparatus.hash --------------------------
+
+_HASH_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    # `model_revision` satisfies the template's declared `apparatus_facts`;
+    # `zeta_field`/`alpha_field` are inserted in the REVERSE of sorted order,
+    # so a build that dropped `sort_keys=True` would hash a different byte
+    # string than one that kept it (Decision 10's own prescribed mutation,
+    # step 4).
+    return Apparatus(
+        facts={"model_revision": "r1", "zeta_field": "z1", "alpha_field": "a1"}
+    )
+"""
+
+_HASH_FACT_PROBE_MODULE_CHANGED = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe2")
+def probe(cfg):
+    return Apparatus(
+        facts={"model_revision": "r1", "zeta_field": "z1", "alpha_field": "a2"}
+    )
+"""
+
+_APPARATUS_ASSAY_TEMPLATE_2 = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_assay_2")
+class ApparatusAssay2(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_probe2"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+
+def test_the_apparatus_hash_is_recomputable_from_the_recorded_facts(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture H. Recomputed by the test from the `facts` mapping it read out
+    of `run.yaml`, with `json.dumps(..., sort_keys=True, separators=(",",
+    ":"), ensure_ascii=False)`. A digest literal would pass under an encoder
+    that changed and hide it."""
+    site = installed(
+        "dist-t12a", "1.0", {"publishable.probes": {"h7d_probe": "t12a_probe_mod:probe"}}
+    )
+    (site / "t12a_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    recomputed = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                block["facts"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    assert block["hash"] == recomputed
+
+
+def test_two_runs_with_identical_facts_share_a_hash_and_one_changed_fact_moves_it(
+    installed, registries, tmp_path, capsys
+):
+    """The property a literal would have hidden: identical facts, different
+    `run_id`s and different timestamps, identical hash — and a probe
+    returning one different value gives a different hash. Both halves,
+    because the first alone passes for a constant."""
+    site = installed(
+        "dist-t12b", "1.0", {"publishable.probes": {"h7d_probe": "t12b_probe_mod:probe"}}
+    )
+    (site / "t12b_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE)
+
+    doc1 = run_a_project(
+        tmp_path / "run1",
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    doc2 = run_a_project(
+        tmp_path / "run2",
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run1 = yaml.safe_load((doc1["run_dir"] / "run.yaml").read_text())
+    run2 = yaml.safe_load((doc2["run_dir"] / "run.yaml").read_text())
+    # Two independently scaffolded runs, in two different result directories
+    # (`doc1["run_dir"] != doc2["run_dir"]`) — not the same run read twice —
+    # yet identical facts hash identically.
+    assert doc1["run_dir"] != doc2["run_dir"]
+    assert run1["provenance"]["apparatus"]["hash"] == run2["provenance"]["apparatus"]["hash"]
+
+    site2 = installed(
+        "dist-t12c", "1.0", {"publishable.probes": {"h7d_probe2": "t12c_probe_mod:probe"}}
+    )
+    (site2 / "t12c_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE_CHANGED)
+    doc3 = run_a_project(
+        tmp_path / "run3",
+        capsys=capsys,
+        experiment_type="apparatus_assay_2",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE_2,
+    )
+    run3 = yaml.safe_load((doc3["run_dir"] / "run.yaml").read_text())
+    assert run3["provenance"]["apparatus"]["hash"] != run1["provenance"]["apparatus"]["hash"]
+
+
+def test_the_hash_does_not_cover_unobserved_or_the_probe_name():
+    """Direct call: two facts documents that differ in nothing hash the same,
+    and the argument is the facts mapping alone — the assertion is on the
+    function's signature-level behaviour rather than on a comment claiming
+    it. `apparatus_hash` takes no `probe_name` or `unobserved` parameter at
+    all, so two callers who disagree about either but agree on `facts` are
+    physically unable to make it return different digests."""
+    from publishable.apparatus import apparatus_hash
+
+    facts = {"00_baseline": {"model_revision": "r1"}}
+    h1 = apparatus_hash(facts)
+    h2 = apparatus_hash(dict(facts))
+    assert h1 == h2
+    assert h1.startswith("sha256:")
