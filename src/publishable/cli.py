@@ -77,6 +77,7 @@ from publishable.stats import (
     paired_percentile_of_derived,
     paired_t_over_units,
     paired_t_over_units_clustered,
+    permutation_over_contrast,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -114,6 +115,7 @@ from publishable.units import (
     holdout_for,
     holdout_seed_for,
     index_names,
+    null_test_level,
     partition_units,
     resolve_units,
     stratum_names,
@@ -795,6 +797,7 @@ def _comparison_step_blocks(
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
     clusters: dict[str, str] | None = None,
+    null_test: dict[str, Any] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
@@ -814,6 +817,23 @@ def _comparison_step_blocks(
     `clusters` never arrive together — refused above as
     `E-DATA-WEIGHT-CLUSTER-CONTRAST` — so every branch below is a choice among
     mutually exclusive declarations rather than a combination to compose.
+
+    `null_test`, when given, is `_resolved_null_test`'s dict with `level`
+    filled in by `command_run` (it needs the roster, which that function does
+    not have). **Only the unpaired arm ever writes `p_value`/`null_test`**,
+    gated on `not is_paired` and on the resolved `shuffle` naming a group axis
+    these two conditions actually differ on: a paired comparison's two
+    conditions share their units, so its null is a per-unit sign flip rather
+    than a relabelling and `shuffle` cannot express it — § What isn't a repeat
+    says so in those words. Both keys are **absent, not null**, everywhere
+    else, the same shape `n_paired` follows: a fact about whether this
+    comparison joins that p-value home, not about whether the permutation
+    happened to run. Where it does write, `p_value` is written whether or not
+    `interval` came back — the two per-side vectors it reads are built above
+    regardless of whether the *t* or Welch construction resolved one — and
+    `p_value_corrected` is never written here, because the correction pass
+    merges it in afterward from the family it belongs to, not from this one
+    comparison's own view of itself.
 
     Under a declared weight, a recorded column's `delta` is the weighted mean of
     the differences and `cohens_d` is `weighted_cohens_dz(diffs, col_weights)` —
@@ -927,9 +947,8 @@ def _comparison_step_blocks(
     # one function with two callers. Read once at function scope: a per-metric
     # re-derivation is how two entries in one block come to disagree about a fact
     # about their two conditions.
-    is_paired = not crossed_group_axes(
-        conditions_by_index[comp.of], conditions_by_index[comp.against]
-    )
+    group_axes = crossed_group_axes(conditions_by_index[comp.of], conditions_by_index[comp.against])
+    is_paired = not group_axes
     # `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses this combination at `validate`,
     # and `cli` always validates before running — so both being set is core's own
     # bookkeeping error, not a config. Raised rather than resolved by dropping the
@@ -1321,6 +1340,47 @@ def _comparison_step_blocks(
                         "cohens_d": cohens_ds(of_values, against_values),
                         "correction": None,
                     }
+                    # Decision: only an unpaired comparison gets a p-value, and
+                    # only when the resolved `shuffle` names an axis THESE TWO
+                    # CONDITIONS actually differ on — `group_axes` above, the
+                    # same expression that decided `is_paired`, so the two
+                    # cannot disagree about which comparisons are unpaired. A
+                    # paired comparison's two conditions share their units, so
+                    # its null is a per-unit sign flip rather than a
+                    # relabelling and `shuffle` cannot express it. Written
+                    # whether or not `interval` came back — `of_values` and
+                    # `against_values` are built above regardless — the same
+                    # fact-not-construction rule `n_paired` follows.
+                    if null_test is not None and null_test.get("shuffle") in group_axes:
+                        p_value = permutation_over_contrast(
+                            of_values,
+                            against_values,
+                            seed=seed,
+                            n=null_test["n"],
+                            of_clusters=(
+                                [of_clusters[k] for k in of_col]
+                                if of_clusters is not None
+                                else None
+                            ),
+                            against_clusters=(
+                                [against_clusters[k] for k in against_col]
+                                if against_clusters is not None
+                                else None
+                            ),
+                            level=null_test["level"] or "rows",
+                        )
+                        metric_block[metric_key]["p_value"] = p_value
+                        # The echo carries the derived `level`, the one resolved
+                        # value the config never writes — a reader who sees
+                        # `within_cluster` beside a `null_test.shuffle` the
+                        # config declared over an attribute alone would
+                        # otherwise have no way to tell which relabelling ran.
+                        metric_block[metric_key]["null_test"] = {
+                            "method": null_test["method"],
+                            "n": null_test["n"],
+                            "shuffle": null_test["shuffle"],
+                            "level": null_test["level"] or "rows",
+                        }
             # The three facts a weight adds to a contrast entry, and they move
             # together with the delta and the interval: § Contrasts requires it,
             # and a weighted delta beside an unweighted effect size or an
@@ -1452,6 +1512,10 @@ def _comparison_step_blocks(
                     # this to the position in that combined, ordered list —
                     # the only point where the full declaration order exists.
                     declaration_index=0,
+                    # Absent on the block iff absent here: `.get` rather than a
+                    # second condition, so this cannot disagree with the write
+                    # above about which comparisons carry one.
+                    p_value=metric_block[metric_key].get("p_value"),
                 )
             )
             # § Validation keys this on the comparison's realized denominator, and an
@@ -1525,6 +1589,15 @@ def _compute_vs_baseline(
 
     The members every comparison produced come back beside the block, for the
     correction family `command_run` builds over both record shapes at once.
+
+    **No `null_test` parameter, deliberately** — decision 6: a group-axis
+    p-value lands on a declared `statistics.contrasts` entry and never in
+    `vs_baseline`. This is not a gate this function has to enforce: a baseline
+    fixing a group level draws the permanent `E-SWEEP-BASELINE-GROUP`, so every
+    comparison built here is within one group-axis cell and `is_paired` is
+    always true for it — `_comparison_step_blocks` would write nothing even if
+    handed a `null_test`. Omitted rather than threaded-and-unused, so a reader
+    does not have to check that it is always `None` here.
     """
     if roster is None:
         return None, []
@@ -1581,6 +1654,7 @@ def _compute_declared_contrasts(
     strata: dict[str, str] | None = None,
     weighted_by: str | None = None,
     clusters: dict[str, str] | None = None,
+    null_test: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -1602,6 +1676,10 @@ def _compute_declared_contrasts(
     The members every contrast produced come back beside the list, joining the
     `vs_baseline` ones in one family: `reference.md` counts every interval a
     reader is shown, and a declared contrast is one of them.
+
+    `null_test`, threaded through to `_comparison_step_blocks` unchanged, is
+    decision 6's landing site: a declared contrast is the only place a
+    group-axis p-value lands, so this is the one caller that carries it.
     """
     if roster is None:
         return None, []
@@ -1633,6 +1711,7 @@ def _compute_declared_contrasts(
             strata=strata,
             weighted_by=weighted_by,
             clusters=clusters,
+            null_test=null_test,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -1688,6 +1767,41 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
         "method": method if isinstance(method, str) and method else "bootstrap",
         "n": n if isinstance(n, int) and not isinstance(n, bool) else 2000,
         "stratify_by": stratum_names(declared.get("stratify_by")),
+        "declared": bool(declared),
+    }
+
+
+def _resolved_null_test(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """`statistics.null_test` with every default filled in, resolved once —
+    `_resolved_resample`'s shape, for the block this task gives a p-value home.
+
+    `None`, not a `declared: False` dict, when nothing is declared: every
+    caller below gates on `null_test is not None`, so "no null test declared"
+    and "this caller has not been taught about null tests" collapse to one
+    check rather than two — the direct call sites in the test suite take no
+    edit with no behavioural content, the same reasoning `weights`, `strata`
+    and `clusters` are already defaulted for.
+
+    **`.get("null_test") or {}`, never `.get("null_test", …)`**: `materialize.py`
+    writes no `null_test` key at all and a hand-written config may write
+    `null_test: null`, and the two are different documents that must resolve
+    to one answer.
+
+    `level` is left `None` here on purpose — `units.null_test_level` needs the
+    roster, which this function does not have, so `command_run` fills it in
+    once the roster it resolves is in scope.
+    """
+    declared = ((doc.get("statistics") or {}).get("null_test")) or {}
+    if not isinstance(declared, dict) or not declared:
+        return None
+    method = declared.get("method")
+    n = declared.get("n")
+    shuffle = declared.get("shuffle")
+    return {
+        "method": method if isinstance(method, str) and method else "permutation",
+        "n": n if isinstance(n, int) and not isinstance(n, bool) else 5000,
+        "shuffle": shuffle if isinstance(shuffle, str) and shuffle else None,
+        "level": None,
         "declared": bool(declared),
     }
 
@@ -2299,6 +2413,15 @@ def command_run(config_path: Path) -> int:
             # is nothing yet to choose between).
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
+            # `_resolved_null_test`'s counterpart to `resample_spec`, resolved
+            # once here for the same reason. `level` is filled in here rather
+            # than inside that function, because `units.null_test_level` needs
+            # the roster and `_resolved_null_test` does not have one — this is
+            # the one place both the declaration and the roster are in scope.
+            null_test_spec = _resolved_null_test(doc)
+            if null_test_spec is not None and null_test_spec["shuffle"] is not None:
+                level, _ = null_test_level(eval_roster, cluster_by, null_test_spec["shuffle"])
+                null_test_spec["level"] = level
             # The resolved block, beside the interval rather than joining `n` —
             # `summarize_step`'s own rule for which carrier a fact takes, and
             # `weighted_by` is the precedent: a key that names a declaration
@@ -3048,6 +3171,7 @@ def command_run(config_path: Path) -> int:
                 strata=resample_strata,
                 weighted_by=weight_by if weights else None,
                 clusters=clusters,
+                null_test=null_test_spec,
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:

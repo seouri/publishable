@@ -3250,6 +3250,109 @@ def _unpaired_contrast_call(**extra):
     return _comparison_step_blocks(comparison, **kwargs)
 
 
+_C1_VALUES = [float(100 * c + i) for c in range(1, 11) for i in range(5)]
+_C1_LABELS = ["of" if i >= 3 else "against" for c in range(1, 11) for i in range(5)]
+_C1_CLUSTERS = [f"M{c:02d}" for c in range(1, 11) for i in range(5)]
+_C1_KEYS = [f"u{i:03d}" for i in range(50)]
+
+
+def _fixture_c1_call(**extra):
+    """Fixture C1 — `docs/superpowers/specs/2026-08-18-null-test-design.md` §
+    Fixture C: 50 units in 10 matched sets of 5, `arm` varying within every
+    set (`of` the top two, `against` the bottom three), `cluster_by:
+    match_set`, and a DECLARED contrast crossing `arm` — decision 6's only
+    p-value home, never `vs_baseline`.
+
+    `seed=11, n=5000` is `test_stats.py`'s own pin
+    (`test_a_within_cluster_permutation_over_fixture_c_gives_exactly_one_over_n_plus_one`):
+    the observed labelling is the unique maximum over all 10¹⁰ within-cluster
+    relabellings, so `b = 0` deterministically and the p-value is exactly
+    `1/5001` — carried here rather than re-derived, so this test cannot drift
+    from the construction's own pin."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [k for k, label in zip(_C1_KEYS, _C1_LABELS, strict=True) if label == "of"]
+    against_keys = [k for k, label in zip(_C1_KEYS, _C1_LABELS, strict=True) if label != "of"]
+    roster = UnitList([Unit(key=k) for k in _C1_KEYS])
+    comparison = extra.pop("_comparison", None) or Comparison(
+        id="arm_effect", of=1, against=0, declared=True
+    )
+    of_values = [v for v, label in zip(_C1_VALUES, _C1_LABELS, strict=True) if label == "of"]
+    against_values = [v for v, label in zip(_C1_VALUES, _C1_LABELS, strict=True) if label != "of"]
+    kwargs = dict(
+        roster=roster,
+        aggregated={
+            1: {"s": {"y": sum(of_values) / len(of_values)}},
+            0: {"s": {"y": sum(against_values) / len(against_values)}},
+        },
+        collapsed_by_key={
+            (1, "s"): {k: {"y": v} for k, v in zip(of_keys, of_values, strict=True)},
+            (0, "s"): {k: {"y": v} for k, v in zip(against_keys, against_values, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=11,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=against",
+                values={"arm": "against"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1, label="arm=of", values={"arm": "of"}, selectors=frozenset({"arm"})
+            ),
+        },
+        resample_columns=False,
+        clusters=dict(zip(_C1_KEYS, _C1_CLUSTERS, strict=True)),
+        null_test={"method": "permutation", "n": 5000, "shuffle": "arm", "level": "within_cluster"},
+    )
+    kwargs.update(extra)
+    return _comparison_step_blocks(comparison, **kwargs)
+
+
+def test_the_contrast_side_null_test_writes_a_p_value_and_its_resolved_echo():
+    """Task 19's load-bearing case, on fixture C1. `permutation_over_contrast`
+    is exactly `permutation_over_units_clustered` under the arm-as-side
+    reading, so this is the same `1/5001` `test_stats.py` already pins, landing
+    on the contrast entry rather than as a bare float — and the echo carries
+    `level`, the one resolved value the config itself never writes."""
+    block, members = _fixture_c1_call()
+    entry = block["s"]["y"]
+    assert entry["p_value"] == pytest.approx(1.0 / 5001.0)
+    assert entry["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "arm",
+        "level": "within_cluster",
+    }
+    assert members[0].p_value == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_paired_comparison_carries_neither_p_value_nor_null_test():
+    """**The discriminating half.** The same `null_test` declaration, over
+    `_clustered_contrast_call`'s PAIRED fixture (no declared group axis, so
+    `crossed_group_axes` returns `[]` and `is_paired` is `True`) — without this
+    control, a write that ignored `is_paired` entirely would pass the test
+    above just as well."""
+    block, members = _clustered_contrast_call(
+        null_test={"method": "permutation", "n": 5000, "shuffle": "arm", "level": "rows"}
+    )
+    entry = block["s"]["m"]
+    assert "p_value" not in entry
+    assert "null_test" not in entry
+    assert members[0].p_value is None
+
+
 def test_an_unpaired_contrast_records_its_two_side_counts_and_no_n_paired():
     """Decision 5, and it is the first conditional write of `n_paired` in this
     codebase. § Contrasts defines `n_paired` as the intersection, and an unpaired
