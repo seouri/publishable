@@ -1027,6 +1027,16 @@ _PIN_MEMBERS = [
 ]
 
 
+_PIN_INNER_KEYS = {
+    "ci95_corrected",
+    "correction",
+    "correction_level",
+    "family_size",
+    "family",
+    "thin",
+}
+
+
 def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
     """The regression pin, captured at `a207702` before any H4d change.
 
@@ -1040,6 +1050,14 @@ def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
 
     The three levels are alpha/3, alpha/2 and alpha, which is Holm at m = 3 —
     so a family that admitted `cond:4` would show 4, and every bound would move.
+
+    Round-1 review (M2): the outer `set(fields)` assertion pinned member
+    identities only, so a task widening what EACH block carries — `holm` and
+    `bonferroni` both gain `p_value_corrected` in tasks 17/18, `fdr_bh`'s
+    `ci95_corrected` stays `null` under a rewritten two-pass `corrected_for` —
+    could pass this test with a spurious key or a spurious `None` added to
+    every block. Each block's own key set is now pinned alongside its values,
+    so an added or missing key fails here rather than passing.
     """
     ranked = [m.where for m in rank_family(family_members(_PIN_MEMBERS))]
     assert ranked == ["cond:2", "cond:1", "cond:3"]
@@ -1050,6 +1068,8 @@ def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
         ("cond:2", "s", "m"),
         ("cond:3", "s", "m"),
     }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
     assert fields[("cond:2", "s", "m")]["correction_level"] == pytest.approx(0.05 / 3)
     assert fields[("cond:2", "s", "m")]["ci95_corrected"] == [
         pytest.approx(-0.18335036277829492),
@@ -1066,6 +1086,62 @@ def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
         pytest.approx(0.22281388519862744),
     ]
     assert [v["thin"] for v in fields.values()] == [False, False, False]
+
+
+def test_bonferronis_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The same regression pin under `bonferroni`, added per round-1 review
+    (M2): task 27's original pin exercised `holm` alone, while decision 3
+    changes exactly Bonferroni's cell and task 18 rewrites the same
+    `corrected_for` two-pass for `fdr_bh`. Captured at `a207702`, before any
+    H4d change: every member is corrected at the same level α/m under
+    Bonferroni, unlike Holm's per-rank level.
+    """
+    fields = corrected_fields(_PIN_MEMBERS, "bonferroni")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
+        assert fields[key]["correction_level"] == pytest.approx(0.05 / 3)
+        assert fields[key]["correction"] == "bonferroni"
+    assert fields[("cond:2", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.18335036277829492),
+        pytest.approx(-0.1546496372217051),
+    ]
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.0027007255565898065),
+        pytest.approx(0.05470072555658981),
+    ]
+    assert fields[("cond:3", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.2870072555658981),
+        pytest.approx(0.2870072555658981),
+    ]
+    assert [v["thin"] for v in fields.values()] == [False, False, False]
+
+
+def test_fdr_bhs_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The same regression pin under `fdr_bh`, added per round-1 review (M2).
+
+    `fdr_bh` is the method task 18 rewrites `corrected_for` two-pass for, and
+    with no member of `_PIN_MEMBERS` carrying a `p_value`, `ci95_corrected`
+    and `correction_level` must stay `None` for every member — a widened
+    two-pass rewrite that started returning an interval, or a `p_value` key,
+    here would move this pin.
+    """
+    fields = corrected_fields(_PIN_MEMBERS, "fdr_bh")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
+        assert fields[key]["ci95_corrected"] is None
+        assert fields[key]["correction_level"] is None
+        assert fields[key]["correction"] == "fdr_bh"
+        assert fields[key]["thin"] is False
 
 
 def test_a_member_with_no_interval_and_no_p_value_is_still_outside_the_family():
