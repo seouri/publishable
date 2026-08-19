@@ -1,5 +1,6 @@
 """The one public import root. Submodules are implementation detail."""
 
+from publishable.apparatus import Apparatus
 from publishable.base_experiment import BaseExperiment
 from publishable.base_step import BaseStep
 from publishable.errors import (
@@ -16,6 +17,7 @@ from publishable.templates.discovery import register_template
 from publishable.units import Unit
 
 __all__ = [
+    "Apparatus",
     "ArtifactError",
     "ArtifactExistsError",
     "BaseExperiment",

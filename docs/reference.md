@@ -967,7 +967,7 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `BaseReport` | subclass | not yet built | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
 | `Param` | construct | built | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
 | `Unit` | construct | built | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
-| `Apparatus` | construct | not yet built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
+| `Apparatus` | construct | built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
 | `Estimate` | construct | built | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
 | `register_template` | decorator | built | One of the five plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `register_resolver` | decorator | built | The registry a [`data.units.from.resolver`](#where-units-come-from) name resolves through — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
@@ -3985,7 +3985,7 @@ publishable/
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
 │   ├── plugins.py             # entry-point metadata scan; the resolver/probe/writer/reader registries
-│   ├── apparatus.py           # per-condition facts, the change gate, `Apparatus` — not yet built
+│   ├── apparatus.py           # per-condition facts, the change gate, `Apparatus`
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance)
 │   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built
