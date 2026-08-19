@@ -4163,6 +4163,58 @@ def test_a_declared_null_test_is_refused(write_config):
     )
 
 
+def test_a_typo_among_the_null_tests_fixed_keys_is_reported(write_config):
+    """`shufle` for `shuffle`. Probed at `2a4dc53`: this earned
+    `{E-STATS-NULLTEST-UNSUPPORTED}` alone, so the typo was unreachable by any
+    check — and would have turned from latent to live at the moment the wholesale
+    refusal retired. Closed here first, on the ground `envelope.py` states for
+    `resample` and `holdout` both.
+
+    Asserted ALONGSIDE the wholesale refusal, never on a total code set: the
+    refusal is alive until task 25, and `validate` collects rather than aborting,
+    so both findings are present at once."""
+    found = codes(
+        write_config(
+            {"statistics": {"null_test": {"method": "permutation", "n": 5000, "shufle": "label"}}}
+        )
+    )
+    assert "E-CONFIG-KEY-UNKNOWN" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_a_wrong_typed_null_test_child_is_reported_by_the_envelope(write_config):
+    """The other half of closing a block one level in: a child whose type is
+    wrong is `E-CONFIG-TYPE`, which is what lets every check in `_check_null_test`
+    skip a non-leaf value instead of reporting the same defect twice under its own
+    code. `n: "lots"` is the discriminating shape — a bare `dict` leaf would have
+    admitted it silently."""
+    found = codes(
+        write_config({"statistics": {"null_test": {"method": "permutation", "n": "lots"}}})
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+    # The second case, over `shuffle`: this is the fixture that makes a mutation
+    # removing `"statistics.null_test.shuffle": str` from `LEAF_TYPES` visible.
+    # Deleting only that sibling entry changes whether a wrong-typed `shuffle` is
+    # reported, and nothing above supplies one — a wrong-typed `n` is silent to
+    # that mutation, since it goes through a different entry entirely.
+    shuffle_found = codes(
+        write_config({"statistics": {"null_test": {"method": "permutation", "shuffle": 5}}})
+    )
+    assert "E-CONFIG-TYPE" in shuffle_found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in shuffle_found
+
+
+def test_a_scalar_null_test_block_is_still_a_type_fault(write_config):
+    """The block keeps its own `dict` entry as well as gaining children — a
+    path that is both a leaf and a container is typed AND descended into, which is
+    what `statistics.resample` does today. Without this case, deleting the outer
+    entry would pass both tests above and silently lose `E-CONFIG-TYPE` for a
+    scalar block."""
+    assert "E-CONFIG-TYPE" in codes(write_config({"statistics": {"null_test": 5}}))
+
+
 def test_declared_report_by_is_checked_rather_than_refused(write_config):
     """S4d retires the blanket refusal and checks the declaration for real: with
     no `data.units.attributes` declared at all, `sex` is not among them, so this

@@ -35,14 +35,16 @@ from typing import Any
 # read values whose shape a check already approved. The optional
 # blocks that section documents but a
 # materialized config omits — `sweep`'s modes, `statistics.contrasts` /
-# `.null_test` / `.report_by`, and `data.units.assign` — are declared at their
+# `.report_by`, and `data.units.assign` — are declared at their
 # own key with the one outer type that section gives them.
-# `statistics.resample` is no longer among them: it is closed one level in, the
-# same way `measurements` is — its three keys (`method`, `n`, `stratify_by`)
-# are fixed, so leaving the block whole would make a typo among them
-# unreachable by any check. Unlike `measurements`, `resample` is closed before
-# its own wholesale refusal retired (H4a task 12), not after — see the comment
-# at its `LEAF_TYPES` entry for why validating the shape had to precede
+# `statistics.resample` and `statistics.null_test` are no longer among them:
+# each is closed one level in, the same way `measurements` is — their fixed
+# keys (`method`, `n`, `stratify_by` for `resample`; `method`, `n`, `shuffle`
+# for `null_test`) are fixed, so leaving either block whole would make a typo
+# among them unreachable by any check. Unlike `measurements`, both are closed
+# before their own wholesale refusal retired (H4a task 12 for `resample`;
+# ahead of H4d's own retirement for `null_test`), not after — see the comment
+# at each one's `LEAF_TYPES` entry for why validating the shape had to precede
 # honouring the values.
 #
 # The table stopping at a key is the end of the line for everything under it:
@@ -154,6 +156,17 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "statistics.resample.n": int,
     "statistics.resample.stratify_by": (str, list),
     "statistics.null_test": dict,
+    # Closed one level in at its own three fixed keys, the same way `resample`
+    # and `holdout` are, and — like both of them — closed BEFORE its own
+    # wholesale refusal retires rather than after: the slice that honours the
+    # block needs the shape checked before it can read the values, so a `shufle`
+    # among fixed names is reported rather than turning from latent to live at
+    # the moment of retirement. `level` is deliberately absent: it is derived
+    # from the roster and recorded, never declared, so a config naming it is a
+    # config asserting a value core computes.
+    "statistics.null_test.method": str,
+    "statistics.null_test.n": int,
+    "statistics.null_test.shuffle": str,
     "statistics.report_by": list,
     "sweep.baseline": dict,
     "sweep.groups": list,
