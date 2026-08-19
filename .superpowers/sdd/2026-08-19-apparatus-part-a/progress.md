@@ -124,3 +124,45 @@ justification was itself wrong.** **Flagging it is why it was caught**, and the 
 narrower than *don't use it*: **a revert is verified by behaviour, never by `git status`, and least of
 all by a story about what caused the change.** Keeping a copy before mutating removes the need for a
 diagnosis at all.
+
+## Batch 2 — tasks 4-8 — every check and the ledger, and not one call site
+
+Commits `c330c67` (invocation and the contained raise), `899f657` (the `apparatus_facts` projection —
+**closing the unbuilt-reader-of-a-shipped-surface defect this attribute has carried for three slices**),
+`5e45ca4` (credential refusal), `48b50c8` (null semantics and the unanswered warning), `f1be329` (the
+ledger), report `6df82fe`. Suite 2371 → **2392**.
+
+**The implementer caught two prescribed mutations that could not discriminate**, which is the
+*a mutation is a claim too* discipline working before a reviewer had to supply it: task 6's
+`len>=20 or (digit and isalnum)` heuristic **also flags the fixture `lab7`**, so it could not be told
+from the equality check; and task 7's mutation (c) is 4-against-3 on this batch's fixture rather than
+the brief's 8-against-3, a figure belonging to a fixture **not yet built**. The reviewer re-derived every
+number by running and confirmed both adjudications — calling the first *"correct and understated"*.
+
+### Review: spec compliance FAILS on one point; four Majors
+
+**The pattern is the same in all four, and it is the entry worth keeping: the batch diagnosed correctly
+and then left the falsified claim standing in the committed code.** Three tests assert "no heuristic
+flags lab7", "six observations", "eight" and a fixture that does not exist — **all contradicted by the
+implementer's own report, which was right.** The numbers are fixture-derived and correct; the prose
+around them is false. That is *a test whose docstring claims a guarantee no assertion makes*, and **a
+reader greps for exactly that claim and stops looking** — the seventh instance on this project.
+
+**The spec failure is a brief defect first.** `warn_unanswered` fires `W-APPARATUS-UNANSWERED` for an
+**undeclared** fact that came back `null`, against decision 8, decision 4's fourth row and `reference.md`
+— and **task 7's brief prescribes the signature `warn_unanswered(self, c: Collector)` with no `declared`
+parameter**, so the rule could not be expressed in the shape the plan handed over. No fixture separated
+the readings either. **Ruling: fix the behaviour, build the separating fixture, and record the brief
+defect** — a seam a brief cannot express is the plan's fault.
+
+**And the highest-stakes check in the batch is pinned by a test whose loop body never runs.** The
+credential check cannot distinguish exact-value matching from a pattern: the brief's own heuristic
+mutation leaves the **full suite green**, because the one test that would separate them passes
+`credentials={}` — **so the loop never executes.** The missing cell is decision 6's own ground: a
+non-empty `credentials` beside a credential-shaped value that is not a declared credential. **This repo
+has shipped this exact class of leak twice**, which is why it is a Major rather than a Minor.
+
+One real escape found: comparing `value == cred_value` on the **raw** value lets a numpy-array fact out
+as an **uncoded `ValueError`** — but **only when a credential is declared**, which is the worst shape for
+a conditional fault, since the `credentials={}` path is correctly coded and would be what a casual test
+exercises.
