@@ -216,3 +216,37 @@ its briefs prescribed them**; the reviewer checks the new scope is true and did 
 something the code does provide.
 
 **No brief/spec disagreements this batch**, against eight found by the plan author and two by batch 1.
+
+### Batch 2 — task review: spec compliance PASS with two Majors, task quality PASS (high)
+
+Review at `task-b2-review.md`. **All five faults return distinct exact sets**, verified by direct
+call — the batch's central claim holds. Three implementer judgement calls were checked and **upheld**:
+the blindness claim **survived an overturn attempt** (deleting the leaf fails exactly one test, the
+added case, because later tests assert membership and `_check_null_test` reads `shuffle`
+independently of the envelope — so the fixture is the **sole pin** and was prescribed, making it
+correct rather than scope creep); the docstring trim was called **exemplary**; and the
+crash-versus-assertion split is confirmed, both named tests failing on real assertions with two
+`IndexError`s as collateral.
+
+**Both Majors are fail-opens — a config that should be refused validates clean — and both are named
+`CLAUDE.md` shapes.**
+
+**Major 1 is the proxy shape, with a consequence downstream.** `null_test_level`'s documented domain
+is "`shuffle` names an attribute", and task 7's union admits **axis names**. An axis name is not a
+roster attribute, so every unit renders `no value`, every cluster reads constant, and the function
+answers **`whole_cluster`** instead of refusing. Verified end to end on one roster: `shuffle: arm`
+returns `E-STATS-NULLTEST-UNSUPPORTED` alone while `shuffle: label` on the **identical roster** earns
+the refusal. **No test in the suite combines a group-axis shuffle with a cluster**, which is why it is
+invisible — and `null_test_level` exists **for task 13 to choose the permutation construction**, so a
+plausible wrong answer selects a wrong construction rather than merely mis-reporting.
+
+**Major 2 is a documented rule with no code behind it.** Every guard is `isinstance(shuffle, str)`, so
+an **absent** `shuffle` skips `-SHUFFLE`, `-REPORTBY` and the level derivation alike. `reference.md`
+already states "requires `shuffle`", and **no task owns it** — task 28 only restates the row. Verified
+by running: after task 25 retires `-UNSUPPORTED`, **both an absent and an empty `shuffle` would
+validate clean**.
+
+**Ruling on both: fix or file, but pin either way, and a filing must name the owner and the check.**
+A fail-open closed without a test that fails when the fix is removed is the shape this repo has
+shipped five times across three slices. The discriminating roster for Major 1 already exists in the
+review — the shuffled axis varying inside one cluster and constant inside another.
