@@ -161,3 +161,93 @@ def test_a_keyboard_interrupt_is_re_raised_fresh_and_argument_less():
     with pytest.raises(KeyboardInterrupt) as excinfo:
         observe_once(probe, None, probe_name="llm_deployment")
     assert str(excinfo.value) == ""
+
+
+def test_every_declared_fact_that_came_back_is_kept_and_a_null_is_kept_as_null():
+    """The first two states in one assertion, because a test asserting only the
+    value state passes identically when `null` is dropped."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+
+    returned = Apparatus(facts={"model_revision": "r1", "reagent_lot": None})
+    checked = check_facts(
+        returned, ["model_revision", "reagent_lot"], probe_name="p", credentials={}
+    )
+    assert checked == {"model_revision": "r1", "reagent_lot": None}
+
+
+def test_a_declared_fact_the_probe_omitted_is_E_APPARATUS_FACT_MISSING():
+    """The third state — the plugin and the template disagreeing about what this
+    probe supplies. Assert the message names the missing KEY."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"model_revision": "r1"})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, ["model_revision", "reagent_lot"], probe_name="p", credentials={})
+    assert excinfo.value.code == "E-APPARATUS-FACT-MISSING"
+    assert "reagent_lot" in str(excinfo.value)
+
+
+def test_an_undeclared_fact_the_probe_returned_is_kept():
+    """The fourth state, and the deliberate difference from a resolver's
+    attribute projection. Paired with the assertion above that the declared ones
+    survive, so it cannot pass on an implementation that keeps everything by
+    doing nothing at all — assert the returned mapping's exact key set."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+
+    returned = Apparatus(facts={"model_revision": "r1", "extra_diagnostic": "on"})
+    checked = check_facts(returned, ["model_revision"], probe_name="p", credentials={})
+    assert set(checked) == {"model_revision", "extra_diagnostic"}
+
+
+def _apparatus_with_list_facts():
+    from publishable import Apparatus
+
+    return Apparatus(facts=["not", "a", "mapping"])
+
+
+def _apparatus_with_non_str_key():
+    from publishable import Apparatus
+
+    return Apparatus(facts={7: "r1"})
+
+
+@pytest.mark.parametrize(
+    "make_returned",
+    [
+        lambda: {"model_revision": "r1"},
+        _apparatus_with_list_facts,
+        _apparatus_with_non_str_key,
+    ],
+    ids=["a-plain-dict", "facts-is-a-list", "facts-has-a-non-str-key"],
+)
+def test_a_probe_returning_something_that_is_not_an_apparatus_is_E_APPARATUS_RETURN(make_returned):
+    """Parametrized over three shapes: a dict, an `Apparatus` whose `facts` is a
+    list, and an `Apparatus` whose `facts` has a non-`str` key. Without this,
+    each reaches `run` as an `AttributeError` or a `TypeError`."""
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(make_returned(), [], probe_name="p", credentials={})
+    assert excinfo.value.code == "E-APPARATUS-RETURN"
+
+
+def test_a_structural_fact_value_is_E_APPARATUS_FACT_TYPE_and_the_message_names_the_type():
+    """Re-coded from `coerce_scalars`, not `E-STEP-RETURN-TYPE`: a reader holding
+    that identifier is sent to § Steps and artifacts, which describes a different
+    fault at a different time. Assert the code AND that the offending value's own
+    text is absent from the message."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"model_revision": ["a-credential-shaped-value-9182736"]})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={})
+    assert excinfo.value.code == "E-APPARATUS-FACT-TYPE"
+    assert "a-credential-shaped-value-9182736" not in str(excinfo.value)
+    assert "list" in str(excinfo.value)

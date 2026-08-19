@@ -7,10 +7,11 @@ same way a resolver is — `reference.md` § Creating a plugin — and `Apparatu
 is the one shape it may return.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from publishable.coercion import coerce_scalars
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
@@ -119,3 +120,54 @@ def observe_once(probe: Callable[..., Any], cfg: Any, *, probe_name: str) -> App
             code="E-APPARATUS-RAISED",
         ) from exc
     return cast("Apparatus", returned)
+
+
+def check_facts(
+    returned: Any, declared: Sequence[str], *, probe_name: str, credentials: Mapping[str, str]
+) -> dict[str, Any]:
+    """The three phase-independent checks, in the order a leak forbids reversing.
+
+    `data.units.attributes`' projection rule, with one deliberate difference:
+    a resolver's undeclared attribute is DROPPED, a probe's undeclared fact
+    is KEPT — a probe would not return a fact if it did not describe the
+    apparatus, while a unit table's columns are the config's declared shape.
+    So every key `returned.facts` carries survives into the result, declared
+    or not, and only a DECLARED key `returned.facts` omits is refused.
+    """
+    # 1. shape            → E-APPARATUS-RETURN
+    if not isinstance(returned, Apparatus):
+        raise ContractError(
+            f"probe `{probe_name}` returned a {type(returned).__name__}, not an `Apparatus` — "
+            "`Apparatus(facts=...)` is the one shape a probe may return",
+            code="E-APPARATUS-RETURN",
+        )
+    facts = returned.facts
+    if not isinstance(facts, Mapping):
+        raise ContractError(
+            f"probe `{probe_name}` returned an `Apparatus` whose `facts` is a "
+            f"{type(facts).__name__}, not a mapping",
+            code="E-APPARATUS-RETURN",
+        )
+    for key in facts:
+        if not isinstance(key, str):
+            raise ContractError(
+                f"probe `{probe_name}` returned a fact keyed by a {type(key).__name__}, "
+                "not a `str` — `facts` keys are fact names",
+                code="E-APPARATUS-RETURN",
+            )
+    # 2. credentials      → E-APPARATUS-FACT-CREDENTIAL      (task 6)
+    # 3. scalar walk      → E-APPARATUS-FACT-TYPE
+    try:
+        checked = coerce_scalars(dict(facts), f"probe `{probe_name}`")
+    except ContractError as exc:
+        raise ContractError(str(exc), code="E-APPARATUS-FACT-TYPE") from exc
+    # 4. declared keys    → E-APPARATUS-FACT-MISSING
+    for key in declared:
+        if key not in checked:
+            raise ContractError(
+                f"`apparatus_facts` names `{key}`, which probe `{probe_name}` did not "
+                "return — the plugin and the template disagree about what this probe "
+                "supplies",
+                code="E-APPARATUS-FACT-MISSING",
+            )
+    return checked
