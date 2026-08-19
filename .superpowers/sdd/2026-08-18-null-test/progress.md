@@ -430,3 +430,41 @@ the batch-3 lesson applied *before* the fact: a pin built against a proxy is not
 member set with the larger `m` is right. The spec ruled by **transferring `family_shape`'s conservatism
 argument, which is reasoning rather than measurement**, and said so. The reviewer checks what was
 actually measured and whether it supports the ruling.
+
+### Batch 4 — task review: spec compliance fails on one point, quality strong on the family, weak on diagnostics
+
+Review at `task-b4-review.md`. **No Criticals — nothing publishes a wrong number and the refusal is
+alive.** Three results are worth recording as positives, because they are what the batch was measured
+for. The reviewer **independently re-derived fixture D's BH, Holm and Bonferroni values in a standalone
+script and every one matched the spec table exactly.** **Batch 1's guard pin was not edited at all** —
+zero deleted lines in `tests/test_correction.py` — **and still fails on a spurious
+`p_value_corrected: None`**, re-verified. And **every prescribed mutation the reviewer re-ran failed via
+an assertion**, which is precisely the standard batch 3 was measured against and missed.
+
+**Eight Majors, and the shape of them matters: most are missing pins rather than wrong behaviour, and
+three are mutations that came back green when they should not have.** `W-STATS-NULLTEST-FAMILY` has
+**zero tests** (firing condition → `False`, suite green); **disjunct 2 of the narrowed
+`W-STATS-CORRECTION-INAPPLICABLE` is unfailable** (`elif False:`, suite green); and § Corrections 8's
+`report_by` ruling is **unpinned at the site it rules about** — threading the null arguments into the
+level call left the **full** suite at 2348 **while the test's docstring claims it is pinned "in the
+shape `command_run` actually makes them"**. That last is the docstring-claims-the-guarantee row, which
+shipped twice on the previous slice, both times prescribed by a brief.
+
+**The clusters gate is right on the number and incomplete on disclosure**, which is the more
+interesting half: all three keys are absent, and **absence is the shape reserved for "no null test
+declared"** — so a user who declared one cannot tell it was dropped. Its filing also claims *"a `null`
+disclosing the gap"* when **nothing is written**, and its heading (`Owner: H4d task 21 or unassigned`)
+**contradicts its own body** and uses the forbidden vague-owner form.
+
+**And two pins were built against proxies.** Task 18's merge pin uses a shape **production cannot
+build** (`cond:` plus `p_value`, while `_compute_vs_baseline` takes no `null_test` by design), leaving
+**the `contrast:` branch — the only p-value home — with no merge pin at all.** And **task 17's owed
+measurement was not made**: the BH-over-partial-set ruling remains pure transfer, and `hypotheses.py`
+never records `p_value_corrected`, so it is **unobservable today**. **Ruling: make it observable and
+measure, or state plainly that it cannot be and file it** — reasoning may stand in for a measurement
+only when it is labelled as such, and this one was promised as a check.
+
+**One finding is a claim to delete rather than satisfy:** the disclaimed non-monotonicity is
+instantiated by **no** fixture — Holm's adjusted order on fixture D **equals** its raw order, so a test
+named `..._is_not_monotone` asserts the monotone relation. The guard survives on its literals anyway,
+so the fix is deleting the name's claim, **not building a fixture to justify a name**.
