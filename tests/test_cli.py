@@ -4245,6 +4245,66 @@ class Step(BaseStep):
 """
 
 
+def test_a_derived_key_collision_under_a_cluster_computes_the_clustered_width(tmp_path):
+    """**Fix round 1, Critical 1.** The batch's own end-to-end fixture
+    (`test_a_derived_key_collision_under_a_cluster_end_to_end` above) produces
+    `ci95: [0.0, 0.0]` under EVERY construction — degenerate, so its
+    `ci95 is not None` assertion is blind to which construction actually ran,
+    and the `method` string literal was the entire pin. The reviewer verified
+    that editing `_comparison_step_blocks`' `clusters` ARGUMENT alone
+    (`clusters=base_col_clusters` → `clusters=None`, the `method` ternary left
+    untouched) leaves that test, `tests/test_cli.py` as a whole, and the FULL
+    suite green — the two ternaries deciding `method` and `clusters` were
+    independently writable, so a `_clustered` label could publish a unit-level
+    draw. Verbatim the shape H4b-2's whole-branch review found a Critical in.
+
+    This fixture reuses `_CLUSTER_CONTRAST_STEP` (non-degenerate `pred`,
+    varying by site: 0.0 baseline throughout, 1.0/5.0/9.0 by site under
+    `spearman`) combined with `aggregate_returns="pred"`, so the derived
+    metric's own recompute — `mean(pred)` under the same name the step already
+    records — collides with the recorded column AND varies with which
+    clusters a resample draws, which fixture `[0.0, 0.0]` above could not
+    do (every value there was 0.0, so no construction could move the
+    interval). Measured directly before trusting it: clustered
+    `ci95 == [1.0, 9.0]` (half-width 4.0), unit-level (clusters argument
+    nulled, label left alone) `ci95 == [4.666…, 8.0]` (half-width ≈1.667) —
+    categorically different numbers, which is what makes this fixture able to
+    tell the two constructions apart where the degenerate one could not.
+
+    The load-bearing check is the ARGUMENT-ONLY mutation below, not a string
+    literal: mutate `clusters=base_col_clusters` to `clusters=None` at the
+    call site, leave every `method` ternary untouched, and confirm THIS test
+    fails on `ci95` — the ONLY way this class of bug can be caught, since a
+    method-string mutation was already exercised by 15b's own commit."""
+    doc = run_a_project(
+        tmp_path,
+        _starter_step=_CLUSTER_CONTRAST_STEP,
+        aggregate_returns="pred",
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CONTRAST_CLUSTER_ROSTER,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {"id": "c", "of": "method=spearman", "against": "baseline"},
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert entry["method"] == "paired_percentile_over_units_clustered"
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    # The number a unit-level draw over the identical intersection would give
+    # is [4.666666666666667, 8.0] — measured directly by nulling the
+    # `clusters` argument alone. This asserts the CLUSTERED one, which is
+    # wider because it draws whole clusters rather than independent rows.
+    assert entry["ci95"] == pytest.approx([1.0, 9.0])
+    assert entry["n_paired_clusters"] == 3
+
+
 def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tmp_path):
     """The whole path, for the first time: `validate` lets a clustered comparison
     through, `command_run` threads the membership from `clusters_of` down to the

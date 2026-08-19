@@ -2533,11 +2533,15 @@ a point with no interval is honest, a zero-width 95 % interval is not.
 deliberate rather than hidden.** `percentile_over_units_clustered` makes the identical content-based
 refusal whether or not `strata` is declared, and `percentile_over_units` makes it once `strata` is
 declared — both on the same "every drawable thing in every stratum is identical" test this contrast
-draw uses. But the plain unweighted, unstratified, unclustered `percentile_over_units` carries no such
-check and never has: a constant column still returns a zero-width `Interval` there. So within one run
-a constant column can publish `ci95: [x, x]` per condition beside `ci95: null` on the delta comparing
-two such conditions — the contrast path is refused where the per-condition one it sits beside is not.
-That gap is real and open, not claimed away by this paragraph.
+draw uses. The derived forms follow the identical family rule: `percentile_of_derived_clustered`
+makes the refusal whether or not `strata` is declared, and `percentile_of_derived` makes it once
+`strata` is declared. But the plain unweighted, unstratified, unclustered forms —
+`percentile_over_units` and `percentile_of_derived` alike — carry no such check and never have: a
+constant column, or a derived metric recomputed over constant content, still returns a zero-width
+`Interval` there. So within one run a constant column can publish `ci95: [x, x]` per condition
+beside `ci95: null` on the delta comparing two such conditions — the contrast path is refused where
+the per-condition one it sits beside is not. That gap is real and open, not claimed away by this
+paragraph.
 
 And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used. *d*s pools where `welch_t_over_units` deliberately doesn't, and that isn't an inconsistency: an interval is an inference and gets the assumption-light construction, while *d* is a descriptive standardization whose conventional denominator *is* the pooled one — reporting a *d* against a Welch-style denominator would be a number no reader could compare to another paper's.
 

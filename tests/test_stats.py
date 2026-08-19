@@ -685,6 +685,46 @@ def test_a_clustered_derived_metric_is_resampled_by_the_clustered_construction()
     assert out["total"]["resample_draws"] == 2000
 
 
+def test_a_clustered_derived_metrics_n_clusters_matches_the_draw_it_actually_rests_on():
+    """**Fix round 1, Major 3.** `percentile_of_derived_clustered`'s docstring
+    claims `G` "cannot disagree with the `n.clusters` a caller prints beside
+    the interval" — verified false before this fix: `summarize_step`'s derived
+    branch wrote `"n": {**counts, "completed": len(collapsed)}` unconditionally,
+    passing `counts["clusters"]` (`attrition`'s condition-wide figure) straight
+    through with no recomputation, while the recorded-column branch beside it
+    deliberately recomputes `cluster_count_of(clusters, column_keys)` for
+    exactly the reason a ragged carrier set can disagree with the whole
+    roster's count. A `counts` claiming 4 clusters beside a `collapsed` table
+    spanning only 2 published `n: {..., clusters: 4}` beside an interval drawn
+    from 2 — the docstring's guarantee, contradicted by the code beside it.
+
+    Fixed by recomputing `n.clusters` from `collapsed`'s own keys — the same
+    keys `percentile_of_derived_clustered` draws from — whenever `clusters` is
+    given, mirroring the recorded-column branch's own discipline. This fixture
+    deliberately hands `counts["clusters"]` a WRONG, larger figure (4, over a
+    4-cluster mapping) beside a `collapsed` table spanning only 2 of those
+    clusters, so a caller that forgot to recompute would publish the wrong
+    number — the exact shape the docstring was making a claim about.
+
+    `tests/test_cli.py`'s own review note: reachability through a real `run`
+    would need a step recording for a proper subset of completed units, which
+    this test does not construct — the weaker, direct-call claim is what is
+    verified here."""
+    collapsed = {f"u{i}": {"y": float(i)} for i in range(2)}
+    clusters = {"u0": "A", "u1": "B", "u2": "C", "u3": "D"}
+    counts = {"resolved": 4, "completed": 4, "ineligible": 0, "failed": 0, "clusters": 4}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": 190.0},
+        seed=7,
+        resample={"total": lambda units: sum(units.y)},
+        clusters=clusters,
+        draws=200,
+    )
+    assert out["total"]["n"]["clusters"] == 2
+
+
 @pytest.mark.parametrize(
     "narrowed",
     [
@@ -5140,6 +5180,24 @@ def test_the_permutation_p_value_is_reproducible_from_its_seed():
     assert a != c
 
 
+def test_the_unstratified_permutation_walk_is_pinned_at_a_literal_seed():
+    """**Fix round 1, Minor 6.** Task 14's `strata` refactor moved this
+    function's unstratified RNG stream — each draw now shuffles a fresh
+    per-group copy and writes it back, rather than shuffling `pool` in place
+    — and every existing assertion on this path is range-based, so nothing
+    failed and nothing pinned the new walk. A future refactor of this shape
+    would be equally invisible without a literal here.
+
+    `0.473505298940212`, at `seed=7, n=5000` over fixture C: the value this
+    docstring's own review measured after the refactor (`0.48050` before it).
+    If this literal ever needs to move, the docstring's claim about WHY
+    should move with it — an unexplained change here is exactly the signal
+    the review is naming."""
+    assert permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=5000) == pytest.approx(
+        0.473505298940212
+    )
+
+
 def test_a_draw_that_ties_the_observed_statistic_counts_against_it():
     """The `>=` comparison, on a fixture sized so ties are common rather than
     a coincidence: four units, values `[1.0, 1.0, 2.0, 2.0]`, labels `["of",
@@ -5503,6 +5561,38 @@ def test_a_clustered_derived_draw_returns_its_survivor_count_even_when_degenerat
     clusters = {"a1": "A", "b1": "B"}
     interval, survivors = percentile_of_derived_clustered(
         collapsed, clusters, lambda table: None, seed=1, draws=50
+    )
+    assert interval is None
+    assert survivors == 0
+
+
+def test_a_clustered_derived_draw_over_constant_content_reports_no_interval():
+    """**Fix round 1, Major 4.** `reference.md` § Statistical reporting scopes
+    the zero-width gap narrowly: `percentile_over_units_clustered` "makes the
+    identical content-based refusal whether or not `strata` is declared," and
+    only "the plain unweighted, unstratified, unclustered `percentile_over_units`
+    carries no such check." `percentile_of_derived_clustered` (task 15a) shipped
+    with NO content check at all — narrower than even the documented gap —
+    so 20 units of identical content in 4 clusters returned
+    `Interval(5.0, 5.0)` where its recorded-column sibling,
+    `percentile_over_units_clustered`, already returns `None` on the
+    identical input. Verified directly before this fix: `(Interval(low=5.0,
+    high=5.0, ...), 500)`.
+
+    Fixed by taking the same content-based check `percentile_over_units_clustered`
+    and `percentile_of_derived`'s own strata branch already make — every cluster
+    within a stratum group carrying the identical multiset of rows — applied
+    unconditionally (with or without `strata`), matching the clustered sibling's
+    own "whether or not `strata` is declared" rule rather than the unclustered
+    plain form's narrower one."""
+    collapsed = {f"u{i}": {"y": 5.0} for i in range(20)}
+    clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
+    interval, survivors = percentile_of_derived_clustered(
+        collapsed,
+        clusters,
+        lambda table: sum(row["y"] for row in table) / len(table),
+        seed=1,
+        draws=500,
     )
     assert interval is None
     assert survivors == 0

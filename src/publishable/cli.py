@@ -1029,6 +1029,19 @@ def _comparison_step_blocks(
                         compute_against,
                     )
                     if len(base_keys) >= 2:
+                        # ONE fact — `clusters is not None` — decides both the
+                        # `method` label and the `clusters` argument below, so the
+                        # two cannot read differently about whether this draw is
+                        # clustered. Two independent ternaries here is exactly how
+                        # H4b-2's whole-branch review found a Critical: an
+                        # UNCLUSTERED draw published under a `_clustered` label.
+                        # `base_col_clusters` is `None` unless a cluster is
+                        # actually declared, in which case it carries every
+                        # base key's membership — the same one-pass discipline
+                        # `col_weights`/`col_clusters` follow above.
+                        base_col_clusters = (
+                            None if clusters is None else {k: clusters[k] for k in base_keys}
+                        )
                         resampled = paired_percentile_of_derived(
                             of_collapsed,
                             against_collapsed,
@@ -1040,12 +1053,10 @@ def _comparison_step_blocks(
                             strata=strata,
                             method=(
                                 "paired_percentile_over_units_clustered"
-                                if clusters is not None
+                                if base_col_clusters is not None
                                 else "paired_percentile_over_units"
                             ),
-                            clusters=(
-                                None if clusters is None else {k: clusters[k] for k in base_keys}
-                            ),
+                            clusters=base_col_clusters,
                         )
                         interval = resampled.interval
                 # § Contrasts: `n_paired` is the intersection, and a PAIRED contrast has
@@ -1262,9 +1273,13 @@ def _comparison_step_blocks(
                             # function serving two `method` strings, so the string is
                             # the caller's to pass — the asymmetry with the *t* arm
                             # below, where each spelling is its own function.
+                            # Both the label and the two `_clusters` arguments read
+                            # `of_clusters is not None` — ONE fact deciding both,
+                            # the same discipline the paired derived branch above
+                            # takes for the identical reason.
                             method=(
                                 "unpaired_percentile_over_units_clustered"
-                                if clusters is not None
+                                if of_clusters is not None
                                 else "unpaired_percentile_over_units"
                             ),
                             of_clusters=of_clusters,

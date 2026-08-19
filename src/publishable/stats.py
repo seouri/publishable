@@ -933,7 +933,21 @@ def permutation_over_units(
     so a cross isn't destroyed" — and it is the same shape
     `percentile_over_units` gives its own `strata`: what one draw may touch,
     not what the statistic is. With no `strata` the whole vector is one
-    stratum, which is an identity rather than a second path.
+    group covering every position, structurally the same domain the
+    unstratified draw always had.
+
+    **That structural sameness is not an RNG-identical one, unlike
+    `_draw_pools`' own refactor.** Each draw now shuffles a fresh per-group
+    copy and writes it back into `pool`, rather than shuffling `pool` in
+    place — a valid uniform permutation either way, but a DIFFERENT sequence
+    of `random.Random` calls: measured directly, fixture C at `seed=7, n=5000`
+    gives `p = 0.48050` before this refactor and `p = 0.47351` after (also at
+    seeds 2 and 3). Nothing user-visible moved, because `null_test` is
+    unwired and every assertion this shape touches is range-based rather than
+    a seed-pinned literal — but a future refactor of this walk is invisible
+    to the suite for the identical reason, which is worth stating rather than
+    leaving for the next reader to discover by the same review that found it
+    here.
     """
     if len(values) < 2:
         return None
@@ -942,13 +956,6 @@ def permutation_over_units(
         return None
     rng = random.Random(seed)
     pool = list(labels)
-    # `strata`: the permutation is confined to each stratum's own positions.
-    # `reference.md` § What isn't a repeat requires it for a group-axis contrast —
-    # "permuted within cells of every *other* group axis, so a cross isn't
-    # destroyed" — and it is the same shape `percentile_over_units` gives its own
-    # `strata`: what one draw may touch, not what the statistic is. With no
-    # `strata` the whole vector is one stratum, which is an identity rather than a
-    # second path.
     groups: list[list[int]] = []
     if strata is None:
         groups = [list(range(len(values)))]
@@ -1763,6 +1770,25 @@ def percentile_of_derived_clustered(
     if len(keys) < 2:
         return None, 0
     pools = _draw_pools(keys, strata, clusters)
+    # The content-based refusal `percentile_over_units_clustered` makes
+    # "whether or not `strata` is declared" (`reference.md` § Statistical
+    # reporting), taken again here rather than left as a second undocumented
+    # gap beside `percentile_of_derived`'s own unstratified one: if every
+    # cluster within a stratum group carries the identical multiset of rows
+    # (a stratum holding a single cluster is trivially so), drawing any of
+    # them with replacement reproduces the same pooled table every time, so no
+    # replicate can differ from any other and the interval would be `[x, x]`
+    # — a zero-width 95 % interval `reference.md` refuses in those terms.
+    # Content, not count: two identical-content clusters clear any count floor
+    # and are still degenerate.
+    if all(
+        len(
+            {tuple(sorted(tuple(sorted(collapsed[key].items())) for key in item)) for item in group}
+        )
+        <= 1
+        for group in pools
+    ):
+        return None, 0
     rng = random.Random(seed)
     values: list[float] = []
     for _ in range(draws):
@@ -1960,7 +1986,7 @@ def _draw_pools(
     strata: dict[str, str] | None,
     clusters: dict[str, str] | None,
 ) -> list[list[list[str]]]:
-    """One draw shape, for a percentile construction's two callers.
+    """One draw shape, for a percentile construction's callers.
 
     A list of stratum groups, each holding the DRAWABLE things that stratum
     owns, each of those a list of keys. A unit is the drawable thing by
@@ -1975,12 +2001,13 @@ def _draw_pools(
     group order and the per-group counts are today's, each key merely
     wrapped.
 
-    Two callers: `paired_percentile_of_derived` draws one key list and
-    applies it to both sides; `unpaired_percentile_of_sides` calls this once
-    per side, independently. Both trust the `strata` × `clusters`
-    composition rule, the relabelling invariance and the sorted-keys caller
-    contract to be the same for either — a second copy is how one of them is
-    fixed in one place and not the other.
+    Every caller trusts the `strata` × `clusters` composition rule, the
+    relabelling invariance and the sorted-keys caller contract to be the same
+    as every other's — a second copy of this function is how one caller comes
+    to be fixed in one place and not the others. Not enumerated by name or
+    count here on purpose: `CLAUDE.md`'s own rule against a call-site count
+    near an insertion is what this docstring already violated once, when
+    task 15a became a third caller and the "two callers" count went unswept.
     """
     if clusters is None:
         # `keys` order preserved rather than sorted — the unstratified draw
@@ -2830,9 +2857,7 @@ def summarize_step(
     replacement and building a `UnitTable` from their pooled units, whose row
     count varies per draw, `G` being `units.cluster_count_of`'s answer over these
     same keys. Unclustered, `percentile_of_derived` draws units instead. Which
-    one runs is decided beside the derived keys below, not here — this loop's own
-    `clusters` only ever reaches the RECORDED-column branches, since a derived
-    metric has no per-column carrier to look this up by.
+    one runs is decided beside the derived keys below.
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as
@@ -2843,9 +2868,18 @@ def summarize_step(
     condition-wide count beside it would name a df no interval used. A full
     column's figure is identical to `counts`'; a ragged one's is its own.
 
-    A DERIVED metric takes the condition-wide figure from `counts` instead, as it
-    does for `effective`: `aggregate` returned one number over the whole collapsed
-    table, so there is no per-column carrier set to recompute over.
+    A DERIVED metric takes the condition-wide figure from `counts` for
+    `effective`: `aggregate` returned one number over the whole collapsed
+    table, so there is no per-column carrier set to recompute a WEIGHTED
+    figure over — core never weights a derived metric itself (§ Weighted
+    samples hands the weight column to `aggregate` as a unit attribute
+    instead). `clusters` is different: a derived metric has no ragged
+    per-column carrier either, but `percentile_of_derived_clustered`'s own
+    `G` is the distinct values `clusters` takes over `collapsed`'s keys, so
+    `n.clusters` is recomputed from those same keys below rather than passed
+    through from `counts` unmodified — the fix for Major 3 of the batch-3
+    review, which found the two could disagree whenever `collapsed` is a
+    proper subset of the roster `counts` was computed over.
 
     `resample_columns` is the gate a RECORDED COLUMN's interval construction reads
     (H4a task 14). A column always has a `t_over_units` fallback available, so
@@ -3035,6 +3069,17 @@ def summarize_step(
                 "derived key may not shadow a recorded column",
                 code="E-STEP-KEY-COLLISION",
             )
+        # A derived metric has no per-column carrier set to recompute `clusters`
+        # from — `aggregate` returned one number over the whole table, unlike a
+        # recorded column's own ragged `column_keys` — but `percentile_of_derived_clustered`'s
+        # own `G` (task 15a) is the distinct values `clusters` takes over
+        # `collapsed`'s OWN keys, not `counts["clusters"]`'s condition-wide
+        # figure, which can disagree with it whenever `collapsed` is a proper
+        # subset of the roster `attrition` counted (a step recording for only
+        # some completed units). Recomputed once here, over the same keys the
+        # construction itself draws from, so `n.clusters` cannot print a
+        # different `G` from the one the interval actually rests on.
+        derived_clusters_n = cluster_count_of(clusters, collapsed) if clusters is not None else None
         for key, value in derived.items():
             compute = (resample or {}).get(key)
             # `draws_used` is `None` only when resampling was never attempted
@@ -3054,11 +3099,14 @@ def summarize_step(
                 )
             else:
                 derived_interval, draws_used = None, None
+            derived_n = {**counts, "completed": len(collapsed)}
+            if derived_clusters_n is not None:
+                derived_n["clusters"] = derived_clusters_n
             out[key] = {
                 **_beside_n_copy(beside_n),
                 "value": value,
                 "basis": "units",
-                "n": {**counts, "completed": len(collapsed)},
+                "n": derived_n,
                 "ci95": (
                     [derived_interval.low, derived_interval.high] if derived_interval else None
                 ),

@@ -6763,3 +6763,60 @@ rows and the pin**: the twin of `tests/test_cli.py::test_the_weight_cluster_refu
 (the H4b-2 precedent for exactly this claim), which task 9's own plan brief cites as "the shape of
 the pin that says so" without writing it. Recorded here, at the ruling's own entry, so task 9's
 implementer finds the obligation rather than re-discovering it.
+
+## `paired_percentile_of_derived`'s degenerate-draw refusal is row-content-based, and a compute-cancellation still publishes a zero-width interval and a zero-width corrected interval
+
+**Found by the H4d batch-3 review** (2026-08-19, at `4ea6f97`), and confirmed here at fix round 1
+against a reachable, non-degenerate-*rows* fixture. `_drawable_content` and the check built around
+it in `paired_percentile_of_derived` (H4b-2 task 9, recorded two entries above this one) refuse a
+draw whose every drawable thing carries the *same pair of rows* — a genuinely constant table. That
+is a ROW-content check. It says nothing about a draw whose rows **do** vary but whose two
+`compute_of`/`compute_against` calls evaluate to the *same* difference on every draw anyway — the
+"plausible but wrong" case that function's own docstring already names in words, with "nothing to
+raise": two computes evaluating the identical formula over the identical per-unit data (the
+recorded-column contrast's own `_column_mean` closure, called on both sides, is exactly this shape
+whenever the two conditions record the metric identically) cancel to `0.0` on every single draw,
+rows or no rows, clusters or no clusters.
+
+**Verified reachable end to end**, unclustered, at `d97ec9c` (pre-existing, confirmed by the
+reviewer as not introduced by H4d): the batch-3 review's own `_AGGREGATE_STEP` fixture (`pred =
+float(i)`, identical under both conditions) publishes `method: paired_percentile_over_units,
+delta: 0.0, ci95: [0.0, 0.0], ci95_corrected: [0.0, 0.0]`. **This is the identical shape already
+recorded and reasoned about** in the entry above ("The contrast path discloses nothing about its
+resample... Finding 2"), which judged it *not a regression* because `paired_t_over_units` gives the
+same zero-width interval for a genuinely constant column and the record is "internally consistent."
+That reasoning is sound for a column contrast, where a zero-width interval beside a `0.0` delta
+over identical values is the honest answer — there is no sampling variance to report.
+
+**It stops being sound the moment `clusters` enters, which is what H4d task 15b did.** Task 15b
+routed a derived-key collision's surviving closures through `paired_percentile_of_derived` with a
+`clusters` mapping, and cited the resulting `run.yaml` (`delta: 0.0, ci95: [0.0, 0.0],
+ci95_corrected: [0.0, 0.0], n_paired_clusters: 3`) as its end-to-end verification that the fix
+works — without noticing that the fixture reaching that record was **also** compute-degenerate (a
+derived key whose `aggregate` recomputes the exact value already recorded, over exactly the
+intersection both sides share), so the record proves nothing about the clustered construction and
+is a second instance of the same unfixed gap, now beside a *cluster count* that makes the record
+look more authoritative than it is: `n_paired_clusters: 3` beside a zero-width interval reads as "3
+independent clusters agree on zero," which `reference.md` § Statistical reporting's own words
+refuse — "a zero-width 95 % interval is not [honest]; reporting a point with no interval is
+honest" — for a construction that, unlike a genuinely constant column, had no way to tell its
+caller the cancellation was coming.
+
+**Not a regression, and not owed to any slice that already ran.** `paired_t_over_units` over a
+constant column has the identical shape and the identical honesty; the difference `_drawable_content`
+cannot see is COMPUTE cancellation on VARYING rows, which no row-content check can catch by
+construction — it would have to run `compute_of`/`compute_against` on more than one draw and compare
+outputs, which is exactly what a resample already does, so the fix is a variance check on the
+resulting pool (`len({round(v, ...) for v in values}) <= 1`, content-based over the DRAWN VALUES
+rather than over the rows feeding them) rather than a structural one over `collapsed`/`strata`/
+`clusters` alone.
+
+**Owner: unassigned — the next slice that touches `paired_percentile_of_derived`'s degenerate-draw
+refusal.** The check that owner must make: after the resample loop collects `values`, refuse
+(`interval=None`, `draws_used=len(values)`, matching every other degenerate-draw return in this
+function) when every surviving value is identical — content over the COMPUTED POOL, the value-level
+counterpart to `_drawable_content`'s row-level check, checked whether or not `clusters`/`strata`
+were declared. A test fixture needs rows that genuinely vary (so `_drawable_content`'s own check
+does not fire first) with `compute_of`/`compute_against` that still cancel to the identical
+difference on every draw — the recorded-column `_column_mean` closure over two conditions recording
+one metric identically is the shape already reachable through a real `run` today, clustered or not.
