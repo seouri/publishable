@@ -503,3 +503,74 @@ Both have been found on every re-scope in this repo, and both are here.
 | `experimental-designs.md` § Mistakes core prevents carries a `null_test` row whose guarantee is delivered today by the wholesale refusal alone, which the cross-document invariant does not permit after retirement | § 1 |
 | A permutation null does **not** replicate across the paired/weighted/clustered axes the last three slices each filled six-fold — the modifiers change the draw, not the estimator | § 4 |
 | The `-UNSUPPORTED` family does **not** empty: `E-TEMPLATE-INSTALLED-UNSUPPORTED` survives at two emit sites, so the registry-absence sentence must survive with it | § 6 |
+
+---
+
+## 9. Amendment, 2026-08-18, same commit `2a4dc53` — five corrections to the body above
+
+Appended rather than folded in, per the development-record rule: a scoping records what was measured,
+and a retro-edit destroys the evidence. Each entry names what it replaces. **None changes the task
+count, the no-split ruling, or the payoff answer.**
+
+**1. A p-value on a member with no interval is reachable, and § 4's "a field, not a kind" row
+under-states its cost.** That row says `Member.p_value` touches neither `__post_init__`'s count nor
+`_corrected_bounds`' six return paths, verified by reading all three. That much stands. What it did
+not check is `family_members`, which is `[e for e in entries if e.ci95 is not None]` — and
+`_comparison_step_blocks` builds `ci95=(interval.low, interval.high) if interval else None`, so a
+member whose interval came back `None` (a thin pool, a too-short draw, a degenerate column) is
+constructed and then **dropped before ranking**. A permutation p-value needs only the observed
+statistic and the null distribution, both of which exist in exactly that state. So a metric can
+legitimately carry a p-value and no interval, and today's family would silently omit it — leaving
+`fdr_bh` adjusting nothing for the member whose p-value was the only thing it had to adjust.
+
+The exclusion argument § Statistical reporting gives — *"a metric reported without an interval isn't a
+comparison anyone can read as significant"* — is about **intervals** and does not transfer to
+p-values on its face. **This is a ruling task 15 owes and task 2 should decide:** either
+`family_members` widens to `ci95 is not None or p_value is not None` (which changes `family_shape`'s
+metric count, and therefore every existing corrected level in any run that declares `null_test`), or
+the exclusion is re-argued for p-values explicitly and the omission documented. Named here so it is
+decided rather than discovered.
+
+**2. § 4's eight cells, with the standing refusals applied.** The body gives the space as
+2 (draw: rows | clusters) × 2 (recompute: column | derived) × 2 (null of: one condition | a contrast)
+and stops there. Reduced against what `validate` already refuses:
+
+| Cell | Status at `2a4dc53` | H4d |
+|---|---|---|
+| rows × column × condition | Live | **Builds** — task 10 |
+| rows × derived × condition | Live | **Builds** — task 11 |
+| clusters × column × condition | Live | **Builds** — task 12 |
+| clusters × derived × condition | The resample counterpart is refused by `E-DATA-CLUSTER-DERIVED` | **Builds, having claimed that filing** — task 20 |
+| rows × column × contrast | Live, and reachable **only** through a declared `statistics.contrasts` entry (§ 3) | **Builds** — task 13 |
+| rows × derived × contrast | Same reachability | **Builds** — task 13 |
+| clusters × column × contrast | Same reachability | **Builds** — tasks 12, 13 |
+| clusters × derived × contrast | Behind `E-DATA-CLUSTER-DERIVED` as well | **Builds** — tasks 20, 13 |
+
+**Weights multiply none of these on the contrast half**, and that is the whole contribution of the
+two standing weight refusals: `E-DATA-WEIGHT-ALLOCATION-CONTRAST` refuses a weighted cross-arm
+comparison and `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses weight × cluster, so no weighted contrast cell
+is reachable to permute. **On the per-condition half a weight *is* live** — H4b-1 gave every
+`basis: units` column a weighted value and interval — so a permutation null over a weighted estimate
+is reachable and needs a ruling: whether a relabelling permutes the weights with the labels or holds
+them fixed with the units. That is one decision, not a construction, and it belongs in task 2.
+
+**3. `E-STATS-NULLTEST-N`'s floor is a document change, and § 7 put it in the wrong place.** Task 6
+mints a draw floor. No § Validation row states one, and § Statistical reporting's draw-count
+paragraphs are about *interval* endpoints — `min_honest_draws`, whose argument is that below 80 draws
+a percentile interval's lower endpoint is the sample minimum. A permutation p-value's resolution is
+`1/(n+1)`, a different quantity with a different threshold. **The floor's value and its ground go
+with tasks 1–4, before task 6 enforces it**, by the same rule those tasks exist to honour. Inheriting
+`resample`'s floor unexamined is the available shortcut and it is the wrong one: the two numbers
+answer different questions.
+
+**4. § 7 task 26 is wrong about § Validation's shape.** It reads "§ Validation's two rows given
+codes"; § Validation is a two-column table and carries no code column at all. What the two rows need
+is their **condition restated** once a check exists behind each, and the new codes need rows in
+§ Errors `validate` reports. Corrected here because a task brief inherits a sentence like that and
+executes it literally.
+
+**5. Task 25's conversion is a row swap, confirmed rather than assumed.**
+`test_every_unsupported_message_defers_rather_than_scolds` asserts every `-UNSUPPORTED` message
+contains `"later slice"`. Checked: `templates/registry.installed_template_message` contains that
+exact phrase, so reparametrizing the test with a config drawing `E-TEMPLATE-INSTALLED-UNSUPPORTED`
+preserves the test's premise instead of rewriting it. Task 25 costs what § 7 says it costs.
