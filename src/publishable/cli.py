@@ -2394,21 +2394,38 @@ def command_run(config_path: Path) -> int:
 
         # `apparatus_probe` declared on the resolved template — the ordinary
         # case declares none, and `observer` stays `None` so every downstream
-        # call site (the run-start round just below, and `execute_plan`'s
-        # per-execution round, task 10) is a no-op guarded on that, not on a
-        # property of `Observer` itself. Resolved through the same three-step
-        # dispatch a resolver name goes through (`apparatus._probe_for`) —
-        # deliberately OUTSIDE the `try` below, so a dispatch failure
-        # (`E-PROBE-UNKNOWN`, `E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`) escapes to
-        # `main` exactly as it does today, rather than being filtered by
-        # `apparatus.APPARATUS_CODES`, which names only the five
-        # `E-APPARATUS-*` codes a probe CALL can raise.
+        # call site (`Observer.observe_round`'s run-start round, and
+        # `execute_plan`'s per-execution round, task 10) is a no-op guarded on
+        # that, not on a property of `Observer` itself.
         declared_probe = getattr(run_template, "apparatus_probe", None)
         observer: apparatus.Observer | None = None
         if isinstance(declared_probe, str) and declared_probe:
+            # `apparatus._probe_for` is the same three-step dispatch a
+            # resolver name goes through, and its middle step
+            # (`load_entry_point`) imports a plugin's top level — user code —
+            # exactly as `units._resolver_for` does for a resolver.
+            # `validate._check_probe` answers only `E-PROBE-UNKNOWN` from
+            # package metadata and never loads anything, so a load-time
+            # failure (`E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`) gets no verdict
+            # from `validate` at all and can carry a credential the plugin's
+            # own import-time body read — this wrapper is the roster
+            # wrapper's own shape (`except BaseException`, `KeyboardInterrupt`
+            # re-raised fresh and argument-less, a FRESH credential-bearing
+            # `Collector`), for the identical reason.
+            try:
+                probe_fn = apparatus._probe_for(declared_probe)
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt):
+                    raise KeyboardInterrupt from None
+                dispatch_c = Collector()
+                dispatch_c.credentials = credentials
+                dispatch_code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
+                dispatch_c.error(dispatch_code, "experiment_type", str(exc))
+                print(dispatch_c.render(), file=sys.stderr)
+                return EXIT_WRONG
             observer = apparatus.Observer(
                 probe_name=declared_probe,
-                probe=apparatus._probe_for(declared_probe),
+                probe=probe_fn,
                 declared_facts=list(getattr(run_template, "apparatus_facts", None) or []),
                 conditions=conditions,
                 cfgs=cfgs,
@@ -2445,14 +2462,15 @@ def command_run(config_path: Path) -> int:
                 observer=observer,
             )
         except ContractError as exc:
-            # The one containment site for a probe's raise: `main`'s own
-            # `PublishableError` handler prints `{exc}` with no collector in
-            # scope, so anything reaching it is un-redacted. Filtered to
-            # exactly `apparatus.APPARATUS_CODES` — every other `ContractError`
-            # out of this block (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`, a
-            # stray dispatch code) keeps escaping exactly as it does today;
-            # this slice does not change how core's own inconsistencies are
-            # reported.
+            # The one containment site for a probe CALL's raise (dispatch
+            # failures are resolved, and redacted, above — before this `try`
+            # is ever entered): `main`'s own `PublishableError` handler prints
+            # `{exc}` with no collector in scope, so anything reaching it is
+            # un-redacted. Filtered to exactly `apparatus.APPARATUS_CODES` —
+            # every other `ContractError` out of this block
+            # (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`) keeps escaping
+            # exactly as it does today; this slice does not change how core's
+            # own inconsistencies are reported.
             if exc.code not in apparatus.APPARATUS_CODES:
                 raise
             probe_c = Collector()

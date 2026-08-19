@@ -526,11 +526,11 @@ def execute_plan(
     (Decision 3): a condition-bearing execution once, under its own cfg; a
     `run`- or `summary`-scoped execution once per resolved condition, under
     each condition's own cfg. This function derives no condition list for
-    that round — `conditions_list` below is built from executions this plan
-    already carries and is **empty** for a plan with no condition-scoped
-    step, so the round instead reads the resolved conditions held on
-    `observer` itself, the same single-authority rule `holdout_plan` and
-    `group_axes` already follow.
+    that round — this function's own `conditions_list` (used for
+    `io.conditions`) is built from executions the plan already carries, and is
+    **empty** for a plan with no condition-scoped step, so the round instead
+    reads the resolved conditions held on `observer` itself, the same
+    single-authority rule `holdout_plan` and `group_axes` already follow.
     """
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this

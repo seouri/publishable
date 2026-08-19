@@ -341,12 +341,8 @@ def append_observation(
     other two are named here so H8's and H9's callers do not mint a fifth
     spelling of a phase this module already has a name for.
 
-    **No ordering is ruled here against `check_facts`.** This function writes
-    `facts` verbatim, with no check of its own — a caller that appends before
-    calling `check_facts` would put a credential-carrying fact on disk while
-    satisfying every ordering this module states. Batch 3, which owns the
-    first call site, must either call `check_facts` before this function or
-    the gap is `spec-defects.md`'s to carry with batch 3 as owner.
+    This function writes `facts` verbatim, with no check of its own —
+    `Observer._observe_one` is what rules the order against `check_facts`.
     """
     ledger_dir = run_dir / "apparatus"
     ledger_dir.mkdir(parents=True, exist_ok=True)
@@ -371,15 +367,17 @@ APPARATUS_CODES: frozenset[str] = frozenset(
     }
 )
 """The five codes `check_facts` and `observe_once` raise, and the exact filter
-`cli.command_run`'s run-start wrapper uses (task 9). Deliberately narrow: the
-three dispatch codes (`E-PROBE-UNKNOWN`, `E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`)
-are outside it, because `validate_config` already answers `E-PROBE-UNKNOWN`
-from the same metadata scan `_probe_for` reads before `command_run` ever
-reaches the lock — reaching the wrapper with a dispatch code would need the
-installed set to change between `validate` and the lock, which no fixture in
-this plan reaches. A member with no test is exactly the shipped-but-unread
-shape this repo has already filed against other code, so the set stays five,
-every one pinned."""
+`cli.command_run`'s run-start/`execute_plan` wrapper uses (task 9). Deliberately
+narrow: `E-PROBE-UNKNOWN`, `E-PLUGIN-LOAD` and `E-PLUGIN-DECORATOR` are dispatch
+codes `apparatus._probe_for` raises, not codes a probe CALL raises, and none of
+the three belongs in this set. `E-PROBE-UNKNOWN` is pre-answered by
+`validate._check_probe` from the same metadata scan `_probe_for` reads, before
+`command_run` ever reaches the lock. `E-PLUGIN-LOAD` and `E-PLUGIN-DECORATOR`
+are NOT pre-answered by `validate` — `validate._check_probe` never calls
+`EntryPoint.load()`, so a plugin whose top level raises is caught by
+`command_run`'s own dispatch-time wrapper around `_probe_for` (the roster
+wrapper's shape, redacting before `main` ever sees it), sited before this
+filter's `try` is even entered — not by admitting the two codes here."""
 
 
 class Observer:
@@ -401,7 +399,8 @@ class Observer:
     reverse order would put a credential-carrying fact on disk while
     satisfying every ordering the design states, which is precisely the leak
     Decision 6 exists to prevent. This closes the OPEN filing naming H7d batch
-    3 as owner; `_observe_one` below is where the order is fixed.
+    3 as owner; `Observer._observe_one`, this class's own per-condition
+    probe-and-append step, is where the order is fixed.
     """
 
     def __init__(

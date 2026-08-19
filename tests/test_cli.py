@@ -12896,7 +12896,7 @@ class ApparatusAssay(BaseTemplate):
     apparatus_probe = "h7d_probe"
     apparatus_facts = ["model_revision"]
     parameter_spec = {
-        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
     }
 """
 
@@ -13173,11 +13173,13 @@ def test_a_condition_less_execution_is_probed_once_per_condition(
     against `run.yaml` here would fail on task 11's absence, not on this
     task's own property. This test instead reconstructs the same
     (condition → fact) view `Observations.facts_document()` would publish,
-    directly from the ledger `Observer` already writes — the first non-null
-    observation per (condition, fact), which is the accumulator's own
-    documented rule (`apparatus.Observations.record`) — so the property task
-    10 actually owns (every condition gets a fact from the condition-less
-    round) is pinned without depending on unbuilt wiring.
+    directly from `counter_lines` — the `pre_execution` round alone, NOT the
+    whole ledger. **Fix round 1:** the first version of this test reconstructed
+    from the whole ledger, which made the final assertion pass even under a
+    mutation that skipped the condition-less round entirely, because the
+    `run_start` round already carries both condition keys with a non-null
+    fact. Restricting to `counter_lines` is what makes this test about task
+    10's own property, and it now fails under that exact mutation.
     """
     site = installed(
         "dist-t10b", "1.0", {"publishable.probes": {"h7d_probe": "t10b_probe_mod:probe"}}
@@ -13210,8 +13212,16 @@ def test_a_condition_less_execution_is_probed_once_per_condition(
     pre_execution_conditions = {line["condition"] for line in counter_lines}
     assert pre_execution_conditions == expected_keys
 
-    facts_first_answered: dict[str, Any] = {}
-    for line in ledger:
+    # Restricted to `counter_lines` (the `pre_execution` round only), not the
+    # whole ledger: the `run_start` round already carries both condition keys
+    # with a non-null `model_revision` (task 9), so reconstructing from every
+    # line would make this assertion pass whether or not the condition-less
+    # round ran at all — an assertion implied by another in the same test,
+    # which is what `assert pre_execution_conditions == expected_keys` above
+    # already is. Restricting to `counter_lines` is what makes THIS
+    # assertion about task 10's own property rather than task 9's.
+    facts_first_answered: dict[tuple[str, str], Any] = {}
+    for line in counter_lines:
         for fact, value in line["facts"].items():
             key = (line["condition"], fact)
             if value is not None and key not in facts_first_answered:
@@ -13324,3 +13334,297 @@ def test_the_call_count_contract_is_pinned_by_the_ordered_pair_list_not_a_count(
     )
     assert len(pairs) == 6
     assert pairs == expected
+
+
+# --- Fix round 1, Critical 1: a probe's DISPATCH failure must redact too ----
+
+_LOAD_FAILING_CRED_PROBE_MODULE = """\
+import os
+
+raise RuntimeError("plugin import failed near token " + os.environ["PUBLISHABLE_TEST_TOKEN"])
+"""
+
+
+def test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run(
+    installed, registries, tmp_path, capsys
+):
+    """Critical 1. `apparatus._probe_for`'s `load_entry_point` step imports a
+    plugin's top level — user code — exactly as `units._resolver_for` does
+    for a resolver, and `validate._check_probe` answers only `E-PROBE-UNKNOWN`
+    from package metadata: it never calls `EntryPoint.load()`, so a plugin
+    whose module raises at import gets no verdict from `validate` at all and
+    is reachable on the FIRST `run` of an unchanged machine — no fixture
+    needs to change what is installed between `validate` and the lock.
+
+    Before this fix, `_probe_for` was dispatched outside the containment
+    `try`, so this exact shape printed `RuntimeError('plugin import failed
+    near token lab7')` straight to stderr through `main`'s bare
+    `PublishableError` handler. The fix moves dispatch into its own wrapper,
+    the roster wrapper's own shape, sited before that `try` is ever entered.
+    """
+    site = installed(
+        "dist-loadfail",
+        "1.0",
+        {"publishable.probes": {"h7d_cred_probe": "loadfail_probe_mod:probe"}},
+    )
+    (site / "loadfail_probe_mod.py").write_text(_LOAD_FAILING_CRED_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-PLUGIN-LOAD" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert _ORDINARY_CRED_VALUE not in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_DECORATOR_MISMATCH_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("a_different_name_entirely")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_a_probe_s_entry_point_decorator_mismatch_is_a_diagnostic_not_a_traceback(
+    installed, registries, tmp_path, capsys
+):
+    """The sibling dispatch fault, `E-PLUGIN-DECORATOR`: the entry-point key
+    and the `@register_probe` argument disagree. Carries no credential, but
+    must reach the SAME dispatch wrapper as `E-PLUGIN-LOAD` rather than
+    escaping to `main` as an unfiltered `ContractError` — a regression here
+    would mean the fix above narrowly patched one code rather than dispatch
+    as a whole.
+    """
+    site = installed(
+        "dist-decomismatch",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "decomismatch_probe_mod:probe"}},
+    )
+    (site / "decomismatch_probe_mod.py").write_text(_DECORATOR_MISMATCH_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-PLUGIN-DECORATOR" in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+# --- Fix round 1, Major 2: each APPARATUS_CODES member individually pinned --
+
+_RETURN_BAD_PROBE_MODULE = """\
+from publishable import register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return {"model_revision": "r1"}
+"""
+
+_FACT_TYPE_BAD_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": [1, 2]})
+"""
+
+_FACT_MISSING_BAD_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={})
+"""
+
+
+def _assert_went_through_the_containment_wrapper(output: str, code: str) -> None:
+    """The discriminator Major 2's fix needs: `main`'s own bare
+    `PublishableError` handler prints one line, `f"  error   {code:<20}
+    {exc}"`, with no `path` field and no summary line. `command_run`'s
+    wrapper renders through a real `Collector` — `probe_c.error(exc.code,
+    "experiment_type", str(exc))` — which prints the path `experiment_type`
+    on its own line and a `"N problem(s)"` summary neither of those bare
+    fixture messages contains. A code removed from `APPARATUS_CODES` re-raises
+    past the wrapper and this assertion fails on BOTH counts, not just the
+    code string, which is why deleting a member from the frozenset must show
+    up here rather than only in an unfiltered exit-code check.
+    """
+    assert code in output, output
+    assert "experiment_type" in output, output
+    assert "1 problem (1 error, 0 warnings)" in output, output
+
+
+def test_E_APPARATUS_RETURN_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe returning a bare `dict` instead of an `Apparatus`."""
+    site = installed(
+        "dist-return-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "return_bad_probe_mod:probe"}},
+    )
+    (site / "return_bad_probe_mod.py").write_text(_RETURN_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-RETURN")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+def test_E_APPARATUS_FACT_TYPE_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe returning an `Apparatus` whose fact value is a
+    structural (list) value, not a scalar."""
+    site = installed(
+        "dist-facttype-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "facttype_bad_probe_mod:probe"}},
+    )
+    (site / "facttype_bad_probe_mod.py").write_text(_FACT_TYPE_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-TYPE")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+def test_E_APPARATUS_FACT_MISSING_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe omitting a declared `apparatus_facts` key entirely."""
+    site = installed(
+        "dist-factmissing-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "factmissing_bad_probe_mod:probe"}},
+    )
+    (site / "factmissing_bad_probe_mod.py").write_text(_FACT_MISSING_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-MISSING")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+# --- Fix round 1, Minor 6: Decision 3's motivating case, a summary-scoped ---
+# --- condition-less execution, witnessed by a fixture -----------------------
+
+_SUMMARY_SCOPED_COUNT_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{}}
+"""
+
+
+def test_a_summary_scoped_execution_is_probed_once_per_condition_and_runs_last(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 3's own motivating case, absent from every fixture the batch
+    committed: *"a `summary`-scoped execution runs after every
+    condition-bearing execution, so under any narrowing the most recent
+    observation preceding it can be hours old."* Every fixture in the
+    original batch used `run` scope for its condition-less execution — this
+    is the `summary`-scoped counterpart.
+
+    **Computed, not transcribed.** `sweep.grid` over one axis, three levels
+    (`C = 3`); `replication.repeats` pinned to two `seed` repeats, so the
+    scaffolded `repeat`-scoped step contributes `C × 2 = 6` executions
+    (`E_c = 6`); one extra `summary`-scoped step (`E_none = 1`).
+    `C + E_c + C × E_none = 3 + 6 + 3 × 1 = 12` ledger lines.
+    """
+    site = installed(
+        "dist-summary9", "1.0", {"publishable.probes": {"h7d_probe": "summary9_probe_mod:probe"}}
+    )
+    (site / "summary9_probe_mod.py").write_text(_SWEPT_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2", "m3"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        extra_steps=["summarizer"],
+        extra_step_source=_SUMMARY_SCOPED_COUNT_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    condition_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(condition_keys) == 3, "the fixture must have three conditions"
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(set(by_key.values())) == 3, "the three conditions must sweep distinct values"
+
+    exec_lines = [
+        json.loads(line) for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+    ]
+    assert exec_lines[-1]["scope"] == "summary", "the summary execution must run last"
+    assert exec_lines[-1]["condition"] is None
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 12
+
+    # The summary execution's own round is the LAST three `pre_execution`
+    # lines in the ledger — everything before them belongs to run-start or
+    # to the six repeat-scoped executions' own condition-bearing rounds.
+    summary_round = ledger[-3:]
+    assert all(line["phase"] == "pre_execution" for line in summary_round)
+    summary_by_condition = {
+        line["condition"]: line["facts"]["model_revision"] for line in summary_round
+    }
+    assert summary_by_condition == by_key

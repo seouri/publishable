@@ -6202,11 +6202,19 @@ both of decision 3's serialization boundaries (`runner.execute_plan`'s step-erro
 cannot know what to redact without a global carrying the run's declared credentials into a
 function that today takes only `argv`.
 
-The demonstrated path into it is closed: task 12's review found `template.validate(doc)` raising
-unguarded in `validate.py`, letting a credential-bearing raise reach this exact handler verbatim,
-and the fix (commit `cd72c3a`) routed that call through `Collector.render()` instead, closing the
-one path this slice built that could reach it with a declared value. The handler itself is
-unchanged and remains reachable by any other `PublishableError` raised outside a collector.
+**A demonstrated path into it was closed, then a second was found and closed too — the handler
+itself is still un-redacted and still reachable by construction.** Task 12's review found
+`template.validate(doc)` raising unguarded in `validate.py`, letting a credential-bearing raise
+reach this exact handler verbatim, and the fix (commit `cd72c3a`) routed that call through
+`Collector.render()` instead. **H7d Part A batch 3 then built a second path**, unrelated to the
+first: `apparatus._probe_for` (a plugin's entry-point dispatch, called from `cli.command_run`) sat
+outside the batch's own containment `try`, so a probe plugin whose module raised at import with a
+declared credential reached this exact handler again, verbatim — found by that batch's review and
+closed in the same batch's fix round by wrapping dispatch in a redacting `except BaseException`,
+the roster wrapper's own shape. **The handler itself received neither fix and remains reachable by
+any other `PublishableError` raised outside a collector** — this is the third time this repo has
+shipped this class of leak, and the second time the fix closed one call site rather than the
+handler's own construction.
 
 **Owner:** unassigned. Not a task for this slice — closing it would mean giving `main` a way to
 know which values are credentials, which is a design question (a module-level or threaded
@@ -7031,19 +7039,36 @@ design for an ordering rule against `check_facts` — none exists.
 
 **Ruled:** `apparatus.Observer._observe_one` (task 9) calls `check_facts` before `append_observation`, every time — a probe returning a value equal to a declared credential is refused before a byte reaches `apparatus/probes.jsonl`. Pinned by Fixture K's raw-text-over-the-run-directory assertion. **Closed by:** H7d Part A, batch 3, task 9.
 
-## OPEN — a fact **key** equal to a credential value is not checked, and reaches a diagnostic via `coerce_scalars`'s `{key!r}` — **Owner: unassigned**
+## OPEN — a fact **key** equal to a credential value is not checked by `check_facts` itself, though the diagnostic it produces is redacted at `run` — **Owner: unassigned**
 
 `apparatus.check_facts`'s credential check (Decision 6) compares each fact **value** against every
 declared credential's value; it does not compare fact **keys**. `coercion._refuse`, which
 `check_facts` calls into for its scalar walk and re-codes as `E-APPARATUS-FACT-TYPE`, interpolates the
 offending value's key with `{key!r}`. A probe returning `{<a credential's value>: [1, 2]}` — a
-structural value keyed by a credential — reaches a diagnostic with that credential in the message.
+structural value keyed by a credential — reaches `E-APPARATUS-FACT-TYPE` with that credential in the
+exception's own message.
 
-This is within Decision 6's letter: the ruling is stated for *"a fact value,"* not a fact key, and a
-credential value being used as a probe's key is a shape no fixture in this batch constructs. Whether
-core should also check keys is a real narrowing question the design does not settle, so this entry
-records it rather than resolving it by a code change that would put a second, unruled answer beside
-Decision 6's stated set.
+**Corrected by H7d Part A batch 3's fix round 1: this is not a live leak at `run`.** The batch 3
+review verified by running that the fixture above produces
+`E-APPARATUS-FACT-TYPE experiment_type` with the value rendered as
+`<redacted:PUBLISHABLE_TEST_TOKEN>` — because `E-APPARATUS-FACT-TYPE` is a member of
+`apparatus.APPARATUS_CODES`, and `command_run`'s wrapper redacts every code in that set through a
+credential-bearing `Collector` before anything reaches a stream. The original entry's claim
+("reaches a diagnostic with that credential in the message") was true of the raw `ContractError`
+object and false of what is actually printed — it did not check the render path. **The redaction
+this rests on is now individually pinned** (`test_E_APPARATUS_FACT_TYPE_is_individually_pinned_
+through_the_wrapper`), closing the qualification the batch 3 review attached to this entry (Major 2:
+"the redaction rests on a set membership no test can see").
+
+**What is still genuinely open:** Decision 6's check itself compares values, not keys — the ruling
+is stated for *"a fact value,"* not a fact key — so `check_facts` still has no rule of its own
+against a credential-valued key; it is `APPARATUS_CODES` membership downstream, not a check inside
+`check_facts`, that happens to redact this particular shape today. A future code added outside that
+set (or a future call site printing the raw exception rather than a `Collector`) would reopen the
+leak with no check_facts-level guard against it. Whether core should also check keys, inside
+`check_facts` itself, is the real narrowing question the design does not settle, so this entry
+stays open on that question rather than being struck.
 
 **Owner:** unassigned. **Found by:** batch 2's review, verified by reading `check_facts`'s ordering
-and `coercion._refuse`'s message format together.
+and `coercion._refuse`'s message format together. **Corrected by:** H7d Part A batch 3, fix round 1,
+verified by running.

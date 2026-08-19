@@ -511,3 +511,47 @@ def test_the_condition_key_is_the_nn_label_form_and_a_labelless_condition_is_nn(
     assert condition_key(0, "baseline") == condition_dir_name(0, "baseline")
     assert condition_key(0, "baseline") == "00_baseline"
     assert condition_key(0, None) == "00"
+
+
+def test_observer_warn_unanswered_delegates_to_observations_with_declared_facts(tmp_path):
+    """Fix round 1, Minor 7. `Observer.warn_unanswered` shipped with no caller
+    and no test of its own — every existing test exercised
+    `Observations.warn_unanswered` directly, which is a proxy for this
+    method's one job: supplying `self.declared_facts` so a caller (task 11's
+    wiring, its own step 2) does not have to carry it separately. `Observer`'s
+    own call sites are all `command_run`'s (task 9's run-start round, task
+    10's per-execution round); `warn_unanswered`'s call site is task 11's, not
+    yet built — this test exercises the method directly rather than waiting
+    on that wiring, the same way `check_facts` and `observe_once` were
+    exercised directly before `Observer` existed to call them."""
+    from collections import namedtuple
+
+    from publishable.apparatus import Apparatus, Observer
+    from publishable.diagnostics import Collector
+
+    Condition = namedtuple("Condition", ["index", "label"])
+    conditions = [Condition(0, "baseline")]
+
+    def probe(cfg):
+        return Apparatus(facts={"declared_fact": None, "undeclared_fact": "x"})
+
+    observer = Observer(
+        probe_name="p",
+        probe=probe,
+        declared_facts=["declared_fact"],
+        conditions=conditions,
+        cfgs={0: None},
+        run_dir=tmp_path,
+        credentials={},
+    )
+    observer.observe_round(phase="run_start", condition_index=None)
+
+    c = Collector()
+    observer.warn_unanswered(c)
+    findings = [f for f in c.findings if f.code == "W-APPARATUS-UNANSWERED"]
+    assert len(findings) == 1
+    assert "declared_fact" in findings[0].message
+    # The undeclared fact must never warn (Decision 8's fourth row) — proof
+    # that `self.declared_facts`, not every observed fact, is what reached
+    # `Observations.warn_unanswered` through this method.
+    assert all("undeclared_fact" not in f.message for f in findings)
