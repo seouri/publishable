@@ -3527,7 +3527,7 @@ def command_run(config_path: Path) -> int:
                 "uv_lock": "environment/uv.lock" if lock_path is not None else None,
                 "uv_lock_hash": lock_hash,
             },
-            "apparatus": None,
+            "apparatus": observer.block() if observer is not None else None,
             "input_manifest": "manifest/input.json",
             "input_manifest_hash": manifest_hash(manifest),
             "input_manifest_changed": changed_inputs,
@@ -3579,6 +3579,19 @@ def command_run(config_path: Path) -> int:
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
+
+        # `W-APPARATUS-UNANSWERED`, once at run end: `run.yaml` has no
+        # diagnostics channel of its own — the same reason `aggregate_c`'s
+        # findings print to stdout above rather than joining the document —
+        # so this is a FRESH `Collector` (never `c`, already rendered and
+        # printed) rendered to stdout. A warning never changes the exit code,
+        # on `W-ENV-UNLOCKED`'s own precedent above.
+        if observer is not None:
+            warn_c = Collector()
+            warn_c.credentials = credentials
+            observer.warn_unanswered(warn_c)
+            if warn_c.findings:
+                print(warn_c.render())
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")

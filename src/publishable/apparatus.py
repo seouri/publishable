@@ -7,6 +7,7 @@ same way a resolver is — `reference.md` § Creating a plugin — and `Apparatu
 is the one shape it may return.
 """
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -462,3 +463,48 @@ class Observer:
         object's only job here is supplying the declared-facts narrowing
         (Decision 8) so a caller need not carry it separately."""
         self.observations.warn_unanswered(c, self.declared_facts)
+
+    def block(self) -> dict[str, Any]:
+        """`provenance.apparatus`'s five sub-keys, exactly `reference.md` §
+        The apparatus core can only observe's fenced example: `probe`, `ledger`,
+        `hash`, `facts`, `unobserved` — assembled from `Observations`'s two
+        projections rather than re-deriving either. `command_run` calls this
+        only when `observer is not None`; a template declaring no probe never
+        constructs an `Observer` at all, so the whole block is `None` there
+        (Decision 7) rather than this method being asked to return one."""
+        facts = self.observations.facts_document()
+        return {
+            "probe": self.probe_name,
+            "ledger": "apparatus/probes.jsonl",
+            "hash": apparatus_hash(facts),
+            "facts": facts,
+            "unobserved": self.observations.unobserved(self.declared_facts),
+        }
+
+
+def apparatus_hash(facts_document: Mapping[str, Any]) -> str:
+    """`provenance.apparatus.hash` (Decision 10): sha256 over canonical JSON
+    (`sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`) of the
+    resolved condition → facts mapping alone — never the ledger, the probe
+    name, phases, timestamps or `unobserved`. This is **not a fourth hash** in
+    `CLAUDE.md`'s sense: it sits beside `uv_lock_hash` as an environment
+    fingerprint core compares (a lockfile mismatch is one, a moved apparatus
+    is another), not among the three identity claims `HASHED_TREES` and
+    `parameters_hash`/`input_manifest_hash` make provable. That is why this
+    function lives here, beside the builder of the mapping it hashes —
+    `manifest_hash` beside `build_manifest` in `manifest.py`, `allocation_hash`
+    beside `build_allocation_document` in `artifacts.py` are the shipped
+    precedent — and not in `hashes.py`, which holds hashes over the three
+    identity trees.
+
+    **The hash is over the mapping, not over any file's bytes.** `run.yaml`
+    renders this same mapping through `yaml.safe_dump` and the ledger renders
+    individual observations through `json.dumps`; neither encoding reproduces
+    this digest. A reader checking it must re-canonicalize the *parsed*
+    `facts` mapping with the exact `json.dumps` arguments above, not hash
+    either file's rendered text.
+    """
+    canonical = json.dumps(
+        facts_document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

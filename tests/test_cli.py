@@ -13704,3 +13704,167 @@ def test_a_probe_dispatch_keyboard_interrupt_propagates_with_no_message(
     # dispatch call's original one, so a constructed credential cannot reach
     # Python's own uncaught-exception printer.
     assert excinfo.value.args == ()
+
+
+# --- H7d Part A task 11: provenance.apparatus's five sub-keys ---------------
+
+_APPARATUS_NULLABLE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_nullable_assay")
+class ApparatusNullableAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_nullable_probe"
+    apparatus_facts = ["firmware", "calibration_id"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+# Fixture N. Two conditions (`m1`/`m2`) times two `seed` repeats gives four
+# `pre_execution` calls, plus one `run_start` call per condition: six calls
+# total, three per condition. `_calls` counts per-model so each condition's
+# three calls are told apart without a condition argument the probe signature
+# doesn't have (`probe(cfg)` only).
+#
+# `m1`'s `firmware` never answers (the "never-answered pair"); `m2`'s always
+# does (no warning). Both models' `calibration_id` answers `null` on exactly
+# their first call and a value afterward (the "two partially answered ones").
+_PARTIAL_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_calls = {}
+
+
+@register_probe("h7d_nullable_probe")
+def probe(cfg):
+    model = cfg.parameters.instrument.model
+    n = _calls.get(model, 0)
+    _calls[model] = n + 1
+    firmware = None if model == "m1" else "3.11.2"
+    calibration_id = None if n == 0 else f"CAL-{model}"
+    return Apparatus(facts={"firmware": firmware, "calibration_id": calibration_id})
+"""
+
+
+def test_a_declared_probe_records_the_five_sub_keys_per_condition(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture N end to end. Asserts the block's exact key SET, then `facts`
+    per condition with the unanswered fact `None` and the answered one
+    holding its value, then `unobserved` RECOMPUTED from the ledger the test
+    just read — the two numbers are never hard-coded."""
+    site = installed(
+        "dist-t11a", "1.0", {"publishable.probes": {"h7d_nullable_probe": "t11a_probe_mod:probe"}}
+    )
+    (site / "t11a_probe_mod.py").write_text(_PARTIAL_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_nullable_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_NULLABLE_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(by_key) == 2, "the fixture must have two conditions"
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    assert set(block) == {"probe", "ledger", "hash", "facts", "unobserved"}
+    assert block["probe"] == "h7d_nullable_probe"
+    assert block["ledger"] == "apparatus/probes.jsonl"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 6, "run_start (2) + pre_execution (4, two conditions x two repeats)"
+
+    for key, model in by_key.items():
+        assert block["facts"][key]["calibration_id"] == f"CAL-{model}"
+    m1_key = next(k for k, m in by_key.items() if m == "m1")
+    m2_key = next(k for k, m in by_key.items() if m == "m2")
+    assert block["facts"][m1_key]["firmware"] is None
+    assert block["facts"][m2_key]["firmware"] == "3.11.2"
+
+    # `unobserved` recomputed from the ledger itself, per fact, over every
+    # probe call regardless of condition.
+    expected_unobserved: dict[str, dict[str, int]] = {}
+    for fact in ("firmware", "calibration_id"):
+        total = sum(1 for line in ledger if fact in line["facts"])
+        nulls = sum(1 for line in ledger if line["facts"].get(fact) is None)
+        expected_unobserved[fact] = {"null_probes": nulls, "total_probes": total}
+    assert block["unobserved"] == expected_unobserved
+
+
+_UNDECLARED_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1", "extra_diagnostic": None})
+"""
+
+
+def test_the_undeclared_fact_is_recorded_and_has_no_unobserved_entry(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 4's fourth row, which no other test reaches. The presence
+    assertion and the absence assertion are one pair: the absence alone would
+    pass if the probe had never run."""
+    site = installed(
+        "dist-t11b", "1.0", {"publishable.probes": {"h7d_probe": "t11b_probe_mod:probe"}}
+    )
+    (site / "t11b_probe_mod.py").write_text(_UNDECLARED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    only_condition = next(iter(block["facts"].values()))
+    assert only_condition["extra_diagnostic"] is None
+    assert "extra_diagnostic" not in block["unobserved"]
+    assert "model_revision" in block["unobserved"]
+
+
+def test_the_unanswered_warning_fires_once_per_condition_and_fact_with_a_null(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture N: exactly THREE `W-APPARATUS-UNANSWERED` lines in stdout
+    across six probe calls — the never-answered pair and the two partially
+    answered ones — and none for a fact that always answered or for the
+    undeclared fact. A count assertion and an exact pair set, because
+    per-call emission would print eight and a warning derived from `facts`
+    alone would print one. The exit code stays 0, on `W-ENV-UNLOCKED`'s
+    precedent."""
+    site = installed(
+        "dist-t11c", "1.0", {"publishable.probes": {"h7d_nullable_probe": "t11c_probe_mod:probe"}}
+    )
+    (site / "t11c_probe_mod.py").write_text(_PARTIAL_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_nullable_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_NULLABLE_TEMPLATE,
+    )
+    out = doc["stdout"] or ""
+    warn_lines = [line for line in out.splitlines() if "W-APPARATUS-UNANSWERED" in line]
+    assert len(warn_lines) == 3, out
