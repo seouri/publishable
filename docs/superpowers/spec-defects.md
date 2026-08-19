@@ -6082,6 +6082,15 @@ checks it against the installed `publishable.probes` distributions (`E-PROBE-UNK
 family this entry's `field_convention` belongs to is now `field_convention` and `apparatus_facts`
 only.
 
+**Amended 2026-08-19 — H7d Part A task 5:** `apparatus_facts` gained a reader too.
+`cli.command_run` passes `getattr(run_template, "apparatus_facts", None) or []` to `Observer` as
+`declared_facts`, and `apparatus.check_facts` reads it to project a probe's returned `facts` and to
+raise `E-APPARATUS-FACT-MISSING` for a declared key that did not come back — re-verified against
+`src/publishable/apparatus.py` and `src/publishable/cli.py` at this branch's HEAD, not carried from
+the design. `field_convention` is now the **sole** remaining member of this entry's family. Still
+unassigned; H7d Part A does not adopt it — folding it in here would make this slice the owner of a
+gap it did not find.
+
 ## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
 
 `docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
@@ -6311,7 +6320,18 @@ declaration named, never an installed template's class, so it does nothing for t
 case — a config naming an installed *template* still resolves no class. Amended, not closed; owner
 stays unassigned.
 
-## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
+## `PROBES` and `RESOLVERS` are written by their decorators and read by nothing — `PROBES` half CLOSED by H7d Part A task 3
+
+**CLOSED (`PROBES` half) 2026-08-19 (H7d Part A task 3).** Re-verified against the code at this
+branch's HEAD before striking: `apparatus._probe_for` calls
+`declared_names(PROBE_GROUP, fn)`, which resolves `PROBE_GROUP = "publishable.probes"` through
+`plugins._registry_for` to the `PROBES` dict itself — `grep -n "PROBES" src/publishable/plugins.py
+src/publishable/apparatus.py` shows the write site in `plugins.py` and the read through
+`declared_names` in `apparatus.py`. This is exactly the reader this entry's own reasoning said
+would close it: *"a reader for `PROBES` means executing a probe"* — `_probe_for` is the probe's
+three-step dispatch, the first thing this slice ships. `RESOLVERS`'s half of this entry was
+already amended closed by H7b Part B task 30, below — this closes the `PROBES` half the same
+amendment left open, naming H7d as its owner.
 
 H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
 `RESOLVERS["<name>"] = fn` is set by `register_resolver`'s decorator (task 12) and
@@ -6469,7 +6489,15 @@ so a name that resolves outside it never matches an entry either. Neither needs 
 to make `hash_index` correct; one would be a change to what a resolver may read, which is a decision
 this task was not asked to make.
 
-## OPEN — a run whose template declares an installed probe records a false `apparatus: null` — **Owner: H7d**
+## a run whose template declares an installed probe records a false `apparatus: null` — CLOSED by H7d Part A task 11
+
+**CLOSED 2026-08-19 (H7d Part A task 11).** Re-verified against the code at this branch's HEAD
+before striking: `src/publishable/cli.py`'s provenance document no longer writes the literal
+`None` unconditionally — `grep -n '"apparatus"' src/publishable/cli.py` shows
+`"apparatus": observer.block() if observer is not None else None,` — so a run whose template
+declares an installed, resolvable probe now records the five real sub-keys `apparatus.py`'s
+`Observer.block()` builds, and a run whose template declares none still records `null`, honestly.
+The original text is kept below as filed.
 
 `cli.command_run`'s provenance document writes `"apparatus": None` unconditionally — there is no
 branch reading a template's `apparatus_probe` at all. `reference.md` § The apparatus core can only
@@ -7072,3 +7100,44 @@ stays open on that question rather than being struck.
 **Owner:** unassigned. **Found by:** batch 2's review, verified by reading `check_facts`'s ordering
 and `coercion._refuse`'s message format together. **Corrected by:** H7d Part A batch 3, fix round 1,
 verified by running.
+
+## OPEN — `EXIT_EXTERNAL = 5` ships and is read by nothing — **Owner: Part B**
+
+`src/publishable/diagnostics.py` defines `EXIT_EXTERNAL = 5` alongside `EXIT_OK`, `EXIT_WRONG`,
+`EXIT_INVOCATION`, `EXIT_PARTIAL` and `EXIT_FAILED` — one definition, `grep -rn "EXIT_EXTERNAL"
+src/publishable/ tests/` at this branch's HEAD returns only that line. Nothing in `src/` or
+`tests/` reads the name, returns it, or tests it: no command constructs it, `cli.main` never
+selects it, and no fixture asserts a process exit code of `5`. `docs/reference.md` § Exit codes
+and diagnostics already documents its meaning and its precedence in the present tense — *"Something
+outside the machine refused… `5` is separate from all of them because it is the class you retry…
+so when both apply, `5` wins"* — which is a correct **specification** claim (the surface it
+describes, `EXIT_EXTERNAL` itself, is shipped) but not yet a **build** fact: no code path in this
+build can currently exit `5`, including the one this slice adds. H7d Part A's own probe-failure
+paths (Decision 12) end a command through `EXIT_WRONG`, not `EXIT_EXTERNAL` — filed rather than
+fixed, on Decision 12's own ruling: Part A refuses, it does not truncate a run or write
+`status: partial`, and choosing an exit code for the unreachable-apparatus case is Part B's
+`run_status` contract change, not a wiring task this slice can absorb quietly.
+
+This is a fourth member of the shipped-but-unread family `CLAUDE.md`'s misreading table already
+tracks under *reading an unbuilt reader as a defect* (`required_env`, `apparatus_probe` and
+`apparatus_facts`, in that order, each closed by giving it a reader) — `EXIT_EXTERNAL` is the same
+shape outside `BaseTemplate`, a module-level constant rather than a class attribute.
+
+**What retiring it needs, narrower than a plain "add the reader" would suggest:** a reader in
+`cli.main` or `command_run` that returns `5` for the unreachable-apparatus case *and* the documented
+precedence rule (`5` wins over `3` and `4` when both would otherwise apply) — not the constant
+itself, which already exists, and not a general-purpose exit-code registry. That reader is its own
+task in
+[`docs/superpowers/specs/2026-08-19-apparatus-part-a-design.md`](specs/2026-08-19-apparatus-part-a-design.md)
+§ Out of scope (Part B, task 18), which depends on two sibling tasks named in the same table: the
+`run_status` contract change (task 17 — nothing today compares `len(results)` against the plan, so
+a truncated all-completed plan still records `completed`) and the unreachable-probe path
+distinguished from the moved-fact path (task 19 — `partial` + `5` versus a failed run). This entry
+does not restate any of those three decisions — it files the narrower, previously-unfiled fact that
+the constant itself predates all of that work and has never had a reader at any point in this
+repo's history.
+
+**Owner:** Part B. **Found by:**
+[`docs/superpowers/plans/2026-08-19-apparatus-part-a.md`](plans/2026-08-19-apparatus-part-a.md)
+§ Corrections against the code, correction 13, re-confirmed here by grep at this branch's HEAD
+before filing rather than carried from that measurement unchecked.
