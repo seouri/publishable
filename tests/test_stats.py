@@ -32,6 +32,7 @@ from publishable.stats import (
     percentile_over_units,
     percentile_over_units_clustered,
     permutation_of_derived,
+    permutation_over_contrast,
     permutation_over_units,
     permutation_over_units_clustered,
     repeat_spread,
@@ -5356,3 +5357,71 @@ def test_a_whole_cluster_relabelling_permutes_the_clusters_own_labels():
         )
         is None
     )
+
+
+def test_a_contrast_permutation_relabels_which_side_a_unit_is_on():
+    """Fixture C as a contrast: the 20 `of` units against the 30 `against` ones,
+    clustered by matched set, at the within-cluster level. Same roster, same
+    observed delta of 2.5, and — because it is the same construction — the same
+    `1/5001`. **The two homes differ in where the number lands, not in what it
+    is**, and this assertion is what says so."""
+    of = [v for v, label in zip(_C_VALUES, _C_LABELS, strict=True) if label == "of"]
+    against = [v for v, label in zip(_C_VALUES, _C_LABELS, strict=True) if label != "of"]
+    of_clusters = [c for c, label in zip(_C_CLUSTERS, _C_LABELS, strict=True) if label == "of"]
+    against_clusters = [c for c, label in zip(_C_CLUSTERS, _C_LABELS, strict=True) if label != "of"]
+    p = permutation_over_contrast(
+        of,
+        against,
+        seed=11,
+        n=5000,
+        of_clusters=of_clusters,
+        against_clusters=against_clusters,
+        level="within_cluster",
+    )
+    assert p == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_contrast_permutation_is_confined_to_the_cells_of_every_other_group_axis():
+    """ "Permuted within cells of every *other* group axis, so a cross isn't
+    destroyed."
+
+    **Corrected from the brief's own fixture.** The brief's four-unit, two-cell
+    fixture (`values = [1.0, 2.0, 1000.0, 2000.0]`, cells of size 2) asserted
+    `confined == 1/1000`, but a 2-unit cell has only 2 arrangements, so two such
+    cells give an arrangement space of `2 × 2 = 4` — enumerated directly, the
+    deltas are `-500.5, 499.5, -499.5, 500.5`, the observed IS the unique
+    maximum, but over a space of 4, not thousands; at `n = 999` the expected
+    count reaching it is `≈ 999/4 ≈ 250`, not 0, and the total roster is only 4
+    units, so even the FREE permutation has only `C(4, 2) = 6` arrangements —
+    nowhere near enough freedom to reach the mid-null answer the brief's own
+    docstring predicted. Measured: `confined ≈ 0.252`, `free ≈ 0.344`, barely
+    distinguishable — a second instance of "a fixture whose numbers agree with
+    the bug", found the same way task 13's was: by computing before trusting.
+
+    **Fixture C, reused rather than invented a second time**, with its own
+    matched sets as `strata` instead of `clusters` — the two mechanisms are the
+    identical within-group shuffle, so this is expected to reproduce task 13's
+    own `1/5001`-shaped answer at this construction's own `(seed, n)`, and it
+    does: `confined == 1/1000` at `seed=2, n=999`, matching the brief's original
+    literal exactly once the fixture actually has the arrangement space (10¹⁰)
+    to earn it. `free` stays near 0.48, the free-relabelling answer task 11's
+    own suite already pins for this roster — so the two remain three orders of
+    magnitude apart, which is what the brief's docstring described and the
+    four-unit fixture could not deliver."""
+    confined = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=2, n=999, strata=_C_CLUSTERS)
+    free = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=2, n=999)
+    assert confined == pytest.approx(1.0 / 1000.0)
+    assert free is not None
+    assert free > 0.2
+    assert free > 100 * confined
+
+
+def test_a_contrast_permutation_over_disjoint_sides_with_no_cluster_is_the_row_draw():
+    """The unclustered contrast, which is the reachable shape for a design with no
+    `cluster_by`. Asserted against the equivalent `permutation_over_units` call on
+    the concatenated vectors, so the delegation is pinned as an identity rather
+    than as two numbers that happen to agree at one seed."""
+    of = [10.0, 12.0, 14.0]
+    against = [1.0, 2.0, 3.0, 4.0]
+    direct = permutation_over_units(of + against, ["of"] * 3 + ["against"] * 4, "of", seed=6, n=999)
+    assert permutation_over_contrast(of, against, seed=6, n=999) == direct

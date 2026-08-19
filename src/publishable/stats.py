@@ -894,6 +894,7 @@ def permutation_over_units(
     of_level: str,
     seed: int,
     n: int = 5000,
+    strata: Sequence[str] | None = None,
 ) -> float | None:
     """The permutation p-value for a label's effect, over rows.
 
@@ -925,6 +926,14 @@ def permutation_over_units(
     One seeded `random.Random`, drawn in call order, for the reason every draw in
     this module is: two identical runs must agree, and a generator taken from the
     global state would make the p-value depend on what ran before it.
+
+    **With `strata`, the permutation is confined to each stratum's own
+    positions.** `reference.md` § What isn't a repeat requires it for a
+    group-axis contrast — "permuted within cells of every *other* group axis,
+    so a cross isn't destroyed" — and it is the same shape
+    `percentile_over_units` gives its own `strata`: what one draw may touch,
+    not what the statistic is. With no `strata` the whole vector is one
+    stratum, which is an identity rather than a second path.
     """
     if len(values) < 2:
         return None
@@ -933,10 +942,29 @@ def permutation_over_units(
         return None
     rng = random.Random(seed)
     pool = list(labels)
+    # `strata`: the permutation is confined to each stratum's own positions.
+    # `reference.md` § What isn't a repeat requires it for a group-axis contrast —
+    # "permuted within cells of every *other* group axis, so a cross isn't
+    # destroyed" — and it is the same shape `percentile_over_units` gives its own
+    # `strata`: what one draw may touch, not what the statistic is. With no
+    # `strata` the whole vector is one stratum, which is an identity rather than a
+    # second path.
+    groups: list[list[int]] = []
+    if strata is None:
+        groups = [list(range(len(values)))]
+    else:
+        by_stratum: dict[str, list[int]] = {}
+        for index, stratum in enumerate(strata):
+            by_stratum.setdefault(stratum, []).append(index)
+        groups = list(by_stratum.values())
     reached = 0
     varied = False
     for _ in range(n):
-        rng.shuffle(pool)
+        for indices in groups:
+            within = [labels[i] for i in indices]
+            rng.shuffle(within)
+            for index, label in zip(indices, within, strict=True):
+                pool[index] = label
         drawn = _label_delta(values, pool, of_level)
         if drawn is None:
             continue
@@ -1033,6 +1061,65 @@ def permutation_over_units_clustered(
     if not varied:
         return None
     return (1 + reached) / (n + 1)
+
+
+def permutation_over_contrast(
+    of: Sequence[float],
+    against: Sequence[float],
+    seed: int,
+    n: int = 5000,
+    of_clusters: Sequence[str] | None = None,
+    against_clusters: Sequence[str] | None = None,
+    of_strata: Sequence[str] | None = None,
+    against_strata: Sequence[str] | None = None,
+    level: str = "rows",
+) -> float | None:
+    """The permutation p-value for a cross-arm contrast.
+
+    `reference.md` § What isn't a repeat: a `shuffle` naming a `groups` axis builds
+    the null of "that axis's contrast, against a world where its membership carries
+    no information — permuted within cells of every *other* group axis, so a cross
+    isn't destroyed."
+
+    **The arm label IS the side**, so this is not a second construction: the two
+    per-side vectors are concatenated, the side membership becomes the label
+    vector, and the draw is `permutation_over_units` — stratified by the other
+    group axes' cells — or its clustered sibling wherever `data.units.cluster_by`
+    is declared. Delegating rather than reimplementing is the rule
+    `corrected_for`'s own docstring states for itself: two spellings of one
+    construction drifting apart is a defect this codebase has already shipped.
+
+    Takes two per-side value vectors rather than a difference vector, which is the
+    evidence shape an unpaired comparison has — `correction.UnpairedEvidence` makes
+    the same argument one module over: an unpaired contrast has no per-unit
+    differences to store, because the two sides are disjoint sets of units.
+
+    `level` is `units.null_test_level`'s answer, derived by the caller from the
+    roster for the reason the clustered draw states.
+    """
+    values = list(of) + list(against)
+    labels = ["of"] * len(of) + ["against"] * len(against)
+    # A design declaring both a `cluster_by` and a second group axis takes the
+    # clustered branch below and the strata are not composed with it: that
+    # composition is a construction nothing in the four documents specifies,
+    # no config in the feasibility analysis declares two group axes, and
+    # inventing one would be a rule with no authority behind it.
+    if of_clusters is not None and against_clusters is not None:
+        return permutation_over_units_clustered(
+            values,
+            labels,
+            list(of_clusters) + list(against_clusters),
+            "of",
+            seed,
+            n=n,
+            level=level,
+        )
+    strata = (
+        None
+        if of_strata is None or against_strata is None
+        else list(of_strata) + list(against_strata)
+    )
+    return permutation_over_units(values, labels, "of", seed, n=n, strata=strata)
 
 
 def percentile_over_units(
