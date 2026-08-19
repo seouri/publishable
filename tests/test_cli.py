@@ -13094,3 +13094,127 @@ def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
     assert swept, "no artifacts were written — the leak check below would be vacuous"
     for path in swept:
         assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+# --- H7d Part A task 10: the probe before every execution -------------------
+
+_LEDGER_COUNTING_RUN_STEP = """\
+from pathlib import Path
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        ledger = Path(io.run_dir) / "apparatus" / "probes.jsonl"
+        seen = len(ledger.read_text().splitlines()) if ledger.exists() else 0
+        io.write("seen.json", {{"lines": seen}})
+        return {{}}
+"""
+
+
+def test_the_ledger_line_precedes_the_execution_it_covers(installed, registries, tmp_path, capsys):
+    """`seen.json` holds 4: the two run-start lines and this execution's own
+    round, both written before the step ran. An after-the-execution append
+    gives 2 — a different number, not a crash.
+
+    **Computed, not transcribed.** Two conditions (`sweep.grid` over
+    `instrument.model`) mean the run-start round is `C = 2` calls, one per
+    condition (task 9). The counting step is `run`-scoped — belongs to no
+    condition — so Decision 3 probes it once per resolved condition before it
+    runs: `C = 2` more calls. `2 + 2 = 4`, all written before `Step.run`
+    reads the ledger. The design's own prescribed mutation for this placement
+    (a step that raises, leaving the ledger short by one line) cannot work
+    here: a failed execution never stops the run, so an after-the-execution
+    append would still land the line — this fixture is arithmetic instead
+    (§ Corrections against the code, correction 6).
+    """
+    site = installed(
+        "dist-t10a", "1.0", {"publishable.probes": {"h7d_probe": "t10a_probe_mod:probe"}}
+    )
+    (site / "t10a_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    # `_starter_step`, not `extra_steps`: the scaffolded step itself becomes
+    # the ONLY step in the plan, run-scoped. A second, condition-scoped or
+    # repeat-scoped step would also be probed (once per its own condition) and
+    # its `pre_execution` lines would land under the same condition keys the
+    # run-scoped round writes, making the run-scoped round's own contribution
+    # unobservable from the ledger alone — exactly the confound this fixture
+    # is built to avoid.
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        _starter_step=_LEDGER_COUNTING_RUN_STEP,
+    )
+    seen = json.loads(
+        (doc["run_dir"] / "shared" / "step01_summarize_units" / "seen.json").read_text()
+    )
+    assert seen["lines"] == 4
+
+
+def test_a_condition_less_execution_is_probed_once_per_condition(
+    installed, registries, tmp_path, capsys
+):
+    """The `pre_execution` lines for the `run`-scoped step carry BOTH
+    condition keys, and both keys have an observed fact. The wide-cfg reading
+    would produce one line whose condition is absent from both.
+
+    **Deviation from the brief, reported rather than silently written.** The
+    brief's docstring asks this to be checked against `provenance.apparatus.
+    facts` in `run.yaml` — but that assembly is task 11's (`Observer.block()`
+    plus its `cli.py` wiring), out of scope for this batch, and
+    `command_run` still writes `"apparatus": None` unconditionally. Asserting
+    against `run.yaml` here would fail on task 11's absence, not on this
+    task's own property. This test instead reconstructs the same
+    (condition → fact) view `Observations.facts_document()` would publish,
+    directly from the ledger `Observer` already writes — the first non-null
+    observation per (condition, fact), which is the accumulator's own
+    documented rule (`apparatus.Observations.record`) — so the property task
+    10 actually owns (every condition gets a fact from the condition-less
+    round) is pinned without depending on unbuilt wiring.
+    """
+    site = installed(
+        "dist-t10b", "1.0", {"publishable.probes": {"h7d_probe": "t10b_probe_mod:probe"}}
+    )
+    (site / "t10b_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    # Same reason as the previous test: `_starter_step` makes the run-scoped
+    # counting step the ONLY execution in the plan, so every `pre_execution`
+    # line in the ledger is unambiguously its own — no condition-scoped
+    # execution's probe can share a condition key with it and mask the
+    # property under test.
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        _starter_step=_LEDGER_COUNTING_RUN_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    expected_keys = {f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]}
+    assert len(expected_keys) == 2, "the fixture must have two conditions"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    counter_lines = [line for line in ledger if line["phase"] == "pre_execution"]
+    pre_execution_conditions = {line["condition"] for line in counter_lines}
+    assert pre_execution_conditions == expected_keys
+
+    facts_first_answered: dict[str, Any] = {}
+    for line in ledger:
+        for fact, value in line["facts"].items():
+            key = (line["condition"], fact)
+            if value is not None and key not in facts_first_answered:
+                facts_first_answered[key] = value
+    for condition_key in expected_keys:
+        assert (condition_key, "model_revision") in facts_first_answered

@@ -519,6 +519,18 @@ def execute_plan(
     that happens to look random. A value a step read from `os.environ` for a name
     nothing declared is outside what core saw and is not matched — see
     `docs/reference.md` § Secrets & credentials.
+
+    `observer` is `None` for a template declaring no `apparatus_probe` — the
+    ordinary case — and every execution's own probe round is guarded on that.
+    When given, it is probed before EVERY execution, with no narrowing
+    (Decision 3): a condition-bearing execution once, under its own cfg; a
+    `run`- or `summary`-scoped execution once per resolved condition, under
+    each condition's own cfg. This function derives no condition list for
+    that round — `conditions_list` below is built from executions this plan
+    already carries and is **empty** for a plan with no condition-scoped
+    step, so the round instead reads the resolved conditions held on
+    `observer` itself, the same single-authority rule `holdout_plan` and
+    `group_axes` already follow.
     """
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this
@@ -568,6 +580,14 @@ def execute_plan(
     step_scopes = {e.step_name: e.scope for e in plan}
 
     for execution in plan:
+        # Before the step is constructed and before anything is executed
+        # (Decision 3, Decision 9): the ledger line an execution ran under is
+        # on disk regardless of how the execution ends. `condition_index` is
+        # handed straight through — `None` for a `run`/`summary`-scoped
+        # execution, which is `Observer.observe_round`'s own signal to probe
+        # once per resolved condition rather than being narrowed here.
+        if observer is not None:
+            observer.observe_round(phase="pre_execution", condition_index=execution.condition_index)
         started = datetime.now(UTC)
         clock = time.monotonic()
 
