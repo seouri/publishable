@@ -307,3 +307,9 @@ transferable form: **a brief's prose about other tests is a claim about the code
 grep.** A second, milder divergence went unreported in the same batch — a docstring claiming a sweep was
 "sliced out of `run.yaml`" where the body sweeps the whole file, which is the harmless direction and
 still a divergence.
+
+**Fix round 1 — the Major and all six Minors closed** (`e636f15`, `2ce5efa`), every one by deletion,
+rename or correction with **no behaviour changed**; suite unchanged at **2417**. The false "no other test
+reaches" clause is deleted rather than rewritten, the misleading test name now says what it asserts, and
+the report's disagreement count is **corrected from zero to two, both named** — which is the outcome that
+makes the pattern visible instead of buried.
