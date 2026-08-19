@@ -11756,7 +11756,7 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
     assert hits == []
 
 
-def test_the_worked_examples_intervals_are_not_narrowed_by_the_null_test_work():
+def test_the_worked_examples_intervals_in_reference_md_are_not_narrowed_by_the_null_test_work():
     """`CLAUDE.md` § The worked example: these were checked numerically against a
     synthetic 228-unit table and must not be narrowed back. H4d adds a `p_value`
     to two `reference.md` sections that hold worked-example numbers, and an edit
@@ -11764,14 +11764,17 @@ def test_the_worked_examples_intervals_are_not_narrowed_by_the_null_test_work():
     catches. Read from `__file__` rather than a bare relative path, and guarded
     against an empty read so it cannot pass vacuously.
 
-    Only three of the four literals CLAUDE.md's worked example names are present
-    in `reference.md` as literal text — the fourth, kendall's own per-condition
-    `[0.347, 0.477]`, appears in README.md's demo table but not here, where the
-    worked example only ever spells out kendall's baseline delta
+    Guards `docs/reference.md` only, and only three of the four literals
+    CLAUDE.md's worked example names — the fourth, kendall's own per-condition
+    `[0.347, 0.477]`, appears in README.md's demo table rather than here, where
+    the worked example only ever spells out kendall's baseline delta
     (`[-0.213, -0.125]`) rather than its raw per-condition interval. Verified at
     `a207702` with `grep -c '0.347' docs/reference.md` returning 0. A pin
     asserting a string that was never there passes for the wrong reason the
-    moment someone adds it, so it is left out here rather than included."""
+    moment someone adds it, so it is left out here rather than included, and
+    README's own copy of that fourth literal is left unpinned by this test —
+    named in the docstring rather than the title, per round-1 review (m4), so
+    the name claims exactly the file this test reads and nothing more."""
     import pathlib
 
     text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "reference.md").read_text()
