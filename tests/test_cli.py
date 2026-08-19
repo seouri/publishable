@@ -13218,3 +13218,109 @@ def test_a_condition_less_execution_is_probed_once_per_condition(
                 facts_first_answered[key] = value
     for condition_key in expected_keys:
         assert (condition_key, "model_revision") in facts_first_answered
+
+
+# --- H7d Part A task 15: the call-count contract ----------------------------
+
+_COUNT_CONTRACT_RUN_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        return {{}}
+"""
+
+
+def test_the_call_count_contract_is_pinned_by_the_ordered_pair_list_not_a_count(
+    installed, registries, tmp_path, capsys
+):
+    """`C + E_c + C × E_none`. Fixture F, computed rather than transcribed:
+    `sweep.grid` over one axis, two levels (`C = 2`); `replication.repeats`
+    pinned to a single `seed` repeat, so the scaffolded `repeat`-scoped step
+    contributes one execution per condition (`E_c = 2`); one extra
+    `run`-scoped step (`E_none = 1`). `2 + 2 + 2 × 1 = 6` ledger lines.
+
+    **Five rejected readings, and their line counts — two of them collide,
+    which is why the assertion below is the ORDERED `(phase, condition)`
+    pair list and not the count:**
+
+    | Reading | Lines |
+    |---|---|
+    | Once per run, full stop | 1 |
+    | Once per condition, at run start only | 2 |
+    | Run start per condition, then before condition-BEARING executions only | 2 + 2 = 4 |
+    | Once per run at run start, full per-execution probing otherwise | 1 + 2 + 2×1 = 5 |
+    | Run start per condition, ONE wide-cfg call for the condition-less execution | 2 + 2 + 1 = 5 |
+
+    The third row is Decision 3's rejected narrowing; the fifth is the other
+    rejected reading (a wide-cfg call instead of one per condition).
+
+    The last two both land on **5**: with two conditions, "probe once for the
+    whole run at run start" and "probe the condition-less execution once,
+    wide-cfg" are indistinguishable by count alone. This design's own line
+    count, 6, is not shared with either — but the pair list is asserted
+    anyway, because a fixture that only pins a total that happens to be
+    unique among six readings is one edit away (a third condition, say) from
+    losing that property silently; the ordered list separates all six by
+    construction, not by this fixture's particular size.
+
+    **Execution order**, verified directly against this fixture at H7d Part A
+    batch 3 (this commit): the `run`-scoped step executes FIRST, before
+    either condition's repeat-scoped execution — `scope.build_plan` orders by
+    scope rather than by declaration order in `experiment.steps`, where the
+    extra step was appended.
+    """
+    site = installed(
+        "dist-t15", "1.0", {"publishable.probes": {"h7d_probe": "t15_probe_mod:probe"}}
+    )
+    (site / "t15_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        extra_steps=["counter"],
+        extra_step_source=_COUNT_CONTRACT_RUN_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    condition_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(condition_keys) == 2, "the fixture must have two conditions"
+
+    # Ground truth for execution order — read off `executions.jsonl` rather
+    # than assumed, so a plan-ordering change would move this test's own
+    # expectation rather than silently invalidating it.
+    exec_lines = [
+        json.loads(line) for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+    ]
+    condition_bearing_order = [
+        f"{e['condition']:02d}_"
+        + next(c["label"] for c in sweep["conditions"] if c["index"] == e["condition"])
+        for e in exec_lines
+        if e["condition"] is not None
+    ]
+    assert condition_bearing_order == condition_keys, (
+        "the repeat-scoped executions must run in ascending condition order for "
+        "this test's expected pair list to hold"
+    )
+    assert exec_lines[0]["condition"] is None, "the run-scoped counter must run first"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    pairs = [(line["phase"], line["condition"]) for line in ledger]
+
+    expected = (
+        [("run_start", k) for k in condition_keys]
+        + [("pre_execution", k) for k in condition_keys]  # the run-scoped counter's round
+        + [("pre_execution", k) for k in condition_keys]  # the two repeat-scoped executions
+    )
+    assert len(pairs) == 6
+    assert pairs == expected
