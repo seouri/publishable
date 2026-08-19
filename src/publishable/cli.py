@@ -1029,16 +1029,14 @@ def _comparison_step_blocks(
                         compute_against,
                     )
                     if len(base_keys) >= 2:
-                        # ONE fact — `clusters is not None` — decides both the
-                        # `method` label and the `clusters` argument below, so the
-                        # two cannot read differently about whether this draw is
-                        # clustered. Two independent ternaries here is exactly how
-                        # H4b-2's whole-branch review found a Critical: an
-                        # UNCLUSTERED draw published under a `_clustered` label.
                         # `base_col_clusters` is `None` unless a cluster is
                         # actually declared, in which case it carries every
                         # base key's membership — the same one-pass discipline
-                        # `col_weights`/`col_clusters` follow above.
+                        # `col_weights`/`col_clusters` follow above. The label and
+                        # this argument are separately writable, so what keeps them
+                        # agreeing is the collision test that asserts the clustered
+                        # WIDTH rather than the label — arithmetic a unit-level draw
+                        # cannot reproduce.
                         base_col_clusters = (
                             None if clusters is None else {k: clusters[k] for k in base_keys}
                         )

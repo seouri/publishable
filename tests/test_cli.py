@@ -4182,11 +4182,15 @@ def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     interval published beside `n_paired_clusters`, reading as if the cluster had
     been honoured when it was drawn as though every unit were independent — H4d
     task 15b closes a different way: `paired_percentile_of_derived` now takes
-    the same `clusters` mapping the recorded-column arm already draws through,
-    so the collision's surviving closures compute a genuinely CLUSTERED
-    interval instead.** `method: paired_percentile_over_units_clustered`, the
-    `_clustered` suffix present — verified directly below, over both call
-    sites into `_comparison_step_blocks`.
+    the same `clusters` mapping the recorded-column arm already draws through.**
+
+    This fixture asserts the `method` label and the presence of an interval over
+    both call sites into `_comparison_step_blocks`. It does NOT establish that the
+    draw was clustered: its `ci95` is `[0.0, 0.0]`, which is the one value every
+    construction agrees on, so no arithmetic here can tell a clustered draw from a
+    unit-level one. That property is asserted by
+    `test_a_derived_key_collision_under_a_cluster_computes_the_clustered_width`,
+    on a fixture built to separate the two widths.
 
     Both the generated `vs_baseline` delta and the declared `results.contrasts`
     entry are asserted, since `_compute_vs_baseline` and

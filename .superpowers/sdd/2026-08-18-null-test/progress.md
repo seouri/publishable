@@ -344,3 +344,54 @@ But **15b extended it to a second path, cited it as its verification, and filed 
 **And the guard removed here was H4b-2's fix for that Critical.** The ruling that the property is now
 protected *by construction* rather than by suppression may still be right — but it was asserted from a
 degenerate fixture, so it was unverified either way until the reviewer built the discriminating one.
+
+**Fix round 1 — the Critical is closed and pinned ARITHMETICALLY** (`33f5753`, `d15c94a`), confirmed
+by a scoped re-review that settled it by running: the argument-only mutation (`clusters=None`, every
+`method` ternary untouched) now fails **one named test on an arithmetic assertion** —
+`[1.0, 9.0]` expected against `[4.667, 8.0]` obtained — while the `method` and `n_paired_clusters`
+assertions in that same test **still pass** under the mutation. That contrast *is* the discrimination
+that was missing. The new fixture is non-degenerate: clustered half-width 4.0 against unit-level ≈1.67.
+The label direction is pinned too, but **by string comparison across 11 tests**, which is the right
+instrument for a label and is recorded as such rather than counted as a second arithmetic pin.
+
+**The code-side coupling is convention, not construction** — the argument and the ternary remain
+independently writable, which is exactly why the mutation compiled and published a `_clustered` label
+over a unit-level draw. **The test is what catches drift now, and the comment says so.**
+
+Majors 3 and 4 closed and pinned (`n.clusters` recomputed from the draw it rests on, with the
+no-split guarantee read from `_draw_pools`; the clustered percentile gaining the zero-width refusal its
+unclustered sibling already had, and the document's scope made truthful).
+
+### Four record defects the fix round introduced or left — closed by the controller, all by deletion
+
+**A seventh wrong ground for this corner, inside the commit fixing the sixth.** The new comment claimed
+*"Two independent ternaries here is exactly how H4b-2's whole-branch review found a Critical."* It was
+not: that Critical was reachable because `derived_by_key` **and** `resample_fns_by_key` are assigned
+before the `summarize_step` call whose `except ContractError` retry clears neither — **the branch had no
+`clusters` argument at all.** The batch-3 review said the new defect is *"verbatim the **shape**"* of it;
+the comment **converted shape into cause**. Deleted.
+
+**And a safety "cannot" the reviewer falsified by running**, in the same comment: *"the two cannot read
+differently about whether this draw is clustered."* A one-line argument-only edit made it happen.
+Replaced with what is true — the two are separately writable and a width assertion is what holds them
+together.
+
+**Ruling: these were closed by DELETION, by me, rather than dispatched as another rewrite.** That
+paragraph had already been rewritten **three times**, and two of the invented sentences became findings
+1 and 3 of the review that examined them. `CLAUDE.md`'s rule is that a rewrite invents and a deletion
+cannot; at three rewrites the rule stops being advice and becomes the diagnosis. **Cost if wrong:** less
+explanation at that call site than an author wanted — against a comment that had produced two findings
+per revision.
+
+Also closed: the Critical's **own fixture still carried the false claim the review quoted as the
+reasoning error** — its docstring said the collision computes "a genuinely CLUSTERED interval" over a
+fixture whose `ci95` is `[0.0, 0.0]`. It now states plainly that it asserts the label and the presence
+of an interval, that **no arithmetic on a zero-width interval can distinguish the constructions**, and
+which test does. Two **false positional locators** in the filing (naming entries "two above" and "in the
+entry above" that are four and six entries away) replaced with content references, per the ban on
+locating a row by position. And the filing's owner, which read *"the next slice that touches…"* — the
+form this same file's H4c entry rejects **by name** — now says **unassigned, with the reason**: no
+remaining slice has that function as its surface, so a live gap with no owner is the honest record and
+inventing a successor would be the anti-pattern.
+
+Suite 2325 passed, 1 skipped, 2 xfailed; four gates clean. Batch 3 complete.

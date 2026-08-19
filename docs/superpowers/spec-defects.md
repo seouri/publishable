@@ -6768,7 +6768,7 @@ implementer finds the obligation rather than re-discovering it.
 
 **Found by the H4d batch-3 review** (2026-08-19, at `4ea6f97`), and confirmed here at fix round 1
 against a reachable, non-degenerate-*rows* fixture. `_drawable_content` and the check built around
-it in `paired_percentile_of_derived` (H4b-2 task 9, recorded two entries above this one) refuse a
+it in `paired_percentile_of_derived` (H4b-2 task 9, whose own entry records the row-level check) refuse a
 draw whose every drawable thing carries the *same pair of rows* — a genuinely constant table. That
 is a ROW-content check. It says nothing about a draw whose rows **do** vary but whose two
 `compute_of`/`compute_against` calls evaluate to the *same* difference on every draw anyway — the
@@ -6782,7 +6782,7 @@ rows or no rows, clusters or no clusters.
 reviewer as not introduced by H4d): the batch-3 review's own `_AGGREGATE_STEP` fixture (`pred =
 float(i)`, identical under both conditions) publishes `method: paired_percentile_over_units,
 delta: 0.0, ci95: [0.0, 0.0], ci95_corrected: [0.0, 0.0]`. **This is the identical shape already
-recorded and reasoned about** in the entry above ("The contrast path discloses nothing about its
+recorded and reasoned about** in the entry titled ("The contrast path discloses nothing about its
 resample... Finding 2"), which judged it *not a regression* because `paired_t_over_units` gives the
 same zero-width interval for a genuinely constant column and the record is "internally consistent."
 That reasoning is sound for a column contrast, where a zero-width interval beside a `0.0` delta
@@ -6811,8 +6811,11 @@ resulting pool (`len({round(v, ...) for v in values}) <= 1`, content-based over 
 rather than over the rows feeding them) rather than a structural one over `collapsed`/`strata`/
 `clusters` alone.
 
-**Owner: unassigned — the next slice that touches `paired_percentile_of_derived`'s degenerate-draw
-refusal.** The check that owner must make: after the resample loop collects `values`, refuse
+**Owner: unassigned, and stated as such rather than deferred.** No slice remaining in the spine has
+this function as its surface — H4d is the last whose surface is the `statistics` block — so naming a
+successor here would be the *"whichever slice does X"* form this file's own H4c entry rejects by name.
+It is recorded as a **live gap with no owner**, which is the honest shape, and the check below is
+written so whoever does claim it needs no re-derivation: after the resample loop collects `values`, refuse
 (`interval=None`, `draws_used=len(values)`, matching every other degenerate-draw return in this
 function) when every surviving value is identical — content over the COMPUTED POOL, the value-level
 counterpart to `_drawable_content`'s row-level check, checked whether or not `clusters`/`strata`
