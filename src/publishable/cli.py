@@ -1385,11 +1385,8 @@ def _comparison_step_blocks(
             # there is an interval to correct: the draws a percentile interval
             # was read off, the per-unit differences a *t* interval was computed
             # from, or the two independent per-side vectors a Welch interval was
-            # computed from. An entry with no `ci95` is dropped by
-            # `family_members` before any of the three fields is ever read — but
-            # it does not necessarily carry
-            # none: a column contrast whose resample ran but produced too few
-            # surviving draws for the confidence level still carries its
+            # computed from. A column contrast whose resample ran but produced
+            # too few surviving draws for the confidence level still carries its
             # (too-short) `pool` alongside a `None` `ci95`, and
             # `Member.__post_init__` exempts that case rather than requiring
             # `pool`/`diffs` to be `None` too.

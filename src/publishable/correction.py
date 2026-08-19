@@ -114,6 +114,17 @@ class Member:
     lives inside `UnpairedEvidence` instead, where the two label vectors can be
     checked against the two value vectors they each belong to. `None` is the
     default and the shape every construction predating this field still builds.
+
+    `p_value`, when set, is the permutation p-value a declared
+    `statistics.null_test` produced for this metric — **a field rather than a
+    fourth kind of evidence**, and that is a decision rather than an omission. The
+    three kinds exist because `_corrected_bounds` rebuilds the SAME construction at
+    a smaller α; a p-value has no construction to rebuild, only a rank and a family
+    size, both of which `corrected_for` already holds. So it enters neither the
+    exactly-one rule nor any of `_corrected_bounds`' return paths. A member may
+    carry it with an interval, with no interval at all, or not at all: a permutation
+    p-value needs only the observed statistic and the null, both of which exist
+    where a thin pool or a degenerate column left no interval to report.
     """
 
     where: str
@@ -127,12 +138,12 @@ class Member:
     weights: tuple[Any, ...] | None = None
     clusters: tuple[str, ...] | None = None
     sides: UnpairedEvidence | None = None
+    p_value: float | None = None
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs`/`sides` is set whenever there is a
         `ci95` to correct — never two, never none. A member with no interval at
-        all (`ci95=None`, excluded by `family_members` before any of the three
-        fields is ever read) is exempt: it may still carry one.
+        all (`ci95=None`) is exempt: it may still carry one.
 
         This is `cli.py`'s bookkeeping error to make, not a plugin author's
         declaration to violate, so it raises plain `ValueError` rather than
@@ -243,14 +254,18 @@ def family_members(entries: Sequence[Member]) -> list[Member]:
     """The subset that is corrected, and therefore counted.
 
     `reference.md`: "Only metrics core corrects are counted — that is, `basis:
-    units` metrics, since a metric reported without an interval isn't a
-    comparison anyone can read as significant." A reported `Estimate` never
-    reaches here (core did not compute it and has no standing to correct it),
-    and neither does a reporting stratum (it describes rather than compares) —
-    both are excluded by `cli` never building a `Member` for them, which is
-    where the distinction is visible.
+    units` metrics, since a metric core computed nothing for is not a
+    comparison anyone can read as significant. A metric carrying a p-value and
+    no interval is counted: the exclusion is about metrics core has nothing to
+    say about, and a permutation p-value needs only the observed statistic and
+    the null, both of which exist where an interval could not be built." A
+    reported `Estimate` never reaches here (core did not compute it and has no
+    standing to correct it), and neither does a
+    reporting stratum (it describes rather than compares) — both are excluded by
+    `cli` never building a `Member` for them, which is where the distinction is
+    visible.
     """
-    return [e for e in entries if e.ci95 is not None]
+    return [e for e in entries if e.ci95 is not None or e.p_value is not None]
 
 
 def family_shape(members: Sequence[Member]) -> tuple[int, dict[str, int]]:
@@ -282,7 +297,9 @@ def _evidence_ratio(member: Member) -> float:
     A zero-width interval (a point-mass bootstrap, which S4b established is
     legitimate) has infinite evidence rather than a `ZeroDivisionError`.
     """
-    assert member.ci95 is not None  # family_members dropped the others
+    # `rank_family` never calls this for a member with no interval; the tier in
+    # its key decides that before the ratio is asked for.
+    assert member.ci95 is not None
     half = (member.ci95[1] - member.ci95[0]) / 2.0
     if half <= 0.0:
         return float("inf")
@@ -299,10 +316,20 @@ def rank_family(members: Sequence[Member]) -> list[Member]:
     earlier key broke ties by metric *name*, which is a different ordering that
     happened to be stable, and which reorders a family when a metric is renamed.
     """
-    return sorted(
-        members,
-        key=lambda m: (-_evidence_ratio(m), m.declaration_index),
-    )
+
+    def _key(member: Member) -> tuple[int, float, int]:
+        # The tier FIRST, and the ratio computed only inside it. A member with no
+        # interval has no evidence ratio — `_evidence_ratio` asserts as much — so a
+        # key evaluating the ratio for every member crashes during the sort, and a
+        # test that observed the crash would be testing the assert rather than the
+        # ranking. A sentinel ratio is the other wrong answer: `_evidence_ratio`
+        # returns exactly `0.0` for a member whose `delta` is 0 with a finite width,
+        # so a p-only member handed `0.0` sorts AMONG those rather than after them.
+        if member.ci95 is None:
+            return (1, 0.0, member.declaration_index)
+        return (0, -_evidence_ratio(member), member.declaration_index)
+
+    return sorted(members, key=_key)
 
 
 def _level_for(method: str, family_size: int, rank: int) -> float | None:

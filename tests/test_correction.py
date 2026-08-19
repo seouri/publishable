@@ -1157,3 +1157,145 @@ def test_a_member_with_no_interval_and_no_p_value_is_still_outside_the_family():
     counted = family_members(_PIN_MEMBERS)
     assert [m.where for m in counted] == ["cond:1", "cond:2", "cond:3"]
     assert family_shape(counted) == (3, {"comparisons": 3, "metrics": 1})
+
+
+def test_a_member_carrying_only_a_p_value_is_in_the_family():
+    """Decision 4's widening. `cli` builds exactly this member for a thin pool, a
+    too-short draw or a degenerate column — while a permutation p-value needs only
+    the observed statistic and the null, both of which exist in that state.
+    Unwidened, `fdr_bh` would silently adjust nothing for precisely the member
+    whose p-value was the only thing it had.
+
+    The assertion is on the family SIZE as well as on membership: a member counted
+    changes `m`, which is the quantity every level is derived from."""
+    thin = Member(
+        where="cond:9",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.01,
+    )
+    with_interval = Member(
+        where="cond:8",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=(0.1, 0.7),
+        pool=None,
+        diffs=(0.3, 0.4, 0.5),
+        declaration_index=1,
+    )
+    counted = family_members([thin, with_interval])
+    assert {m.where for m in counted} == {"cond:9", "cond:8"}
+    assert family_shape(counted) == (2, {"comparisons": 2, "metrics": 1})
+
+
+def test_a_member_with_neither_an_interval_nor_a_p_value_is_still_excluded():
+    """The other half, and the one that says the widening is a widening rather
+    than a deletion of the predicate."""
+    neither = Member(
+        where="cond:7",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=(0.3, 0.4),
+        declaration_index=0,
+    )
+    assert family_members([neither]) == []
+
+
+def test_a_p_only_member_ranks_below_every_interval_carrying_one_including_a_zero_ratio():
+    """**The discriminating case for the tier, and the reason it is a tuple
+    element rather than a sentinel ratio.** `_evidence_ratio` returns exactly
+    `0.0` for a member whose `delta` is 0 with a finite width — a REAL member —
+    so a p-only member handed `0.0` would sort among those rather than after them.
+
+    Three members: a strong one, a zero-ratio one, and a p-only one. The order
+    must be strong, zero-ratio, p-only. A sentinel implementation gives strong,
+    then the two in declaration order, which differs from this whenever the
+    p-only member was declared first — which it is here, deliberately."""
+    p_only = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.01,
+    )
+    zero_ratio = Member(
+        where="cond:2",
+        step="s",
+        metric="m",
+        delta=0.0,
+        ci95=(-0.5, 0.5),
+        pool=None,
+        diffs=(-0.1, 0.0, 0.1),
+        declaration_index=1,
+    )
+    strong = Member(
+        where="cond:3",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=(0.9, 1.1),
+        pool=None,
+        diffs=(0.9, 1.0, 1.1),
+        declaration_index=2,
+    )
+    ranked = [m.where for m in rank_family(family_members([p_only, zero_ratio, strong]))]
+    assert ranked == ["cond:3", "cond:2", "cond:1"]
+
+
+def test_ranking_a_p_only_member_does_not_reach_the_evidence_ratio():
+    """`_evidence_ratio` asserts `member.ci95 is not None`, and the widening makes
+    that assert reachable. **This test asserts the ranking, not the assert**: a
+    test catching the `AssertionError` would be testing the assert, and a mutation
+    caught by a crash is not a pin. So the key must short-circuit, and the way to
+    see that it does is that ranking a family of p-only members returns them in
+    declaration order rather than raising."""
+    members = [
+        Member(
+            where=f"cond:{i}",
+            step="s",
+            metric="m",
+            delta=float(i),
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=i,
+            p_value=0.1 * i,
+        )
+        for i in (1, 2, 3)
+    ]
+    assert [m.where for m in rank_family(family_members(members))] == [
+        "cond:1",
+        "cond:2",
+        "cond:3",
+    ]
+
+
+def test_the_exactly_one_rule_is_unchanged_by_the_p_value_field():
+    """Recorded as a decision rather than left as an omission: a p-value is not
+    evidence, so it does not enter the exactly-one count. A member carrying a
+    `ci95` and two evidence kinds is still refused, with or without a p-value."""
+    with pytest.raises(ValueError, match="exactly one of pool/diffs/sides"):
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=(0.0, 0.2),
+            pool=(0.0, 0.1, 0.2),
+            diffs=(0.1,),
+            declaration_index=0,
+            p_value=0.05,
+        )
