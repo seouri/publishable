@@ -2315,10 +2315,15 @@ def test_a_plain_holdout_declaration_is_now_accepted(write_config, tmp_path):
     declaration core honors — `cluster_by` counts the clusters, keeps one out
     of two folds, and makes every `basis: units` interval cluster-robust;
     `weight_by` computes Kish's effective size and weights every `basis: units`
-    column and interval, and, as of H4b-1, every weighted contrast too. What
-    `cluster_by` may not yet be combined with is checked by
-    `test_a_clustered_generated_comparison_is_refused` below, and, at run time,
-    by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`. `holdout` left the same family
+    column and interval, and, as of H4b-1, every weighted contrast too. The one
+    combination `cluster_by` still may not be combined with — a weighted
+    clustered contrast, `E-DATA-WEIGHT-CLUSTER-CONTRAST` — is checked by
+    `test_a_weighted_clustered_comparison_draws_its_own_refusal` below. A
+    derived metric under `cluster_by` resamples too, through
+    `stats.percentile_of_derived_clustered` (H4d task 15), with nothing left
+    for `validate` to check about it — as before, whether a template's
+    `aggregate` derives anything is not knowable from a declaration.
+    `holdout` left the same family
     with task 18: `_check_holdout` checks the declaration for real, and a
     plain, well-formed one earns none of its findings.
 
@@ -2597,25 +2602,24 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"statistics": {"null_test": {"method": "permutation", "n": 5000}}},
-    ],
-)
-def test_every_unsupported_message_defers_rather_than_scolds(write_config, overrides):
+def test_every_unsupported_message_defers_rather_than_scolds(installed, write_config):
     """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
     'your config is wrong'. Every message in this family must say so explicitly, or a
-    user has no way to tell a refusal from a validation error. `allocation: between` and
-    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals,
-    `data.units.holdout` left with task 18, and `data.units.from.resolver` left with
-    H7b Part B — each now draws a real, behavior-specific finding instead
-    (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, and so
-    on, or validates clean), not a deferral. `E-STATS-NULLTEST-UNSUPPORTED` is what
-    remains of the family."""
-    found = messages_by_code(write_config(overrides))
+    user has no way to tell a refusal from a validation error. `allocation: between`,
+    `assign`, `data.units.holdout`, `data.units.from.resolver` and, as of H4d task 25,
+    `statistics.null_test` have each left this family in turn — every one now draws a
+    real, behavior-specific finding instead (`E-DATA-ALLOCATION-NO-ARMS`,
+    `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, the five `E-STATS-NULLTEST-*` codes,
+    and so on, or validates clean), not a deferral.
+
+    `E-TEMPLATE-INSTALLED-UNSUPPORTED` is what remains of the family — reparametrized
+    onto it rather than left with an empty `parametrize` or a permanently red
+    assertion, on the scoping's own confirmation that `installed_template_message`
+    contains this exact phrase."""
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+    found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
-    assert unsupported, f"expected an -UNSUPPORTED finding for {overrides}"
+    assert unsupported, "expected an -UNSUPPORTED finding for an installed-only template name"
     for code, message in unsupported.items():
         assert "later slice" in message, f"{code} message does not defer: {message!r}"
 
@@ -2682,15 +2686,26 @@ def test_validate_config_refuses_a_resolver_reading_a_swept_parameter(
     assert "E-RESOLVER-SWEPT-PARAM" in found
 
 
-def test_the_unsupported_family_is_down_to_null_test(write_config):
-    """`E-DATA-RESOLVER-UNSUPPORTED` is gone from every surface, and the family it
-    left is not empty — a sweep asserting only an absence would pass identically if
-    the whole family had been deleted."""
+def test_the_unsupported_declaration_family_is_empty_and_the_family_is_not(installed, write_config):
+    """`E-STATS-NULLTEST-UNSUPPORTED` retires here (H4d task 25), the same way
+    `E-DATA-RESOLVER-UNSUPPORTED` did before it — and the *declaration* family it
+    leaves behind is now empty: nothing left in § The one config file's config
+    example draws an `-UNSUPPORTED` code. The family itself is not empty, though,
+    on the same ground the earlier version of this test named — 'a sweep asserting
+    only an absence would pass identically if the whole family had been deleted' —
+    so a control that still draws one is asserted beside the absence:
+    `E-TEMPLATE-INSTALLED-UNSUPPORTED` refuses a name only an installed
+    distribution's entry point claims, which is not a declaration at all and so is
+    not one this retirement could have touched."""
     found = messages_by_code(
         write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
     )
     unsupported = {code for code in found if code.endswith("-UNSUPPORTED")}
-    assert unsupported == {"E-STATS-NULLTEST-UNSUPPORTED"}
+    assert unsupported == set()
+
+    installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
+    still_live = codes(write_config({"experiment_type": "vendor_assay"}))
+    assert "E-TEMPLATE-INSTALLED-UNSUPPORTED" in still_live
 
 
 def test_a_null_subfield_is_not_a_declaration(write_config):
@@ -4157,10 +4172,512 @@ def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_con
     assert "W-STATS-RESAMPLE-CLUSTERS" not in above
 
 
-def test_a_declared_null_test_is_refused(write_config):
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
-        write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
+def test_a_well_formed_null_test_validates_clean(write_config, tmp_path):
+    """`statistics.null_test` was refused wholesale (`E-STATS-NULLTEST-UNSUPPORTED`)
+    until H4d task 25 retired that refusal. A declaration naming a real attribute
+    now validates clean rather than drawing it, or any of the five narrow codes
+    minted in its place."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,of\np2,against\n")
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label"],
+                },
+                "statistics": {
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"}
+                },
+            }
+        )
     )
+    assert not [c for c in found if c.startswith("E-STATS-NULLTEST")]
+
+
+def test_a_typo_among_the_null_tests_fixed_keys_is_reported(write_config):
+    """`shufle` for `shuffle`. Probed at `2a4dc53`: this earned
+    `{E-STATS-NULLTEST-UNSUPPORTED}` alone, so the typo was unreachable by any
+    check — and would have turned from latent to live at the moment the wholesale
+    refusal retired (H4d task 25, since landed). Closed here first, on the
+    ground `envelope.py` states for `resample` and `holdout` both."""
+    found = codes(
+        write_config(
+            {"statistics": {"null_test": {"method": "permutation", "n": 5000, "shufle": "label"}}}
+        )
+    )
+    assert "E-CONFIG-KEY-UNKNOWN" in found
+
+
+def test_a_wrong_typed_null_test_child_is_reported_by_the_envelope(write_config):
+    """The other half of closing a block one level in: a child whose type is
+    wrong is `E-CONFIG-TYPE`, which is what lets every check in `_check_null_test`
+    skip a non-leaf value instead of reporting the same defect twice under its own
+    code. `n: "lots"` is the discriminating shape — a bare `dict` leaf would have
+    admitted it silently."""
+    found = codes(
+        write_config({"statistics": {"null_test": {"method": "permutation", "n": "lots"}}})
+    )
+    assert "E-CONFIG-TYPE" in found
+
+    # The second case, over `shuffle`: this is the fixture that makes a mutation
+    # removing `"statistics.null_test.shuffle": str` from `LEAF_TYPES` visible.
+    # Deleting only that sibling entry changes whether a wrong-typed `shuffle` is
+    # reported, and nothing above supplies one — a wrong-typed `n` is silent to
+    # that mutation, since it goes through a different entry entirely.
+    shuffle_found = codes(
+        write_config({"statistics": {"null_test": {"method": "permutation", "shuffle": 5}}})
+    )
+    assert "E-CONFIG-TYPE" in shuffle_found
+
+
+def test_a_scalar_null_test_block_is_still_a_type_fault(write_config):
+    """The block keeps its own `dict` entry as well as gaining children — a
+    path that is both a leaf and a container is typed AND descended into, which is
+    what `statistics.resample` does today. Without this case, deleting the outer
+    entry would pass both tests above and silently lose `E-CONFIG-TYPE` for a
+    scalar block."""
+    assert "E-CONFIG-TYPE" in codes(write_config({"statistics": {"null_test": 5}}))
+
+
+def _null_test_doc(**null_test) -> dict:
+    """A config declaring a roster with two attributes and a `null_test` over it.
+
+    `label` and `site` are both declared, so a `shuffle` naming either is legal
+    and a `shuffle` naming anything else is the fault under test — which keeps a
+    refusal attributable rather than roster-incidental. Nineteen adversary
+    configs over one roster is how a previous slice made every refusal
+    roster-incidental; this helper varies the DECLARATION and holds the roster."""
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label", "site"],
+        },
+        "statistics": {"null_test": {"method": "permutation", "n": 5000, **null_test}},
+    }
+
+
+_NULL_TEST_ROSTER = "patient_id,label,site\n" + "".join(
+    f"p{i},{'of' if i % 2 else 'against'},s{i % 3}\n" for i in range(8)
+)
+
+
+def test_an_out_of_enum_null_test_method_is_refused(write_config, tmp_path):
+    """Probed at `2a4dc53`: `method: bootsrap` earned `{E-STATS-NULLTEST-UNSUPPORTED}`
+    alone, so the typo was unreachable by any check — closed here."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(method="bootsrap", shuffle="label")))
+    assert "E-STATS-NULLTEST-METHOD" in found
+
+
+def test_a_sub_floor_null_test_n_is_refused_and_the_floor_is_the_permutation_one(
+    write_config, tmp_path
+):
+    """`n: 19` is refused and `n: 20` is not, which is the assertion pair that
+    separates this floor from `resample`'s. A test asserting only that 19 is
+    refused would pass identically against `min_honest_draws`' 80, which refuses
+    both — so the CLEAN case is the discriminating half."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    refused = codes(write_config(_null_test_doc(n=19, shuffle="label")))
+    assert "E-STATS-NULLTEST-N" in refused
+    clean = codes(write_config(_null_test_doc(n=20, shuffle="label")))
+    assert "E-STATS-NULLTEST-N" not in clean
+
+
+def test_a_shuffle_naming_nothing_declared_is_refused(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(shuffle="nope_not_an_attr")))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+
+
+def test_an_absent_shuffle_is_refused(write_config, tmp_path):
+    """Fix round 1, Major 2. `null_test` is declared FOR a relabelling; an
+    absent `shuffle` is the block's missing subject, and — before this fix —
+    validated clean, so once task 25 retires the wholesale refusal a
+    `{method, n}`-only `null_test` would too, permuting nothing and changing no
+    behavior. `reference.md` § Validation's *Null test coherence* already states
+    "requires `shuffle`"; this is the check behind that row."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc()))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+
+
+def test_an_empty_shuffle_is_refused(write_config, tmp_path):
+    """The other half of Major 2: `shuffle: ""` is a declared value, not an
+    absent key, but it names nothing either — before this fix it validated
+    clean the identical way. Asserted separately from the absent case so a fix
+    that only guards `is None` cannot pass this one vacuously."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(shuffle="")))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+
+
+def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
+    """**The load-bearing case of this task.** Under decision 6 the group-axis
+    contrast is the ONLY p-value home that joins the correction family, so a check
+    scoped to `data.units.attributes` alone refuses the one shape the slice exists
+    to serve. The precedent for admitting an axis name beside an attribute name is
+    `units._stratum_groups`, which already does it for `assign`.
+
+    The axis name here is deliberately NOT also a declared attribute, or the test
+    would pass under either scoping — the fixture would agree with the bug, which
+    is this repo's most-repeated unfailable-check shape."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,of\np2,against\n")
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label"],
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute", "from": "label"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["of", "against"]}]},
+                "statistics": {"null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"}},
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-SHUFFLE" not in found
+
+
+def test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused(write_config, tmp_path):
+    """Fix round 1, Major 1. `null_test_level` reads `unit.attributes.get(shuffle)`
+    per unit — an axis name that is not also a declared attribute matches nobody's
+    attributes, so every unit silently renders `no value`, every cluster reads
+    constant, and the (unfixed) function answered a confident `whole_cluster` for
+    a roster it never examined. Reviewer's own end-to-end fixture: `arm`'s
+    membership (via `assign: {arm: {method: by_attribute, from: label}}`) is
+    itself ambiguous across `match_set` — `label` varies inside `M07` and is
+    constant inside `M12` — but the fix refuses the axis-plus-`cluster_by`
+    combination outright rather than trying to derive a level for it at all, so
+    this fires regardless of whether the underlying membership happens to be
+    ambiguous, within-cluster, or whole-cluster.
+
+    **The CONTROL is `shuffle: label` on the IDENTICAL roster** — a real unit
+    attribute, so `null_test_level` may run, and it reports the pre-existing
+    ambiguity refusal instead. Without this control the fixture would not tell
+    the axis-domain refusal apart from the ordinary ambiguity one."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,label\np1,M07,of\np2,M07,against\np3,M12,of\np4,M12,of\n"
+    )
+    axis_doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label", "match_set"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute", "from": "label"}},
+            "cluster_by": "match_set",
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["of", "against"]}]},
+        "statistics": {"null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"}},
+    }
+    axis_messages = messages_by_code(write_config(axis_doc))
+    assert "E-STATS-NULLTEST-LEVEL" in axis_messages
+    # Distinguishes this refusal from the ordinary ambiguity one below: the
+    # axis-domain message never claims to have read the roster's clustering at
+    # all, and names the axis rather than a pair of witness clusters.
+    assert "axis" in axis_messages["E-STATS-NULLTEST-LEVEL"]
+    assert "cannot be derived" in axis_messages["E-STATS-NULLTEST-LEVEL"]
+
+    attribute_doc = dict(axis_doc)
+    attribute_doc["statistics"] = {
+        "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"}
+    }
+    attribute_messages = messages_by_code(write_config(attribute_doc))
+    assert "E-STATS-NULLTEST-LEVEL" in attribute_messages
+    # The pre-existing ambiguity refusal, unaffected by this fix: it names both
+    # witness clusters rather than an axis.
+    assert "M07" in attribute_messages["E-STATS-NULLTEST-LEVEL"]
+    assert "M12" in attribute_messages["E-STATS-NULLTEST-LEVEL"]
+
+
+def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(write_config):
+    """The filed gap (`spec-defects.md`, "`statistics.null_test` has no no-units
+    check"), claimed. Probed at `2a4dc53`: a `null_test` with the whole `data.units`
+    block removed earned `{E-STATS-NULLTEST-UNSUPPORTED}` alone.
+
+    **Reports without returning**, which is the half a `return` would silently
+    lose: this config ALSO carries a sub-floor `n`, and both findings must be
+    present in one pass. `validate` collects rather than aborting, and a reader
+    who fixes the roster should not then meet the `n` fault on a second pass."""
+    found = codes(write_config({"statistics": {"null_test": {"method": "permutation", "n": 3}}}))
+    assert "E-STATS-NULLTEST-UNITS" in found
+    assert "E-STATS-NULLTEST-N" in found
+
+
+_GROUP_AXIS_NULL_TEST_ROSTER = "patient_id,arm\n" + "".join(
+    f"p{i},{'treatment' if i % 2 else 'control'}\n" for i in range(8)
+)
+
+
+def _group_axis_null_test_doc(**extra) -> dict:
+    """Task 7's group-axis shape (`groups` + `between` + `by_attribute`), plus a
+    declared contrast that crosses the axis and a `null_test` whose `shuffle`
+    names it — the only shape decision 6 makes a p-value home for — under
+    `correction: fdr_bh`."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "statistics": {
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def _parameter_axis_null_test_doc(**extra) -> dict:
+    """A `grid` + `baseline` shape — every resolved comparison paired, since a
+    parameter axis alone shares its units across conditions — with a `null_test`
+    over an ordinary attribute and `correction: fdr_bh`. The third disjunct of
+    § Validation's *Correction can be applied*: a paired contrast's null is a
+    per-unit sign flip, not a relabelling, so `null_test` supplies no p-value
+    whatever its `shuffle` names."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label"],
+        },
+        "sweep": {
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        "statistics": {
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_the_inapplicable_correction_warning_is_silent_where_a_p_value_can_be_carried(
+    write_config, tmp_path
+):
+    """Task 10. The warning's three disjuncts, per § Validation's *Correction can be
+    applied*: no `null_test`, a `shuffle` reaching no comparison, or every member a
+    parameter-axis contrast. A design declaring `fdr_bh` with a `null_test` whose
+    `shuffle` names the group axis its comparison crosses meets none of them, so
+    the warning must NOT fire.
+
+    The CONTROL is the same config with the `null_test` dropped, which must still
+    warn — without it this test would pass identically against a warning that had
+    simply been deleted."""
+    (tmp_path / "input" / "index.csv").write_text(_GROUP_AXIS_NULL_TEST_ROSTER)
+    doc = _group_axis_null_test_doc()
+    found = codes(write_config(doc))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" not in found
+
+    without = _group_axis_null_test_doc()
+    without["statistics"].pop("null_test")
+    without_found = codes(write_config(without))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in without_found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in without_found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in without_found
+
+
+def test_the_inapplicable_correction_warning_still_fires_for_a_parameter_axis_contrast(
+    write_config, tmp_path
+):
+    """The disjunct `not crossed_by_any_comparison`, which `contrasts.crossed_
+    group_axes` is what answers: two conditions differing only on a parameter
+    axis were computed from the same units, so their null is a per-unit sign
+    flip rather than a relabelling and `shuffle` cannot express it. A
+    `null_test` declared beside such a family supplies no p-value to adjust,
+    and the warning is still correct.
+
+    Whole-branch review Minor 5: the CODE is unfailable by code-presence alone
+    — when `crossed_by_any_comparison` is empty, the next `elif` (`shuffle not
+    in crossed_by_any_comparison`) is vacuously true too, so disabling this
+    branch alone still fires the warning through the other one. Only the
+    MESSAGE can tell them apart, so the message is asserted here rather than
+    only the code — a mutation neutering this specific branch now changes the
+    reason text even though the code still fires."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    doc = _parameter_axis_null_test_doc()
+    path = write_config(doc)
+    found = codes(path)
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+    message = messages_by_code(path)["W-STATS-CORRECTION-INAPPLICABLE"]
+    assert "differs only on a parameter axis" in message
+
+
+_GROUP_AXIS_WRONG_SHUFFLE_ROSTER = "patient_id,arm,site\n" + "".join(
+    f"p{i},{'treatment' if i % 2 else 'control'},s{i % 3}\n" for i in range(8)
+)
+
+
+def _group_axis_wrong_shuffle_doc(**extra) -> dict:
+    """M3's fixture: the SECOND disjunct, distinct from both existing ones. A
+    group axis (`arm`) exists and IS crossed by the declared contrast — so
+    disjunct 3 (every comparison is parameter-axis) does not apply, and
+    `null_test` IS declared — so disjunct 1 does not apply either — but
+    `shuffle` names `site`, an ordinary attribute no comparison in this family
+    crosses. `crossed_by_any_comparison` is `{"arm"}`, and `"site" not in
+    {"arm"}` is disjunct 2 firing on its own, isolated from the other two."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm", "site"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "statistics": {
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "site"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_the_inapplicable_correction_warning_fires_when_shuffle_names_no_crossed_axis(
+    write_config, tmp_path
+):
+    """M3, closing the one disjunct the two existing tests do not reach:
+    `null_test` IS declared and a group axis IS crossed by a comparison in the
+    family, but `shuffle` names a different, ordinary attribute — so
+    `crossed_by_any_comparison` is non-empty and `shuffle` is not in it. Both
+    of the other tests' controls stay silent on this shape (the first disjunct
+    needs no declaration at all; the third needs an entirely parameter-axis
+    family), so only this fixture can tell disjunct 2 apart from either."""
+    (tmp_path / "input" / "index.csv").write_text(_GROUP_AXIS_WRONG_SHUFFLE_ROSTER)
+    doc = _group_axis_wrong_shuffle_doc()
+    path = write_config(doc)
+    found = codes(path)
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+    message = messages_by_code(path)["W-STATS-CORRECTION-INAPPLICABLE"]
+    assert "is not a group axis any comparison" in message
+
+
+def _family_null_test_doc(n: int) -> dict:
+    """`_parameter_axis_null_test_doc`'s one-comparison shape (baseline + one
+    `grid` condition = 1 resolved comparison), with `null_test.n` overridden —
+    `W-STATS-NULLTEST-FAMILY` is not gated on `correction` or on which
+    disjunct of the sibling warning fires, only on `comparisons > 0` and a
+    declared `null_test`, so this fixture needs nothing beyond that."""
+    doc = _parameter_axis_null_test_doc()
+    doc["statistics"]["null_test"]["n"] = n
+    return doc
+
+
+def test_the_nulltest_family_warning_fires_below_the_honest_floor(write_config, tmp_path):
+    """M2. `min_honest_permutations(ALPHA / comparisons)` at `comparisons == 1`
+    is `floor(1 / 0.05) == 20` — a permutation p-value can never fall below
+    `1/(n+1)`, so `n = 19` cannot reach the `0.05` level this one-comparison
+    family needs even before any correction narrows it further."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    assert "W-STATS-NULLTEST-FAMILY" in codes(write_config(_family_null_test_doc(19)))
+
+
+def test_the_nulltest_family_warning_is_silent_at_the_honest_floor(write_config, tmp_path):
+    """The control: `n = 20` meets the same floor exactly, and the warning
+    must not fire — without this half, a warning that always fired regardless
+    of `n` would pass the test above identically."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    assert "W-STATS-NULLTEST-FAMILY" not in codes(write_config(_family_null_test_doc(20)))
+
+
+def _level_doc(**null_test) -> dict:
+    """A config declaring `cluster_by: match_set` and a `null_test` shuffling
+    `status` — the shared fixture both the ambiguity test and its control use."""
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["match_set", "status"],
+            "cluster_by": "match_set",
+        },
+        "statistics": {
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "status", **null_test}
+        },
+    }
+
+
+def test_an_ambiguous_shuffle_level_is_refused(write_config, tmp_path):
+    """§ Validation's *Shuffle level is unambiguous*, given a check. The row's own
+    worked example: one matched set whose `status` varies and one whose does not,
+    so neither a within-cluster nor a whole-cluster null applies.
+
+    Roster-time, so the fixture writes a real CSV: the fault is a property of the
+    resolved units and no declaration can express it. **The CONTROL is the same
+    config with `M12` made to vary**, which must NOT draw the code — without it
+    the refusal could be firing on the declaration rather than on the roster."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,status\np1,M07,case\np2,M07,control\np3,M12,control\np4,M12,control\n"
+    )
+    found = codes(write_config(_level_doc()))
+    assert "E-STATS-NULLTEST-LEVEL" in found
+
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,status\np1,M07,case\np2,M07,control\np3,M12,case\np4,M12,control\n"
+    )
+    clean = codes(write_config(_level_doc()))
+    assert "E-STATS-NULLTEST-LEVEL" not in clean
+
+
+def test_a_shuffle_naming_a_report_by_attribute_is_refused(write_config):
+    """`E-STATS-NULLTEST-REPORTBY`, minted by task 5 as a standing narrow refusal.
+    Relabelling a stratifying attribute changes which units a stratum holds, so
+    the null is of a different partition rather than of the same estimate.
+
+    The CONTROL is the same config shuffling the OTHER declared attribute, which
+    `report_by` does not name: the refusal is about the overlap, not about
+    declaring both blocks."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label", "site"],
+                },
+                "statistics": {
+                    "report_by": ["site"],
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "site"},
+                },
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-REPORTBY" in found
+
+    clean = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label", "site"],
+                },
+                "statistics": {
+                    "report_by": ["site"],
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+                },
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-REPORTBY" not in clean
 
 
 def test_declared_report_by_is_checked_rather_than_refused(write_config):
@@ -4266,29 +4783,6 @@ def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     found = codes(write_config({"data.units": units}))
     assert "E-UNITS-SOURCE-MISSING" not in found
-
-
-def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
-    write_config, tmp_path
-):
-    """`statistics.null_test` is refused wholesale, but it is not read by
-    `resolve_units` at all — a duplicate key in the roster is a real,
-    independent defect and must still be reported alongside the refusal, not
-    swallowed by it. `holdout` no longer serves this example: task 18 retired
-    its wholesale refusal, so `statistics.null_test` is the field that still
-    validates clean while changing no behavior."""
-    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
-    units = {"from": "index.csv", "key": "patient_id"}
-    found = codes(
-        write_config(
-            {
-                "data.units": units,
-                "statistics": {"null_test": {"method": "permutation", "n": 5000}},
-            }
-        )
-    )
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
-    assert "E-UNITS-KEY-DUPLICATE" in found
 
 
 def test_a_string_units_block_is_reported_not_raised(write_config):
@@ -6816,9 +7310,9 @@ def test_an_unset_parameter_is_named_only_when_the_version_moved(write_config):
 
 
 def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(write_config):
-    """A config declaring `statistics.null_test` reaches this warning — the block is
-    refused (`E-STATS-NULLTEST-UNSUPPORTED`) but `validate` collects rather than
-    stopping — and the message used to tell that config its `null_test` was
+    """A config declaring `statistics.null_test` reaches this warning — `validate`
+    collects rather than stopping, so whatever else the declaration draws does not
+    suppress it — and the message used to tell that config its `null_test` was
     undeclared. The condition is unchanged and still over-broad against the row it
     implements; what this pins is only that the message asserts nothing false."""
     path = write_config(
@@ -6830,7 +7324,6 @@ def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(wri
     c = Collector()
     validate_config(path, c)
     found = {f.code: f.message for f in c.findings}
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "undeclared" not in found["W-STATS-CORRECTION-INAPPLICABLE"]
 
 
@@ -7871,9 +8364,7 @@ def test_no_cluster_warning_once_cluster_by_declares_the_column(write_config, tm
 
 def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tmp_path):
     """One of the exclusions: a cluster is what shuffling *respects*, not what it
-    names. Reported through `validate_config` even though `statistics.null_test`
-    is itself refused in this build — the refusal is a finding beside this one,
-    not a substitute for it."""
+    names."""
     _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
     path = write_config(
         {
@@ -7883,7 +8374,6 @@ def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tm
     )
     found = codes(path)
     assert "W-DATA-CLUSTER-UNDECLARED" not in found
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
 def test_no_cluster_warning_for_an_attribute_something_stratifies_on(write_config, tmp_path):
@@ -11754,6 +12244,52 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
     assert len(files) > 20
     hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
     assert hits == []
+
+
+def test_the_retired_nulltest_unsupported_code_appears_nowhere_in_src():
+    """H4d task 25's own retirement, on H4a's precedent above: a retired
+    `-UNSUPPORTED` code is retired wholesale, so nothing in `src/` may still
+    emit or cite `E-STATS-NULLTEST-UNSUPPORTED`. Filtering the FILE LIST rather
+    than the sweep's output, and guarded against an empty scan, for the same
+    reason the resample sweep above is."""
+    import pathlib
+
+    src_root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    files = list(src_root.rglob("*.py"))
+    assert len(files) > 20
+    hits = [path for path in files if "E-STATS-NULLTEST-UNSUPPORTED" in path.read_text()]
+    assert hits == []
+
+
+def test_the_worked_examples_intervals_in_reference_md_are_not_narrowed_by_the_null_test_work():
+    """`CLAUDE.md` § The worked example: these were checked numerically against a
+    synthetic 228-unit table and must not be narrowed back. H4d adds a `p_value`
+    to two `reference.md` sections that hold worked-example numbers, and an edit
+    that re-derived an interval to "agree" with a p-value is the failure this
+    catches. Read from `__file__` rather than a bare relative path, and guarded
+    against an empty read so it cannot pass vacuously.
+
+    Guards `docs/reference.md` only, and only three of the four literals
+    CLAUDE.md's worked example names — the fourth, kendall's own per-condition
+    `[0.347, 0.477]`, appears in README.md's demo table rather than here, where
+    the worked example only ever spells out kendall's baseline delta
+    (`[-0.213, -0.125]`) rather than its raw per-condition interval. Verified at
+    `a207702` with `grep -c '0.347' docs/reference.md` returning 0. A pin
+    asserting a string that was never there passes for the wrong reason the
+    moment someone adds it, so it is left out here rather than included, and
+    README's own copy of that fourth literal is left unpinned by this test —
+    named in the docstring rather than the title, per round-1 review (m4), so
+    the name claims exactly the file this test reads and nothing more."""
+    import pathlib
+
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "reference.md").read_text()
+    assert len(text) > 100000
+    for literal in (
+        "ci95: [-0.007, 0.059]",
+        "[0.488, 0.661]",
+        "[0.517, 0.683]",
+    ):
+        assert literal in text, f"worked-example interval {literal!r} is gone or narrowed"
 
 
 def _holdout(block, **extra) -> dict:

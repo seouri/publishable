@@ -981,3 +981,648 @@ def test_a_member_may_not_carry_clusters_beside_a_pool_or_a_weight():
             weights=(1.0, 1.0),
             **common,
         )
+
+
+_PIN_MEMBERS = [
+    Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=0.026,
+        ci95=(-0.007, 0.059),
+        pool=None,
+        diffs=tuple(0.026 + 0.01 * k for k in range(-5, 6)),
+        declaration_index=0,
+    ),
+    Member(
+        where="cond:2",
+        step="s",
+        metric="m",
+        delta=-0.169,
+        ci95=(-0.213, -0.125),
+        pool=None,
+        diffs=tuple(-0.169 + 0.005 * k for k in range(-5, 6)),
+        declaration_index=1,
+    ),
+    Member(
+        where="cond:3",
+        step="s",
+        metric="m",
+        delta=0.0,
+        ci95=(-0.5, 0.5),
+        pool=None,
+        diffs=tuple(0.1 * k for k in range(-5, 6)),
+        declaration_index=2,
+    ),
+    Member(
+        where="cond:4",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=None,
+        pool=None,
+        diffs=(1.0, 1.0, 1.0),
+        declaration_index=3,
+    ),
+]
+
+
+_PIN_INNER_KEYS = {
+    "ci95_corrected",
+    "correction",
+    "correction_level",
+    "family_size",
+    "family",
+    "thin",
+}
+
+
+def test_holms_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The regression pin, captured at `a207702` before any H4d change.
+
+    Three properties in one family, and each would move under a different fault.
+    The RANK ORDER is asserted first because a level is a function of a rank:
+    `cond:3` has `delta` exactly 0 with a finite width, so `_evidence_ratio`
+    returns exactly `0.0` for it — a REAL member at the value a p-only member
+    would be handed by any sentinel. It must keep rank 3 of 3, which is what
+    says the new tier sorts below every interval-carrying member rather than
+    among them.
+
+    The three levels are alpha/3, alpha/2 and alpha, which is Holm at m = 3 —
+    so a family that admitted `cond:4` would show 4, and every bound would move.
+
+    Round-1 review (M2): the outer `set(fields)` assertion pinned member
+    identities only, so a task widening what EACH block carries — `holm` and
+    `bonferroni` both gain `p_value_corrected` in tasks 17/18, `fdr_bh`'s
+    `ci95_corrected` stays `null` under a rewritten two-pass `corrected_for` —
+    could pass this test with a spurious key or a spurious `None` added to
+    every block. Each block's own key set is now pinned alongside its values,
+    so an added or missing key fails here rather than passing.
+    """
+    ranked = [m.where for m in rank_family(family_members(_PIN_MEMBERS))]
+    assert ranked == ["cond:2", "cond:1", "cond:3"]
+
+    fields = corrected_fields(_PIN_MEMBERS, "holm")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
+    assert fields[("cond:2", "s", "m")]["correction_level"] == pytest.approx(0.05 / 3)
+    assert fields[("cond:2", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.18335036277829492),
+        pytest.approx(-0.1546496372217051),
+    ]
+    assert fields[("cond:1", "s", "m")]["correction_level"] == pytest.approx(0.025)
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.00033766915711599607),
+        pytest.approx(0.05233766915711599),
+    ]
+    assert fields[("cond:3", "s", "m")]["correction_level"] == pytest.approx(0.05)
+    assert fields[("cond:3", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.22281388519862744),
+        pytest.approx(0.22281388519862744),
+    ]
+    assert [v["thin"] for v in fields.values()] == [False, False, False]
+
+
+def test_bonferronis_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The same regression pin under `bonferroni`, added per round-1 review
+    (M2): task 27's original pin exercised `holm` alone, while decision 3
+    changes exactly Bonferroni's cell and task 18 rewrites the same
+    `corrected_for` two-pass for `fdr_bh`. Captured at `a207702`, before any
+    H4d change: every member is corrected at the same level α/m under
+    Bonferroni, unlike Holm's per-rank level.
+    """
+    fields = corrected_fields(_PIN_MEMBERS, "bonferroni")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
+        assert fields[key]["correction_level"] == pytest.approx(0.05 / 3)
+        assert fields[key]["correction"] == "bonferroni"
+    assert fields[("cond:2", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.18335036277829492),
+        pytest.approx(-0.1546496372217051),
+    ]
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.0027007255565898065),
+        pytest.approx(0.05470072555658981),
+    ]
+    assert fields[("cond:3", "s", "m")]["ci95_corrected"] == [
+        pytest.approx(-0.2870072555658981),
+        pytest.approx(0.2870072555658981),
+    ]
+    assert [v["thin"] for v in fields.values()] == [False, False, False]
+
+
+def test_fdr_bhs_corrected_bounds_are_unmoved_by_the_p_value_work():
+    """The same regression pin under `fdr_bh`, added per round-1 review (M2).
+
+    `fdr_bh` is the method task 18 rewrites `corrected_for` two-pass for, and
+    with no member of `_PIN_MEMBERS` carrying a `p_value`, `ci95_corrected`
+    and `correction_level` must stay `None` for every member — a widened
+    two-pass rewrite that started returning an interval, or a `p_value` key,
+    here would move this pin.
+    """
+    fields = corrected_fields(_PIN_MEMBERS, "fdr_bh")
+    assert set(fields) == {
+        ("cond:1", "s", "m"),
+        ("cond:2", "s", "m"),
+        ("cond:3", "s", "m"),
+    }
+    for key in fields:
+        assert set(fields[key]) == _PIN_INNER_KEYS
+        assert fields[key]["ci95_corrected"] is None
+        assert fields[key]["correction_level"] is None
+        assert fields[key]["correction"] == "fdr_bh"
+        assert fields[key]["thin"] is False
+
+
+def test_a_member_with_no_interval_and_no_p_value_is_still_outside_the_family():
+    """The property decision 4 rests on: widening `family_members` must be a no-op
+    for every config that declares no `null_test`.
+
+    `cond:4` carries `diffs` and no `ci95` — the shape `cli` builds for a thin
+    pool, a too-short draw or a degenerate column. It must not be counted, and
+    the assertion is on the family SIZE rather than on its absence: a member
+    wrongly admitted inflates `m`, which tightens every level and narrows every
+    corrected interval in the run, in the direction no reader can check.
+    """
+    counted = family_members(_PIN_MEMBERS)
+    assert [m.where for m in counted] == ["cond:1", "cond:2", "cond:3"]
+    assert family_shape(counted) == (3, {"comparisons": 3, "metrics": 1})
+
+
+def test_a_member_carrying_only_a_p_value_is_in_the_family():
+    """Decision 4's widening. `cli` builds exactly this member for a thin pool, a
+    too-short draw or a degenerate column — while a permutation p-value needs only
+    the observed statistic and the null, both of which exist in that state.
+    Unwidened, `fdr_bh` would silently adjust nothing for precisely the member
+    whose p-value was the only thing it had.
+
+    The assertion is on the family SIZE as well as on membership: a member counted
+    changes `m`, which is the quantity every level is derived from."""
+    thin = Member(
+        where="cond:9",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.01,
+    )
+    with_interval = Member(
+        where="cond:8",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=(0.1, 0.7),
+        pool=None,
+        diffs=(0.3, 0.4, 0.5),
+        declaration_index=1,
+    )
+    counted = family_members([thin, with_interval])
+    assert {m.where for m in counted} == {"cond:9", "cond:8"}
+    assert family_shape(counted) == (2, {"comparisons": 2, "metrics": 1})
+
+
+def test_a_member_with_neither_an_interval_nor_a_p_value_is_still_excluded():
+    """The other half, and the one that says the widening is a widening rather
+    than a deletion of the predicate."""
+    neither = Member(
+        where="cond:7",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=(0.3, 0.4),
+        declaration_index=0,
+    )
+    assert family_members([neither]) == []
+
+
+def test_a_p_only_member_ranks_below_every_interval_carrying_one_including_a_zero_ratio():
+    """**The discriminating case for the tier, and the reason it is a tuple
+    element rather than a sentinel ratio.** `_evidence_ratio` returns exactly
+    `0.0` for a member whose `delta` is 0 with a finite width — a REAL member —
+    so a p-only member handed `0.0` would sort among those rather than after them.
+
+    Three members: a strong one, a zero-ratio one, and a p-only one. The order
+    must be strong, zero-ratio, p-only. A sentinel implementation gives strong,
+    then the two in declaration order, which differs from this whenever the
+    p-only member was declared first — which it is here, deliberately."""
+    p_only = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.01,
+    )
+    zero_ratio = Member(
+        where="cond:2",
+        step="s",
+        metric="m",
+        delta=0.0,
+        ci95=(-0.5, 0.5),
+        pool=None,
+        diffs=(-0.1, 0.0, 0.1),
+        declaration_index=1,
+    )
+    strong = Member(
+        where="cond:3",
+        step="s",
+        metric="m",
+        delta=1.0,
+        ci95=(0.9, 1.1),
+        pool=None,
+        diffs=(0.9, 1.0, 1.1),
+        declaration_index=2,
+    )
+    ranked = [m.where for m in rank_family(family_members([p_only, zero_ratio, strong]))]
+    assert ranked == ["cond:3", "cond:2", "cond:1"]
+
+
+def test_ranking_a_p_only_member_does_not_reach_the_evidence_ratio():
+    """`_evidence_ratio` asserts `member.ci95 is not None`, and the widening makes
+    that assert reachable. **This test asserts the ranking, not the assert**: a
+    test catching the `AssertionError` would be testing the assert, and a mutation
+    caught by a crash is not a pin. So the key must short-circuit, and the way to
+    see that it does is that ranking a family of p-only members returns them in
+    declaration order rather than raising."""
+    members = [
+        Member(
+            where=f"cond:{i}",
+            step="s",
+            metric="m",
+            delta=float(i),
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=i,
+            p_value=0.1 * i,
+        )
+        for i in (1, 2, 3)
+    ]
+    assert [m.where for m in rank_family(family_members(members))] == [
+        "cond:1",
+        "cond:2",
+        "cond:3",
+    ]
+
+
+def test_the_exactly_one_rule_is_unchanged_by_the_p_value_field():
+    """Recorded as a decision rather than left as an omission: a p-value is not
+    evidence, so it does not enter the exactly-one count. A member carrying a
+    `ci95` and two evidence kinds is still refused, with or without a p-value."""
+    with pytest.raises(ValueError, match="exactly one of pool/diffs/sides"):
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=(0.0, 0.2),
+            pool=(0.0, 0.1, 0.2),
+            diffs=(0.1,),
+            declaration_index=0,
+            p_value=0.05,
+        )
+
+
+def _fixture_d(x_has_interval: bool = True) -> list[Member]:
+    """Four members at m = 4, with the p-order and the evidence order deliberately
+    disagreeing — the only arrangement that can tell decision 1's ruling from an
+    implementation that ranks BH on the evidence ratio.
+
+    Evidence ratios 1, 4, 3, 2 give evidence ranks X=4, Y=1, Z=2, W=3 (verified at
+    `a207702` by `rank_family`), against p-ranks X=1, Y=2, Z=3, W=4. `x_has_interval`
+    is decision 4's variant: X carries a p-value and no interval, and the BH table
+    must be IDENTICAL — X already ranks last on evidence, so demoting it to the
+    no-interval tier moves no other member's Holm rank either."""
+
+    def mk(where, delta, low, high, index, p, interval=True):
+        return Member(
+            where=where,
+            step="s",
+            metric="m",
+            delta=delta,
+            ci95=(low, high) if interval else None,
+            pool=None,
+            diffs=tuple(delta + 0.1 * k for k in range(-3, 4)),
+            declaration_index=index,
+            p_value=p,
+        )
+
+    return [
+        mk("cond:X", 1.0, 0.0, 2.0, 0, 0.0001999600079984003, x_has_interval),
+        mk("cond:Y", 4.0, 3.0, 5.0, 1, 0.22),
+        mk("cond:Z", 3.0, 2.0, 4.0, 2, 0.31),
+        mk("cond:W", 2.0, 1.0, 3.0, 3, 0.9),
+    ]
+
+
+def test_bh_ranks_on_the_ascending_p_value_and_its_suffix_min_binds():
+    """Decision 1, and the single assertion that can tell a two-pass
+    implementation from a one-pass one: **Y's own `m/i × p` is 0.44 and it is
+    pulled down to Z's 0.41333…**. A single-pass implementation reports 0.44.
+
+    **X is the member the whole ruling is about** — p-rank 1, evidence rank 4 —
+    and the two readings differ on it by exactly the factor `m`: BH on the
+    ascending p gives `4 × p`, BH on the evidence ratio gives `4/4 × p`, which is
+    Holm's answer. So the X assertion is the ordering assertion and the Y/Z pair
+    is the accumulation assertion; neither alone is enough.
+
+    The Y/Z TIE is the signature of the bind, which means a mutation swapping
+    those two members is invisible on those cells — the ordering is pinned on X
+    and W, whose adjusted values are unique to them."""
+    fields = corrected_for(_fixture_d(), "fdr_bh", 4, {"comparisons": 4, "metrics": 1})
+    adjusted = {where: v["p_value_corrected"] for (where, _, _), v in fields.items()}
+    assert adjusted["cond:X"] == pytest.approx(0.0007998400319936012)
+    assert adjusted["cond:Y"] == pytest.approx(0.41333333333333333)
+    assert adjusted["cond:Z"] == pytest.approx(0.41333333333333333)
+    assert adjusted["cond:W"] == pytest.approx(0.9)
+    assert adjusted["cond:Y"] != pytest.approx(0.44)
+
+
+def test_fdr_bh_leaves_every_corrected_interval_null_by_design():
+    """`_level_for` returns `None` for `fdr_bh` and that is the documented
+    behaviour, not a gap: controlling a false discovery rate is a statement about
+    a set, not a bound on any one comparison. Asserted beside the adjusted
+    p-values, because "reports nothing" and "reports only the p" are the two
+    states this method has been in."""
+    fields = corrected_for(_fixture_d(), "fdr_bh", 4, {"comparisons": 4, "metrics": 1})
+    assert all(v["ci95_corrected"] is None for v in fields.values())
+    assert all(v["correction_level"] is None for v in fields.values())
+    assert all(v["p_value_corrected"] is not None for v in fields.values())
+
+
+def test_holms_adjusted_p_is_the_p_at_this_members_own_evidence_rank():
+    """Decision 2. Holm's level is α/(m − i + 1) at the EVIDENCE rank, not the
+    p-rank, so the p at that level is `p × (m − i + 1)`, clipped at 1 — computed
+    from `rank_family`'s evidence ordering (Y=1, Z=2, W=3, X=4 on this fixture),
+    never from sorting the raw p-values.
+
+    On fixture D the adjusted order happens to equal the raw-p order — X < Y <
+    Z < W both ways — so this fixture does not exhibit `reference.md`'s
+    disclaimed possibility that "a member with a smaller raw p can carry a
+    larger adjusted one." That inversion is a real property of the CONSTRUCTION
+    (a `reference.md` "can", not a "does"), not one this fixture happens to
+    instantiate, and no claim of non-monotonicity is made here.
+
+    W is where the clip is asserted: 0.9 × 2 = 1.8."""
+    fields = corrected_for(_fixture_d(), "holm", 4, {"comparisons": 4, "metrics": 1})
+    adjusted = {where: v["p_value_corrected"] for (where, _, _), v in fields.items()}
+    assert adjusted["cond:Y"] == pytest.approx(0.88)
+    assert adjusted["cond:Z"] == pytest.approx(0.9299999999999999)
+    assert adjusted["cond:W"] == pytest.approx(1.0)
+    assert adjusted["cond:X"] == pytest.approx(0.0001999600079984003)
+
+
+def test_bonferroni_reports_the_p_at_alpha_over_m_for_every_member():
+    """Decision 3: the table's Bonferroni `—` was an asymmetry with no ground, and
+    it is amended. Every member gets `min(1, p × m)`, so Z and W both clip.
+
+    Holm and Bonferroni necessarily AGREE at evidence rank 1 (both are α/m
+    there), which is Y — so the discriminating members for that pair are Z (0.93
+    against 1.0) and X (a factor of 4), and both are asserted."""
+    fields = corrected_for(_fixture_d(), "bonferroni", 4, {"comparisons": 4, "metrics": 1})
+    adjusted = {where: v["p_value_corrected"] for (where, _, _), v in fields.items()}
+    assert adjusted["cond:X"] == pytest.approx(0.0007998400319936012)
+    assert adjusted["cond:Y"] == pytest.approx(0.88)
+    assert adjusted["cond:Z"] == pytest.approx(1.0)
+    assert adjusted["cond:W"] == pytest.approx(1.0)
+
+
+def test_the_bh_table_is_identical_when_one_member_carries_no_interval():
+    """Decision 4's widening, made visible as four unchanged literals rather than
+    as an absence. Unwidened, X vanishes and `m` drops to 3, which moves every
+    other row.
+
+    Asserted as an equality between the two tables rather than as eight literals:
+    the relation is the claim, and a per-member literal restated twice would pass
+    if both had moved together."""
+    with_interval = corrected_for(_fixture_d(True), "fdr_bh", 4, {"comparisons": 4, "metrics": 1})
+    without = corrected_for(_fixture_d(False), "fdr_bh", 4, {"comparisons": 4, "metrics": 1})
+    assert {k: v["p_value_corrected"] for k, v in with_interval.items()} == {
+        k: v["p_value_corrected"] for k, v in without.items()
+    }
+
+
+def test_a_member_with_no_p_value_gets_no_p_value_corrected_key():
+    """Absent, not null: an explicit null would claim an adjustment was attempted
+    and found nothing to do, which is the same distinction `ci95_corrected` makes
+    under `correction: none`."""
+    members = [
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=(0.4, 0.6),
+            pool=None,
+            diffs=(0.4, 0.5, 0.6),
+            declaration_index=0,
+        )
+    ]
+    fields = corrected_for(members, "holm", 1, {"comparisons": 1, "metrics": 1})
+    assert "p_value_corrected" not in fields[("cond:1", "s", "m")]
+
+
+def test_a_p_only_member_does_not_report_a_thin_correction():
+    """**A defect the widening would otherwise introduce, and the spec names only
+    its `fdr_bh` half.** `corrected_for` computes `thin = level is not None and
+    bounds is None`, and `_corrected_bounds` falls through to `None` for a member
+    carrying none of the three evidence kinds — so under `holm` a p-only member
+    would set `thin: True` and the caller would emit `W-STATS-CORRECTED-THIN`,
+    whose message says the RESAMPLE'S DRAWS could not support the level. That is
+    false of a member that never had an interval to build.
+
+    Asserted as `thin is False` rather than by looking for the warning: this
+    function returns the flag and `cli` reads it, so the flag is where the fault
+    lives."""
+    members = [
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=0,
+            p_value=0.02,
+        ),
+        Member(
+            where="cond:2",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=(0.4, 0.6),
+            pool=None,
+            diffs=(0.4, 0.5, 0.6),
+            declaration_index=1,
+        ),
+    ]
+    fields = corrected_for(members, "holm", 2, {"comparisons": 2, "metrics": 1})
+    assert fields[("cond:1", "s", "m")]["thin"] is False
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] is None
+
+
+def test_a_p_only_member_does_not_report_a_thin_correction_under_bonferroni_either():
+    """Whole-branch review Major 3: the same fixture as `..._does_not_report_a_
+    thin_correction`, over `bonferroni` rather than `holm` — the method-
+    independent `thin` expression (`and member.ci95 is not None`) was pinned
+    for only one of the two methods that use a real `level`, and this closes
+    the gap directly (per the review's remedy) rather than leaving a second
+    report-only note nobody downstream reads."""
+    members = [
+        Member(
+            where="cond:1",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=0,
+            p_value=0.02,
+        ),
+        Member(
+            where="cond:2",
+            step="s",
+            metric="m",
+            delta=0.5,
+            ci95=(0.4, 0.6),
+            pool=None,
+            diffs=(0.4, 0.5, 0.6),
+            declaration_index=1,
+        ),
+    ]
+    fields = corrected_for(members, "bonferroni", 2, {"comparisons": 2, "metrics": 1})
+    assert fields[("cond:1", "s", "m")]["thin"] is False
+    assert fields[("cond:1", "s", "m")]["ci95_corrected"] is None
+
+
+def test_bh_over_a_partial_member_set_at_the_larger_declared_m_is_the_conservative_direction():
+    """Task 17's owed measurement, made directly against `corrected_for` rather
+    than transferred as an argument from `family_shape`'s docstring.
+
+    `hypotheses.evaluate` calls `corrected_for(family_members_, method, size,
+    {"hypotheses": size})` where `size = len(counted)` is the DECLARED
+    confirmatory-hypothesis count and `family_members_` drops any counted
+    hypothesis with no `Member` — so `m` (the family size argument) can be
+    LARGER than `k` (the number of members `_bh_adjusted` actually sees). This
+    measures that combination directly: three p-only members, called once at
+    `family_size=3` (one hypothesis declared with no resolvable `Member`, the
+    real `hypotheses.py` shape) and once at `family_size=len(members) == 3`
+    (no gap) versus a SEPARATE two-member call at `family_size=2` — the
+    smaller `m` a same-count family would use if the third hypothesis had
+    never been declared at all.
+
+    BH's own arithmetic (`m/i × p`, suffix-min) is monotone increasing in `m`
+    for a fixed `i`, so every member's adjusted value at `m=3` must be >= its
+    value at `m=2` for the same two members — the conservative direction
+    `family_shape`'s docstring names for the sweep family, measured here for
+    the case `hypotheses.py` actually creates rather than asserted by
+    analogy."""
+    two_of_the_three = [
+        Member(
+            where="h:1",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=0,
+            p_value=0.01,
+        ),
+        Member(
+            where="h:2",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=1,
+            p_value=0.04,
+        ),
+    ]
+    at_declared_three = corrected_for(two_of_the_three, "fdr_bh", 3, {"hypotheses": 3})
+    at_present_two = corrected_for(two_of_the_three, "fdr_bh", 2, {"hypotheses": 2})
+    for key in (("h:1", "s", "m"), ("h:2", "s", "m")):
+        larger_m = at_declared_three[key]["p_value_corrected"]
+        smaller_m = at_present_two[key]["p_value_corrected"]
+        assert larger_m >= smaller_m
+    # The discriminating literal: h:2 at m=3 is `min(1, 3/2 × 0.04) = 0.06`,
+    # strictly above its m=2 value `min(1, 2/2 × 0.04) = 0.04` — not merely
+    # `>=` by a tie, which a family_size that silently did nothing could also
+    # produce.
+    assert at_declared_three[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.06)
+    assert at_present_two[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.04)
+
+
+def test_holm_withholds_p_value_corrected_for_a_p_only_member_rather_than_fabricating_its_rank():
+    """Whole-branch review Critical 1. `rank_family`'s tier places every p-only
+    member after every interval-carrying one, purely to give the sort a total
+    order — that placement is a tie-break, not a claim about where the member's
+    evidence sits. Publishing Holm's `min(1, p × (m − i + 1))` at that
+    fabricated `i` let two members with BIT-IDENTICAL raw p diverge by
+    `declaration_index` alone: reproduced end to end by the whole-branch
+    reviewer (one unit in `arm=of`, five in `against`, two recorded columns,
+    `shuffle: arm`, `correction: holm`) — `y` and `z` shared `p_value:
+    0.16976604679064186` and published `p_value_corrected` 0.3395 and 0.1698
+    respectively, differing only by which column was declared first.
+
+    Two p-only members at equal raw p is the discriminating fixture: if either
+    got a real (non-`None`) `p_value_corrected`, reordering them would move
+    which one is `0.3395` and which is `0.1698` — the exact failure this test
+    exists to catch. Withheld (`None`/absent) is the only order-independent
+    answer available under `holm`, matching `thin`'s own precedent for the
+    identical member shape."""
+    p_only_first = Member(
+        where="cond:first",
+        step="s",
+        metric="y",
+        delta=87.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.16976604679064186,
+    )
+    p_only_second = Member(
+        where="cond:second",
+        step="s",
+        metric="z",
+        delta=261.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=1,
+        p_value=0.16976604679064186,
+    )
+    forward = corrected_for(
+        [p_only_first, p_only_second], "holm", 2, {"comparisons": 2, "metrics": 1}
+    )
+    reversed_order = corrected_for(
+        [p_only_second, p_only_first], "holm", 2, {"comparisons": 2, "metrics": 1}
+    )
+    for fields in (forward, reversed_order):
+        assert "p_value_corrected" not in fields[("cond:first", "s", "y")]
+        assert "p_value_corrected" not in fields[("cond:second", "s", "z")]
+        assert fields[("cond:first", "s", "y")]["ci95_corrected"] is None
+        assert fields[("cond:second", "s", "z")]["ci95_corrected"] is None

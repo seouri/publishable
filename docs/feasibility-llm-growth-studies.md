@@ -1319,6 +1319,46 @@ by H4c (`docs/superpowers/spec-defects.md`) and owned by **H4d**, terminally.
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2272 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
 
+### Measured on 2026-08-19 against commit `d0e9345` — after H4d
+
+H4d retires `E-STATS-NULLTEST-UNSUPPORTED` and builds `statistics.null_test` end to end — a `method`
+enum, an `n` floor, a `shuffle` check, a cluster-level derivation, a group-axis p-value home, a
+per-condition derived one, and `fdr_bh` made real. **H4d unblocks ZERO configs, and both counts stay
+unmoved: six with no remaining core-side blocker, three executable.** Neither number moves, on the
+same measurement method every entry above uses: each config's `data`/`statistics` blocks run through
+`validate_config`.
+
+**The measurement, self-matches named rather than filtered out** (`CLAUDE.md`: never filter a
+sweep's output, filter the file list — and this file is now the one place both the pattern and this
+sentence describing it live). Every `statistics` block in this analysis holds an explicit null for
+the field this slice builds: `grep -c '  null_test: null' docs/feasibility-llm-growth-studies.md` →
+9, eight config blocks and this sentence's own grep command, which `_check_null_test`'s own
+`if not isinstance(null_test, dict) or not null_test: return` treats as undeclared, the identical
+truthy guard `_check_unimplemented`'s retired check read. **Zero configs declare `fdr_bh`**:
+`grep -c '  correction: holm'` → 8 (seven config blocks, one self-match) and
+`grep -c '  correction: none'` → 2 (one config block, one self-match), seven plus one config block
+is every `statistics` block this analysis has, and neither pattern is `fdr_bh`. **The control**:
+`grep -c '  correction: fdr_bh'` → 1, and reading the hit shows it is this sentence's own grep
+command rather than a config — proving the sweep can find a real hit if one existed rather than
+passing vacuously by a pattern nothing ever matches. So no config reaches any of the five narrow
+codes this slice mints (`-METHOD`, `-N`, `-SHUFFLE`, `-UNITS`, `-LEVEL`), and the one warning this
+slice narrows — `W-STATS-CORRECTION-INAPPLICABLE` — fires for none of them either, since none
+declares `fdr_bh` for it to fire under.
+
+**A retired-refusal count is not an executable-run count**, the sentence the H4c entry above already
+states and this one repeats rather than lets drift: H4d's net is one `-UNSUPPORTED` retired, five
+narrow refusals minted in its place, `E-STATS-NULLTEST-REPORTBY` minted, and one prior filing
+(`E-DATA-CLUSTER-DERIVED`) claimed — not a refusal count that improves, and not a number that moves
+here.
+
+**Unchanged and still outstanding**, carried from the H4c entry rather than re-derived: E3, E4, E6,
+C1, C2 and C3 remain blocked on `io.reuse_from`; all three C configs still meet the `report_by`
+`resample_columns` asymmetry, converted to a documented limitation by H4d task 24 rather than
+deferred a fifth time.
+
+Full local `pytest`/`ruff`/`mypy` gates at this commit: 2359 passed + 1 skipped + 2 xfailed, ruff and
+mypy both clean.
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.

@@ -839,6 +839,312 @@ def min_honest_draws(confidence: float = 0.95) -> int:
     return math.ceil(2.0 / tail)
 
 
+NULL_TEST_METHODS = ("permutation",)
+
+
+def min_honest_permutations(level: float = 0.05) -> int:
+    """The fewest relabellings a permutation p-value may be read off.
+
+    A DIFFERENT quantity from `min_honest_draws`, and inheriting that one
+    unexamined is the available shortcut and the wrong one: that floor is about a
+    percentile interval's two ranks being interior, while a permutation p-value's
+    resolution is `1/(n + 1)` — the smallest value it can take. The floor is the
+    smallest `n` at which the p-value can fall STRICTLY below the level being
+    tested: `1/(n + 1) < level` gives `n > 1/level − 1`, so `n >= floor(1/level)`
+    — 20 at 95 % confidence, where `min_honest_draws` is 80.
+
+    Derived from `level` rather than written as a literal, the way
+    `min_honest_draws` is derived from `confidence`, so a family tested at a
+    corrected level moves the floor with it.
+
+    `floor` rather than a search over `n`: at `level = 0.05/7` the two disagree,
+    a scan answering 139 because `1/140` and `0.05/7` differ by one ulp, where
+    exact arithmetic answers 140. The non-strict reading `1/(n + 1) <= level`
+    would be `ceil(1/level) - 1` and gives 19 at 95 %; `reference.md`
+    § Statistical reporting states the strict inequality and the integer
+    together so the two cannot drift.
+    """
+    return math.floor(1.0 / level)
+
+
+def _label_delta(values: Sequence[float], labels: Sequence[str], of_level: str) -> float | None:
+    """The statistic a permutation null is built for: the mean over the units
+    labelled `of_level` minus the mean over the rest.
+
+    One expression, called for the observed labelling and for every draw, so the
+    `>=` comparison cannot be against a differently computed number. `reference.md`
+    § What isn't a repeat requires the comparison be "against the value the actual
+    run produced" — recomputed here rather than read off a record, so a delta that
+    was rounded, weighted or narrowed elsewhere cannot silently shift the count by
+    one at the identity draw.
+
+    `None` for an empty arm, which is not a delta of zero: `reference.md`
+    § Contrasts refuses that reading one construction over.
+
+    `None` too when the delta itself is `nan` — `docs/superpowers/spec-defects.md`'s
+    "a column resample is only ever defined given finite inputs" filing, claimed
+    for this construction rather than re-declined a fourth time: an unguarded
+    `nan` observed statistic makes every `>=` comparison `False`, which
+    `permutation_over_units` would report as a small, real-looking p-value —
+    `1/(n + 1)` — from a table nobody could compute a mean of, which is worse
+    than the honest absence an empty arm already gets. Checked here rather
+    than at each caller, since both the observed statistic and every draw's
+    recomputation pass through this one function.
+    """
+    of = [v for v, label in zip(values, labels, strict=True) if label == of_level]
+    against = [v for v, label in zip(values, labels, strict=True) if label != of_level]
+    if not of or not against:
+        return None
+    delta = sum(of) / len(of) - sum(against) / len(against)
+    return None if math.isnan(delta) else delta
+
+
+def permutation_over_units(
+    values: Sequence[float],
+    labels: Sequence[str],
+    of_level: str,
+    seed: int,
+    n: int = 5000,
+    strata: Sequence[str] | None = None,
+) -> float | None:
+    """The permutation p-value for a label's effect, over rows.
+
+    `reference.md` § What isn't a repeat: a `null_test` "relabels units and
+    recomputes the metric", and "the permutation test compares the null it builds
+    against the value the actual run produced". So each draw is one relabelling of
+    `labels` — the multiset of labels is held fixed, which is what makes the arm
+    sizes constant across draws and the null a null about the LABEL rather than
+    about the design — and the statistic is recomputed from it.
+
+    **The estimator is `(1 + #{T >= T_obs}) / (n + 1)`, and the +1 is not a
+    rounding choice.** The observed labelling is itself one of the relabellings,
+    so it is counted; `b/n` can return exactly `0.0`, and a permutation test can
+    never legitimately report a probability of zero — it has only ever examined
+    `n` of them. The `>=` is deliberate too: a draw that ties the observed
+    statistic is evidence against the observed being extreme, so counting only
+    strict exceedances would report a smaller p than the evidence supports.
+
+    `None`, never a number, in three states, and each is an honest absence rather
+    than a failure: an arm the observed labelling left empty (no statistic to
+    test), fewer than two values (nothing to relabel), and a null whose every draw
+    reproduces the observed statistic. The last is decision 8 and it follows
+    `percentile_over_units_clustered`'s shipped rule that "the degenerate case is
+    content, not count" — a p-value of 1.0 from a distribution that could not have
+    been anything else is a number with no construction behind it. The record says
+    so by carrying the resolved `null_test` echo beside the `null`, exactly as
+    `ci95: null` beside a `resample` echo does.
+
+    One seeded `random.Random`, drawn in call order, for the reason every draw in
+    this module is: two identical runs must agree, and a generator taken from the
+    global state would make the p-value depend on what ran before it.
+
+    **With `strata`, the permutation is confined to each stratum's own
+    positions.** `reference.md` § What isn't a repeat requires it for a
+    group-axis contrast — "permuted within cells of every *other* group axis,
+    so a cross isn't destroyed" — and it is the same shape
+    `percentile_over_units` gives its own `strata`: what one draw may touch,
+    not what the statistic is. With no `strata` the whole vector is one
+    group covering every position, structurally the same domain the
+    unstratified draw always had.
+
+    **That structural sameness is not an RNG-identical one, unlike
+    `_draw_pools`' own refactor.** Each draw now shuffles a fresh per-group
+    copy and writes it back into `pool`, rather than shuffling `pool` in
+    place — a valid uniform permutation either way, but a DIFFERENT sequence
+    of `random.Random` calls: measured directly, fixture C at `seed=7, n=5000`
+    gives `p = 0.48050` before this refactor and `p = 0.47351` after (also at
+    seeds 2 and 3). Nothing user-visible moved, because `null_test` is
+    unwired and every assertion this shape touches is range-based rather than
+    a seed-pinned literal — but a future refactor of this walk is invisible
+    to the suite for the identical reason, which is worth stating rather than
+    leaving for the next reader to discover by the same review that found it
+    here.
+    """
+    if len(values) < 2:
+        return None
+    observed = _label_delta(values, labels, of_level)
+    if observed is None:
+        return None
+    rng = random.Random(seed)
+    pool = list(labels)
+    groups: list[list[int]] = []
+    if strata is None:
+        groups = [list(range(len(values)))]
+    else:
+        by_stratum: dict[str, list[int]] = {}
+        for index, stratum in enumerate(strata):
+            by_stratum.setdefault(stratum, []).append(index)
+        groups = list(by_stratum.values())
+    reached = 0
+    varied = False
+    for _ in range(n):
+        for indices in groups:
+            within = [labels[i] for i in indices]
+            rng.shuffle(within)
+            for index, label in zip(indices, within, strict=True):
+                pool[index] = label
+        drawn = _label_delta(values, pool, of_level)
+        if drawn is None:
+            continue
+        if drawn != observed:
+            varied = True
+        if drawn >= observed:
+            reached += 1
+    if not varied:
+        return None
+    return (1 + reached) / (n + 1)
+
+
+def permutation_over_units_clustered(
+    values: Sequence[float],
+    labels: Sequence[str],
+    clusters: Sequence[str],
+    of_level: str,
+    seed: int,
+    n: int = 5000,
+    level: str = "within_cluster",
+) -> float | None:
+    """A permutation p-value that respects the clustering, at the level the
+    roster implies.
+
+    `reference.md` § Clustered units gives both rules and neither is a choice
+    made here: "if `shuffle` names an attribute that varies *within* clusters,
+    labels are permuted within each cluster independently — for matched
+    case-control that's a case/control swap inside each matched set, which is
+    the conditional test that design calls for. If the attribute is constant
+    within a cluster, whole clusters are relabelled, which is the null for a
+    cluster-randomized trial. Shuffling rows freely would destroy the structure
+    the null is supposed to hold fixed, and the two designs need opposite
+    treatments, so guessing is not an option."
+
+    **`level` arrives as a parameter rather than being derived here**, because
+    the derivation reads the roster and this module imports nothing:
+    `units.null_test_level` is the single expression, and `validate` refuses
+    the ambiguous roster before any caller reaches this. A caller passing a
+    level it did not derive is passing a guess, which is what that refusal
+    exists to prevent.
+
+    **Within-cluster: each cluster's own label multiset is permuted inside
+    it**, so every cluster keeps its arm counts and the null holds the
+    matching fixed. **Whole-cluster: the clusters' labels are permuted among
+    the clusters**, so a cluster's units move together and the arm sizes vary
+    from draw to draw with the cluster sizes — which is the construction, not
+    a defect of it. A whole-cluster draw that empties an arm has no statistic,
+    and `_label_delta` reports that as `None`; where EVERY draw empties one,
+    the p-value is `None` for decision 8's reason.
+
+    The estimator, the `>=`, the +1 and the invariance rule are
+    `permutation_over_units`' and are not restated in a second expression here
+    — the two differ in what one draw is, which is exactly what `reference.md`
+    says the cluster declaration changes.
+    """
+    if len(values) < 2:
+        return None
+    observed = _label_delta(values, labels, of_level)
+    if observed is None:
+        return None
+    rng = random.Random(seed)
+    positions: dict[str, list[int]] = {}
+    for index, cluster in enumerate(clusters):
+        positions.setdefault(cluster, []).append(index)
+    drawn_labels = list(labels)
+    # The cluster's own label, for the whole-cluster draw: constant within the
+    # cluster by `units.null_test_level`'s own answer, so the first position's
+    # label IS the cluster's. Read once rather than per draw, so a draw cannot
+    # read a label a previous draw wrote.
+    cluster_order = list(positions)
+    cluster_labels = [labels[positions[c][0]] for c in cluster_order]
+    reached = 0
+    varied = False
+    for _ in range(n):
+        if level == "whole_cluster":
+            rng.shuffle(cluster_labels)
+            for cluster, label in zip(cluster_order, cluster_labels, strict=True):
+                for index in positions[cluster]:
+                    drawn_labels[index] = label
+        else:
+            for cluster in cluster_order:
+                indices = positions[cluster]
+                within = [labels[i] for i in indices]
+                rng.shuffle(within)
+                for index, label in zip(indices, within, strict=True):
+                    drawn_labels[index] = label
+        drawn = _label_delta(values, drawn_labels, of_level)
+        if drawn is None:
+            continue
+        if drawn != observed:
+            varied = True
+        if drawn >= observed:
+            reached += 1
+    if not varied:
+        return None
+    return (1 + reached) / (n + 1)
+
+
+def permutation_over_contrast(
+    of: Sequence[float],
+    against: Sequence[float],
+    seed: int,
+    n: int = 5000,
+    of_clusters: Sequence[str] | None = None,
+    against_clusters: Sequence[str] | None = None,
+    level: str = "rows",
+) -> float | None:
+    """The permutation p-value for a cross-arm contrast.
+
+    `reference.md` § What isn't a repeat: a `shuffle` naming a `groups` axis builds
+    the null of "that axis's contrast, against a world where its membership carries
+    no information — permuted within cells of every *other* group axis, so a cross
+    isn't destroyed."
+
+    **The arm label IS the side**, so this is not a second construction: the two
+    per-side vectors are concatenated, the side membership becomes the label
+    vector, and the draw is `permutation_over_units` — stratified by the other
+    group axes' cells — or its clustered sibling wherever `data.units.cluster_by`
+    is declared. Delegating rather than reimplementing is the rule
+    `corrected_for`'s own docstring states for itself: two spellings of one
+    construction drifting apart is a defect this codebase has already shipped.
+
+    Takes two per-side value vectors rather than a difference vector, which is the
+    evidence shape an unpaired comparison has — `correction.UnpairedEvidence` makes
+    the same argument one module over: an unpaired contrast has no per-unit
+    differences to store, because the two sides are disjoint sets of units.
+
+    `level` is `units.null_test_level`'s answer, derived by the caller from the
+    roster for the reason the clustered draw states.
+
+    **No `strata` parameter, on purpose — whole-branch review Minor 4.** A prior
+    version took `of_strata`/`against_strata` and stratified the unclustered
+    branch by them, on the ground that `reference.md` requires a group-axis
+    null to be "permuted within cells of every other group axis." No caller,
+    production or test, ever supplied either: a declared contrast names its
+    two conditions by label, and a condition is one cell of the full group
+    cross, so every OTHER group axis is already constant on both sides of any
+    comparison — the rule is satisfied structurally by which two conditions a
+    contrast can even name, not by a stratified draw. Removed rather than left
+    as dead surface a docstring implied delivered something it was never
+    reachable to deliver.
+    """
+    values = list(of) + list(against)
+    labels = ["of"] * len(of) + ["against"] * len(against)
+    # A design declaring both a `cluster_by` and a second group axis takes the
+    # clustered branch below and the strata are not composed with it: that
+    # composition is a construction nothing in the four documents specifies,
+    # no config in the feasibility analysis declares two group axes, and
+    # inventing one would be a rule with no authority behind it.
+    if of_clusters is not None and against_clusters is not None:
+        return permutation_over_units_clustered(
+            values,
+            labels,
+            list(of_clusters) + list(against_clusters),
+            "of",
+            seed,
+            n=n,
+            level=level,
+        )
+    return permutation_over_units(values, labels, "of", seed, n=n)
+
+
 def percentile_over_units(
     values: Sequence[float],
     seed: int,
@@ -1438,6 +1744,179 @@ def percentile_of_derived(
     )
 
 
+def percentile_of_derived_clustered(
+    collapsed: dict[str, dict[str, float]],
+    clusters: dict[str, str],
+    compute: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
+) -> tuple[Interval | None, int]:
+    """A percentile interval for a derived metric, resampling whole clusters, and
+    the number of draws it actually rests on.
+
+    `reference.md` states the construction twice, and this docstring does not
+    add a third wording: each replicate draws `G` clusters with replacement and
+    rebuilds a unit table from their pooled units, so its row count varies per
+    draw — `G` being `units.cluster_count_of`'s answer, so this cannot disagree
+    with the `n.clusters` a caller prints beside the interval. `compute` is run
+    on the pooled table exactly as `percentile_of_derived` runs it on its own
+    resampled table; every other rule this function follows — the survivor
+    discipline, the real-keys row-list construction, the uncontained unpermuted
+    call — is `percentile_of_derived`'s, cited rather than restated.
+
+    Built through `_draw_pools`, the one draw shape a percentile construction's
+    other two callers already share, rather than a second notion of what a
+    cluster draw is: with no `strata` this is one group holding every cluster
+    (`G` clusters, drawn `G` times with replacement, pooling their units); with
+    `strata` each stratum draws exactly as many clusters as it holds, the
+    composition `_draw_pools` already enforces for its other two callers.
+
+    The two ways to get this wrong both produce a plausible number: drawing `G`
+    *units* and repairing the groups afterwards would be a resample whose
+    independent draw count is really the row count, not the cluster count — a
+    "too narrow" interval in exactly the sense `reference.md` § Clustered units
+    names; averaging the drawn clusters' own means, rather than pooling their
+    units, would give every cluster equal say regardless of size, where "pools
+    their units" and the row count that varies with it says a large cluster
+    contributes more rows than a small one.
+    """
+    keys = sorted(collapsed)
+    if len(keys) < 2:
+        return None, 0
+    pools = _draw_pools(keys, strata, clusters)
+    # The content-based refusal `percentile_over_units_clustered` makes
+    # "whether or not `strata` is declared" (`reference.md` § Statistical
+    # reporting), taken again here rather than left as a second undocumented
+    # gap beside `percentile_of_derived`'s own unstratified one: if every
+    # cluster within a stratum group carries the identical multiset of rows
+    # (a stratum holding a single cluster is trivially so), drawing any of
+    # them with replacement reproduces the same pooled table every time, so no
+    # replicate can differ from any other and the interval would be `[x, x]`
+    # — a zero-width 95 % interval `reference.md` refuses in those terms.
+    # Content, not count: two identical-content clusters clear any count floor
+    # and are still degenerate.
+    if all(
+        len(
+            {tuple(sorted(tuple(sorted(collapsed[key].items())) for key in item)) for item in group}
+        )
+        <= 1
+        for group in pools
+    ):
+        return None, 0
+    rng = random.Random(seed)
+    values: list[float] = []
+    for _ in range(draws):
+        drawn: list[str] = []
+        for group in pools:
+            for _ in range(len(group)):
+                drawn.extend(group[rng.randrange(len(group))])
+        table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
+        try:
+            value = compute(table)
+        # Degenerate, not caught for the real call; see `percentile_of_derived`.
+        except Exception:
+            continue
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            continue
+        values.append(float(value))
+    if len(values) < min_honest_draws(confidence):
+        return None, len(values)
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return (
+        Interval(low=values[lo], high=values[hi], method="percentile_of_derived_clustered"),
+        len(values),
+    )
+
+
+def permutation_of_derived(
+    collapsed: dict[str, dict[str, float]],
+    labels: dict[str, str],
+    compute: "Callable[[UnitTable, dict[str, str]], float | None]",
+    seed: int,
+    n: int = 5000,
+) -> tuple[float | None, int]:
+    """A permutation p-value for a metric a template derived, and the number of
+    draws it rests on.
+
+    A derived metric has no per-unit value to relabel directly — `aggregate`
+    returned one number for the whole table — so this is `percentile_of_derived`'s
+    situation one construction over: recompute the metric under each relabelling
+    and count how many recomputations reach the observed value.
+
+    **`compute` takes the table AND the relabelled label mapping, and that second
+    argument is the whole difference from `percentile_of_derived`.** A one-argument
+    closure of that function's shape cannot express a permutation here: `cli`
+    re-applies each unit's declared attributes from the roster on every call
+    (`_attributed`, which merges the roster's values OVER the row), so a
+    relabelling written into the table's rows is erased before `aggregate` sees it
+    and every draw reproduces the observed statistic. That is not a hypothetical —
+    it is the shape the existing resample closure has, and it would report
+    `p_value: 1.0` for every derived metric in every run. Handing the labels
+    through instead makes the relabelling the closure's own input, which is the
+    only place it cannot be overwritten.
+
+    The table is rebuilt from a row list carrying the REAL unit keys, exactly as
+    `percentile_of_derived` does and for its reason: a template that legitimately
+    reads `unit` must see the roster it was drawn from. Unlike a bootstrap this
+    draw repeats no unit, so the keys are unique — the row-list construction is
+    kept anyway so the two functions hand `compute` the same shape of table.
+
+    Units are sorted by key before the labels are permuted, for the row-order
+    invariance `percentile_over_units` explains: a fixed seed permutes a fixed
+    sequence of positions, so an unsorted roster would make the p-value depend on
+    iteration order rather than on the multiset of units.
+
+    A draw on which `compute` returns `None`, returns `nan`, or *raises* is dropped
+    rather than counted — the three are the same situation from three different
+    libraries, and which one `aggregate` happens to call is not a fact about
+    whether the draw was degenerate. **The single unpermuted call that produces the
+    observed statistic is not made robust that way**: it is the metric's real
+    definition for this table, so a failure there is a fault to surface rather than
+    a degenerate draw to skip, and `cli.py` contains it exactly as it contains the
+    unresampled `aggregate` call — which is `percentile_of_derived`'s own rule,
+    cited rather than restated in new words.
+
+    The second return value is the surviving count **always**, even when the
+    p-value is `None`, which is what lets a caller tell "the null was attempted and
+    every draw was degenerate" from "no null was attempted at all" — two states
+    that otherwise reach `run.yaml` byte-identical.
+    """
+    keys = sorted(collapsed)
+    rows = [{"unit": key, **collapsed[key]} for key in keys]
+    table = unit_table_from_rows(rows)
+    # NOT wrapped in `try`, and the docstring above says why: a failure in the
+    # metric's own definition for this table is a fault to surface, exactly as
+    # `percentile_of_derived` leaves its single unresampled call uncontained.
+    observed = compute(table, dict(labels))
+    if observed is None or math.isnan(float(observed)):
+        return None, 0
+    rng = random.Random(seed)
+    pool = [labels[key] for key in keys]
+    reached = 0
+    survivors = 0
+    varied = False
+    for _ in range(n):
+        rng.shuffle(pool)
+        drawn_labels = dict(zip(keys, pool, strict=True))
+        try:
+            drawn = compute(table, drawn_labels)
+        except Exception:
+            continue
+        if drawn is None or math.isnan(float(drawn)):
+            continue
+        survivors += 1
+        if float(drawn) != float(observed):
+            varied = True
+        if float(drawn) >= float(observed):
+            reached += 1
+    if not varied or survivors == 0:
+        return None, survivors
+    return (1 + reached) / (n + 1), survivors
+
+
 def paired_delta_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
@@ -1523,7 +2002,7 @@ def _draw_pools(
     strata: dict[str, str] | None,
     clusters: dict[str, str] | None,
 ) -> list[list[list[str]]]:
-    """One draw shape, for a percentile construction's two callers.
+    """One draw shape, for a percentile construction's callers.
 
     A list of stratum groups, each holding the DRAWABLE things that stratum
     owns, each of those a list of keys. A unit is the drawable thing by
@@ -1538,12 +2017,13 @@ def _draw_pools(
     group order and the per-group counts are today's, each key merely
     wrapped.
 
-    Two callers: `paired_percentile_of_derived` draws one key list and
-    applies it to both sides; `unpaired_percentile_of_sides` calls this once
-    per side, independently. Both trust the `strata` × `clusters`
-    composition rule, the relabelling invariance and the sorted-keys caller
-    contract to be the same for either — a second copy is how one of them is
-    fixed in one place and not the other.
+    Every caller trusts the `strata` × `clusters` composition rule, the
+    relabelling invariance and the sorted-keys caller contract to be the same
+    as every other's — a second copy of this function is how one caller comes
+    to be fixed in one place and not the others. Not enumerated by name or
+    count here on purpose: `CLAUDE.md`'s own rule against a call-site count
+    near an insertion is what this docstring already violated once, when
+    task 15a became a third caller and the "two callers" count went unswept.
     """
     if clusters is None:
         # `keys` order preserved rather than sorted — the unstratified draw
@@ -2249,6 +2729,9 @@ def summarize_step(
     clusters: dict[str, str] | None = None,
     resample_columns: bool = False,
     strata: dict[str, str] | None = None,
+    null_test: dict[str, Any] | None = None,
+    labels: dict[str, str] | None = None,
+    null_fns: "dict[str, Callable[[UnitTable, dict[str, str]], float | None]] | None" = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -2388,31 +2871,12 @@ def summarize_step(
     same pass as its values, for the reason the weights are: a differently filtered
     vector groups the wrong unit, and the result is a number rather than an error.
 
-    A DERIVED metric's interval **cannot be clustered here, so the combination is
-    refused** — `E-DATA-CLUSTER-DERIVED`, raised below. The clustered draw for a
-    recomputed metric is a different construction from
-    `percentile_over_units_clustered` — each replicate drawing `G` clusters with
-    replacement and building a `UnitTable` from their pooled units, whose row count
-    varies per draw — and it does not exist. `percentile_of_derived` draws units,
-    so left to run it would report an interval "too narrow" in exactly the sense
-    § Clustered units names, beside recorded columns whose intervals *are*
-    cluster-robust and with nothing in the record saying which is which.
-
-    **Why the refusal is here rather than in `validate`.** Whether a template
-    derives a metric is not knowable before the run: `aggregate` is user code, core
-    never inspects the body of user Python, and a template that overrides
-    `aggregate` may still return `{}` for a given config — so "returns derived
-    metrics" has no validate-time meaning. This is the first point at which core
-    holds the answer, and it holds it as a fact rather than a guess. `cli.py`
-    contains the raise the same way it contains a derived key collision: the whole
-    `derived` mapping is dropped and re-summarized without it, the code is
-    disclosed through `W-STATS-AGGREGATE-FAILED`, and the run keeps its record and
-    its recorded columns. **Dropped, not published with `ci95: null`** — that state
-    already means "no resample callable, or no seed", and reusing it would
-    reintroduce the ambiguity `resample_draws`' `0`-versus-`null` distinction
-    exists to remove. What is still missing is a clustered draw for a
-    *recomputed* metric — the same construction one level over that H4b-2 built
-    for a recorded contrast.
+    A DERIVED metric's interval **is clustered by `percentile_of_derived_clustered`
+    when `clusters` is given** — each replicate drawing `G` clusters with
+    replacement and building a `UnitTable` from their pooled units, whose row
+    count varies per draw, `G` being `units.cluster_count_of`'s answer over these
+    same keys. Unclustered, `percentile_of_derived` draws units instead. Which
+    one runs is decided beside the derived keys below.
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as
@@ -2423,9 +2887,18 @@ def summarize_step(
     condition-wide count beside it would name a df no interval used. A full
     column's figure is identical to `counts`'; a ragged one's is its own.
 
-    A DERIVED metric takes the condition-wide figure from `counts` instead, as it
-    does for `effective`: `aggregate` returned one number over the whole collapsed
-    table, so there is no per-column carrier set to recompute over.
+    A DERIVED metric takes the condition-wide figure from `counts` for
+    `effective`: `aggregate` returned one number over the whole collapsed
+    table, so there is no per-column carrier set to recompute a WEIGHTED
+    figure over — core never weights a derived metric itself (§ Weighted
+    samples hands the weight column to `aggregate` as a unit attribute
+    instead). `clusters` is different: a derived metric has no ragged
+    per-column carrier either, but `percentile_of_derived_clustered`'s own
+    `G` is the distinct values `clusters` takes over `collapsed`'s keys, so
+    `n.clusters` is recomputed from those same keys below rather than passed
+    through from `counts` unmodified — the fix for Major 3 of the batch-3
+    review, which found the two could disagree whenever `collapsed` is a
+    proper subset of the roster `counts` was computed over.
 
     `resample_columns` is the gate a RECORDED COLUMN's interval construction reads
     (H4a task 14). A column always has a `t_over_units` fallback available, so
@@ -2480,6 +2953,40 @@ def summarize_step(
     `resample_draws: draws` exactly as a clean sample would — a known, unfixed
     gap filed in `docs/superpowers/spec-defects.md`, not a guarantee this
     docstring is making.
+
+    `null_test`, `labels` and `null_fns` are a DERIVED metric's own p-value
+    path, and they never reach a recorded column: decision 7 gives a column no
+    null at all, because `mean(column)` over a condition's units is invariant
+    under every relabelling — the null would be the observed value repeated
+    `n` times and the p-value exactly 1.0, a number that reads as a finding
+    and is an artifact of asking rather than a fact about the design.
+    `null_test` is the resolved `{"method", "n", "shuffle", "level", ...}`
+    dict; `labels` is the roster-wide `{unit key: label}` mapping the
+    `shuffle` attribute takes; `null_fns` is `key → callable`, one per derived
+    metric, built the same way `resample`'s closures are — `cli.py`'s
+    `_make_null_fn`, a SECOND closure family rather than a keyword added to
+    `_make_resample_fn`'s (§ Corrections, correction 1): that closure's
+    `_attributed` merges the roster's declared attributes OVER each row, which
+    erases a relabelling written into the table before `aggregate` ever sees
+    it, so reusing it here would report `p_value: 1.0` for every derived
+    metric in every run. Where a key has both a callable and `null_test`
+    declared **and `clusters` is `None`**, `permutation_of_derived` runs and
+    the metric block gains `p_value`, `null_draws`, and the `null_test` echo —
+    uncorrected, per decision 5: the correction pass in `cli.py` merges
+    `p_value_corrected` in afterward from the family this member belongs to,
+    not from this call.
+
+    **A declared `cluster_by` suppresses this write, and that is a gap this
+    build has not closed rather than a design choice.** `permutation_of_derived`
+    (task 12) draws one free relabelling over every unit — it takes no cluster
+    argument, and no clustered counterpart exists in this build. § Clustered
+    units requires the opposite treatment for a design declaring `cluster_by`,
+    and measured directly against Fixture C's roster, the free draw lands on
+    the spec's own "permutes across clusters (the wrong stratum)" row (≈0.48),
+    not the within-cluster answer a declared `cluster_by` promises — so
+    reporting it beside `null_test.level: "within_cluster"` would be a
+    declaration accepted whose effect is not delivered, worse than the absent
+    p-value this gate chooses instead.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -2615,31 +3122,17 @@ def summarize_step(
                 "derived key may not shadow a recorded column",
                 code="E-STEP-KEY-COLLISION",
             )
-        # The clustered derived draw, refused rather than drawn as if independent
-        # (the docstring says why it lives here and not in `validate`). Gated on
-        # what would actually be *drawn*, not on the declaration: with no callable
-        # or no seed no interval is built at all, so a clustered run whose derived
-        # metric was never going to be resampled publishes its point estimate as
-        # it always did and there is no too-narrow interval to prevent. Raised
-        # before a single derived key is written, so the caller drops the whole
-        # mapping rather than a record carrying some of it.
-        if clusters is not None and seed is not None:
-            drawable = sorted(k for k in derived if (resample or {}).get(k) is not None)
-            if drawable:
-                raise ContractError(
-                    f"{drawable[0]!r} is derived by the template's `aggregate`, and its "
-                    "interval is a percentile over resampled units while "
-                    "`data.units.cluster_by` declares that units are not independent. "
-                    "Resampling whole clusters for a recomputed metric is a construction "
-                    "this build does not have, and drawing units instead would report an "
-                    "interval narrower than the design supports beside recorded columns "
-                    "that are cluster-robust. The derived metrics are dropped for this "
-                    "step; the recorded columns keep their clustered intervals. Report "
-                    "the derived value as an `Estimate` from a `summary` step, which core "
-                    "records as reported rather than recomputing, or drop `cluster_by` if "
-                    "the units really are independent",
-                    code="E-DATA-CLUSTER-DERIVED",
-                )
+        # A derived metric has no per-column carrier set to recompute `clusters`
+        # from — `aggregate` returned one number over the whole table, unlike a
+        # recorded column's own ragged `column_keys` — but `percentile_of_derived_clustered`'s
+        # own `G` (task 15a) is the distinct values `clusters` takes over
+        # `collapsed`'s OWN keys, not `counts["clusters"]`'s condition-wide
+        # figure, which can disagree with it whenever `collapsed` is a proper
+        # subset of the roster `attrition` counted (a step recording for only
+        # some completed units). Recomputed once here, over the same keys the
+        # construction itself draws from, so `n.clusters` cannot print a
+        # different `G` from the one the interval actually rests on.
+        derived_clusters_n = cluster_count_of(clusters, collapsed) if clusters is not None else None
         for key, value in derived.items():
             compute = (resample or {}).get(key)
             # `draws_used` is `None` only when resampling was never attempted
@@ -2650,16 +3143,23 @@ def summarize_step(
             derived_interval: Interval | None
             draws_used: int | None
             if compute is not None and seed is not None:
-                derived_interval, draws_used = percentile_of_derived(
-                    collapsed, compute, seed, draws=draws, strata=strata
+                derived_interval, draws_used = (
+                    percentile_of_derived_clustered(
+                        collapsed, clusters, compute, seed, draws=draws, strata=strata
+                    )
+                    if clusters is not None
+                    else percentile_of_derived(collapsed, compute, seed, draws=draws, strata=strata)
                 )
             else:
                 derived_interval, draws_used = None, None
+            derived_n = {**counts, "completed": len(collapsed)}
+            if derived_clusters_n is not None:
+                derived_n["clusters"] = derived_clusters_n
             out[key] = {
                 **_beside_n_copy(beside_n),
                 "value": value,
                 "basis": "units",
-                "n": {**counts, "completed": len(collapsed)},
+                "n": derived_n,
                 "ci95": (
                     [derived_interval.low, derived_interval.high] if derived_interval else None
                 ),
@@ -2674,6 +3174,49 @@ def summarize_step(
                 # a clean 2000-draw one (see `percentile_of_derived`).
                 "resample_draws": draws_used,
             }
+            # Decision 7's other half: a DERIVED metric gets a p-value when a
+            # `null_test` is declared and a closure exists for this key — the
+            # closure is `null_fns`, never `resample`, for the reason the
+            # docstring above gives. `label` and `n` come from the resolved
+            # `null_test` dict; the level itself never reaches this function,
+            # since it changed nothing about the DRAW `permutation_of_derived`
+            # performs (unlike `permutation_over_units_clustered`, which reads
+            # it to choose whole-cluster versus within-cluster relabelling) —
+            # only the echo shows it, so a reader can see which relabelling a
+            # `shuffle` naming a clustered attribute actually ran.
+            null_fn = (null_fns or {}).get(key)
+            # **Gated on `clusters is None`, which is a spec gap this build has
+            # not closed rather than a stylistic choice.** `permutation_of_derived`
+            # (task 12) does one free `rng.shuffle` over every unit's label —
+            # it takes no cluster argument, and no clustered counterpart exists
+            # in this build. Measured directly against fixture C's own roster:
+            # a free relabelling gives ≈0.4845, the spec's own "permutes across
+            # clusters (the wrong stratum)" row, not the within-cluster
+            # `1/5001` a declared `cluster_by` promises. § Clustered units gives
+            # the two designs OPPOSITE treatments, so publishing that number
+            # beside `null_test.level: "within_cluster"` would be a declaration
+            # accepted whose effect is not delivered — worse than reporting no
+            # p-value at all, which is what this gate chooses instead. With it,
+            # `null_test.get("level")` can only ever have resolved to `"rows"`
+            # on a path that reaches this write, so the echo below cannot lie.
+            if (
+                null_test is not None
+                and null_fn is not None
+                and labels is not None
+                and seed is not None
+                and clusters is None
+            ):
+                p_value, null_draws = permutation_of_derived(
+                    collapsed, labels, null_fn, seed, n=null_test.get("n", 5000)
+                )
+                out[key]["p_value"] = p_value
+                out[key]["null_draws"] = null_draws
+                out[key]["null_test"] = {
+                    "method": null_test.get("method", "permutation"),
+                    "n": null_test.get("n", 5000),
+                    "shuffle": null_test.get("shuffle"),
+                    "level": null_test.get("level") or "rows",
+                }
     return out
 
 

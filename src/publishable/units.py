@@ -2543,6 +2543,79 @@ def stratum_varies_within_cluster(
     return None
 
 
+def null_test_level(
+    roster: UnitList, cluster_by: str | None, shuffle: str
+) -> tuple[str, tuple[str, str] | None]:
+    """Which relabelling a `statistics.null_test` draws, derived from the roster.
+
+    `reference.md` § Clustered units: "`null_test` shuffles at the level the
+    shuffled attribute lives at. Core derives which from the data rather than
+    asking: if `shuffle` names an attribute that varies *within* clusters, labels
+    are permuted within each cluster independently… If the attribute is constant
+    within a cluster, whole clusters are relabelled." Shuffling rows freely would
+    destroy the structure the null is supposed to hold fixed, and the two designs
+    need opposite treatments, so guessing is not an option.
+
+    Four answers, and `ambiguous` is the fourth because the two rules are stated
+    for the whole roster rather than per cluster: a roster where some clusters
+    vary and others do not satisfies neither, which § Validation's *Shuffle level
+    is unambiguous* refuses with exactly that reasoning. It returns the two
+    witnesses — the first varying cluster and the first constant one, in roster
+    order — because a message naming only one reads as though the other were fine.
+
+    **`stratum_varies_within_cluster` cannot answer this**, and that is why this
+    is a second function rather than a call to it: that one returns the first
+    offender or `None`, which separates "varies somewhere" from "constant
+    everywhere" and cannot separate "varies everywhere" from "varies somewhere" —
+    the distinction between a legal within-cluster null and the ambiguity above.
+    The two share `clusters_of`, which is the single authority they must not
+    disagree about.
+
+    A unit carrying no value for `shuffle` renders `no value`, which is
+    `_stratum_groups`' and `stratum_varies_within_cluster`'s own convention for
+    the same absence, so a cluster split between a value and no value varies like
+    any other. A unit carrying no CLUSTER value raises `E-DATA-CLUSTER-UNKNOWN`
+    from `clusters_of` rather than forming a cluster of its own, which would make
+    its level trivially constant and hide exactly what this looks for.
+
+    `rows` with no `cluster_by`: that is the absence of a clustering answer, not
+    a third one.
+
+    **`shuffle` must name a roster ATTRIBUTE — never a `sweep.groups` axis
+    name.** `unit.attributes.get(shuffle)` is read per unit here; an axis name
+    that is not also a declared attribute matches nobody's attributes, so every
+    unit would render `no value`, every cluster would read constant, and this
+    would answer a confident `whole_cluster` for a roster it never actually
+    examined — the exact fail-open a review caught end to end. Two callers now
+    reach this function — `validate._check_null_test` and `cli.command_run`
+    (task 20's per-condition null) — and neither passes an axis-only name:
+    `validate` calls this only when `shuffle in declared` and refuses the
+    axis-plus-`cluster_by` combination outright under `E-STATS-NULLTEST-LEVEL`;
+    `cli` is safe by a different route — an axis-only name with no `cluster_by`
+    returns `("rows", None)` before any attribute is read, and axis-only WITH
+    `cluster_by` is the same combination `validate` already refused before any
+    `run` reaches this call. Neither caller re-derives the restriction here;
+    both rest on `validate`'s own refusal.
+    """
+    if not cluster_by:
+        return "rows", None
+    membership = clusters_of(roster, cluster_by)
+    seen: dict[str, set[str]] = {}
+    order: list[str] = []
+    for unit in roster:
+        cluster = membership[unit.key]
+        if cluster not in seen:
+            seen[cluster] = set()
+            order.append(cluster)
+        value = unit.attributes.get(shuffle)
+        seen[cluster].add("no value" if value is None else str(value))
+    varying = [c for c in order if len(seen[c]) > 1]
+    constant = [c for c in order if len(seen[c]) == 1]
+    if varying and constant:
+        return "ambiguous", (varying[0], constant[0])
+    return ("within_cluster" if varying else "whole_cluster"), None
+
+
 def _assign_whole_clusters(
     units: list[Unit], k: int, rng: random.Random, clusters: dict[str, str] | None
 ) -> list[list[Unit]]:

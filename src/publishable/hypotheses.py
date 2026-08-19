@@ -107,7 +107,10 @@ _POINT_KEYS = ("delta", "value")
 
 
 def _observed_block(
-    obs: Observation, bounds: tuple[float, float] | None, corrected_unavailable: bool = False
+    obs: Observation,
+    bounds: tuple[float, float] | None,
+    corrected_unavailable: bool = False,
+    p_value_corrected: float | None = None,
 ) -> dict[str, Any] | None:
     """What the record shows as `observed`, in the shape its source implies.
 
@@ -121,6 +124,12 @@ def _observed_block(
     makes on the sweep side ("`ci95_corrected` is null rather than too narrow").
     Absent still means what it means everywhere else in this record: no
     correction was attempted at all.
+
+    `p_value`, when the named block carries one, is copied the same way `ci95`
+    is. `p_value_corrected` is *always* absent-not-null when there is none —
+    `correction.corrected_for` never emits the key for a p-only-less member, so
+    there is no "attempted and found nothing" state for it to report the way
+    `ci95_corrected` has one; a `None` here always means "not passed."
     """
     if obs.block is None:
         return None
@@ -132,7 +141,7 @@ def _observed_block(
     # Copying also keeps a later in-place edit of either copy from silently
     # changing both.
     out: dict[str, Any] = {}
-    for k in ("delta", "value", "ci95", "method"):
+    for k in ("delta", "value", "ci95", "method", "p_value"):
         if k in obs.block:
             held = obs.block[k]
             out[k] = list(held) if isinstance(held, list) else held
@@ -140,6 +149,8 @@ def _observed_block(
         out["ci95_corrected"] = [bounds[0], bounds[1]]
     elif corrected_unavailable:
         out["ci95_corrected"] = None
+    if p_value_corrected is not None:
+        out["p_value_corrected"] = p_value_corrected
     return out
 
 
@@ -164,6 +175,13 @@ def _tested_number(
     answer a question nobody asked, on the *tighter* of the two bounds, so the
     error direction is over-support: a `supported: true` decided at α when the
     verdict was asked for at α/m. There is no number, so there is no verdict.
+
+    `evaluate_on`'s three values — `observed`, `ci95_lower`, `ci95_upper` — are
+    the whole vocabulary, and none of them is a p-value. No verdict this
+    function computes rests on one, even for a counted hypothesis whose member
+    carries `p_value`: `evaluate()` still writes `p_value_corrected` into the
+    entry when it is there, at this family's own size, but that value is never
+    read back into a comparison here.
     """
     if obs.block is None:
         return None
@@ -185,6 +203,7 @@ def verdict_for(
     obs: Observation,
     bounds: tuple[float, float] | None,
     corrected_unavailable: bool = False,
+    p_value_corrected: float | None = None,
 ) -> dict[str, Any]:
     """The verdict fields for one hypothesis.
 
@@ -214,6 +233,11 @@ def verdict_for(
     with no diagnostics channel: `run.yaml` has nowhere to carry a finding, so
     a warning printed to stdout would leave the record itself still claiming a
     verdict it cannot support.
+
+    `p_value_corrected` never enters `number` or `supported`: `evaluate_on`
+    names three bounds and none is a p-value, so it travels straight through to
+    `_observed_block` for a reader to see, and never through the comparison
+    this function decides.
     """
     evaluate_on = str(hyp.get("evaluate_on") or "observed")
     number = _tested_number(obs, evaluate_on, bounds, corrected_unavailable)
@@ -228,7 +252,7 @@ def verdict_for(
     ):
         supported = number > threshold if direction == "greater" else number < threshold
     return {
-        "observed": _observed_block(obs, bounds, corrected_unavailable),
+        "observed": _observed_block(obs, bounds, corrected_unavailable, p_value_corrected),
         "verdict_evaluated_on": evaluate_on,
         "supported": supported,
         "verdict_rests_on": obs.rests_on,
@@ -301,13 +325,15 @@ def evaluate(
         # and the interval at it could not be built, which `_tested_number`
         # refuses to paper over with the raw bound.
         corrected_unavailable = False
+        p_value_corrected = None
         if corrected is not None:
             interval = corrected.get("ci95_corrected")
             if interval:
                 bounds = (interval[0], interval[1])
             else:
                 corrected_unavailable = True
-        entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable))
+            p_value_corrected = corrected.get("p_value_corrected")
+        entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable, p_value_corrected))
         if _is_counted(hyp, obs):
             entry["family_size"] = size
             entry["family"] = {"hypotheses": size}

@@ -578,6 +578,68 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
     assert {e["family_size"] for e in got} == {2}
 
 
+def test_p_value_corrected_is_computed_at_the_hypothesis_familys_own_size():
+    """Bonferroni's `p_value_corrected` is `min(1, p * m)`. `members` carries
+    three p-only entries — the shape `cli` hands `evaluate`, its full sweep
+    family unfiltered — but only two are named by a confirmatory hypothesis, so
+    the hypothesis family's own `size` is 2. `0.05 * 2 = 0.1` is what the
+    counted family gives; `0.05 * 3` (the sweep's own three-member count) would
+    be 0.15. The two must differ for the fixture to tell them apart, and they
+    do."""
+    hyps = [
+        {
+            "id": f"h{i}",
+            "kind": "confirmatory",
+            "metric": f"s.m{i}",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        }
+        for i in (1, 2)
+    ]
+
+    def _p_member(metric, p_value, decl):
+        return Member(
+            where="contrast:x",
+            step="s",
+            metric=metric,
+            delta=0.10,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=decl,
+            p_value=p_value,
+        )
+
+    got = evaluate(
+        hyps,
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[
+            {
+                "id": "x",
+                "s": {
+                    "m1": {"delta": 0.10, "p_value": 0.05},
+                    "m2": {"delta": 0.10, "p_value": 0.05},
+                },
+            }
+        ],
+        summary={},
+        members=[
+            _p_member("m1", 0.05, 0),
+            _p_member("m2", 0.05, 1),
+            _p_member("m3", 0.05, 2),
+        ],
+        method="bonferroni",
+        parameters_hash="sha256:1a2b",
+    )
+    by_id = {e["id"]: e for e in got}
+    assert by_id["h1"]["family_size"] == 2
+    assert by_id["h1"]["observed"]["p_value_corrected"] == 0.1
+    assert by_id["h2"]["observed"]["p_value_corrected"] == 0.1
+
+
 def test_an_unresolvable_confirmatory_hypothesis_is_not_counted():
     """A confirmatory hypothesis naming a metric no run produced (`m1` is
     correct; `nosuch` matches no member) rests on `computed` — its `compare`
@@ -744,3 +806,44 @@ def test_no_correction_at_all_still_tests_the_raw_bound():
     got = _thin_verdict("ci95_lower", method="none")
     assert got["supported"] is True  # raw lower bound 0.01 > 0.0
     assert "ci95_corrected" not in got["observed"]
+
+
+def test_a_counted_hypothesis_on_a_p_only_member_records_an_unavailable_corrected_bound():
+    """The one thing decision 4's widening moves on the hypothesis side, sized
+    honestly: `observed.ci95_corrected` goes from absent to `null`, which says the
+    level was demanded and the bound could not be built. `supported` does not move
+    — a bound test had no raw interval to read either — and `family_size` does not
+    move, being `len(counted)`."""
+    hyp = {
+        "id": "h",
+        "kind": "confirmatory",
+        "metric": "s.m",
+        "compare": {"contrast": "y"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    p_only_member = Member(
+        where="contrast:y",
+        step="s",
+        metric="m",
+        delta=0.10,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.05,
+    )
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[{"id": "y", "s": {"m": {"delta": 0.10}}}],
+        summary={},
+        members=[p_only_member],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert got["family_size"] == 1
+    assert got["observed"]["ci95_corrected"] is None
+    assert got["supported"] is True

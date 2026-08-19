@@ -5220,6 +5220,12 @@ match the naming this task settled on rather than the `E-REPL-FOLD-K` name once 
 reporting without returning, so a roster-independent `null_test` shape fault (its own `shuffle`
 checks) still surfaces in the same pass.
 
+**CLOSED by H4d task 8 (2026-08-18).** `_check_null_test` reports `E-STATS-NULLTEST-UNITS` from the
+declaration, without returning, so a roster-independent shape fault in the same block still surfaces
+in the same pass — pinned by
+`tests/test_validate.py::test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report`,
+whose fixture carries a sub-floor `n` beside the missing roster for exactly that reason.
+
 ## A column metric's `resample_draws` records the requested `n`, not a survivor count
 
 Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Interval` where
@@ -5400,6 +5406,43 @@ unpaired forms while also fixing the pre-existing `t_over_units` family (which t
 re-check and which the original entry already flagged as unsurveyed) is more than one task's worth of
 work. **Owner: H4d**, the last remaining slice whose surface is the `statistics` block — the same
 terminal reasoning the `report_by`/`resample_columns` entry below carries.
+
+**MEASURED 2026-08-19 (H4d, task 23) — the permutation half of the same finiteness surface, claimed;
+the resample half named above stays open.** H4d recomputes metrics over relabelled tables, which is
+the identical unchecked-finiteness surface one construction over, so the premise was measured rather
+than inherited a fourth time. Probed directly at `a207702`:
+
+```
+permutation_over_units([1.0, 2.0, 3.0, float('nan')], ['of','of','against','against'], 'of', seed=1, n=100)
+  -> 0.009900990099009901
+permutation_of_derived({'a': {'y': 1.0}, 'b': {'y': float('inf')}, 'c': {'y': 2.0}, 'd': {'y': 3.0}},
+                        {'a':'of','b':'of','c':'against','d':'against'},
+                        lambda t, l: sum(r['y'] for r in t) / len(list(t)), seed=1, n=100)
+  -> (None, 100)
+```
+
+`permutation_of_derived` already drops a `nan` draw — its survivor discipline checks `math.isnan` —
+so the derived path was clean before this task touched it. `permutation_over_units` had no such
+check: an unguarded `nan` observed statistic makes every `>=` comparison `False`, reported as
+`p_value = 1/(n+1) = 0.0099...` — a small, real-looking p-value from a table nobody could compute a
+mean of, worse than the existing `Interval(nan, nan)` this filing's original entry names for the
+resample path. **Claimed**: `stats._label_delta` — the one function both the observed statistic and
+every draw's recomputation pass through, for both `permutation_over_units` and
+`permutation_over_units_clustered` — now returns `None` whenever the computed delta is `nan`, the
+same honest absence an empty arm already gets. Re-probed after the fix: both calls above now return
+`None`. Pinned by
+`tests/test_stats.py::test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one`,
+with a mutation removing the guard (the assertion then reads `0.009900990099009901`, a value rather
+than a crash).
+
+**The resample (column-bootstrap) half this entry was originally about is untouched and stays open**
+— `percentile_over_units` and its siblings still have no finiteness check, and
+`tests/test_stats.py::test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap` and
+`::test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap` are unchanged and
+still pin it. This slice narrowed the filing to the resample half only; it is not closed, and H4d
+being the last slice whose surface is the `statistics` block means no further slice can inherit it —
+**it stays open with no owner**, which is worth stating plainly rather than leaving the heading above
+to imply otherwise.
 
 ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
@@ -5645,7 +5688,17 @@ plainly that a `report_by` level's recorded-column interval does not honour a de
 `resample_columns`, so a reader stops expecting a fix that the charter no longer has a slice to
 deliver.
 
-## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
+**CONVERTED 2026-08-18 (H4d, task 24) — Finding 2 is now a documented permanent limitation.** The
+entry's own terminal instruction was that *"the correct move at that point is not another deferral —
+it is converting this into a documented, permanent limitation"*, and H4d is the last slice whose
+surface is the `statistics` block. `reference.md` § Statistical reporting now states plainly that a
+`report_by` level's recorded-column interval does not honour `resample_columns`, with the
+disclosure that distinguishes the two constructions in the record and the reason a level joins no
+correction family. **The code is unchanged**, which is what "limitation" means here: this is not a
+fix and must not be read as one. `W-STATS-REPORTBY-THIN`'s whole-roster-versus-arm gap is a
+*different* half of this entry and is left as § What isn't a repeat already records it.
+
+## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
 finding added below by the whole-branch review at `d59316d`. Three
@@ -5779,6 +5832,21 @@ warning that the loss came from a thin pool rather than a thin `n_of`/`n_against
 the original finding named for the paired case. **Owner: H4d**, the same slice Finding 3 and the
 `report_by`/`resample_columns` entry below are owned by — the last remaining slice whose surface is
 the `statistics` block, so a fifth deferral past it is not available.
+
+**CLAIMED 2026-08-19 (H4d, task 22) — both findings, in the same commit.** Finding 3:
+`_comparison_step_blocks` now takes a `resample_echo` parameter (`_resolved_resample`'s own
+`{method, n, stratify_by}` dict, the same one `cli` merges into every `aggregated` block as
+`weighted_beside["resample"]`), threaded through `_compute_vs_baseline` and
+`_compute_declared_contrasts`, and written onto every metric entry — derived and column, paired and
+unpaired alike — absent, not null, when nothing is declared. Finding 1: `W-STATS-CONTRAST-RESAMPLE-THIN`
+is minted, emitted from `_comparison_step_blocks` with `where_id` (`cond:<index>` / `contrast:<id>`)
+whenever a resampled comparison's `draws_used` falls below what was requested, distinct from
+`W-STATS-CONTRAST-THIN`'s `limits.min_reported_n` path so the two cannot collide on one `where`.
+Verified by a direct call with a 3-unit fixture, two of whose units carry `nan` for the recorded
+column: most of 400 bootstrap draws fail `math.isnan` and are dropped, landing below the 80-draw
+floor and publishing `ci95: null` alongside the new warning. Pinned by a mutation that suppresses the
+emit (`if False and resampled is not None...`): the assertion on the warning's presence fails by a
+named `AssertionError`, not a crash, and the mutation is reverted in the same commit.
 
 ## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 
@@ -6562,6 +6630,17 @@ claim.
 
 **Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
 
+**Built by H4d, task 15 (2026-08-19), not H4c.** H4c deferred it again on a new ground — building it
+while the derived branch's two-ground suppression guard was being written would make one guard
+distinguish three states — and named the condition for building it: that the guard has shipped and
+survived a whole-branch review. It has, and H4d task 15a built the construction named here:
+`stats.percentile_of_derived_clustered`, a per-condition percentile draw over `G` clusters with
+replacement, pooling their units into a `UnitTable` built from a row list per replicate. Task 15b
+retired `E-DATA-CLUSTER-DERIVED` and routed `stats.summarize_step`'s derived branch through it, and
+removed `cli._comparison_step_blocks`' `clusters is None` suppression, so a derived paired contrast
+under `cluster_by` now computes through `stats.paired_percentile_of_derived`'s own clustered branch —
+built earlier, for the recorded-column arm — rather than publishing `null` beside `n_paired_clusters`.
+
 **CORRECTION, fix round 1 (task-b1 review, Major 2):** the "H4b-2 does not need it" paragraph above
 reasons from a proxy and overstates what it found. `_comparison_step_blocks` iterates
 `set(of_summary) & set(against_summary)` from **`aggregated`**, but the branch it takes —
@@ -6736,3 +6815,160 @@ rows and the pin**: the twin of `tests/test_cli.py::test_the_weight_cluster_refu
 (the H4b-2 precedent for exactly this claim), which task 9's own plan brief cites as "the shape of
 the pin that says so" without writing it. Recorded here, at the ruling's own entry, so task 9's
 implementer finds the obligation rather than re-discovering it.
+
+## `paired_percentile_of_derived`'s degenerate-draw refusal is row-content-based, and a compute-cancellation still publishes a zero-width interval and a zero-width corrected interval
+
+**Found by the H4d batch-3 review** (2026-08-19, at `4ea6f97`), and confirmed here at fix round 1
+against a reachable, non-degenerate-*rows* fixture. `_drawable_content` and the check built around
+it in `paired_percentile_of_derived` (H4b-2 task 9, whose own entry records the row-level check) refuse a
+draw whose every drawable thing carries the *same pair of rows* — a genuinely constant table. That
+is a ROW-content check. It says nothing about a draw whose rows **do** vary but whose two
+`compute_of`/`compute_against` calls evaluate to the *same* difference on every draw anyway — the
+"plausible but wrong" case that function's own docstring already names in words, with "nothing to
+raise": two computes evaluating the identical formula over the identical per-unit data (the
+recorded-column contrast's own `_column_mean` closure, called on both sides, is exactly this shape
+whenever the two conditions record the metric identically) cancel to `0.0` on every single draw,
+rows or no rows, clusters or no clusters.
+
+**Verified reachable end to end**, unclustered, at `d97ec9c` (pre-existing, confirmed by the
+reviewer as not introduced by H4d): the batch-3 review's own `_AGGREGATE_STEP` fixture (`pred =
+float(i)`, identical under both conditions) publishes `method: paired_percentile_over_units,
+delta: 0.0, ci95: [0.0, 0.0], ci95_corrected: [0.0, 0.0]`. **This is the identical shape already
+recorded and reasoned about** in the entry titled ("The contrast path discloses nothing about its
+resample... Finding 2"), which judged it *not a regression* because `paired_t_over_units` gives the
+same zero-width interval for a genuinely constant column and the record is "internally consistent."
+That reasoning is sound for a column contrast, where a zero-width interval beside a `0.0` delta
+over identical values is the honest answer — there is no sampling variance to report.
+
+**It stops being sound the moment `clusters` enters, which is what H4d task 15b did.** Task 15b
+routed a derived-key collision's surviving closures through `paired_percentile_of_derived` with a
+`clusters` mapping, and cited the resulting `run.yaml` (`delta: 0.0, ci95: [0.0, 0.0],
+ci95_corrected: [0.0, 0.0], n_paired_clusters: 3`) as its end-to-end verification that the fix
+works — without noticing that the fixture reaching that record was **also** compute-degenerate (a
+derived key whose `aggregate` recomputes the exact value already recorded, over exactly the
+intersection both sides share), so the record proves nothing about the clustered construction and
+is a second instance of the same unfixed gap, now beside a *cluster count* that makes the record
+look more authoritative than it is: `n_paired_clusters: 3` beside a zero-width interval reads as "3
+independent clusters agree on zero," which `reference.md` § Statistical reporting's own words
+refuse — "a zero-width 95 % interval is not [honest]; reporting a point with no interval is
+honest" — for a construction that, unlike a genuinely constant column, had no way to tell its
+caller the cancellation was coming.
+
+**Not a regression, and not owed to any slice that already ran.** `paired_t_over_units` over a
+constant column has the identical shape and the identical honesty; the difference `_drawable_content`
+cannot see is COMPUTE cancellation on VARYING rows, which no row-content check can catch by
+construction — it would have to run `compute_of`/`compute_against` on more than one draw and compare
+outputs, which is exactly what a resample already does, so the fix is a variance check on the
+resulting pool (`len({round(v, ...) for v in values}) <= 1`, content-based over the DRAWN VALUES
+rather than over the rows feeding them) rather than a structural one over `collapsed`/`strata`/
+`clusters` alone.
+
+**Owner: unassigned, and stated as such rather than deferred.** No slice remaining in the spine has
+this function as its surface — H4d is the last whose surface is the `statistics` block — so naming a
+successor here would be the *"whichever slice does X"* form this file's own H4c entry rejects by name.
+It is recorded as a **live gap with no owner**, which is the honest shape, and the check below is
+written so whoever does claim it needs no re-derivation: after the resample loop collects `values`, refuse
+(`interval=None`, `draws_used=len(values)`, matching every other degenerate-draw return in this
+function) when every surviving value is identical — content over the COMPUTED POOL, the value-level
+counterpart to `_drawable_content`'s row-level check, checked whether or not `clusters`/`strata`
+were declared. A test fixture needs rows that genuinely vary (so `_drawable_content`'s own check
+does not fire first) with `compute_of`/`compute_against` that still cancel to the identical
+difference on every draw — the recorded-column `_column_mean` closure over two conditions recording
+one metric identically is the shape already reachable through a real `run` today, clustered or not.
+
+## OPEN — a derived metric's permutation null has no clustered construction — **Owner: unassigned**
+
+`reference.md` § What isn't a repeat gives `null_test`'s relabelling two designs, gated on
+`cluster_by`: "within clusters, or whole clusters at a time." H4d task 20 built the write for a
+derived metric's own `p_value` (`stats.permutation_of_derived`, task 12), and measured directly
+against Fixture C's roster: `permutation_of_derived` performs one free `rng.shuffle` over every
+unit's label and takes no cluster argument at all, so a design declaring `cluster_by` gets the
+**wrong** relabelling — the spec's own "permutes across clusters (the wrong stratum)" answer
+(≈0.4845 on Fixture C), not the within-cluster `1/5001` a declared `cluster_by` promises. No
+clustered counterpart (`permutation_of_derived_clustered`, on `percentile_of_derived_clustered`'s
+precedent) exists in this build.
+
+**Not silently shipped as the wrong number, but incomplete on disclosure.**
+`stats.summarize_step` gates the whole write — `p_value`, `null_draws`, and the `null_test` echo —
+on `clusters is None`: a derived metric under a declared `cluster_by` gets no p-value at all rather
+than one whose `level` echo would claim a construction that did not run. That much is right — no
+number is published that the construction did not earn. **What is not right, and is a second, live
+half of this same gap:** the three keys are simply absent, which is the exact shape a run that
+declared no `null_test` at all writes — so a user who DID declare one beside `cluster_by` gets a
+record indistinguishable from one that declared nothing. `p_value: null` beside the echo (§
+Statistical reporting's own precedent, "the resolved `null_test` echo sits beside the `null` p-value,
+which says the test ran and produced nothing") is not the fix either: the test did not run here at
+all, so writing that shape would claim the opposite of what happened. No run-level disclosure exists
+either — `null_test` never reaches `assemble_run_yaml`. This needs either a warning (`validate`
+cannot fire it, since it cannot know whether a template's `aggregate` will produce a derived metric
+at all — a declaration-time refusal would have to refuse `null_test` + `cluster_by` outright, which
+is a design call this entry does not make) or some other run-time disclosure; left open rather than
+guessed at. The contrast-side write (task 19, `stats.permutation_over_contrast`) is unaffected: it
+delegates to `permutation_over_units_clustered` (task 13), which does carry the within-cluster
+construction, so Fixture C1's `1/5001` is genuine and only the derived (C2) side is gapped.
+
+**Owner: unassigned.** Closing it needs a new construction (`permutation_of_derived_clustered`)
+outside what task 20's own file list scopes (`stats.py` only for `summarize_step`'s signature), so
+naming a successor here would invent one the plan does not have. Whoever claims it: draw `G`
+clusters' worth of labels as one unit exactly as `percentile_of_derived_clustered` draws `G`
+clusters' worth of rows, and gate `summarize_step`'s write on that construction existing rather than
+on `clusters is None`. Whoever closes the CONSTRUCTION half should also close the DISCLOSURE half
+above in the same pass — building the clustered null makes the disclosure gap moot for that path,
+but does not retroactively fix the record a run wrote before it existed, and the two are one finding
+either way.
+
+**Found by:** H4d task 20, while writing Fixture C2 to the letter its own design spec
+(`docs/superpowers/specs/2026-08-18-null-test-design.md` § Fixture C) states — the spec's C2 promised
+`p_value: 1/5001` under a declared `cluster_by`, and direct computation against the shipped
+`permutation_of_derived` returned ≈0.4845 instead. Reported rather than adjusted: `CLAUDE.md`'s own
+rule is to report a fixture that disagrees with the code, not to force the fixture to agree.
+
+**RECONFIRMED 2026-08-19 (H4d task 25, end to end).** Task 25's own run-verified fixture C2
+(`tests/test_cli.py::test_fixture_c2_null_test_runs_end_to_end_and_confirms_the_filed_clustered_gap`)
+runs fixture C2 through a real `run` — a project-local template's `aggregate`, not a direct call —
+and confirms both halves of this gap on live output: `delta_y` computes `2.5` and resamples
+(`method: percentile_of_derived_clustered`, `E-DATA-CLUSTER-DERIVED` claimed), and its block carries
+none of `p_value`, `null_draws`, or `null_test` — the disclosure half's own "indistinguishable from a
+run that declared no `null_test` at all," reproduced rather than assumed. Fixture C1's
+`1/5001` (the contrast-side write, task 19) is unaffected and asserted in the sibling test. Still
+**unowned**: H4d is the last slice whose surface is the `statistics` block, so this gap has no
+successor to fall to.
+
+## OPEN — the contrast-side `null_test` write carries no `null_draws` — **Owner: unassigned**
+
+`docs/reference.md` § Statistical reporting: *"`null_draws` is what the p-value actually rests on …
+a metric-block sibling of `null_test`, not a key inside it,"* and *"present in every metric block
+carrying a `p_value`."* H4d task 19's contrast-side write (`cli.py`'s unpaired arm of
+`_comparison_step_blocks`) writes `p_value` and the `null_test` echo and nothing else — verified by
+running Fixture C1 through it and printing the entry's key list: `null_draws` is absent.
+
+**Not a write that was skipped by oversight — a write that has no number to write.**
+`stats.permutation_over_contrast` returns `float | None`, no survivor count, because it delegates
+entirely to `permutation_over_units`/`permutation_over_units_clustered`, neither of which returns
+one either (unlike `stats.permutation_of_derived`, task 12, whose per-draw `aggregate` recompute can
+raise or return `nan` and so needs a survivor count to disclose that). Closing this needs a
+signature change on whichever of the three functions actually drops draws — and it is not "equal by
+construction" for every one of them, which is this entry's second half: **the document's own claim
+is false for a clustered whole-cluster relabelling.** In `permutation_over_units_clustered`, a
+whole-cluster draw whose relabelling empties the `of` arm is `continue`d (dropped) rather than
+counted as a survivor — pre-existing to this slice, task 13's surface — so a contrast under
+`shuffle`'s `whole_cluster` level can genuinely rest on fewer than `n` draws, and `null_draws` there
+is not `n` "by construction" the way the recorded-column paragraph states. A within-cluster or
+unclustered (`rows`) contrast IS exactly `n`, because a permutation there only reorders a fixed
+label multiset and can never empty an arm — so the gap is narrower than "every contrast," but the
+document does not currently say which shape it applies to.
+
+**Owner: unassigned.** Closing it in full needs: (1) `permutation_over_units` and
+`permutation_over_units_clustered` to return `(float | None, int)` — a signature change with real
+blast radius, since both are called directly by roughly twenty already-merged tests in
+`tests/test_stats.py` expecting a bare `float | None`, so the change must update every one of those
+call sites in the same pass, not just the two production functions; (2) `permutation_over_contrast`
+threading the count through instead of returning its inner call's result directly; (3) `cli.py`'s
+contrast-side write adding `null_draws` to the metric block beside `p_value` and the echo; and (4)
+`reference.md`'s "equal for a recorded column by construction" sentence narrowed to the shapes it is
+actually true of (unclustered and within-cluster; not whole-cluster). Whoever claims it should do
+all four together — a `null_draws` key added without narrowing the document's own claim would still
+leave that sentence false.
+
+**Found by:** H4d batch 4's review, verified by running `_fixture_c1_call()` and printing
+`block["s"]["y"]`'s key set.

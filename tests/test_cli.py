@@ -17,11 +17,13 @@ from publishable.cli import (
     _apply_execution_order,
     _cond_roster,
     _condition_counts,
+    _entry_for,
     _evaluation_roster,
     _resolved_group_axes,
     _resolved_holdout,
     main,
 )
+from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
@@ -1528,35 +1530,24 @@ def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: P
     `stats.py`'s DERIVED-metric block (`aggregate`'s return, not a recorded
     column) IS a live consumer of `attrition`'s own figure — `"n": {**counts,
     "completed": len(collapsed)}` passes it straight through, unlike the
-    recorded-column path above. What keeps that path unreached here is a
-    narrower, run-time fact, not an unconditional refusal: `stats.py`'s gate
-    is `if clusters is not None and seed is not None:`, plus a non-empty
-    `drawable` (a per-key resample closure whose `statistics.resample` name
-    matches). `command_run` always supplies both — `resample_seed(digest)`
-    returns a real `int`, never `None`, and it builds a resample closure for
-    every derived key regardless of whether `statistics.resample` names it —
-    so the gate closes on every config `command_run` can produce today
-    (`E-DATA-CLUSTER-DERIVED`, confirmed by probe and pinned by
-    `test_a_clustered_derived_metric_is_refused_rather_than_drawn`), not
-    because the combination cannot exist in the code. A fourth call site
-    that omitted `seed` or built no `resample` closure would publish
-    `attrition`'s figure unmodified, and this claim would need re-checking
-    against it.
+    recorded-column path above.
 
-    **This "no config reaches `run.yaml` with `attrition`'s own clusters
-    figure" is therefore scoped to today's build, not a permanent property**:
-    `reference.md` marks `E-DATA-CLUSTER-DERIVED` *Temporary*, twice, both
-    saying H4 lifts it — once H4 lands, a derived metric under `cluster_by`
-    may again reach `run.yaml`, carrying `attrition`'s figure straight
-    through, and this test's own discriminating mutation site may need
-    revisiting then. `attrition`'s own arithmetic is not unpinned by any of
-    this — `tests/test_runner.py`'s
+    **This was true only through H4d task 15 (2026-08-19), when this passage
+    was corrected a second time**: `E-DATA-CLUSTER-DERIVED` is retired, and a
+    derived metric under a declared `cluster_by` now DOES reach `run.yaml`,
+    its `"n": {**counts, "completed": len(collapsed)}` carrying `attrition`'s
+    own condition-wide `clusters` figure straight through, unrecomputed —
+    exactly the shape this docstring once described as a future possibility.
+    `test_a_clustered_derived_metric_is_resampled_by_the_clustered_construction`
+    (`tests/test_stats.py`) now pins the computed interval directly; this
+    test's own discriminating mutation, over the recorded-column path alone,
+    is unaffected — it never touched the derived branch. `attrition`'s own
+    arithmetic is not unpinned by any of this — `tests/test_runner.py`'s
     `test_n_gains_clusters_under_a_clustered_design`,
     `test_every_attrition_return_site_agrees_about_clusters`, and
     `test_clusters_and_effective_are_independent_parts_of_n` each call it
-    directly and DO catch that mutation — it is simply not observable through
-    any `command_run`-produced `run.yaml` today. **This test's own
-    discriminating mutation is therefore in `stats.py`, not `runner.py`**:
+    directly and DO catch that mutation. **This test's own
+    discriminating mutation is in `stats.py`, not `runner.py`**:
     changing line ~1360's `cluster_count_of(clusters, column_keys)` to
     `cluster_count_of(clusters, clusters.keys())` moves both arms' printed
     figure from 3 to 4 (whole-roster count), which this test's exact-value
@@ -3259,6 +3250,228 @@ def _unpaired_contrast_call(**extra):
     return _comparison_step_blocks(comparison, **kwargs)
 
 
+_C1_VALUES = [float(100 * c + i) for c in range(1, 11) for i in range(5)]
+_C1_LABELS = ["of" if i >= 3 else "against" for c in range(1, 11) for i in range(5)]
+_C1_CLUSTERS = [f"M{c:02d}" for c in range(1, 11) for i in range(5)]
+_C1_KEYS = [f"u{i:03d}" for i in range(50)]
+
+
+def _fixture_c1_call(**extra):
+    """Fixture C1 — `docs/superpowers/specs/2026-08-18-null-test-design.md` §
+    Fixture C: 50 units in 10 matched sets of 5, `arm` varying within every
+    set (`of` the top two, `against` the bottom three), `cluster_by:
+    match_set`, and a DECLARED contrast crossing `arm` — decision 6's only
+    p-value home, never `vs_baseline`.
+
+    `seed=11, n=5000` is `test_stats.py`'s own pin
+    (`test_a_within_cluster_permutation_over_fixture_c_gives_exactly_one_over_n_plus_one`):
+    the observed labelling is the unique maximum over all 10¹⁰ within-cluster
+    relabellings, so `b = 0` deterministically and the p-value is exactly
+    `1/5001` — carried here rather than re-derived, so this test cannot drift
+    from the construction's own pin."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [k for k, label in zip(_C1_KEYS, _C1_LABELS, strict=True) if label == "of"]
+    against_keys = [k for k, label in zip(_C1_KEYS, _C1_LABELS, strict=True) if label != "of"]
+    roster = UnitList([Unit(key=k) for k in _C1_KEYS])
+    comparison = extra.pop("_comparison", None) or Comparison(
+        id="arm_effect", of=1, against=0, declared=True
+    )
+    of_values = [v for v, label in zip(_C1_VALUES, _C1_LABELS, strict=True) if label == "of"]
+    against_values = [v for v, label in zip(_C1_VALUES, _C1_LABELS, strict=True) if label != "of"]
+    kwargs = dict(
+        roster=roster,
+        aggregated={
+            1: {"s": {"y": sum(of_values) / len(of_values)}},
+            0: {"s": {"y": sum(against_values) / len(against_values)}},
+        },
+        collapsed_by_key={
+            (1, "s"): {k: {"y": v} for k, v in zip(of_keys, of_values, strict=True)},
+            (0, "s"): {k: {"y": v} for k, v in zip(against_keys, against_values, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=11,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=against",
+                values={"arm": "against"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1, label="arm=of", values={"arm": "of"}, selectors=frozenset({"arm"})
+            ),
+        },
+        resample_columns=False,
+        clusters=dict(zip(_C1_KEYS, _C1_CLUSTERS, strict=True)),
+        null_test={"method": "permutation", "n": 5000, "shuffle": "arm", "level": "within_cluster"},
+    )
+    kwargs.update(extra)
+    return _comparison_step_blocks(comparison, **kwargs)
+
+
+def test_the_contrast_side_null_test_writes_a_p_value_and_its_resolved_echo():
+    """Task 19's load-bearing case, on fixture C1. `permutation_over_contrast`
+    is exactly `permutation_over_units_clustered` under the arm-as-side
+    reading, so this is the same `1/5001` `test_stats.py` already pins, landing
+    on the contrast entry rather than as a bare float — and the echo carries
+    `level`, the one resolved value the config itself never writes."""
+    block, members = _fixture_c1_call()
+    entry = block["s"]["y"]
+    assert entry["p_value"] == pytest.approx(1.0 / 5001.0)
+    assert entry["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "arm",
+        "level": "within_cluster",
+    }
+    assert members[0].p_value == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_paired_comparison_carries_neither_p_value_nor_null_test():
+    """**The discriminating half.** The same `null_test` declaration, over
+    `_clustered_contrast_call`'s PAIRED fixture (no declared group axis, so
+    `crossed_group_axes` returns `[]` and `is_paired` is `True`) — without this
+    control, a write that ignored `is_paired` entirely would pass the test
+    above just as well."""
+    block, members = _clustered_contrast_call(
+        null_test={"method": "permutation", "n": 5000, "shuffle": "arm", "level": "rows"}
+    )
+    entry = block["s"]["m"]
+    assert "p_value" not in entry
+    assert "null_test" not in entry
+    assert members[0].p_value is None
+
+
+def test_a_contrast_entry_carries_the_resolved_resample_echo():
+    """Finding 3 (`spec-defects.md`, "the contrast path discloses nothing
+    about its resample"): every `aggregated` metric block gets the resolved
+    `{method, n, stratify_by}` echo when `statistics.resample` is declared,
+    and a contrast entry carried none at all — `_comparison_step_blocks`
+    built each entry as a literal mapping with no route for it. `resample`
+    threads a second `resample_echo` parameter for exactly that reason."""
+    block, _ = _clustered_contrast_call(
+        resample_echo={"method": "bootstrap", "n": 2000, "stratify_by": []}
+    )
+    entry = block["s"]["m"]
+    assert entry["resample"] == {"method": "bootstrap", "n": 2000, "stratify_by": []}
+
+
+def test_a_contrast_entry_carries_no_resample_echo_when_none_is_declared():
+    """Absent, not null — the same rule `weighted_by` follows: a contrast built
+    with `resample_echo=None` (the default every direct call in this suite
+    already uses) must not acquire a `resample` key it never had before this
+    task. A control asserting only an absence would pass identically if the
+    write above were deleted entirely; paired with the presence test above,
+    the two together prove the key really depends on the argument."""
+    block, _ = _clustered_contrast_call()
+    entry = block["s"]["m"]
+    assert "resample" not in entry
+
+
+def test_a_thin_contrast_resample_warns_with_a_where():
+    """Finding 1 (`spec-defects.md`): a declared `resample` whose surviving
+    draws fall below `min_honest_draws` publishes `ci95: null` where a
+    `paired_t_over_units` interval used to stand, and nothing warned — the one
+    emit site, `W-STATS-RESAMPLE-THIN`, lives in the per-condition
+    `summarize_step` loop and is never reached from a comparison built here.
+
+    Two of three units carry `nan` for the recorded column `m`, so any
+    bootstrap draw touching either fails `math.isnan` and is dropped
+    (`paired_percentile_of_derived`'s own per-draw `continue`) — most of 400
+    draws, at seed 7, landing below the 80-draw floor and publishing `ci95:
+    null`. `W-STATS-CONTRAST-RESAMPLE-THIN` must carry `where_id`
+    (`cond:1`) rather than the `limits.min_reported_n` path
+    `W-STATS-CONTRAST-THIN` uses — the two warnings address different things
+    and must not collide on one `where`."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    nan = float("nan")
+    keys = ["a", "b", "c"]
+    of_vals = {"a": 1.0, "b": nan, "c": nan}
+    against_vals = {"a": 0.0, "b": nan, "c": nan}
+    roster = UnitList([Unit(key=k) for k in keys])
+    comparison = Comparison(id="c", of=1, against=0)
+    findings = Collector()
+    block, _ = _comparison_step_blocks(
+        comparison,
+        roster=roster,
+        aggregated={1: {"s": {"m": 1.0}}, 0: {"s": {"m": 0.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in of_vals.items()},
+            (0, "s"): {k: {"m": v} for k, v in against_vals.items()},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=findings,
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="m=x", values={"analysis.method": "x"}),
+        },
+        resample_columns=True,
+    )
+    entry = block["s"]["m"]
+    assert entry["ci95"] is None
+    codes = [d.code for d in findings.findings]
+    assert "W-STATS-CONTRAST-RESAMPLE-THIN" in codes
+    thin = next(d for d in findings.findings if d.code == "W-STATS-CONTRAST-RESAMPLE-THIN")
+    assert thin.path == "cond:1"
+    assert "resample draws produced a value" in thin.message
+
+
+def test_the_null_closure_moves_with_the_drawn_labels_not_the_roster():
+    """Task 20's erasure property, pinned against the REAL closure
+    (`cli._make_null_fn`) rather than a hand-built proxy that could not catch
+    the regression it exists to prevent: `_make_resample_fn`'s closure calls
+    `_attributed(units, attrs)`, which merges the roster's own attributes OVER
+    each row and would silently overwrite whatever `labels` a caller passed —
+    reporting the SAME value on every draw and a `p_value` of 1.0 for every
+    derived metric in every run. `_make_null_fn` merges the DRAWN label over
+    the roster's attributes instead, which is the one place it cannot be
+    overwritten — this test calls the closure with the roster's own labels and
+    then with them swapped, and the two must disagree."""
+    from publishable.cli import _make_null_fn
+    from publishable.config import Config
+    from publishable.stats import UnitTable
+    from publishable.templates.base import BaseTemplate
+
+    class _LabelDeltaTemplate(BaseTemplate):
+        def aggregate(self, units, cfg):
+            of = [row["y"] for row in units if row.get("label") == "of"]
+            against = [row["y"] for row in units if row.get("label") == "against"]
+            if not of or not against:
+                return {}
+            return {"delta_y": sum(of) / len(of) - sum(against) / len(against)}
+
+    units = UnitTable({"u1": {"y": 10.0}, "u2": {"y": 20.0}})
+    attrs = {"u1": {"label": "of"}, "u2": {"label": "against"}}
+    null_fn = _make_null_fn("delta_y", Config({}), _LabelDeltaTemplate(), attrs, "label", "test")
+    observed = null_fn(units, {"u1": "of", "u2": "against"})
+    swapped = null_fn(units, {"u1": "against", "u2": "of"})
+    assert observed == pytest.approx(10.0 - 20.0)
+    assert swapped == pytest.approx(20.0 - 10.0)
+    assert observed != swapped
+
+
 def test_an_unpaired_contrast_records_its_two_side_counts_and_no_n_paired():
     """Decision 5, and it is the first conditional write of `n_paired` in this
     codebase. § Contrasts defines `n_paired` as the intersection, and an unpaired
@@ -4097,11 +4310,17 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
     so the colliding key's closures **do** exist when the `except ContractError`
     retry leaves both maps uncleared. Modelled here with `resample_fns_by_key`
     empty regardless — a fixture that pins the null-beside-`n_paired_clusters`
-    shape as a *value*, without claiming this input shape is what the collision
-    actually produces. `test_a_derived_key_collision_under_a_cluster_end_to_end`
+    shape as a *value* that this function still produces whenever
+    `compute_of`/`compute_against` are `None` (an uncomputed derived metric,
+    for whatever reason), without claiming this input shape is what the real
+    collision produces. **It is not**: `test_a_derived_key_collision_under_a_cluster_end_to_end`
     below is the fixture that reproduces the real shape (populated closures,
-    reached through a genuine `run`) and pins the suppression that makes this
-    one's output the true one rather than a coincidence.
+    reached through a genuine `run`), and as of H4d task 15b that one no
+    longer stays null — the closures survive the collision AND the removed
+    `clusters is None` suppression, so the real shape now computes a genuine
+    clustered interval. This fixture's null output stays correct on its own
+    narrower premise (no closures at all), which is why it is kept rather than
+    retired alongside the suppression.
 
     **The decision: yes, `n_paired_clusters` belongs beside a null interval
     here, unchanged from what the code already does.** `n_paired` is written
@@ -4173,7 +4392,8 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
 
 def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     """The whole-branch review's Critical, reproduced through a real `run` (not
-    a direct call with hand-built maps) and pinned so it cannot regress silently.
+    a direct call with hand-built maps) — **converted, not deleted, now that
+    H4d task 15b removed the suppression that fixed it.**
 
     A clustered run whose template's `aggregate` returns a key colliding with
     the recorded column `pred` (`aggregate_returns="pred"`) reaches
@@ -4181,15 +4401,20 @@ def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     populated for the colliding key — `command_run` builds a closure for every
     key in `derived` before the call that can raise `E-STEP-KEY-COLLISION`, and
     the `except ContractError` retry that follows the collision clears neither
-    map. Before the clusters-guarded suppression this test pins, that left
-    `compute_of`/`compute_against` real and callable, so the derived branch
-    computed a genuine point estimate and drew a genuine (UNCLUSTERED)
-    percentile interval — `method: paired_percentile_over_units`, no
-    `_clustered` suffix — and published it beside `n_paired_clusters: 3`,
-    reading as if the cluster had been honoured when the number underneath it
-    was drawn as though every unit were independent. Verbatim the failure
-    `E-DATA-CLUSTER-CONTRAST` existed to prevent, on a path that refusal never
-    covered.
+    map, so `compute_of`/`compute_against` are real and callable. **What the
+    now-removed `clusters is None` suppression once prevented — an UNCLUSTERED
+    interval published beside `n_paired_clusters`, reading as if the cluster had
+    been honoured when it was drawn as though every unit were independent — H4d
+    task 15b closes a different way: `paired_percentile_of_derived` now takes
+    the same `clusters` mapping the recorded-column arm already draws through.**
+
+    This fixture asserts the `method` label and the presence of an interval over
+    both call sites into `_comparison_step_blocks`. It does NOT establish that the
+    draw was clustered: its `ci95` is `[0.0, 0.0]`, which is the one value every
+    construction agrees on, so no arithmetic here can tell a clustered draw from a
+    unit-level one. That property is asserted by
+    `test_a_derived_key_collision_under_a_cluster_computes_the_clustered_width`,
+    on a fixture built to separate the two widths.
 
     Both the generated `vs_baseline` delta and the declared `results.contrasts`
     entry are asserted, since `_compute_vs_baseline` and
@@ -4218,9 +4443,9 @@ def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     )
     declared_entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
     for entry in (vs_baseline_entry, declared_entry):
-        assert entry["delta"] is None
-        assert entry["method"] is None
-        assert entry["ci95"] is None
+        assert entry["delta"] == 0.0
+        assert entry["method"] == "paired_percentile_over_units_clustered"
+        assert entry["ci95"] is not None
         assert entry["cohens_d"] is None
         assert entry["n_paired"] == 12
         assert entry["n_paired_clusters"] == 3
@@ -4246,6 +4471,66 @@ class Step(BaseStep):
             io.record(unit.key, {{"pred": shift * gap[unit.attributes["site"]]}})
         return {{"n_units": len(units)}}
 """
+
+
+def test_a_derived_key_collision_under_a_cluster_computes_the_clustered_width(tmp_path):
+    """**Fix round 1, Critical 1.** The batch's own end-to-end fixture
+    (`test_a_derived_key_collision_under_a_cluster_end_to_end` above) produces
+    `ci95: [0.0, 0.0]` under EVERY construction — degenerate, so its
+    `ci95 is not None` assertion is blind to which construction actually ran,
+    and the `method` string literal was the entire pin. The reviewer verified
+    that editing `_comparison_step_blocks`' `clusters` ARGUMENT alone
+    (`clusters=base_col_clusters` → `clusters=None`, the `method` ternary left
+    untouched) leaves that test, `tests/test_cli.py` as a whole, and the FULL
+    suite green — the two ternaries deciding `method` and `clusters` were
+    independently writable, so a `_clustered` label could publish a unit-level
+    draw. Verbatim the shape H4b-2's whole-branch review found a Critical in.
+
+    This fixture reuses `_CLUSTER_CONTRAST_STEP` (non-degenerate `pred`,
+    varying by site: 0.0 baseline throughout, 1.0/5.0/9.0 by site under
+    `spearman`) combined with `aggregate_returns="pred"`, so the derived
+    metric's own recompute — `mean(pred)` under the same name the step already
+    records — collides with the recorded column AND varies with which
+    clusters a resample draws, which fixture `[0.0, 0.0]` above could not
+    do (every value there was 0.0, so no construction could move the
+    interval). Measured directly before trusting it: clustered
+    `ci95 == [1.0, 9.0]` (half-width 4.0), unit-level (clusters argument
+    nulled, label left alone) `ci95 == [4.666…, 8.0]` (half-width ≈1.667) —
+    categorically different numbers, which is what makes this fixture able to
+    tell the two constructions apart where the degenerate one could not.
+
+    The load-bearing check is the ARGUMENT-ONLY mutation below, not a string
+    literal: mutate `clusters=base_col_clusters` to `clusters=None` at the
+    call site, leave every `method` ternary untouched, and confirm THIS test
+    fails on `ci95` — the ONLY way this class of bug can be caught, since a
+    method-string mutation was already exercised by 15b's own commit."""
+    doc = run_a_project(
+        tmp_path,
+        _starter_step=_CLUSTER_CONTRAST_STEP,
+        aggregate_returns="pred",
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CONTRAST_CLUSTER_ROSTER,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {"id": "c", "of": "method=spearman", "against": "baseline"},
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert entry["method"] == "paired_percentile_over_units_clustered"
+    assert entry["delta"] == pytest.approx(6.333333333333333)
+    # The number a unit-level draw over the identical intersection would give
+    # is [4.666666666666667, 8.0] — measured directly by nulling the
+    # `clusters` argument alone. This asserts the CLUSTERED one, which is
+    # wider because it draws whole clusters rather than independent rows.
+    assert entry["ci95"] == pytest.approx([1.0, 9.0])
+    assert entry["n_paired_clusters"] == 3
 
 
 def test_a_clustered_contrast_runs_end_to_end_and_records_the_clustered_delta(tmp_path):
@@ -4992,6 +5277,334 @@ def test_a_clustered_cross_arm_contrast_runs_and_records_a_cluster_robust_interv
     assert (entry["ci95"][1] - entry["ci95"][0]) / 2 == pytest.approx(4.548314238705341)
 
 
+_C1_ECHO_Y_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"y": float(unit.attributes["y_src"])}})
+        return {{}}
+"""
+
+
+def test_fixture_c1_null_test_runs_end_to_end_with_a_p_value_and_fdr_bh(tmp_path, capsys):
+    """Task 25 step 6(a) — fixture C1
+    (`docs/superpowers/specs/2026-08-18-null-test-design.md` § Fixture C), run
+    through a real `run` rather than a direct call to
+    `_comparison_step_blocks`: a `groups` axis, `assign` by attribute,
+    `cluster_by: match_set`, a declared contrast crossing the axis, and a
+    `null_test` whose `shuffle` names it — decision 6's group-axis p-value
+    home. **This is the verification tasks 19 and 20 owe that is not a
+    proxy** — a direct-call probe hand-builds `derived_by_key` and
+    `resample_fns_by_key` and never reaches the state `command_run` branches
+    on, which is how one corner in `_comparison_step_blocks` collected five
+    wrong grounds across two slices.
+
+    `1/5001` is `test_stats.py`'s own pin: fixture C's within-cluster
+    relabelling is the unique maximum over all 10^10 relabellings, so `b = 0`
+    deterministically. Carried here rather than re-derived. Under
+    `correction: fdr_bh` with exactly one comparison in the family, BH's own
+    adjustment is `min(1, (1/1) * p) = p`, so `p_value_corrected` equals
+    `p_value` while `ci95_corrected` stays `null` by fdr_bh's own design."""
+    rows = "\n".join(
+        f"{key},{cluster},{label},{value}"
+        for key, cluster, label, value in zip(
+            _C1_KEYS, _C1_CLUSTERS, _C1_LABELS, _C1_VALUES, strict=True
+        )
+    )
+    roster_csv = f"patient_id,match_set,arm,y_src\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C1_ECHO_Y_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "match_set", "y_src"],
+            "cluster_by": "match_set",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["against", "of"]}]},
+        statistics={
+            "contrasts": [{"id": "arm_effect", "of": "arm=of", "against": "arm=against"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "fdr_bh",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    entry = next(c for c in contrasts if c["id"] == "arm_effect")["step01_summarize_units"]["y"]
+    assert entry["p_value"] == pytest.approx(1.0 / 5001.0)
+    assert entry["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "arm",
+        "level": "within_cluster",
+    }
+    assert entry["p_value_corrected"] == pytest.approx(1.0 / 5001.0)
+    assert entry["ci95_corrected"] is None
+
+
+_C2_LOCAL_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("cred_assay")\n'
+    "class LabelDelta(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        of = [float(row["y"]) for row in units if row.get("label") == "of"]\n'
+    '        against = [float(row["y"]) for row in units if row.get("label") == "against"]\n'
+    "        if not of or not against:\n"
+    "            return {}\n"
+    '        return {"delta_y": sum(of) / len(of) - sum(against) / len(against)}\n'
+)
+
+
+_C2_NOOP_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # A per-unit record is what makes `collapsed_by_key[(cond, step)]`
+        # non-empty — `aggregate`'s `units` argument is built from it, and an
+        # empty `collapsed` gives `aggregate` zero rows however many
+        # attributes the roster declares. `LabelDelta.aggregate` reads
+        # `label`/`y` off the merged attributes rather than this column, but
+        # the value still has to VARY per unit: a constant recorded column
+        # (every unit the identical `1.0`) is what
+        # `percentile_of_derived_clustered`'s own content-based degenerate
+        # check reads, over the RECORDED columns rather than the merged
+        # attributes — so a constant placeholder there refuses every draw as
+        # degenerate before `aggregate` (which reads the varying attributes,
+        # not this column) ever runs.
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"seen": float(i)}})
+        return {{}}
+"""
+
+
+def test_fixture_c2_null_test_runs_end_to_end_and_confirms_the_filed_clustered_gap(
+    tmp_path, capsys
+):
+    """Task 25 step 6(b) — fixture C2, the per-condition derived home: the
+    SAME 50-unit roster as C1 (`docs/superpowers/specs/2026-08-18-null-test-
+    design.md` § Fixture C — "the same roster serves both p-value homes"),
+    with `label` an ORDINARY attribute rather than a group axis, a
+    project-local template's `aggregate` computing `mean(y|of) -
+    mean(y|against)`, and `cluster_by: match_set`. Blocked until H4d task 15
+    claimed `E-DATA-CLUSTER-DERIVED` — without it a derived metric under a
+    declared `cluster_by` is dropped and there is no metric block for a
+    p-value to land on at all.
+
+    **This is NOT the `p_value ≈ 1/5001` the design spec's own § Fixture C
+    describes for this home, and the brief's step 6(b) asked for that
+    number.** `stats.summarize_step`'s docstring and
+    `docs/superpowers/spec-defects.md`'s OPEN "a derived metric's permutation
+    null has no clustered construction" entry both say why, in terms rather
+    than in silence: `permutation_of_derived` (task 12) takes no cluster
+    argument and no clustered counterpart exists in this build, so
+    `summarize_step` gates the whole write — `p_value`, `null_draws`, the
+    `null_test` echo — on `clusters is None` rather than publish the free
+    (wrong-stratum) relabelling beside a `level: within_cluster` claim it did
+    not earn. Measured directly here rather than asserted from the filing:
+    the SAME roster and arithmetic that gives C1 `1/5001` through the
+    contrast-side write (which delegates to the clustered construction, task
+    13) gives C2 no `p_value` at all, because the per-condition write has no
+    clustered construction to delegate to. `delta_y` still computes (`2.5`,
+    same as C1) and still resamples (`E-DATA-CLUSTER-DERIVED` claimed) — only
+    the null is missing, and it is missing in the shape the filing's own
+    "second, live half" names: indistinguishable from a run that declared no
+    `null_test` at all."""
+    rows = "\n".join(
+        f"{key},{cluster},{label},{value}"
+        for key, cluster, label, value in zip(
+            _C1_KEYS, _C1_CLUSTERS, _C1_LABELS, _C1_VALUES, strict=True
+        )
+    )
+    roster_csv = f"patient_id,match_set,label,y\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C2_NOOP_STEP,
+        _local_template=_C2_LOCAL_TEMPLATE,
+        units_overrides={
+            "attributes": ["label", "match_set", "y"],
+            "cluster_by": "match_set",
+        },
+        statistics={
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "holm",
+        },
+        experiment_type="cred_assay",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["delta_y"]
+    # The claimed half: computes and resamples despite the declared cluster.
+    assert metric["value"] == pytest.approx(2.5)
+    assert metric["method"] == "percentile_of_derived_clustered"
+    # The filed gap, confirmed rather than assumed: a declared `cluster_by`
+    # suppresses the whole null-test write, leaving this block
+    # indistinguishable from one that declared no `null_test` at all.
+    assert "p_value" not in metric
+    assert "null_draws" not in metric
+    assert "null_test" not in metric
+    assert "p_value_corrected" not in metric
+
+
+def test_fixture_c2_null_test_runs_end_to_end_with_a_p_value_when_unclustered(tmp_path, capsys):
+    """Whole-branch review Minor 6. The spec's own ordering constraint says
+    tasks 19 and 20 must be verified BY `run`, never by direct call alone —
+    task 19 got fixture C1's end-to-end test above; task 20's two end-to-end
+    fixtures were both negative (C1 as a paired control, and C2 with
+    `cluster_by` declared, which pins the SUPPRESSED shape). Nothing in the
+    suite ran C2 with `cluster_by` dropped to confirm the POSITIVE path a real
+    `run` actually produces.
+
+    Same roster and template as the suppressed-shape test above, `cluster_by`
+    removed from `units_overrides` — the one change that flips
+    `stats.summarize_step`'s `clusters is None` gate. The reviewer built and
+    ran this exact config independently and got `p_value 0.479`, `null_draws
+    5000`, echo `level: rows`, no `p_value_corrected` — reproduced here as a
+    suite pin rather than left as an unrepeatable manual finding."""
+    rows = "\n".join(
+        f"{key},{label},{value}"
+        for key, label, value in zip(_C1_KEYS, _C1_LABELS, _C1_VALUES, strict=True)
+    )
+    roster_csv = f"patient_id,label,y\n{rows}\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_C2_NOOP_STEP,
+        _local_template=_C2_LOCAL_TEMPLATE,
+        units_overrides={"attributes": ["label", "y"]},
+        statistics={
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"},
+            "correction": "holm",
+        },
+        experiment_type="cred_assay",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["delta_y"]
+    assert metric["value"] == pytest.approx(2.5)
+    # The positive shape the suppressed-shape test's sibling never exercised:
+    # a range rather than a literal, since the run's own digest-derived seed
+    # differs from any fixed seed a direct-call test would choose — the free
+    # (unclustered) relabelling's own answer for this roster, `test_stats.py`'s
+    # own pin at a fixed seed (`0.3 < p < 0.7`).
+    assert metric["p_value"] is not None
+    assert 0.3 < metric["p_value"] < 0.7
+    assert metric["null_draws"] == 5000
+    assert metric["null_test"] == {
+        "method": "permutation",
+        "n": 5000,
+        "shuffle": "label",
+        "level": "rows",
+    }
+    assert "p_value_corrected" not in metric
+    # Decision 7's other half, still true here: the recorded column gets none.
+    seen = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["seen"]
+    assert "p_value" not in seen
+
+
+_TWO_COLUMN_ECHO_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            value = float(unit.attributes["y_src"])
+            io.record(unit.key, {{"y": value, "z": value}})
+        return {{}}
+"""
+
+
+def _one_treatment_five_control_roster_csv() -> str:
+    rows = "\n".join(f"c{i},control,{i}" for i in range(5))
+    rows += "\nt0,treatment,5"
+    return f"patient_id,arm,y_src\n{rows}\n"
+
+
+def test_holm_withholds_p_value_corrected_through_a_real_run_for_two_tied_p_only_members(
+    tmp_path, capsys
+):
+    """Whole-branch review Critical 1's run-level pin. The direct-call test
+    `test_holm_withholds_p_value_corrected_for_a_p_only_member_rather_than_
+    fabricating_its_rank` in `tests/test_correction.py` pins `corrected_for`
+    itself, but the defect was only ever reproduced through a real `run` —
+    the whole-branch reviewer's own reproduction is the fixture below — and
+    nothing in the suite drove that shape through `main(["run", ...])`
+    before this test.
+
+    Same reproduction the reviewer used: 5 units at `arm=control`, 1 at
+    `arm=treatment`, `allocation: between` with `assign.arm.by_attribute`,
+    `sweep.groups` on `arm`, a declared contrast crossing it, `statistics.
+    null_test: {{method: permutation, n: 5000, shuffle: arm}}`, and
+    `correction: holm`. `n_of: 1` makes `welch_t_over_units` refuse both
+    recorded columns (`method`/`ci95` both `null`), leaving a p-only member
+    for each — and both columns echo the same per-unit value, so the two
+    members share one seed and one set of per-unit values and their real
+    permutation `p_value`s are bit-identical, exactly the shape that let
+    `holm`'s old fabricated rank publish two different numbers
+    (`p_value_corrected` 0.3395 and 0.1698) for evidence that does not
+    distinguish them at all.
+
+    The assertion that matters is `p_value_corrected` absent from both
+    entries — not a `method` string alone, which a mutation could satisfy
+    without the withholding this test exists to pin."""
+    roster_csv = _one_treatment_five_control_roster_csv()
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_TWO_COLUMN_ECHO_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "y_src"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "arm_effect", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "holm",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    block = next(c for c in contrasts if c["id"] == "arm_effect")["step01_summarize_units"]
+    y_entry = block["y"]
+    z_entry = block["z"]
+
+    # A p-only member on both columns: `n_of: 1` refuses the interval.
+    assert y_entry["method"] is None and y_entry["ci95"] is None
+    assert z_entry["method"] is None and z_entry["ci95"] is None
+    assert y_entry["n_of"] == 1 and y_entry["n_against"] == 5
+    assert z_entry["n_of"] == 1 and z_entry["n_against"] == 5
+
+    # The bit-identical raw p-value that made the old fabricated rank visible.
+    assert y_entry["p_value"] is not None
+    assert y_entry["p_value"] == z_entry["p_value"]
+
+    # The withholding itself — the assertion this test exists for.
+    assert "p_value_corrected" not in y_entry
+    assert "p_value_corrected" not in z_entry
+
+
 def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_run(tmp_path, capsys):
     """Decision 8, and it is verified by `run` rather than by direct call for a
     measured reason: on H4b-2 the neighbouring corner survived four task batches and
@@ -5001,8 +5614,10 @@ def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_ru
 
     A derived metric's unpaired contrast has nothing to compute — no per-side derived
     draw exists among the constructions this slice builds — so `delta`, `method` and
-    `ci95` are all `null` with the two side counts beside them, the shape
-    `E-DATA-CLUSTER-DERIVED` already uses and § Contrasts licenses.
+    `ci95` are all `null` with the two side counts beside them, the same
+    all-null-plus-counts shape a suppressed entry takes elsewhere and § Contrasts
+    licenses. Unrelated to `E-DATA-CLUSTER-DERIVED` (retired, H4d task 15), which
+    was about the PAIRED derived branch under a declared cluster, not this one.
 
     **The two counts are the presences that must report.** A test asserting only the
     three nulls passes identically if the whole entry were missing, and `is None` is
@@ -7865,13 +8480,15 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
     count are different numbers, which is the only way a reader — or this test —
     can tell which of the two is being reported.
 
-    **The derived half of this test was retired with H3b task 12's second refusal**
-    and moved to `test_a_clustered_derived_metric_is_refused_rather_than_drawn`
-    below: a derived metric under `cluster_by` no longer reaches the record at all,
-    so there is no `n` of its own to carry a cluster count. This one now asserts
-    the recorded column, which is where the count belongs and always did. The
-    project still derives `total` — the recorded column has to come from
-    somewhere — and the refusal drops it, which the test below is what pins."""
+    **The derived half of this test was retired with H3b task 12's second
+    refusal, and moved to what is now**
+    `test_a_clustered_derived_metric_is_now_resampled_by_the_clustered_construction`
+    below (H4d task 15 replaced the refusal it once pinned with a computed,
+    cluster-robust interval). This one asserts only the recorded column, which
+    is where the cluster count in `n` belongs and always did — a derived
+    metric's own `n` carries `attrition`'s condition-wide `clusters` figure
+    straight through rather than recomputing one of its own, which the test
+    below is what pins."""
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
@@ -7901,21 +8518,27 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
         assert re.search(r"\d+\.\d+", block) is None, block
 
 
-# --- H3b task 12: the clustered derived draw, refused rather than drawn --------
+# --- H3b task 12 / H4d task 15: the clustered derived draw ---------------------
 
 
-def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsys):
-    """§ Statistical reporting gives a derived metric "a percentile `ci95` from
-    resampling units — or clusters, when `cluster_by` is declared". The clustered
-    form of that draw does not exist, and `percentile_of_derived` draws units
-    unconditionally, so the combination is refused at run time under
-    `E-DATA-CLUSTER-DERIVED` — not at `validate`, because whether a template's
-    `aggregate` returns anything is not knowable from a declaration.
+def test_a_clustered_derived_metric_is_now_resampled_by_the_clustered_construction(
+    tmp_path, capsys
+):
+    """**Converted from a refusal test, `E-DATA-CLUSTER-DERIVED` now retired**
+    (H4d task 15). § Statistical reporting gives a derived metric "a percentile
+    `ci95` from resampling units — or clusters, when `cluster_by` is declared",
+    and the clustered form of that draw is now `stats.percentile_of_derived_clustered`
+    (task 15a), which `summarize_step` dispatches to whenever `clusters` is given
+    — end to end, through a real `run`, not only by direct call
+    (`tests/test_stats.py` owns that).
 
-    Three things at once, all of them exact: the derived metric is **absent** from
-    the record rather than present with a null interval, the identifier is
-    disclosed, and the recorded column beside it keeps its cluster-robust interval
-    — the refusal costs the derived mapping and nothing else."""
+    Kept alive against the code that survives rather than only asserting the old
+    refusal no longer fires: the derived metric is **present**, with a real
+    `ci95`, a `method` naming the clustered construction, and a `resample_draws`
+    count — `CLAUDE.md`'s own rule that a converted test must assert a positive,
+    since a test asserting only an absence would pass identically if the whole
+    derived branch had been deleted. The recorded column beside it keeps its own
+    cluster-robust interval, unaffected by the derived branch's new construction."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -7926,27 +8549,30 @@ def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsy
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    assert "total" not in aggregated
-    # Dropped, not published with `ci95: null` — that state already means "no
-    # resample callable, or no seed", and the record must not hold two meanings
-    # for it.
-    assert set(aggregated) == {"pred"}
+    assert set(aggregated) == {"pred", "total"}
     assert aggregated["pred"]["method"] == "t_over_units_clustered"
     assert aggregated["pred"]["n"]["clusters"] == 5
-    # The identifier reaches a reader, through the containment `cli` already had
-    # for a derived key collision.
+    assert aggregated["total"]["value"] == 7.0
+    assert aggregated["total"]["ci95"] is not None
+    assert aggregated["total"]["method"] == "percentile_of_derived_clustered"
+    assert aggregated["total"]["resample_draws"] == 2000
+    # `attrition`'s own condition-wide `clusters` figure, straight through —
+    # unlike the recorded column above, a derived metric has no per-column
+    # carrier set to recompute one of its own from.
+    assert aggregated["total"]["n"]["clusters"] == 5
+    # The identifier no longer reaches a reader: nothing was refused, and no
+    # `aggregate` fault was contained.
     out = doc["stdout"]
-    assert "E-DATA-CLUSTER-DERIVED" in out
-    assert "W-STATS-AGGREGATE-FAILED" in out
-    # And the run kept its record: a refusal after every execution is paid for
-    # must not cost the run its `run.yaml`.
+    assert "E-DATA-CLUSTER-DERIVED" not in out
+    assert "W-STATS-AGGREGATE-FAILED" not in out
     assert run["status"] == "completed"
 
 
 def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path, capsys):
     """The control that must report: the identical project without `cluster_by`
-    publishes `total` with a percentile interval over 2000 draws. The refusal is a
-    property of the combination, not of deriving a metric."""
+    publishes `total` with a percentile interval over 2000 draws — the unclustered
+    construction, `percentile_of_derived`, which the clustered project above no
+    longer takes now that `E-DATA-CLUSTER-DERIVED` is retired."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -7970,12 +8596,17 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
     the construction a declared `statistics.resample` puts around every recorded
     column (H4a whole-branch review, I1).
 
-    `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
-    derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
-    `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
-    `resample_draws` key — which `reference.md` § Statistical reporting makes
-    the shape of a run that declared NO resample — while `beside_n` went on
-    carrying the `resample` echo beside it. One block cannot say both.
+    **Retriggered through `E-STEP-KEY-COLLISION` rather than
+    `E-DATA-CLUSTER-DERIVED`**, which H4d task 15 retired — a derived key under
+    `cluster_by` now computes rather than faulting, so this test's own
+    collision (`aggregate_returns="pred"` names the SAME key the scaffolded step
+    records) is what still reaches `cli.py`'s retry path today. The property
+    under test is unchanged: the retry re-summarizes without the derived
+    metrics, and until an earlier fix it also dropped `resample_columns`/
+    `strata`/`seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered`
+    with no `resample_draws` key — which `reference.md` § Statistical reporting
+    makes the shape of a run that declared NO resample — while `beside_n` went
+    on carrying the `resample` echo beside it. One block cannot say both.
 
     `n: 500` rather than the 2000 default on purpose: `draws` is a separate
     parameter from the gate, and at its default a declared 500 would be resampled
@@ -7984,15 +8615,16 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
         tmp_path,
         capsys=capsys,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
-        aggregate_returns="total",
+        aggregate_returns="pred",
         roster_csv=_UNEVEN_CLUSTERS,
         units_overrides={"attributes": ["site"], "cluster_by": "site"},
         statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    # The fault fired and cost exactly the derived mapping, as before.
-    assert "E-DATA-CLUSTER-DERIVED" in doc["stdout"]
+    # The fault fired and cost exactly the derived mapping, as before — now
+    # through the collision rather than the retired cluster refusal.
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
     assert set(aggregated) == {"pred"}
     # And the recorded column came back with the construction the declaration
     # asked for, at the number of draws it asked for.
@@ -8007,13 +8639,16 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
     assert run["status"] == "completed"
 
 
-def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
-    """The blast radius of the refusal above, measured rather than asserted: core
-    ships exactly one template, and `generic` does not override `aggregate` at all
-    — `publishable init` therefore generates no project that can reach
-    `E-DATA-CLUSTER-DERIVED`. Only a user-written template that derives a metric
-    does, which is why the refusal is narrow enough to carry until H4 builds the
-    construction."""
+def test_the_shipped_template_derives_nothing_so_no_generated_project_reaches_a_derived_draw():
+    """Measured rather than asserted, and still true after `E-DATA-CLUSTER-DERIVED`
+    was retired (H4d task 15): core ships exactly one template, `generic`, and
+    it does not override `aggregate` at all — `publishable init` therefore
+    generates no project whose `aggregate` returns anything, so no generated
+    project's `run.yaml` ever carries a `percentile_of_derived`/
+    `percentile_of_derived_clustered` interval at all. Reaching either
+    construction, clustered or not, needs a user-written template that
+    overrides `aggregate` — every test above that does so patches
+    `GenericTemplate.aggregate` directly for exactly that reason."""
     from publishable.templates.base import BaseTemplate
     from publishable.templates.builtin.generic import GenericTemplate
 
@@ -12169,3 +12804,45 @@ def test_a_clustered_run_leaves_a_summary_estimate_alone(tmp_path):
         for block in condition.get("vs_baseline", {}).values()
     )
     assert clustered_entry["method"] == "paired_t_over_units_clustered"
+
+
+def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
+    """The end-to-end shape of `fdr_bh`, minus the run: `corrected_fields` produces
+    the adjusted p-values and `_entry_for` resolves each `where_id` onto the entry
+    that holds the metric. Both halves are asserted, because a key produced and
+    never merged is the failure this test exists to catch.
+
+    **The `contrast:` shape, not `cond:`** — decision 6 makes a declared
+    `statistics.contrasts` entry the ONLY p-value home that joins the
+    correction family; `_compute_vs_baseline` takes no `null_test` parameter at
+    all (by design, since every `vs_baseline` comparison is paired), so a
+    `cond:` entry can never carry a `p_value` in a real run. A pin built on
+    that shape would be a pin against a proxy production cannot construct.
+
+    `ci95_corrected` stays `null` by design and is asserted as such beside the
+    adjusted p — "reports nothing" and "reports only the p" are the two states
+    this method has been in, and only the second is correct."""
+    contrasts_out = [{"id": "t_vs_c", "s": {"m": {"delta": 0.4, "p_value": 0.02}}}]
+    member = Member(
+        where="contrast:t_vs_c",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.02,
+    )
+    fields = corrected_fields([member], "fdr_bh")
+    assert fields, "corrected_fields produced nothing to merge"
+    for (where_id, step_name, metric_key), values in fields.items():
+        entry = _entry_for(None, contrasts_out, where_id, step_name, metric_key)
+        assert entry is not None
+        values = dict(values)
+        assert values.pop("thin") is False
+        entry.update(values)
+    entry = contrasts_out[0]["s"]["m"]
+    assert entry["p_value_corrected"] == pytest.approx(0.02)
+    assert entry["ci95_corrected"] is None
+    assert entry["correction"] == "fdr_bh"

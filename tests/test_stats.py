@@ -22,14 +22,20 @@ from publishable.stats import (
     kish_effective_n,
     mean_of,
     min_honest_draws,
+    min_honest_permutations,
     paired_delta_of_derived,
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
     paired_t_over_units_clustered,
     percentile_of_derived,
+    percentile_of_derived_clustered,
     percentile_over_units,
     percentile_over_units_clustered,
+    permutation_of_derived,
+    permutation_over_contrast,
+    permutation_over_units,
+    permutation_over_units_clustered,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -649,32 +655,74 @@ def test_a_derived_metric_with_no_resample_callable_reports_no_interval():
     assert out["total"]["method"] is None
 
 
-def test_a_clustered_derived_metric_is_refused_at_this_surface():
-    """`E-DATA-CLUSTER-DERIVED`. The clustered draw for a *recomputed* metric —
-    each replicate drawing `G` clusters and pooling their units — does not exist,
-    and `percentile_of_derived` draws units, so the interval would be narrower than
-    the design supports beside recorded columns that are cluster-robust.
+def test_a_clustered_derived_metric_is_resampled_by_the_clustered_construction():
+    """**Converted from a refusal test, `E-DATA-CLUSTER-DERIVED` now retired**
+    (H4d task 15). The clustered draw for a *recomputed* metric — each
+    replicate drawing `G` clusters with replacement and pooling their units —
+    is `percentile_of_derived_clustered` (task 15a), and `summarize_step` now
+    routes a derived key through it whenever `clusters` is given, rather than
+    raising before a single derived key is written.
 
-    Raised here rather than reported by `validate` because whether a template's
-    `aggregate` returns anything is not knowable from a declaration: it is user code
-    core never inspects, and one that overrides `aggregate` may still return `{}`
-    for a given config. `tests/test_cli.py` owns the end-to-end containment; this
-    owns the guard's exact shape."""
+    Kept alive against the code that survives, rather than only asserting the
+    old raise no longer fires: a `ci95`, a `method` naming the clustered
+    construction, and a `resample_draws` count, which is what a converted test
+    must assert on `CLAUDE.md`'s own rule that a test asserting only an
+    absence would pass identically if the whole derived branch had been
+    deleted."""
     collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
     clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
-    with pytest.raises(ContractError) as exc:
-        summarize_step(
-            collapsed,
-            {"completed": 20},
-            derived={"total": 190.0},
-            seed=7,
-            resample={"total": lambda units: sum(units.pred)},
-            clusters=clusters,
-        )
-    assert exc.value.code == "E-DATA-CLUSTER-DERIVED"
-    # Raised before a single derived key is written, so `cli` drops the whole
-    # mapping rather than leaving a record carrying part of it.
-    assert "total" in str(exc.value)
+    out = summarize_step(
+        collapsed,
+        {"completed": 20},
+        derived={"total": 190.0},
+        seed=7,
+        resample={"total": lambda units: sum(units.pred)},
+        clusters=clusters,
+    )
+    assert out["total"]["value"] == 190.0
+    assert out["total"]["ci95"] is not None
+    assert out["total"]["method"] == "percentile_of_derived_clustered"
+    assert out["total"]["resample_draws"] == 2000
+
+
+def test_a_clustered_derived_metrics_n_clusters_matches_the_draw_it_actually_rests_on():
+    """**Fix round 1, Major 3.** `percentile_of_derived_clustered`'s docstring
+    claims `G` "cannot disagree with the `n.clusters` a caller prints beside
+    the interval" — verified false before this fix: `summarize_step`'s derived
+    branch wrote `"n": {**counts, "completed": len(collapsed)}` unconditionally,
+    passing `counts["clusters"]` (`attrition`'s condition-wide figure) straight
+    through with no recomputation, while the recorded-column branch beside it
+    deliberately recomputes `cluster_count_of(clusters, column_keys)` for
+    exactly the reason a ragged carrier set can disagree with the whole
+    roster's count. A `counts` claiming 4 clusters beside a `collapsed` table
+    spanning only 2 published `n: {..., clusters: 4}` beside an interval drawn
+    from 2 — the docstring's guarantee, contradicted by the code beside it.
+
+    Fixed by recomputing `n.clusters` from `collapsed`'s own keys — the same
+    keys `percentile_of_derived_clustered` draws from — whenever `clusters` is
+    given, mirroring the recorded-column branch's own discipline. This fixture
+    deliberately hands `counts["clusters"]` a WRONG, larger figure (4, over a
+    4-cluster mapping) beside a `collapsed` table spanning only 2 of those
+    clusters, so a caller that forgot to recompute would publish the wrong
+    number — the exact shape the docstring was making a claim about.
+
+    `tests/test_cli.py`'s own review note: reachability through a real `run`
+    would need a step recording for a proper subset of completed units, which
+    this test does not construct — the weaker, direct-call claim is what is
+    verified here."""
+    collapsed = {f"u{i}": {"y": float(i)} for i in range(2)}
+    clusters = {"u0": "A", "u1": "B", "u2": "C", "u3": "D"}
+    counts = {"resolved": 4, "completed": 4, "ineligible": 0, "failed": 0, "clusters": 4}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": 190.0},
+        seed=7,
+        resample={"total": lambda units: sum(units.y)},
+        clusters=clusters,
+        draws=200,
+    )
+    assert out["total"]["n"]["clusters"] == 2
 
 
 @pytest.mark.parametrize(
@@ -685,11 +733,11 @@ def test_a_clustered_derived_metric_is_refused_at_this_surface():
         pytest.param({"resample": {"total": None}}, id="no-callable-for-this-key"),
     ],
 )
-def test_a_clustered_derived_metric_that_would_not_be_drawn_is_not_refused(narrowed):
-    """The under-firing controls, and the reason the guard reads what would actually
-    be *drawn* rather than the `cluster_by` declaration. With no seed or no callable
-    no interval is built at all, so there is no too-narrow interval to prevent and
-    the point estimate publishes as it always did.
+def test_a_clustered_derived_metric_with_no_draw_attempted_publishes_no_interval(narrowed):
+    """With no seed or no callable, the dispatch that would route a derived key
+    through `percentile_of_derived_clustered` (task 15a) is never reached, so no
+    interval is built at all and the point estimate publishes as it always did —
+    the same "no draw, no interval" rule an unclustered derived metric follows.
 
     None of these three is reachable through `cli` today — it builds a callable for
     every derived key and only when `derived` is truthy — so the narrowing is
@@ -697,7 +745,7 @@ def test_a_clustered_derived_metric_that_would_not_be_drawn_is_not_refused(narro
     measured, not assumed.
 
     The recorded column beside it stays cluster-robust throughout, which is what
-    says the clustering is still in force and the guard simply does not apply."""
+    says the clustering is still in force and simply has no derived key to reach."""
     collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
     clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
     kwargs = {"seed": 7, "resample": {"total": lambda units: sum(units.pred)}, **narrowed}
@@ -788,6 +836,32 @@ def test_the_honest_draw_floor_is_where_both_ranks_go_interior():
     assert min_honest_draws(0.99) == 400
     lo, hi = _percentile_ranks(min_honest_draws(0.95), 0.95)
     assert lo > 0 and hi < min_honest_draws(0.95) - 1
+
+
+def test_the_permutation_floor_is_the_smallest_n_whose_p_can_fall_below_the_level():
+    """`1/(n + 1) < level` gives `n > 1/level − 1`, so the floor is `floor(1/level)`
+    — 20 at alpha, 40 at alpha/2, 60 at alpha/3.
+
+    Asserted at three levels rather than one, because a single level cannot tell
+    `floor(1/level)` from any expression that happens to agree there: `ceil(1/level)
+    - 1` agrees with nothing here and gives 19/39/59, and `min_honest_draws`'
+    own `ceil(2/tail)` gives 80 at alpha, which is the wrong quantity entirely —
+    that one is about a percentile interval's two ranks being interior."""
+    assert min_honest_permutations(0.05) == 20
+    assert min_honest_permutations(0.025) == 40
+    assert min_honest_permutations(0.05 / 3) == 60
+    assert min_honest_permutations(0.05) != min_honest_draws(0.95)
+
+
+def test_the_permutation_floor_is_what_its_own_inequality_says():
+    """The floor and the inequality it comes from, checked against each other
+    rather than against a literal, so the two cannot drift: at the floor the
+    resolution `1/(n + 1)` is strictly below the level, and one draw fewer it is
+    not."""
+    for level in (0.05, 0.025, 0.05 / 3, 0.05 / 4):
+        n = min_honest_permutations(level)
+        assert 1.0 / (n + 1) < level
+        assert not 1.0 / n < level
 
 
 def test_no_interval_is_built_from_too_few_surviving_draws():
@@ -3739,7 +3813,14 @@ def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
     given finite inputs, and this is the reachable counterexample without that
     condition. `low <= high` is `False` for `nan`, which is exactly what the
     adversarial test above would have caught immediately had it varied value
-    DOMAIN rather than only column shape."""
+    DOMAIN rather than only column shape.
+
+    This resample (column-bootstrap) half of the filing stays open at H4d
+    task 23, which claimed only the sibling permutation half
+    (`stats._label_delta`, over in
+    `test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one`)
+    — H4d is the last slice whose surface is the `statistics` block, so this
+    gap now has no owner to inherit it."""
     got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)
     assert got is not None
     assert math.isnan(got.low) and math.isnan(got.high)
@@ -3752,7 +3833,11 @@ def test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap
     letter for letter — but Σw over these four weights overflows `float`, and
     the resulting weighted mean is `nan`. Finite-and-positive per weight is not
     the same fact as finite-when-summed, and the docstring's argument silently
-    assumed the latter followed from the former."""
+    assumed the latter followed from the former.
+
+    Also still open at H4d task 23, for the reason the sibling test above
+    gives — the permutation half of this finiteness surface closed; this
+    resample half did not."""
     got = percentile_over_units(
         [1.0, 2.0, 3.0, 4.0], seed=1, draws=100, weights=[1e308, 1e308, 1e308, 1e308]
     )
@@ -5013,3 +5098,671 @@ def test_the_unpaired_clustered_percentile_is_invariant_to_relabelling():
             [got.interval.low, got.interval.high]
         )
     assert first == second
+
+
+_C_VALUES: list[float] = []
+_C_LABELS: list[str] = []
+_C_CLUSTERS: list[str] = []
+for _c in range(1, 11):
+    for _i in range(5):
+        _C_VALUES.append(float(100 * _c + _i))
+        _C_LABELS.append("of" if _i >= 3 else "against")
+        _C_CLUSTERS.append(f"M{_c:02d}")
+
+
+def test_an_unclustered_null_over_fixture_c_relabels_across_the_matched_sets():
+    """Fixture C, unclustered. `of` is the top two of every matched set, so the
+    observed delta is 2.5 = 553.5 − 551.0 — but the UNCLUSTERED null is free to
+    relabel across sets, so `of` can hold the global top 20 (mean 852 against 352,
+    delta 500). The observed 2.5 sits near the centre of a null spanning ±500, and
+    the p-value is close to 0.5.
+
+    **This is the wrong-stratum mutant's number, asserted here as the CORRECT
+    answer for the unclustered construction** — which is exactly why task 13's
+    clustered fixture can tell the two apart: 0.0002 against ≈0.5 is four orders
+    of magnitude, not a rounding difference.
+
+    Asserted as a range rather than a literal, because a free permutation's p is a
+    Monte Carlo quantity: the range is far tighter than the gap to any other
+    candidate reading, and a literal would pin the RNG rather than the estimator."""
+    p = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=5000)
+    assert p is not None
+    assert 0.3 < p < 0.7  # measured 0.4845 at seed 11 with a prototype at `a207702`
+
+
+def test_the_permutation_p_value_counts_the_observed_labelling_itself():
+    """The ±1 continuity, on a fixture built so `b = 0`: the observed labelling
+    is the unique maximum over ALL free relabellings, so no draw can reach it.
+
+    **Corrected from the brief's own 6-value fixture** (`[1, 2, 3, 4, 100, 200]`,
+    `of` the top two of six): that fixture's uniqueness claim is true, but its
+    arrangement SPACE is not — `C(6, 2) = 15` distinct label arrangements, and at
+    `n = 999` draws the expected number that land on the unique maximum is
+    `999/15 ≈ 66.6`, not zero. Measured directly (`uv run python -c`, this
+    module's own `permutation_over_units`): `p = 0.07`, not `1/1000`. A fixture
+    whose numbers agree with the bug is the shape `CLAUDE.md` warns against, and
+    the brief's own rule applies — report the disagreement rather than adjusting
+    the assertion until it agrees with a false premise.
+
+    **This fixture instead widens the arrangement space**: 20 values, `of` the
+    top ten. `C(20, 10) = 184 756`, five orders of magnitude above
+    `n = 999`, so the expected count landing on the unique maximum is
+    `≈0.0054` — measured at five different seeds (1 through 5) to confirm `b = 0`
+    at every one, not merely the one this test pins, before trusting it as
+    reliably deterministic in practice."""
+    values = [float(i) for i in range(20)]
+    labels = ["against"] * 10 + ["of"] * 10
+    p = permutation_over_units(values, labels, "of", seed=3, n=999)
+    assert p == pytest.approx(1.0 / 1000.0)
+    assert p != 0.0
+
+
+def test_an_invariant_null_reports_no_p_value_rather_than_one():
+    """Decision 8's invariance rule, on
+    `percentile_over_units_clustered`'s shipped precedent — "the degenerate case is
+    content, not count". Every unit carries the same value, so every relabelling
+    reproduces the observed statistic and a p-value of 1.0 would be computed from a
+    distribution that could not have been anything else.
+
+    `None`, and no new warning code: the record already carries the resolved
+    `null_test` echo beside the `null` p-value, which says the test ran and
+    produced nothing."""
+    labels = ["of"] * 3 + ["against"] * 5
+    assert permutation_over_units([5.0] * 8, labels, "of", seed=1, n=200) is None
+
+
+def test_a_relabelling_that_empties_an_arm_reports_no_p_value():
+    """An observed labelling with nothing on one side has no statistic to test, so
+    it is the same honest absence rather than a `ZeroDivisionError`. This is also
+    the shape task 13's wrong-level mutant produces, which is why it is pinned
+    here rather than only there."""
+    assert permutation_over_units([1.0, 2.0, 3.0], ["against"] * 3, "of", seed=1, n=200) is None
+
+
+def test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one():
+    """H4d task 23, claimed rather than re-declined a fourth time
+    (`docs/superpowers/spec-defects.md`, "a column resample is only ever
+    defined given finite inputs"). Before `_label_delta`'s guard, an
+    unrecoverable `nan` observed statistic made every `>=` comparison `False`
+    and this call reported `0.009900990099009901` — a small, real-looking
+    p-value from a table nobody could compute a mean of. `None` is the honest
+    absence, the same one an emptied arm already gets."""
+    values = [1.0, 2.0, 3.0, float("nan")]
+    labels = ["of", "of", "against", "against"]
+    assert permutation_over_units(values, labels, "of", seed=1, n=100) is None
+
+
+def test_the_permutation_p_value_is_reproducible_from_its_seed():
+    """Two calls at one seed agree and two seeds do not, over a fixture whose null
+    is genuinely variable. A construction that ignored the seed would pass the
+    first assertion and fail the second; one that ignored the labels entirely
+    would pass both, which is what the fixtures above are for."""
+    a = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=500)
+    b = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=500)
+    c = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=8, n=500)
+    assert a == b
+    assert a != c
+
+
+def test_the_unstratified_permutation_walk_is_pinned_at_a_literal_seed():
+    """**Fix round 1, Minor 6.** Task 14's `strata` refactor moved this
+    function's unstratified RNG stream — each draw now shuffles a fresh
+    per-group copy and writes it back, rather than shuffling `pool` in place
+    — and every existing assertion on this path is range-based, so nothing
+    failed and nothing pinned the new walk. A future refactor of this shape
+    would be equally invisible without a literal here.
+
+    `0.473505298940212`, at `seed=7, n=5000` over fixture C: the value this
+    docstring's own review measured after the refactor (`0.48050` before it).
+    If this literal ever needs to move, the docstring's claim about WHY
+    should move with it — an unexplained change here is exactly the signal
+    the review is naming."""
+    assert permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=5000) == pytest.approx(
+        0.473505298940212
+    )
+
+
+def test_a_draw_that_ties_the_observed_statistic_counts_against_it():
+    """The `>=` comparison, on a fixture sized so ties are common rather than
+    a coincidence: four units, values `[1.0, 1.0, 2.0, 2.0]`, labels `["of",
+    "against", "of", "against"]`. Its six distinct relabellings give deltas
+    `[-1, 0, 0, 0, 0, 1]` (enumerated with `itertools.combinations` over which
+    two positions hold `of`) and the observed delta is `0`, so four of six
+    relabellings tie it and a fifth exceeds it — five of six reach `>= observed`,
+    one does not. A `>` comparison would drop the four ties and count only the
+    one exceedance, a categorically smaller number this range is wide enough to
+    tell apart from `>=`'s."""
+    values = [1.0, 1.0, 2.0, 2.0]
+    labels = ["of", "against", "of", "against"]
+    p = permutation_over_units(values, labels, "of", seed=3, n=999)
+    assert p is not None
+    assert 0.75 < p < 0.9
+
+
+def _c_collapsed() -> dict[str, dict[str, float]]:
+    """Fixture C as a collapsed table: 50 units, `y` only. The LABEL is not in the
+    table — it travels as the `labels` mapping, which is what a relabelling
+    permutes and what `cli`'s closure merges back in."""
+    return {f"u{c:02d}_{i}": {"y": float(100 * c + i)} for c in range(1, 11) for i in range(5)}
+
+
+def _c_labels() -> dict[str, str]:
+    return {
+        f"u{c:02d}_{i}": ("of" if i >= 3 else "against") for c in range(1, 11) for i in range(5)
+    }
+
+
+def _c_compute(table, labels):
+    """`mean(y | of) − mean(y | against)`, read through the LABELS ARGUMENT.
+
+    This is the shape `cli`'s null-test closure has and the shape
+    `percentile_of_derived`'s `compute` cannot express: a one-argument closure
+    would have to read the label off the row, and `cli._attributed` overwrites it
+    from the roster on every call."""
+    of = [row["y"] for row in table if labels[row["unit"]] == "of"]
+    against = [row["y"] for row in table if labels[row["unit"]] != "of"]
+    if not of or not against:
+        return None
+    return sum(of) / len(of) - sum(against) / len(against)
+
+
+def test_a_derived_permutation_relabels_and_recomputes_through_the_labels_argument():
+    """Fixture C, unclustered and derived. The observed delta is 2.5; free
+    relabelling lets `of` hold the global top 20 (delta 500), so the observed sits
+    near the centre of the null and the p is near 0.5 — the same number the
+    unclustered COLUMN construction gives, which is what says the two agree about
+    what one draw is.
+
+    The load-bearing assertion is the SURVIVOR COUNT: 500 requested, 500
+    surviving, because every relabelling of this fixture leaves both arms
+    non-empty. A count below the request would say draws were being dropped, which
+    on this fixture can only mean the closure was handed something it could not
+    read."""
+    p, survivors = permutation_of_derived(_c_collapsed(), _c_labels(), _c_compute, seed=7, n=500)
+    assert p is not None
+    assert 0.3 < p < 0.7
+    assert survivors == 500
+
+
+def test_summarize_step_writes_a_derived_p_value_through_the_null_fns_closure():
+    """Task 20, fixture C2's spirit, RESHAPED against a measured gap. The
+    brief's own literal was `p_value == 1/5001` under a declared `cluster_by`
+    and `level: "within_cluster"` — measured directly against `permutation_of_derived`
+    at `a207702`-equivalent and found unreachable: that function does one free
+    `rng.shuffle` over every unit's label and takes no cluster argument at all,
+    so a declared `cluster_by` here gives the spec's OWN "permutes across
+    clusters (the wrong stratum)" answer, ≈0.4845, not the within-cluster
+    `1/5001` a `cluster_by` promises. Publishing that number beside
+    `level: "within_cluster"` would be a declaration accepted whose effect is
+    not delivered — worse than no p-value — so `summarize_step` gates this
+    write on `clusters is None` (see its docstring and the code comment beside
+    the gate) and this test is reshaped to the roster that gate actually
+    serves: no `cluster_by` declared, and the free relabelling's own number
+    asserted as a range, matching `test_a_derived_permutation_relabels_and_
+    recomputes_through_the_labels_argument`'s own pin on the same fixture.
+
+    The decision-5 assertion travels regardless of the reshape: no
+    `p_value_corrected` here, ever — the correction pass merges that in from
+    outside this call."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    block = out["delta_y"]
+    assert block["p_value"] is not None
+    assert 0.3 < block["p_value"] < 0.7
+    assert block["null_draws"] == 500
+    assert block["null_test"] == {
+        "method": "permutation",
+        "n": 500,
+        "shuffle": "label",
+        "level": "rows",
+    }
+    assert "p_value_corrected" not in block
+
+
+def test_summarize_step_writes_no_p_value_for_a_derived_metric_under_a_declared_cluster_by():
+    """The gate's own pin, as a relation between two calls over the SAME
+    roster rather than as a bare absence: without the unclustered control, a
+    `summarize_step` that wrote no p-value under any circumstance would pass
+    this half identically."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    clusters = {f"u{c:02d}_{i}": f"M{c:02d}" for c in range(1, 11) for i in range(5)}
+    shared_kwargs = dict(
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={
+            "method": "permutation",
+            "n": 500,
+            "shuffle": "label",
+            "level": "within_cluster",
+        },
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    clustered = summarize_step(collapsed, counts, clusters=clusters, **shared_kwargs)
+    unclustered = summarize_step(collapsed, counts, **shared_kwargs)
+    assert "p_value" not in clustered["delta_y"]
+    assert "null_draws" not in clustered["delta_y"]
+    assert "null_test" not in clustered["delta_y"]
+    assert unclustered["delta_y"]["p_value"] is not None
+    assert "null_draws" in unclustered["delta_y"]
+    assert "null_test" in unclustered["delta_y"]
+
+
+def test_a_per_condition_recorded_column_gets_no_p_value_at_all():
+    """Decision 7. `mean(column)` over a condition's units is invariant under
+    every relabelling, so a null would be the observed value repeated `n`
+    times and the p-value exactly 1.0 — a number that reads as a finding and
+    is an artifact of asking. Absent, not null, and not 1.0.
+
+    The DERIVED metric in the same block carries one, which is what says the
+    absence is a rule about columns rather than a `null_test` that failed to
+    run."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    for values in collapsed.values():
+        values["extra"] = 1.0
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    assert "p_value" not in out["y"]
+    assert "null_test" not in out["y"]
+    assert "p_value" not in out["extra"]
+    assert out["delta_y"]["p_value"] is not None
+
+
+def test_a_report_by_level_block_carries_no_p_value_while_its_condition_does():
+    """§ Corrections, correction 8 / task 20's ruling: `command_run`'s second
+    `summarize_step` call, once per `statistics.report_by` level, passes no
+    `null_test`, `labels` or `null_fns` — a level describes rather than
+    compares, so it joins no correction family and gets no null, while the
+    condition's own block, computed over the same roster, carries one.
+
+    Called here at two direct `summarize_step` calls, not against
+    `command_run` itself: this test shows only that `summarize_step` behaves
+    differently when handed different keywords — it does not pin that
+    `command_run` calls it that way. That pin is
+    `tests/test_cli.py`'s end-to-end `run`-verified fixture, built once
+    `E-STATS-NULLTEST-UNSUPPORTED` retired (H4d tasks 25+26).
+
+    Both halves in one test: asserting the level alone would pass identically
+    if the null had failed to run for the whole condition."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    condition_block = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    # The level call site: the same roster and the same derived value, but
+    # `command_run` passes none of the three null-test keywords — the ruling
+    # this test pins.
+    level_block = summarize_step(collapsed, counts, derived=derived, seed=7, draws=400)
+    assert condition_block["delta_y"]["p_value"] is not None
+    assert "p_value" not in level_block["delta_y"]
+    assert "null_test" not in level_block["delta_y"]
+
+
+def test_a_derived_permutation_drops_a_degenerate_draw_and_still_reports_its_count():
+    """`None`, `nan` and a raise are one situation from three libraries.
+
+    **Corrected from the brief's own fixture**, which raised on "any draw whose
+    `of` arm holds fewer than two units": a permutation null holds the LABEL
+    MULTISET fixed (`rng.shuffle(pool)` only reorders it), so the `of` arm's
+    *count* is exactly 3 on every one of the 200 draws here, identical to the
+    observed labelling's — the raise's own guard could therefore never fire, and
+    the fixture failed the same constraint a fixture "whose numbers agree with
+    the bug" fails. Measured directly: at this fixture and seed, `survivors ==
+    200` for the count-based guard, not `0 < survivors < 200`.
+
+    **This fixture instead conditions on the SUM of the `of` arm's values**,
+    which *does* vary across draws even though the count does not — six units
+    valued `0..5`, three always labelled `of`, and `sum(of)` ranges `3..12`
+    over the twenty possible label arrangements with roughly half below 8 and
+    half at or above it (enumerated with `itertools.combinations`: sums
+    `[3, 4, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 11, 12]`, ten of
+    twenty below 8). Some draws raise and some don't, and the count says how
+    many survived — the distinction `percentile_of_derived`'s own second
+    return value exists to make.
+
+    The count is asserted as a strict inequality on BOTH sides: `0 < survivors <
+    200`. A test asserting only `survivors < 200` would pass if every draw were
+    dropped, which is the 'a control asserting only absences' shape."""
+
+    def fragile(table, labels):
+        of = [row["y"] for row in table if labels[row["unit"]] == "of"]
+        if sum(of) < 8.0:
+            raise ZeroDivisionError("degenerate draw")
+        against = [row["y"] for row in table if labels[row["unit"]] != "of"]
+        return sum(of) / len(of) - sum(against) / len(against)
+
+    collapsed = {f"u{i}": {"y": float(i)} for i in range(6)}
+    labels = {"u0": "against", "u1": "against", "u2": "against", "u3": "of", "u4": "of", "u5": "of"}
+    p, survivors = permutation_of_derived(collapsed, labels, fragile, seed=5, n=200)
+    assert 0 < survivors < 200
+    assert p is not None
+
+
+def test_a_derived_permutation_reports_no_p_value_when_the_metric_cannot_move():
+    """Decision 8, one construction over from task 11's. A closure ignoring the
+    labels entirely — the exact shape a one-argument `compute` degenerates into —
+    reproduces the observed statistic on every draw, and that is reported as
+    `None` rather than as 1.0. **The survivor count still comes back**, which is
+    what says the null ran."""
+    p, survivors = permutation_of_derived(
+        _c_collapsed(), _c_labels(), lambda table, labels: 1.0, seed=1, n=100
+    )
+    assert p is None
+    assert survivors == 100
+
+
+def test_a_derived_permutation_whose_unpermuted_call_declines_reports_nothing():
+    """No observed statistic, no test. Distinguished from the degenerate-null case
+    by the survivor count, which is 0 here and `n` there — the two states
+    `percentile_of_derived`'s own count exists to separate."""
+    p, survivors = permutation_of_derived(
+        _c_collapsed(), _c_labels(), lambda table, labels: None, seed=1, n=100
+    )
+    assert p is None
+    assert survivors == 0
+
+
+def test_a_derived_permutation_lets_the_unpermuted_calls_failure_out():
+    """The other half of the survivor rule, and the one a closure returning
+    `None` cannot exercise: a RAISE on the unpermuted call is a fault in the
+    metric's own definition for this table, so it propagates rather than being read
+    as a degenerate draw. `percentile_of_derived` leaves its single unresampled
+    call uncontained for that reason, and `cli.py` is where the containment lives.
+
+    Without this test the docstring's claim and the body could disagree silently —
+    the test above passes whether or not that call is wrapped in a `try`."""
+
+    def explodes(table, labels):
+        raise ZeroDivisionError("the metric's own definition failed")
+
+    with pytest.raises(ZeroDivisionError):
+        permutation_of_derived(_c_collapsed(), _c_labels(), explodes, seed=1, n=10)
+
+
+def test_a_within_cluster_permutation_over_fixture_c_gives_exactly_one_over_n_plus_one():
+    """**The load-bearing literal of this slice.** Fixture C: 50 units in 10 matched
+    sets of 5, `of` holding each set's top two. With per-cluster arm counts held
+    fixed, `delta = ΣS_c/12 − 920` is strictly increasing in the sum of the `of`
+    values, so the observed labelling is the UNIQUE maximum over all 10¹⁰
+    within-cluster relabellings — `b = 0`, deterministically, since the observed
+    labelling is drawn with probability 5 × 10⁻⁷ over 5000 draws.
+
+    So the correct answer is exactly `1/5001`, and every wrong construction gives a
+    categorically different number: `b/n` gives 0.0, reusing the observed
+    assignment gives 1.0, permuting across clusters gives ≈0.5 (the free null spans
+    ±500 around an observed 2.5), and relabelling whole clusters empties the `of`
+    arm and gives `None`. **None of the four is within four orders of magnitude of
+    another**, which is what makes this fixture worth its arithmetic."""
+    p = permutation_over_units_clustered(
+        _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=5000, level="within_cluster"
+    )
+    assert p == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_within_cluster_permutation_is_not_the_free_one_over_the_same_roster():
+    """The control that must report, and the number the wrong-stratum mutant lands
+    on. Free relabelling of fixture C lets `of` hold the global top 20 — mean 852
+    against 352 — so the null spans ±500 and the observed 2.5 sits near its centre.
+    Asserted as a relation between the two calls rather than as two literals, so
+    the test cannot pass by pinning one construction twice."""
+    within = permutation_over_units_clustered(
+        _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=5000, level="within_cluster"
+    )
+    free = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=11, n=5000)
+    assert within is not None and free is not None
+    assert free > 100 * within
+
+
+def test_a_whole_cluster_relabelling_of_fixture_c_empties_an_arm_and_reports_nothing():
+    """Every matched set's modal arm is `against` (3 against 2), so a cluster-level
+    relabelling puts NO unit in `of`. That is an empty arm, which decision 8 reports
+    as `null` rather than as a number — categorically distinct from every row above,
+    and the reason fixture C's clusters were built to hold both arms unequally."""
+    assert (
+        permutation_over_units_clustered(
+            _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=500, level="whole_cluster"
+        )
+        is None
+    )
+
+
+def test_a_whole_cluster_relabelling_permutes_the_clusters_own_labels():
+    """The whole-cluster construction, on a roster where it is the RIGHT one: four
+    sites, each entirely `of` or entirely `against`, unequal in size (3, 1, 1, 2).
+
+    **The six assignments of two `of` labels to four sites give six DIFFERENT
+    deltas** — enumerated at `a207702` as 8.5, 3.833, 2.6, −2.6, −3.833, −8.5 —
+    and the observed one is the strict maximum, so `b` counts exactly the draws
+    that reproduced the observed assignment: about `n/6`.
+
+    **No literal is assertable at |Π| = 6, and that is stated rather than worked
+    around.** The spec's own trap table says so: "with |Π| = 36 it is drawn ~139
+    times and no literal is assertable". So the assertion is a range around 1/6
+    (measured 0.148 at this seed) PLUS the within-cluster call on the same
+    fixture, which is `None` because permuting labels inside a single-label
+    cluster is a no-op. The pair is what discriminates: a construction taking the
+    wrong branch cannot produce both numbers."""
+    values = [10.0, 12.0, 11.0, 9.0, 1.0, 2.0, 3.0]
+    labels = ["of"] * 4 + ["against"] * 3
+    clusters = ["S1", "S1", "S1", "S2", "S3", "S4", "S4"]
+    p = permutation_over_units_clustered(
+        values, labels, clusters, "of", seed=4, n=999, level="whole_cluster"
+    )
+    assert p is not None
+    assert 0.10 < p < 0.25
+    assert (
+        permutation_over_units_clustered(
+            values, labels, clusters, "of", seed=4, n=999, level="within_cluster"
+        )
+        is None
+    )
+
+
+def test_a_contrast_permutation_relabels_which_side_a_unit_is_on():
+    """Fixture C as a contrast: the 20 `of` units against the 30 `against` ones,
+    clustered by matched set, at the within-cluster level. Same roster, same
+    observed delta of 2.5, and — because it is the same construction — the same
+    `1/5001`. **The two homes differ in where the number lands, not in what it
+    is**, and this assertion is what says so."""
+    of = [v for v, label in zip(_C_VALUES, _C_LABELS, strict=True) if label == "of"]
+    against = [v for v, label in zip(_C_VALUES, _C_LABELS, strict=True) if label != "of"]
+    of_clusters = [c for c, label in zip(_C_CLUSTERS, _C_LABELS, strict=True) if label == "of"]
+    against_clusters = [c for c, label in zip(_C_CLUSTERS, _C_LABELS, strict=True) if label != "of"]
+    p = permutation_over_contrast(
+        of,
+        against,
+        seed=11,
+        n=5000,
+        of_clusters=of_clusters,
+        against_clusters=against_clusters,
+        level="within_cluster",
+    )
+    assert p == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_contrast_permutation_is_confined_to_the_cells_of_every_other_group_axis():
+    """ "Permuted within cells of every *other* group axis, so a cross isn't
+    destroyed."
+
+    **Corrected from the brief's own fixture.** The brief's four-unit, two-cell
+    fixture (`values = [1.0, 2.0, 1000.0, 2000.0]`, cells of size 2) asserted
+    `confined == 1/1000`, but a 2-unit cell has only 2 arrangements, so two such
+    cells give an arrangement space of `2 × 2 = 4` — enumerated directly, the
+    deltas are `-500.5, 499.5, -499.5, 500.5`, the observed IS the unique
+    maximum, but over a space of 4, not thousands; at `n = 999` the expected
+    count reaching it is `≈ 999/4 ≈ 250`, not 0, and the total roster is only 4
+    units, so even the FREE permutation has only `C(4, 2) = 6` arrangements —
+    nowhere near enough freedom to reach the mid-null answer the brief's own
+    docstring predicted. Measured: `confined ≈ 0.252`, `free ≈ 0.344`, barely
+    distinguishable — a second instance of "a fixture whose numbers agree with
+    the bug", found the same way task 13's was: by computing before trusting.
+
+    **Fixture C, reused rather than invented a second time**, with its own
+    matched sets as `strata` instead of `clusters` — the two mechanisms are the
+    identical within-group shuffle, so this is expected to reproduce task 13's
+    own `1/5001`-shaped answer at this construction's own `(seed, n)`, and it
+    does: `confined == 1/1000` at `seed=2, n=999`, matching the brief's original
+    literal exactly once the fixture actually has the arrangement space (10¹⁰)
+    to earn it. `free` stays near 0.48, the free-relabelling answer task 11's
+    own suite already pins for this roster — so the two remain three orders of
+    magnitude apart, which is what the brief's docstring described and the
+    four-unit fixture could not deliver."""
+    confined = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=2, n=999, strata=_C_CLUSTERS)
+    free = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=2, n=999)
+    assert confined == pytest.approx(1.0 / 1000.0)
+    assert free is not None
+    assert free > 0.2
+    assert free > 100 * confined
+
+
+def test_a_contrast_permutation_over_disjoint_sides_with_no_cluster_is_the_row_draw():
+    """The unclustered contrast, which is the reachable shape for a design with no
+    `cluster_by`. Asserted against the equivalent `permutation_over_units` call on
+    the concatenated vectors, so the delegation is pinned as an identity rather
+    than as two numbers that happen to agree at one seed."""
+    of = [10.0, 12.0, 14.0]
+    against = [1.0, 2.0, 3.0, 4.0]
+    direct = permutation_over_units(of + against, ["of"] * 3 + ["against"] * 4, "of", seed=6, n=999)
+    assert permutation_over_contrast(of, against, seed=6, n=999) == direct
+
+
+def test_a_clustered_derived_draw_rests_on_the_cluster_count_not_the_row_count():
+    """`reference.md` § Clustered units: "300 cells from 10 animals give a 10-draw
+    interval". The fixture is 4 clusters of unequal size holding 20 units, and the
+    discriminating property is that the interval is WIDER than the unit-level one
+    over the same table — a unit-level draw of clustered data is "too narrow to
+    believe", which is the whole reason this construction exists.
+
+    Asserted as a relation between two widths rather than as two literals: a
+    literal pins one construction twice and cannot see that the other moved."""
+    collapsed = {f"c{c}_{i}": {"y": float(10 * c + i)} for c in range(1, 5) for i in range(c + 2)}
+    clusters = {key: key.split("_")[0] for key in collapsed}
+
+    def mean_y(table):
+        rows = [row["y"] for row in table]
+        return sum(rows) / len(rows)
+
+    clustered, survivors = percentile_of_derived_clustered(
+        collapsed, clusters, mean_y, seed=3, draws=500
+    )
+    unit_level, _ = percentile_of_derived(collapsed, mean_y, seed=3, draws=500)
+    assert clustered is not None and unit_level is not None
+    assert survivors == 500
+    assert (clustered.high - clustered.low) > (unit_level.high - unit_level.low)
+
+
+def test_a_clustered_derived_draw_pools_units_rather_than_averaging_cluster_means():
+    """ "Pools their units", and the "varying row count" that follows. A large
+    cluster contributes more rows than a small one, so a cluster drawn twice
+    contributes its units twice.
+
+    **Corrected from the brief's own two-cluster fixture** (one `A` cluster of a
+    single unit, one `B` cluster of five): with only `G = 2` clusters, drawing 2
+    with replacement gives just four equally-likely outcomes (`AA`, `AB`, `BA`,
+    `BB`), whose means are `100.0`, `18.33…`, `18.33…`, `2.0` — a percentile
+    interval read off that four-point distribution spans `[2.0, 100.0]` and
+    brackets BOTH the pooled mean and the cluster-mean-average reading, so the
+    fixture cannot discriminate. Measured directly before trusting it, per the
+    brief's own warning.
+
+    **Widened to 10 `A` clusters and 10 `B` clusters** (`G = 20`), each `A` a
+    single unit valued 100 and each `B` five units valued `0..4` — same disjoint
+    ranges and the same size asymmetry per pair, but enough clusters for the
+    percentile interval to concentrate near the true pooled mean rather than
+    spanning the full four-point support. Confirmed at five seeds (1 through 5)
+    that the interval always brackets the pooled reading and always excludes the
+    cluster-mean-average one before trusting this fixture."""
+    collapsed = {f"a{a}": {"y": 100.0} for a in range(10)}
+    clusters = {f"a{a}": f"A{a}" for a in range(10)}
+    for b in range(10):
+        for i in range(5):
+            collapsed[f"b{b}_{i}"] = {"y": float(i)}
+            clusters[f"b{b}_{i}"] = f"B{b}"
+
+    def mean_y(table):
+        rows = [row["y"] for row in table]
+        return sum(rows) / len(rows)
+
+    interval, _ = percentile_of_derived_clustered(collapsed, clusters, mean_y, seed=1, draws=2000)
+    assert interval is not None
+    # Pooled: (10*100 + 10*(0+1+2+3+4)) / (10 + 50) = 18.333…; the cluster-mean
+    # reading would give (100*10 + 2.0*10)/20 = 51.0. The interval must contain
+    # the first and exclude the second.
+    assert interval.low <= 18.333333333333332 <= interval.high
+    assert not (interval.low <= 51.0 <= interval.high)
+
+
+def test_a_clustered_derived_draw_returns_its_survivor_count_even_when_degenerate():
+    """The three-valued discipline `percentile_of_derived` established, inherited
+    rather than reinvented: `None` and `0` are different facts."""
+    collapsed = {"a1": {"y": 1.0}, "b1": {"y": 2.0}}
+    clusters = {"a1": "A", "b1": "B"}
+    interval, survivors = percentile_of_derived_clustered(
+        collapsed, clusters, lambda table: None, seed=1, draws=50
+    )
+    assert interval is None
+    assert survivors == 0
+
+
+def test_a_clustered_derived_draw_over_constant_content_reports_no_interval():
+    """**Fix round 1, Major 4.** `reference.md` § Statistical reporting scopes
+    the zero-width gap narrowly: `percentile_over_units_clustered` "makes the
+    identical content-based refusal whether or not `strata` is declared," and
+    only "the plain unweighted, unstratified, unclustered `percentile_over_units`
+    carries no such check." `percentile_of_derived_clustered` (task 15a) shipped
+    with NO content check at all — narrower than even the documented gap —
+    so 20 units of identical content in 4 clusters returned
+    `Interval(5.0, 5.0)` where its recorded-column sibling,
+    `percentile_over_units_clustered`, already returns `None` on the
+    identical input. Verified directly before this fix: `(Interval(low=5.0,
+    high=5.0, ...), 500)`.
+
+    Fixed by taking the same content-based check `percentile_over_units_clustered`
+    and `percentile_of_derived`'s own strata branch already make — every cluster
+    within a stratum group carrying the identical multiset of rows — applied
+    unconditionally (with or without `strata`), matching the clustered sibling's
+    own "whether or not `strata` is declared" rule rather than the unclustered
+    plain form's narrower one."""
+    collapsed = {f"u{i}": {"y": 5.0} for i in range(20)}
+    clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
+    interval, survivors = percentile_of_derived_clustered(
+        collapsed,
+        clusters,
+        lambda table: sum(row["y"] for row in table) / len(table),
+        seed=1,
+        draws=500,
+    )
+    assert interval is None
+    assert survivors == 0

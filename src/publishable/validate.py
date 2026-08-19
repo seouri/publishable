@@ -23,7 +23,7 @@ from publishable.replication import resolve_repeats
 from publishable.runner import resolve_wide_cfg
 from publishable.scope import step_name as _step_name
 from publishable.secrets import credential_values, load_env, missing_env
-from publishable.stats import min_honest_draws
+from publishable.stats import NULL_TEST_METHODS, min_honest_draws, min_honest_permutations
 from publishable.strata import levels_for
 from publishable.sweep import (
     NAMEABLE_CHAR,
@@ -58,6 +58,7 @@ from publishable.units import (
     holdout_sizes,
     holdout_values_fault,
     is_measurement_numeric,
+    null_test_level,
     resolve_units,
     rule_for,
     stratum_names,
@@ -739,6 +740,7 @@ def validate_config(
     # against it) must recompute that family locally rather than read it off
     # this call site.
     _check_resample(doc, roster, c, holdout_test=holdout_test)
+    _check_null_test(doc, roster, c)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -3895,10 +3897,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     had not landed as of commit `2fdc957` (H4a task 12, the wholesale
     refusal's retirement): check `cli.command_run`'s `derived_metric_draws`
     directly rather than trusting this sentence, since two tasks after that
-    commit close exactly this gap. `.null_test` is still refused the same way
-    the whole family used to be: a declared 5000-draw permutation that runs
-    and reports nothing is the silent-no-op class, and `p_value` exists
-    nowhere in this build. A top-level `hypotheses` block is refused the same
+    commit close exactly this gap. `statistics.null_test` is no longer in this
+    family either: `_check_null_test` now checks the declaration for real —
+    the `method` enum, the `n` floor, `shuffle`, the level derivation, and the
+    no-roster and `report_by` refusals — and `cli.command_run` computes and
+    records a p-value at both p-value homes (H4d tasks 7–20). A top-level
+    `hypotheses` block is refused the same
     way too — a pre-registered hypothesis that runs and reports success while
     honoring neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
@@ -3984,10 +3988,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
     # `summarize_step` gives every `basis: units` column a cluster-robust
-    # interval. What a clustered run may *not* yet do is resample a derived
-    # metric (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run
-    # time, not being knowable from a declaration at all), which refuses a
-    # combination rather than a declaration and is why it is not here.
+    # interval. A derived metric under a declared `cluster_by` also resamples,
+    # through `stats.percentile_of_derived_clustered` (H4d task 15a),
+    # dispatched from `stats.summarize_step` — no separate `validate` check
+    # for it, since whether a template's `aggregate` derives anything at all
+    # is not knowable from a declaration.
     #
     # `weight_by` is checked by `_check_weight_by`; `attrition` computes
     # Kish's effective size from it, and `summarize_step` weights every
@@ -4006,10 +4011,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cli.py` narrows the denominator to the test partition and writes
     # `allocation.json` and `provenance.allocation_hash`.
 
-    # `statistics.null_test` validates clean today and is read by nothing —
-    # the same silent-no-op class as the fields above. `statistics.resample`
-    # left this loop with H4a: `_check_resample` now checks its declaration
-    # for real instead of refusing the block wholesale.
     # `statistics.contrasts`, `statistics.report_by` and the top-level
     # `hypotheses` block used to be in this list too; they are now checked for
     # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
@@ -4019,20 +4020,9 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # reason: `cli.py` applies it, so a declared correction changes the record —
     # the correction checks further down this module check its *value* instead,
     # and warn only on `none`, which corrects nothing by request.
-    # `materialize.py` writes only one of these keys into a generated config —
-    # `statistics.correction` — plus a top-level `hypotheses: []`, so
-    # `null_test` is simply absent there; the check below fires on a real
-    # declaration either way, never on a key's mere presence or on the empty
-    # list `hypotheses` is generated as.
-    statistics = doc.get("statistics") or {}
-    if statistics.get("null_test"):
-        c.error(
-            "E-STATS-NULLTEST-UNSUPPORTED",
-            "statistics.null_test",
-            "is specified but not implemented in this build — no null distribution is "
-            "computed, and a declaration that changes no behavior is the failure this "
-            "refusal exists to prevent; it will be honored in a later slice",
-        )
+    # `statistics.null_test` is not in it either, as of H4d: `_check_null_test`
+    # checks it for real (above this function's own docstring) and
+    # `cli.command_run` computes and records the p-value it declares.
 
 
 def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
@@ -4979,8 +4969,8 @@ def _check_sweep(
     # CLUSTER COUNT and not from Kish's effective size — § Weighted samples,
     # "`cluster_by` still decides the draw when both are declared" — and the two
     # coincide in any fixture not built to separate them, so the wrong choice
-    # would be invisible. Refused rather than approximated, on the precedent
-    # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
+    # would be invisible, so the combination is refused below rather than
+    # approximated.
     #
     # Reads the resolved family rather than the declaration: a `sweep.baseline`
     # with no axis beside it publishes no delta, and this guard should not
@@ -5086,20 +5076,80 @@ def _check_sweep(
             "`statistics.correction` is `none` — every interval reported is uncorrected, and "
             "each records `correction: null` to say so",
         )
+    # Read once, not twice: this same declaration is read again below for
+    # `W-STATS-NULLTEST-FAMILY`, and a second independent read is how two
+    # checks over one declaration come to disagree about what it says.
+    null_test = (doc.get("statistics") or {}).get("null_test")
     if comparisons > 0 and correction == "fdr_bh":
-        c.warn(
-            "W-STATS-CORRECTION-INAPPLICABLE",
-            "statistics.correction",
-            # The parenthetical this replaces asserted "`statistics.null_test` is
-            # undeclared", which is false of a config that declares one — and such
-            # a config reaches here, drawing `E-STATS-NULLTEST-UNSUPPORTED` and
-            # this warning together. Removing a false assertion is independent of
-            # the condition, which still fires on `fdr_bh` over a non-empty family
-            # and is narrowed by whichever slice implements `null_test`.
-            "`fdr_bh` adjusts p-values, and no comparison in this family can carry one in "
-            "this build — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
-            "whose corrections are interval-shaped",
-        )
+        # Task 10. The three disjuncts of § Validation's *Correction can be
+        # applied*: no `null_test` is declared at all, its `shuffle` names no
+        # axis any comparison in this family crosses, or every comparison here
+        # is a parameter-axis one (paired, and so has no relabelling null to
+        # carry a p-value from). `contrasts.crossed_group_axes` is the same
+        # expression the pairing derivation above already reads, so this
+        # cannot disagree with it about which comparisons are unpaired.
+        declared_null_test = isinstance(null_test, dict) and bool(null_test)
+        shuffle = null_test.get("shuffle") if isinstance(null_test, dict) else None
+        crossed_by_any_comparison: set[str] = set()
+        for comp in resolved_contrasts:
+            of_cond = conditions_by_index.get(comp.of)
+            against_cond = conditions_by_index.get(comp.against)
+            if of_cond is None or against_cond is None:
+                continue
+            crossed_by_any_comparison.update(crossed_group_axes(of_cond, against_cond))
+        if not declared_null_test:
+            reason = "no `statistics.null_test` is declared, so no comparison carries a p-value"
+        elif not crossed_by_any_comparison:
+            reason = (
+                "every comparison in this family differs only on a parameter axis, so its "
+                "null is a per-unit sign flip rather than a relabelling and `shuffle` cannot "
+                "express it"
+            )
+        elif shuffle not in crossed_by_any_comparison:
+            reason = (
+                f"`statistics.null_test.shuffle` names `{shuffle}`, which is not a group "
+                "axis any comparison in this family crosses"
+            )
+        else:
+            reason = None
+        if reason is not None:
+            c.warn(
+                "W-STATS-CORRECTION-INAPPLICABLE",
+                "statistics.correction",
+                f"`fdr_bh` adjusts p-values, and {reason} — every `ci95_corrected` will "
+                "be null. Use `holm` or `bonferroni`, whose corrections are interval-shaped",
+            )
+    if comparisons > 0 and isinstance(null_test, dict) and null_test:
+        # `W-STATS-RESAMPLE-FAMILY`'s twin: Holm's tightest level is still α/m at
+        # rank 1, and a permutation p-value is only as fine-grained as `1/(n+1)` —
+        # `stats.min_honest_permutations` — so a family this size needs at least
+        # `min_honest_permutations(ALPHA / comparisons)` draws or its own tightest
+        # corrected p can never fall below the level demanded of it. `m` is
+        # `comparisons × metrics` and the metric count is unknowable here by the
+        # same design `_check_resample`'s comment gives, so this bounds against
+        # `comparisons` alone — always true when it fires, silent when it might
+        # not be.
+        n = null_test.get("n")
+        if n is None:
+            effective_n = 5000
+        elif isinstance(n, int) and not isinstance(n, bool):
+            effective_n = n
+        else:
+            effective_n = None
+        if effective_n is not None:
+            needed = min_honest_permutations(ALPHA / comparisons)
+            if effective_n < needed:
+                plural = "" if comparisons == 1 else "s"
+                n_desc = f"is {n}" if n is not None else "is unset, so defaults to 5000,"
+                c.warn(
+                    "W-STATS-NULLTEST-FAMILY",
+                    "statistics.null_test.n",
+                    f"{n_desc} and this design resolves to {comparisons} comparison{plural}, "
+                    f"so the tightest corrected p this family can ever report needs at least "
+                    f"{needed} permutations — a p-value cannot fall below `1/(n+1)`. This is a "
+                    "lower bound: the family is comparisons × metrics and the metric count is "
+                    "not knowable before the run, so the real requirement is at least this",
+                )
 
 
 def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None = None) -> None:
@@ -5896,6 +5946,10 @@ def _check_resample(
     # `E-REPL-FOLD-NO-UNITS` — the same `not (doc.get("data") or {}).get("units")`
     # expression, refusing a `fold` level for the identical reason. (Not
     # `E-REPL-FOLD-K`: that is the unrelated `k: all`-basis-unknowable fault.)
+    # `null_test`'s own no-roster fault is `_check_null_test`'s
+    # `E-STATS-NULLTEST-UNITS` (H4d task 8) — the same expression, checked
+    # there rather than here, since the two declarations are independent and
+    # a config can carry either without the other.
     #
     # Read from the DECLARATION, not from `roster is None`: the roster is also
     # `None` when `data.units` is declared and failed to resolve, and that fault
@@ -6169,6 +6223,210 @@ def _check_resample(
             "and the metric count is not knowable before the run, so the real "
             "requirement is at least this",
         )
+
+
+def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """Every check `statistics.null_test` gets — the enumeration is the list, not a
+    sample of it:
+
+    - `E-STATS-NULLTEST-UNITS` — a `null_test` with no `data.units` at all.
+    - `E-STATS-NULLTEST-METHOD` — the `method` enum.
+    - `E-STATS-NULLTEST-N` — the `n` floor, `stats.min_honest_permutations`.
+    - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` that is absent or empty (there is
+      nothing to relabel), OR one naming neither a declared unit attribute NOR a
+      declared `sweep.groups` axis.
+    - `E-STATS-NULLTEST-REPORTBY` — a `shuffle` naming a `statistics.report_by`
+      attribute.
+    - `E-STATS-NULLTEST-LEVEL` — **reads `roster`** for one of its two findings:
+      a `shuffle` that varies within some clusters and not others, so neither a
+      within-cluster nor a whole-cluster null applies; OR — roster-independent,
+      the declaration alone is enough — a `shuffle` naming a `sweep.groups` axis
+      alongside a declared `cluster_by`, which `null_test_level` cannot derive a
+      level for at all (see its own docstring).
+
+    **Only one call in this function reads `roster`** (`null_test_level`'s), and
+    it carries its own `roster is not None` guard rather than leaning on a
+    caller; a check added here must state which side of that line it is on.
+
+    **`shuffle` is checked against `data.units.attributes` UNION the declared
+    `sweep.groups` axis names**, and the union is the load-bearing half rather than
+    a convenience: a group-axis shuffle is the only p-value home that joins the
+    correction family, so a check reading `attributes` alone would refuse the one
+    shape a `null_test` is declared for. The precedent for admitting an axis name
+    beside an attribute name is `units._stratum_groups`, which already does it for
+    `assign`. **`null_test_level` itself is never called with an axis name**,
+    though — its domain is a roster attribute, so this function calls it only
+    when `shuffle in declared`, and refuses outright (`E-STATS-NULLTEST-LEVEL`)
+    when `shuffle` is an axis-only name under a declared `cluster_by`, rather
+    than passing a value outside what that function was built to answer.
+
+    Every check here presupposes the declaration is a mapping; a scalar or a list
+    is `check_envelope`'s `E-CONFIG-TYPE`, and so is a wrong-typed child, because
+    the block is closed one level in. A leaf type fault is deliberately non-fatal
+    in this module, so each value read here is `isinstance`-guarded and quietly
+    skipped when it is not a leaf the envelope types.
+    """
+    statistics = doc.get("statistics") or {}
+    null_test = statistics.get("null_test")
+    if not isinstance(null_test, dict) or not null_test:
+        return
+    # No roster at all, worth its own finding independent of everything below.
+    # `reference.md` § The one config file marks `units:` "required by fold,
+    # resample, null_test", and § Where units come from says a `null_test` "isn't
+    # available" without one. The precedent is `_check_resample`'s own
+    # `E-STATS-RESAMPLE-UNITS` and `_check_replication`'s `E-REPL-FOLD-NO-UNITS` —
+    # the same `not (doc.get("data") or {}).get("units")` expression.
+    #
+    # Read from the DECLARATION, not from `roster is None`: the roster is also
+    # `None` when `data.units` is declared and failed to resolve, and that fault
+    # already has `_check_units`' own finding.
+    #
+    # No `return`, matching both twins. Of the checks below, only the level
+    # derivation reads `roster`, and it requires `roster is not None` itself
+    # rather than leaning on this early-exit having not fired — so this comment's
+    # job is to explain the absence of a `return`, not to promise the rest are
+    # roster-independent.
+    if not ((doc.get("data") or {}).get("units")):
+        c.error(
+            "E-STATS-NULLTEST-UNITS",
+            "statistics.null_test",
+            "is declared and `data.units` is not, so there is no unit table to relabel "
+            "and no metric core could recompute under a relabelling — a declaration "
+            "that changes no behavior. Declare `data.units`, or drop `null_test` and "
+            "report over repeats, which is honest for a design whose executions are the "
+            "observations",
+        )
+    method = null_test.get("method")
+    if method is not None and isinstance(method, str) and method not in NULL_TEST_METHODS:
+        c.error(
+            "E-STATS-NULLTEST-METHOD",
+            "statistics.null_test.method",
+            f"is `{method}`, not one of {', '.join(f'`{m}`' for m in NULL_TEST_METHODS)}",
+        )
+    n = null_test.get("n")
+    floor = min_honest_permutations()
+    # `bool` excluded explicitly: `isinstance(True, int)` is `True` in Python, and
+    # `n: true` is already `E-CONFIG-TYPE` from the envelope — a value flagged
+    # wrong-typed there must not also drive this check.
+    if n is not None and isinstance(n, int) and not isinstance(n, bool) and n < floor:
+        c.error(
+            "E-STATS-NULLTEST-N",
+            "statistics.null_test.n",
+            f"is {n}; a permutation p-value's smallest possible value is 1/(n+1), so "
+            f"below {floor} relabellings it cannot fall under 0.05 however extreme the "
+            "observed statistic is — the test would be incapable of the answer it was "
+            "declared to look for",
+        )
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
+    axes: set[str] = set()
+    for axis in (doc.get("sweep") or {}).get("groups") or []:
+        by = axis.get("by") if isinstance(axis, dict) else None
+        if isinstance(by, str):
+            axes.add(by)
+    shuffle = null_test.get("shuffle")
+    # `null_test` is declared FOR a relabelling, so an absent or empty `shuffle`
+    # is the block's missing subject — a declaration that permutes nothing and
+    # changes no behavior, the same class of hole task 8 closed one field over
+    # for a missing roster. `reference.md` § Validation's *Null test coherence*
+    # already states "requires `shuffle`"; this is the check behind that row.
+    # Read from the DECLARATION (`None` covers both an absent key and an
+    # explicit `shuffle: null`, which § The one config file treats as
+    # equivalent everywhere else), not from any derived state, so a wrong-typed
+    # `shuffle` (caught by the envelope's `E-CONFIG-TYPE`) is quietly skipped
+    # here rather than double-reported.
+    if shuffle is None or (isinstance(shuffle, str) and not shuffle):
+        c.error(
+            "E-STATS-NULLTEST-SHUFFLE",
+            "statistics.null_test.shuffle",
+            "is unset, so there is nothing to relabel — a declared `null_test` needs "
+            "a unit attribute or a `sweep.groups` axis to permute, or it changes no "
+            "behavior. `data.units.attributes` declares "
+            f"{', '.join(sorted(declared)) or 'none'}; `sweep.groups` declares "
+            f"{', '.join(sorted(axes)) or 'none'}",
+        )
+    elif isinstance(shuffle, str) and shuffle and shuffle not in (declared | axes):
+        c.error(
+            "E-STATS-NULLTEST-SHUFFLE",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, which is neither a unit attribute nor a `sweep.groups` "
+            "axis — the label is read per unit when the relabelling is drawn, so it has "
+            f"to be one. `data.units.attributes` declares "
+            f"{', '.join(sorted(declared)) or 'none'}; `sweep.groups` declares "
+            f"{', '.join(sorted(axes)) or 'none'}",
+        )
+    report_by = {a for a in (statistics.get("report_by") or []) if isinstance(a, str)}
+    if isinstance(shuffle, str) and shuffle in report_by:
+        c.error(
+            "E-STATS-NULLTEST-REPORTBY",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, which `statistics.report_by` also names. A permutation "
+            "of that attribute moves units between strata, so each drawn stratum holds a "
+            "different set of units and the null describes a different partition rather "
+            "than the same estimate under a null hypothesis. Shuffle an attribute the "
+            "reporting strata do not use, or drop the level from `report_by` and read "
+            "the contrast instead",
+        )
+    cluster_by = ((doc.get("data") or {}).get("units") or {}).get("cluster_by")
+    cluster_declared = isinstance(cluster_by, str) and bool(cluster_by)
+    # `null_test_level`'s domain is a roster ATTRIBUTE: it reads
+    # `unit.attributes.get(shuffle)` per unit, so passing an axis name that is
+    # NOT also a declared attribute reads nothing for anybody — every unit
+    # renders "no value", every cluster reads constant, and the function
+    # returns a confident `whole_cluster` for a roster it never actually
+    # examined. That is the fail-open CLAUDE.md § Answering a question with a
+    # proxy warns about, found in review: a `sweep.groups` axis under a
+    # declared `cluster_by` has no roster-attribute derivation in this build,
+    # so this refuses the combination rather than silently guessing a level —
+    # never calling `null_test_level` with a bare axis name at all.
+    if (
+        cluster_declared
+        and isinstance(shuffle, str)
+        and shuffle in axes
+        and shuffle not in declared
+    ):
+        c.error(
+            "E-STATS-NULLTEST-LEVEL",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, a `sweep.groups` axis, alongside a declared "
+            f"`data.units.cluster_by: {cluster_by}` — an axis carries no per-unit "
+            "attribute value this build can read, so whether the relabelling is "
+            "within-cluster or whole-cluster cannot be derived from the roster at all, "
+            "rather than merely being ambiguous. Shuffle a unit attribute instead, or "
+            "drop `cluster_by` for an axis shuffle",
+        )
+    # The one remaining check here that reads `roster`, guarded on its own
+    # rather than on the no-units exit above having not fired: `data.units` can
+    # be declared and fail to resolve, and `_check_units` owns that finding.
+    # Restricted to `declared` (never `axes`) for the reason above: this is the
+    # only branch that may call `null_test_level`, and it must never do so with
+    # a value outside that function's own documented domain.
+    elif roster is not None and isinstance(shuffle, str) and shuffle in declared:
+        try:
+            level, witnesses = null_test_level(
+                roster, cluster_by if cluster_declared else None, shuffle
+            )
+        except ContractError:
+            # A unit carrying no cluster value (`E-DATA-CLUSTER-UNKNOWN`), which
+            # `_check_cluster_by` or `_check_units` usually reports beside this
+            # and sometimes does not — the same swallow `_check_resample`'s
+            # `fold_basis` call makes, and for its reason: this check cannot
+            # proceed without a readable grouping, and this module collects.
+            level, witnesses = "rows", None
+        if level == "ambiguous" and witnesses is not None:
+            c.error(
+                "E-STATS-NULLTEST-LEVEL",
+                "statistics.null_test.shuffle",
+                f"names `{shuffle}`, which varies within `{cluster_by}` {witnesses[0]} and "
+                f"is constant within {witnesses[1]} — so neither a within-cluster null "
+                "(permuting labels inside each cluster) nor a whole-cluster one "
+                "(relabelling clusters entire) applies to this roster. Shuffle an "
+                "attribute that is either constant within every cluster or varying "
+                "within every one",
+            )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

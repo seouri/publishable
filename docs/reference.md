@@ -153,8 +153,8 @@ statistics:
                                          #   {method: bootstrap, n: 2000, stratify_by: []}
                                          #   → percentile CIs for column metrics too; derived
                                          #   metrics resample either way
-  null_test: null                        # NOT BUILT; e.g. {method: permutation, n: 5000,
-                                         #   shuffle: label}
+  null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
+                                         #   method: permutation (the only one)
   report_by: []                          # optional unit attributes to repeat every aggregated
                                          #   metric over — marginally, never crossed,
                                          #   e.g. [sex, site]. Strata, not design axes — they add
@@ -190,7 +190,7 @@ hypotheses:
     evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
 
-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **One declaration above is not yet built, and it is marked `NOT BUILT` where it appears**: `statistics.null_test`. A config declaring it is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. A second refusal in the same family is not a declaration at all and so is marked nowhere above: an `experiment_type` naming a template an installed distribution registers is refused, because core resolves such a name from package metadata and this build does not load what the name points at. It carries `E-TEMPLATE-INSTALLED-UNSUPPORTED` and, like every `-UNSUPPORTED` code, [no row in the registry below](#errors-validate-reports). `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `data.units.holdout` left it with H3d: `_check_holdout` now checks its declaration for real, `_resolved_holdout` realizes the split once per run, `io.units`/`io.units.train` see the two halves, and `cli.py` narrows every denominator to the test partition and writes `allocation.json`'s fourth key — so its `NOT BUILT` marker is gone from the line above too. The `{resolver: <name>}` form of `data.units.from` left this list with H7b Part B: `units._from_resolver` dispatches it, `_check_units` resolves it for real, and its `NOT BUILT` marker is gone from the line above too. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block `init` **materializes** as a `null` with its shape in a comment rather than expanded — `statistics.resample` is shown that way too since H4a made it built, but `init` writes no `resample` key at all — the difference that keeps the [column-resample asymmetry](#statistical-reporting) legible: a *declared* `resample` is what turns a column's interval from a *t* into a percentile, so materializing the block at its default expansion would make that the silent default for every generated project. A materialized `resample: null` would not — an explicit `null` is undeclared, exactly as an absent key is — but it would put a key in every config for a choice most runs never make, which is the ordinary reason `init` leaves a block out. `measurements` is materialized because a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout`'s slice has landed with the same treatment, closed one level in at its own five fixed keys (`method`, `frac`, `from`, `stratify_by`, `seed`), so a misspelled child inside a non-empty `holdout` block is reported the same way. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
+`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. Every declaration shown above is built. The `-UNSUPPORTED` family this section used to name one member of is not empty, though — it never applies to a *declaration*, so a refused member of it is marked nowhere in this list. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports), which is why this document, and not that table, is where a refused block or value of this kind gets named. The one surviving member is not a declaration at all: an `experiment_type` naming a template an installed distribution registers is refused, because core resolves such a name from package metadata and this build does not load what the name points at. It carries `E-TEMPLATE-INSTALLED-UNSUPPORTED` and, like every `-UNSUPPORTED` code, [no row in the registry below](#errors-validate-reports). `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `data.units.holdout` left it with H3d: `_check_holdout` now checks its declaration for real, `_resolved_holdout` realizes the split once per run, `io.units`/`io.units.train` see the two halves, and `cli.py` narrows every denominator to the test partition and writes `allocation.json`'s fourth key — so its `NOT BUILT` marker is gone from the line above too. The `{resolver: <name>}` form of `data.units.from` left this list with H7b Part B: `units._from_resolver` dispatches it, `_check_units` resolves it for real, and its `NOT BUILT` marker is gone from the line above too. `statistics.null_test` left this list with H4d: `_check_null_test` checks its declaration for real, `cli.command_run` computes and records the p-value it declares, and its `NOT BUILT` marker is gone from the line above too. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block `init` **materializes** as a `null` with its shape in a comment rather than expanded — `statistics.resample` is shown that way too since H4a made it built, but `init` writes no `resample` key at all — the difference that keeps the [column-resample asymmetry](#statistical-reporting) legible: a *declared* `resample` is what turns a column's interval from a *t* into a percentile, so materializing the block at its default expansion would make that the silent default for every generated project. A materialized `resample: null` would not — an explicit `null` is undeclared, exactly as an absent key is — but it would put a key in every config for a choice most runs never make, which is the ordinary reason `init` leaves a block out. `measurements` is materialized because a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout`'s slice has landed with the same treatment, closed one level in at its own five fixed keys (`method`, `frac`, `from`, `stratify_by`, `seed`), so a misspelled child inside a non-empty `holdout` block is reported the same way. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
 
 **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each — three for a config generated against a [project-local template](#templates-where-parameters-are-defined), which `init` writes with no `template_version` at all.** `experiment_type` names the template and must resolve to one core, an installed plugin, or this project's own `templates/` registers — an installed one is answered from package metadata, so a name no distribution declares is refused without importing anything, and a name one *does* declare is [not yet loadable in this build](#the-one-config-file); `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
 
@@ -250,8 +250,9 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
 | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
 | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
-| Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+| Null test coherence | `statistics.null_test` requires `method: permutation` (the only value), `n` above the permutation floor `min_honest_permutations` derives, and `shuffle` present and naming a unit attribute OR a declared `sweep.groups` axis — an absent or empty `shuffle`, or one naming neither, is refused the same way a wrong `method` or a sub-floor `n` is |
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
+| Shuffle respects the reporting strata | `statistics.null_test.shuffle` names an attribute `statistics.report_by` also names — relabelling it changes which units a stratum holds, so the null is of a different partition rather than of the same estimate |
 | Resample has a roster | `statistics.resample` is declared with no `data.units` — nothing to resample, and the declaration would run nothing |
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
 | Resample draws are honest | `statistics.resample: {n: 50}` — below 80 draws a percentile interval's lower endpoint is the sample minimum, so core reports none and every metric in the run loses its `ci95` |
@@ -382,10 +383,12 @@ Each row states the condition, not the wording.
 | [`replication.repeats`](#a-batch-says-when-not-what) declares a `batch` level but no step in the pipeline sets `nondeterministic = True` | `W-REPL-DETERMINISTIC` |
 | `replication.repeats`'s total across every declared level is below the template's `default_repeats`, checked only once every level's count is resolvable — a floor warning derived from an already-invalid design would be noise | `W-REPL-FLOOR` |
 | A template's `aggregate` produced no usable value for a completed condition and step — it raised, a returned key collided with one a step already recorded, or every resample draw of it was degenerate. Reported at `run` time; the recorded columns' own summaries are unaffected, and only the derived metric is lost | `W-STATS-AGGREGATE-FAILED` |
+| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline)'s declared `resample` produced fewer surviving draws than were requested, though not zero — the contrast's interval is still reported, or is `ci95: null` when the count falls below the honest floor, but rests on less than it claims. The contrast-side sibling of `W-STATS-RESAMPLE-THIN`, on the same disclosure ground, since neither the `n_paired` denominator nor a thin pool are the same fact | `W-STATS-CONTRAST-RESAMPLE-THIN` |
 | A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized denominator is below it: `n_paired` where the contrast is paired, and `n_of` or `n_against` — either side — where it is not | `W-STATS-CONTRAST-THIN` |
 | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
-| `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
+| `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, its `shuffle` names no axis any comparison in the family crosses, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
 | A family of more than zero comparisons per metric exists and `statistics.correction` is `none` — every interval is reported uncorrected, and each records `correction: null` to say so | `W-STATS-FAMILY` |
+| `statistics.null_test.n` is below the permutation count the resolved comparison family's tightest corrected p-value needs — a **lower** bound, `min_honest_permutations` at `ALPHA / comparisons`, since the family is comparisons × metrics and the metric count is not knowable before the run | `W-STATS-NULLTEST-FAMILY` |
 | A level of a [`statistics.report_by`](#reporting-strata) attribute would hold fewer units than `limits.min_reported_n`, checked at `validate` against the roster it can already see — the WHOLE roster, not a group axis's own arm, a gap [§ What isn't a repeat](#what-isnt-a-repeat) records and, with a declared group axis no longer refused at `validate`, a live one rather than a latent one | `W-STATS-REPORTBY-THIN` |
 | `statistics.resample` is declared beside `data.units.cluster_by` and falls in fewer clusters than `limits.min_clusters` — counted over `data.units.holdout`'s realized **test** partition when one is declared and its draw succeeds, the roster otherwise (including when a declared holdout's draw could not be performed, which carries its own finding), because a resample draws from the per-unit table and that is what the table holds; a resample draws whole clusters, so the interval rests on that many independent draws however many units they hold | `W-STATS-RESAMPLE-CLUSTERS` |
 | `statistics.resample.n` is below the draw count the resolved comparison family's tightest corrected level needs, under `holm` or `bonferroni` — a **lower** bound, since the family is comparisons × metrics and the metric count is not knowable before the run | `W-STATS-RESAMPLE-FAMILY` |
@@ -418,10 +421,12 @@ budget loop returns before the roster-partitioning code runs) and `E-REPL-FOLD-K
 caught it first.
 
 A code ending `-UNSUPPORTED` is deliberately absent from this table: it refuses a block this
-build reads but does not yet execute, and it retires with the slice that implements the feature
-it names — [§ The one config file](#the-one-config-file) is where that family's rule lives, and
-where each currently-refused block is named and marked `NOT BUILT` in the config it shows.
-Documenting one here would pin a row this project
+build reads but does not yet execute, or — `E-TEMPLATE-INSTALLED-UNSUPPORTED`, the family's one
+surviving member — a value rather than a block, marked nowhere in the config it would otherwise
+show. It retires with the slice that implements the feature it names —
+[§ The one config file](#the-one-config-file) is where that family's rule lives, and, for a block
+rather than a value, where a currently-refused one would be named and marked `NOT BUILT` in the
+config it shows. Documenting one here would pin a row this project
 already commits to deleting on a schedule neither this table nor its author controls.
 
 Each row states the condition, not the wording.
@@ -568,6 +573,12 @@ likewise apart from those same two envelope rows, none of the others.
 | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
 | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
 | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+| `statistics.null_test.shuffle` names a `sweep.groups` axis alongside a declared `data.units.cluster_by`, and the axis is not also a declared unit attribute — an axis carries no per-unit value this build can read, so whether the relabelling is within-cluster or whole-cluster cannot be derived from the roster at all. Or, roster-time: `shuffle` names an attribute that varies within some clusters and is constant within others, so neither a within-cluster null (permuting inside each cluster) nor a whole-cluster one (relabelling clusters entire) applies to this roster | `E-STATS-NULLTEST-LEVEL` |
+| `statistics.null_test.method` is set and is not `permutation`, the whole enum | `E-STATS-NULLTEST-METHOD` |
+| `statistics.null_test.n` is below the permutation floor `stats.min_honest_permutations` derives — a permutation p-value's smallest possible value is `1/(n+1)`, so below the floor it cannot fall under 0.05 however extreme the observed statistic is, and the test would be incapable of the answer it was declared to look for | `E-STATS-NULLTEST-N` |
+| `statistics.null_test.shuffle` names an attribute that `statistics.report_by` also names. A permutation of that attribute moves units between strata, so each drawn stratum holds a different set of units and the null describes a different partition rather than the same estimate under a null hypothesis. Shuffle an attribute the reporting strata do not use, or drop the level from `report_by` and read the contrast instead | `E-STATS-NULLTEST-REPORTBY` |
+| `statistics.null_test.shuffle` is absent or empty — a declared `null_test` needs a unit attribute or a `sweep.groups` axis to permute, or it changes no behavior — or it names a value that is neither: `data.units.attributes` and `sweep.groups`, unioned, are the whole domain | `E-STATS-NULLTEST-SHUFFLE` |
+| `statistics.null_test` is declared and `data.units` is not — there is no unit table to relabel and no metric core could recompute under a relabelling, a declaration that changes no behavior. Declare `data.units`, or drop `null_test` and report over repeats, which is honest for a design whose executions are the observations | `E-STATS-NULLTEST-UNITS` |
 | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
 | `statistics.resample.method` names a value other than `bootstrap` — the whole enum, [§ Statistical reporting](#statistical-reporting)'s *Resample methods*. Unset (`null`) is accepted and takes the documented default | `E-STATS-RESAMPLE-METHOD` |
 | `statistics.resample.n` is below 80, the fewest draws both percentile ranks are interior at. Refused rather than warned because under it core reports no interval at all, so a declared `n: 50` would null `ci95` on every metric in the run rather than narrowing one | `E-STATS-RESAMPLE-N` |
@@ -1037,7 +1048,6 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
 | A [drawn arm assignment](#allocation-within-subjects-or-between-subjects) whose realized partition leaves a declared level with no units at all — the same fault, and the same code, [`validate` reports](#errors-validate-reports) for a `ratio` that starves an arm over the resolved roster, raised here for the three draws that pass validate-time: a clustered one, whose empty arm depends on the seed, and a stratified one of either kind — on a declared attribute or on an earlier group axis — which `validate` declines to draw for a reason of its own rather than because the answer would differ. `units.assignment_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-ASSIGN-LEVELS` |
 | Under `method: by_attribute`, the column `data.units.holdout.from` names does not resolve to exactly `train` and `test` over the resolved roster — the same set equality [`validate` reports](#errors-validate-reports) for the identical fault, raised here because `units.arms_of` is the single authority for a column-read partition, so a caller reaching `units.holdout_for` without validating first is refused at the draw rather than partitioning on a column that does not hold the split | `ContractError` · `E-DATA-HOLDOUT-VALUES` |
 | Under `method: random`, a realized holdout draw leaves the train or the test side empty — the same fault [`validate` reports](#errors-validate-reports) for the unstratified, unclustered case, raised here for what `validate` does not check: a stratified draw, whose per-stratum sizes only the run's own draw produces; a clustered draw, whose empty side depends on the seed the same way a clustered arm assignment's does; and the **train** side of any draw, since `validate` tests the test side alone. `units.holdout_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-HOLDOUT-EMPTY` |
-| Resampling a metric a template's [`aggregate`](#templates-where-parameters-are-defined) derived, under a declared [`data.units.cluster_by`](#clustered-units). `percentile_of_derived` draws units; the clustered draw for a *recomputed* metric is a different construction — each replicate drawing whole clusters and rebuilding a unit table from their pooled units, so its row count varies per draw — and it does not exist, so the interval would be narrower than the design supports beside recorded columns that are cluster-robust. **Not a fault `validate` can report**, and the one row here whose absence from that table is the point: `aggregate` is user code core never inspects, and a template overriding it may still return `{}` for a given config, so "derives a metric" has no validate-time meaning and this is the first place core holds the answer as a fact. A derived key that collides with a recorded column's name is contained at the AGGREGATED level: the whole `derived` mapping a condition's `aggregate` call returned is dropped from `aggregated` for that condition and step, the code disclosed through [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), and the run keeps its record and the recorded column's own cluster-robust interval. That containment does not by itself reach a CONTRAST over the colliding key: `derived_by_key` and `resample_fns_by_key` are built once per run before the collision can be detected and are not cleared by it, so the colliding key's derived closures survive there. `_comparison_step_blocks` reads a declared `cluster_by` directly and suppresses its own delta and draw for exactly this reason — publishing `delta`/`method`/`ci95` as `null` beside `n_paired_clusters`, dropped rather than published with a real `ci95`, since a real value there would be drawn as though the units were independent beside a cluster-robust per-condition interval. Temporary: the refusal lifts with the slice that builds a clustered draw for a recomputed metric | `ContractError` · `E-DATA-CLUSTER-DERIVED` |
 | Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
 | A [`data.units.from.resolver`](#where-units-come-from) source yielding something that is not a `Unit`, raised in `units._from_resolver`, the one place a yielded item is checked — `validate` is contracted never to raise, so this is what stands between a resolver's own mistake and an `AttributeError` escaping it; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-RESOLVER-YIELD` |
 | **A stratum must be constant within a cluster, and a resample's draw is a cluster drawn within its stratum** — [§ Clustered units](#clustered-units)'s composition, taken again for `resample` rather than invented a second time. `stats.percentile_over_units_clustered` given both `strata` and `membership`, where a cluster's units disagree about the stratum they carry, raised because a public function handed both vectors directly cannot silently pick one. **Dual-listed, but not by one shared authority the way `E-DATA-WEIGHT-INVALID` above is**: `validate` reports the declaration form of this from the roster, through `units.stratum_varies_within_cluster`; `stats.py` cannot import `units.py` to call that same function, so this is a second, independent implementation of its equality over plain sequences — normalized the identical way (`"no value"` for `None`, `str()` otherwise) so the two cannot disagree over a stratum read back as `1` in one place and `"1"` in the other — **again, for a single uncomposed name read straight off the roster**; a composed, multi-name `stratify_by`'s cross-label and `<absent>` sentinel (`cli.py`'s `resample_strata`, H4a task 15) are outside what this equality was built to compare, and a real value colliding with either sentinel string is an acknowledged, unaddressed gap rather than a case this dual listing rules out | `ContractError` · `E-STATS-RESAMPLE-STRATIFY-VARIES` |
@@ -1968,18 +1978,41 @@ Both operate on `units.parquet`, resampling or relabelling it and recomputing th
 
 | `shuffle` names | The null it builds | Where the p-value lands |
 |---|---|---|
-| An ordinary unit attribute | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate |
-| A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On the contrast, in `vs_baseline` |
+| An ordinary unit attribute, where the metric is one a template's [`aggregate`](#templates-where-parameters-are-defined) derived from it | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate, and **uncorrected** — a per-condition estimate is not a comparison, so it joins no correction family |
+| A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On a [declared contrast](#contrasts-claims-that-arent-condition-vs-baseline) entry, which is the only cross-arm comparison a run generates |
+
+A cross-arm comparison exists only as a declared `statistics.contrasts` entry. A `sweep.baseline`
+fixing a group level is refused — the arms of a group axis are [peers](#expansion-modes), so none of
+them is the baseline — and a baseline fixing only a parameter axis expands over the group axis, which
+makes every generated comparison within-arm. So this is where a group-axis p-value lands, for the
+same reason an unpaired delta does.
+
+**A recorded column carries no p-value, and that is a property of the arithmetic rather than a gap.**
+A permutation null relabels units and recomputes; a condition's recorded-column metric is the mean of
+that column over that condition's units, which no relabelling of any attribute changes. The null
+would be the observed value repeated `n` times and the p-value exactly 1.0 — a number that reads as a
+finding and is an artifact of having asked. So the null attaches to a metric the shuffled attribute
+actually enters, which for a per-condition estimate means one a template's `aggregate` derived. The
+one case where an attribute does enter a column metric's computation is a
+[`statistics.report_by`](#reporting-strata) level, and that combination is
+[refused](#errors-validate-reports): relabelling a stratifying attribute changes which units a
+stratum holds, so the null is of a different partition rather than of the same estimate.
 
 ```yaml
 aggregated:                                    # shuffle names an ordinary attribute
   step03_screen:
-    prob: {value: 0.71, basis: units, method: t_over_units, ci95: [0.66, 0.76],
-           p_value: 0.0004, p_value_corrected: 0.0028,
-           null_test: {method: permutation, n: 5000, shuffle: label}}
+    enrichment: {value: 0.71, basis: units, method: percentile_over_units, ci95: [0.66, 0.76],
+                 p_value: 0.0004, resample_draws: 2000, null_draws: 4998,
+                 null_test: {method: permutation, n: 5000, shuffle: label, level: rows}}
 ```
 
-The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
+`null_draws: 4998` here is a derived metric's own draw count falling two short of `null_test.n:
+5000` — two relabelled tables where the shuffle put no unit in one arm, so `aggregate` had nothing
+to recompute on those draws, the same survivor discipline `resample_draws` already carries. A
+recorded column's `null_draws` instead equals `null_test.n` exactly, by the same construction that
+makes its own `resample_draws` two-valued rather than three.
+
+The [`groups`](#expansion-modes)-axis row isn't an exception to the ordinary-attribute row so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
 
 **A *parameter*-axis contrast stays out of reach.** Two conditions differing only on `analysis.method` were computed from the same units, so the null for their paired difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. That contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form it's reported in anyway.
 
@@ -2132,19 +2165,55 @@ vs_baseline:
 | `correction` | `ci95_corrected` | Also reports |
 |---|---|---|
 | `none` | absent | — |
-| `bonferroni` | The interval at α/m, for a family of size *m* | — |
-| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
+| `bonferroni` | The interval at α/m, for a family of size *m* | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
+| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value **and the member carries an interval**. A member with a p-value and no interval is ranked only by the tie-break its tier supplies, so `holm` withholds the key rather than publishing a level that rank fabricated |
 | `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted — so it needs p-values; see below |
 
 **Size `resample.n` against the family this table implies, not against the 80-draw floor alone.** A corrected interval at level α/m needs `min_honest_draws(1 − α/m)` ≈ 80·m draws off the same pool a raw interval draws from, so a family of `m = comparisons × metrics` costs roughly that many times the uncorrected floor — 15 members, as the family above, wants on the order of 1200 draws, not 80. A hypothesis family is corrected separately, at its own declared count rather than at the sweep's `comparisons × metrics`, so a config declaring both sizes `resample.n` against whichever family's m is larger.
 
 Holm's rank-implied level is the conventional companion to the procedure rather than a strictly simultaneous band, and calling it that is the honest description: it is what the step-down procedure tests each comparison at, so an interval excluding the threshold agrees with the procedure's verdict. It also means **the weakest comparison in a family is corrected by nothing** — at rank *m* the level is α itself — which the worked example shows: kendall's contrast carries far the stronger evidence, so spearman's is rank 2 of 2 and its corrected interval is its raw one. That is Holm behaving correctly, not a correction that failed to apply, and it is the property that makes Holm uniformly more powerful than Bonferroni. Benjamini-Hochberg has no interval that means anything of the kind — controlling a false discovery *rate* is a statement about a set, not a bound on any one comparison — so core reports the adjusted p-value and leaves `ci95_corrected` null rather than printing a number with no construction behind it. That asymmetry is deliberate and is the same standard the family count is held to below.
 
-**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [only metrics carrying an interval are counted](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave the family ordered by two statistics, which is not an ordering.
+**What `p_value_corrected` is, under each method that reports one.** It is the p-value expressed at
+the level this member's interval was corrected at, which is what [§ The unit table is the inference
+base](#the-unit-table-is-the-inference-base) already fixes — "corrected alongside the intervals when
+the method supplies one, at the same level the interval was computed at". So `bonferroni` reports
+`min(1, p × m)` and `holm` reports `min(1, p × (m − i + 1))` at this member's own evidence rank *i*,
+and both clip at 1.0 rather than reporting a probability above one. **This is not Holm's step-down
+adjusted p-value, and it is not monotone in the raw p.** There is no prefix maximum: a member with a
+smaller raw p can carry a larger adjusted one, because the rank the level came from is the evidence
+ranking rather than the p ordering. That is the evidence ranking showing through, and it is the
+intended reading rather than a defect to repair — ranking Holm on the p-value instead would leave the
+family ordered by two statistics, which is the arrangement the ranking paragraph below forecloses.
+`fdr_bh` is the exception and is defined in its own paragraph.
 
-**`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either — a correction declared and not applied, which is the state this section exists to prevent. So `validate` warns on the condition that decides it: **no comparison in the family will carry a p-value**, either because `statistics.null_test` is undeclared or because its `shuffle` reaches none of them. Use `holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that supplies the p-value.
+**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have: **the point estimate over half the raw `ci95` width, largest first.** A member with no interval has no such ratio to compute — it is ranked in a tier below every member that does, ties within that tier breaking by declaration order the same way ties within the interval-carrying tier do, so the tier answers where such a member sorts without inventing an evidence value for it. It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave a family whose intervals are built at a rank ordered by two statistics, which is not an ordering.
 
-Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
+**`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics
+carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either —
+a correction declared and not applied, which is the state this section exists to prevent. So
+`validate` warns on the condition that decides it: **no comparison in the family will carry a
+p-value**, either because `statistics.null_test` is undeclared, or because its `shuffle` reaches none
+of them, or because every member is a parameter-axis contrast, which can never supply one. Use
+`holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that
+supplies the p-value.
+
+**Where it does have them, `fdr_bh` ranks on the ascending p-value, and that creates no second
+ordering.** Benjamini-Hochberg's *i* is definitionally the rank in ascending p, and under this method
+no interval is ever built at a rank — `ci95_corrected` is `null` for every member, which is what
+the `correction` table's `fdr_bh` row states — so the evidence ratio decides nothing in an
+`fdr_bh` run. The family is unchanged: **m is the whole
+family**, counted exactly as it is under every other method, while *i* runs over the members that
+carry a p-value. A larger m is the conservative direction, which is the direction this section is
+held to throughout. Each member's adjusted value is `min(1, m/i × p)` taken as a running minimum from
+the largest *i* down, so an adjusted value is never smaller than one belonging to a larger p — the
+accumulation Holm's and Bonferroni's per-member expressions do not have.
+
+Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics,
+since a metric core computed nothing for is not a comparison anyone can read as significant. A
+metric carrying a p-value and no interval is counted: the exclusion is about metrics core has
+nothing to say about, and a permutation p-value needs only the observed statistic and the null, both
+of which exist where an interval could not be built. Under `fdr_bh` that member is the one whose
+p-value was the only thing there was to adjust. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
 **A "comparison" is a baseline contrast or a [declared one](#contrasts-claims-that-arent-condition-vs-baseline)** — both put an interval in front of a reader, so both count. Reporting strata do not: a stratum describes rather than compares, and a subgroup claim you intend to test is a [hypothesis](#pre-registration), corrected in that family.
 
@@ -2423,6 +2492,7 @@ Those last two rows differ, and `data.units` is the whole discriminator. With no
 | `t_over_units_clustered` | Cluster-robust (CR1: the sandwich estimator with the standard finite-sample scaling), df = clusters − 1. The df is the part that bites — 10 animals give 9, not 299 |
 | `percentile_over_units` | The 2.5th and 97.5th percentiles of the resampled distribution, over `statistics.resample.n` draws, defaulting to `bootstrap` at 2000 |
 | `percentile_over_units_clustered` | The same percentiles, drawing whole clusters with replacement and pooling their units, so a replicate's row count varies; the number drawn per replicate is the cluster count |
+| `percentile_of_derived_clustered` | `percentile_over_units_clustered`'s own construction, one level over: each replicate draws whole clusters, pools their units into a fresh table, and re-runs the template's `aggregate` on it rather than resampling a per-unit value directly. A derived metric under a declared `cluster_by`; the unclustered form uses the unsuffixed `percentile_over_units` spelling above, since recomputing a metric is the only construction a derived value has either way |
 | `weighted_t_over_units` | The [weighted](#weighted-samples) mean with the weighted variance, df from Kish's effective sample size rather than the row count |
 | `weighted_t_over_units_clustered` | The weighted mean with a cluster-robust variance whose scores carry the weights; df = clusters − 1, **not** Kish's effective size, since `cluster_by` is what decides the draw |
 | `t_over_repeats` | Student's *t* over the per-repeat values, df = repeats − 1. Only when [no `data.units` is declared](#the-unit-table-is-the-inference-base) |
@@ -2472,17 +2542,50 @@ a point with no interval is honest, a zero-width 95 % interval is not.
 deliberate rather than hidden.** `percentile_over_units_clustered` makes the identical content-based
 refusal whether or not `strata` is declared, and `percentile_over_units` makes it once `strata` is
 declared — both on the same "every drawable thing in every stratum is identical" test this contrast
-draw uses. But the plain unweighted, unstratified, unclustered `percentile_over_units` carries no such
-check and never has: a constant column still returns a zero-width `Interval` there. So within one run
-a constant column can publish `ci95: [x, x]` per condition beside `ci95: null` on the delta comparing
-two such conditions — the contrast path is refused where the per-condition one it sits beside is not.
-That gap is real and open, not claimed away by this paragraph.
+draw uses. The derived forms follow the identical family rule: `percentile_of_derived_clustered`
+makes the refusal whether or not `strata` is declared, and `percentile_of_derived` makes it once
+`strata` is declared. But the plain unweighted, unstratified, unclustered forms —
+`percentile_over_units` and `percentile_of_derived` alike — carry no such check and never have: a
+constant column, or a derived metric recomputed over constant content, still returns a zero-width
+`Interval` there. So within one run a constant column can publish `ci95: [x, x]` per condition
+beside `ci95: null` on the delta comparing two such conditions — the contrast path is refused where
+the per-condition one it sits beside is not. That gap is real and open, not claimed away by this
+paragraph.
 
 And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used. *d*s pools where `welch_t_over_units` deliberately doesn't, and that isn't an inconsistency: an interval is an inference and gets the assumption-light construction, while *d* is a descriptive standardization whose conventional denominator *is* the pooled one — reporting a *d* against a Welch-style denominator would be a number no reader could compare to another paper's.
 
 A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, at the same level the interval was computed at. **It does not add a place in the family**: the family counts comparisons × metrics, and a metric reported with both an interval and a p-value is one metric described two ways, not two findings. Counting it twice would correct a design for declaring `null_test` rather than for the comparisons it actually put in front of a reader.
 
-**A derived metric is resampled whether or not you declare `statistics.resample`.** The two `basis: units` rows of the first table above — the column metric and the derived one — are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default: a `resample: {method, n, stratify_by}` sibling of `n`, present in every metric block of a run that declared one and **absent — not `null`** — from every metric block of a run that didn't, the same absent-not-null shape the recorded-column paragraph below states for its own `resample_draws` (`null` there already means an interval was attempted and came back empty, which is a different fact from nothing having been asked for — the derived metric's own `resample_draws` is a further, three-valued scheme and that rule does not extend to it). `resample.n` is what was *requested*; `resample_draws` beside it is what the interval actually *rests on* — equal for a column by construction, and equal for a derived metric unless a draw was degenerate, which is what [`W-STATS-RESAMPLE-THIN`](#warnings-core-reports) reports. `stratify_by` is always a list in the record, even where the config wrote a bare string — the record resolves what the config abbreviates, the same rule [`of`/`against`](#contrasts-claims-that-arent-condition-vs-baseline) follow. See the `mean_pred` example in [§ What isn't a repeat](#what-isnt-a-repeat) for the shape. **In this build a declared [`cluster_by`](#clustered-units) is the one case where core resamples nothing**: the clustered draw for a *recomputed* metric is a construction that doesn't exist yet, and reporting a unit-level percentile beside recorded columns that are cluster-robust would be the narrower interval this section exists to refuse — so core drops that step's derived metrics and says so. The refusal is [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) and the record is [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports) carrying that code in its message — the same containment every other `aggregate` fault gets, so the recorded columns keep their clustered intervals and the run keeps its `run.yaml`. It is a run-time refusal rather than a `validate` one for the reason that row gives: whether a template derives anything is not knowable before `aggregate` runs.
+**A derived metric is resampled whether or not you declare `statistics.resample`.** The two `basis: units` rows of the first table above — the column metric and the derived one — are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default: a `resample: {method, n, stratify_by}` sibling of `n`, present in every metric block of a run that declared one and **absent — not `null`** — from every metric block of a run that didn't, the same absent-not-null shape the recorded-column paragraph below states for its own `resample_draws` (`null` there already means an interval was attempted and came back empty, which is a different fact from nothing having been asked for — the derived metric's own `resample_draws` is a further, three-valued scheme and that rule does not extend to it). `resample.n` is what was *requested*; `resample_draws` beside it is what the interval actually *rests on* — equal for a column by construction, and equal for a derived metric unless a draw was degenerate, which is what [`W-STATS-RESAMPLE-THIN`](#warnings-core-reports) reports. `stratify_by` is always a list in the record, even where the config wrote a bare string — the record resolves what the config abbreviates, the same rule [`of`/`against`](#contrasts-claims-that-arent-condition-vs-baseline) follow. See the `mean_pred` example in [§ What isn't a repeat](#what-isnt-a-repeat) for the shape.
+
+**A declared `null_test` is echoed beside the p-value it produced**, resolved rather than as written:
+a `null_test: {method, n, shuffle, level}` sibling of `n`, **present in every metric block carrying a
+`p_value` and absent — not `null` — from every metric block of a run that declared none**, the same
+absent-not-null shape `resample` follows. `level` is the one resolved value the config never writes:
+it is **derived** from the roster — `rows` with no [`cluster_by`](#clustered-units), `within_cluster`
+when the shuffled attribute varies inside a cluster, `whole_cluster` when it does not — and it is
+recorded for exactly that reason, since a derived value a reader cannot recompute from the config is
+the kind this record exists to carry. `null_test.n` is what was *requested*; **`null_draws` is what
+the p-value actually rests on**, on `resample_draws`' own precedent and at the same place in the
+record: a metric-block sibling of `null_test`, not a key inside it — `resample_draws` sits beside
+`resample` rather than inside its map, and `null_draws` sits beside `null_test` the same way. Equal
+for a recorded column by construction, and smaller for a derived metric whenever a relabelled table's
+`aggregate` declined to produce a value.
+
+**A relabelling permutes the label and never the weights.** Under a declared
+[`data.units.weight_by`](#weighted-samples) each unit keeps its own weight through every draw: the
+weight represents what the unit stands for, and permuting it would test a null about the sampling
+design rather than about the label. Only the per-condition half of a `null_test` meets a live weight
+at all — a weighted cross-arm comparison is [refused](#errors-validate-reports) — so this is one rule
+rather than a construction.
+
+**A null whose every draw reproduces the observed statistic reports `p_value: null`.** It is the same
+fact one construction over from a draw whose every replicate reproduces the same value, which core
+already reports as no interval rather than as a zero-width one: a p-value of 1.0 computed from a
+distribution that could not have been anything else is a number with no construction behind it. The
+record says so without a warning of its own — the resolved `null_test` echo sits beside the `null`
+p-value, which says the test ran and produced nothing, exactly as `ci95: null` beside a `resample`
+echo does. An arm the relabelling emptied is reported the same way, for the same reason.
 
 **Resample methods.** `statistics.resample.method` names how the draws are taken, and the vocabulary is closed:
 
@@ -2491,6 +2594,25 @@ A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the interval
 | `bootstrap` | Units drawn with replacement to the original count, or whole [clusters](#clustered-units) when `cluster_by` is declared, or within each [stratum](#weighted-samples) when `stratify_by` is — the statistic recomputed on each draw |
 
 One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name — [`E-STATS-RESAMPLE-METHOD`](#errors-validate-reports) — rather than a value silently ignored. The method strings in the two construction tables above are what core **emits** into `run.yaml`, not values a config may name here.
+
+**Null test methods.** One value, and the table exists so that adding a second is a documented change
+rather than a silent one — the same reason [`resample.method`](#statistical-reporting) has one.
+
+| `null_test.method` | What one draw is | What it reports |
+|---|---|---|
+| `permutation` (default) | One relabelling of the shuffled attribute, at the [level the roster implies](#clustered-units) | `p_value`, the proportion of relabellings whose statistic reaches the observed one |
+
+**`null_test.n` has its own floor, and it is not `resample`'s.** `min_honest_draws` is about a
+percentile interval's two ranks being interior; a permutation p-value's resolution is `1/(n + 1)`,
+which is the smallest value it can take. The floor is therefore the smallest `n` at which the
+p-value can fall **strictly below** the level being tested: `1/(n + 1) < level` gives
+`n > 1/level − 1`, so `n ≥ ⌊1/level⌋` — **20 at α = 0.05**, and `validate` refuses less. Derived from
+`level` rather than written as a literal, the way `min_honest_draws` is derived from `confidence`, so
+a family tested at a corrected level moves the floor with it.
+
+**And because a corrected member is tested at α/m rather than at α**, `validate` warns when a
+declared `n` is below `20 × m` for a family of `m` comparisons — the same shape and the same lower
+bound as the resample family's own warning, on the same declared count.
 
 **`resample_draws` says how many draws the interval actually rests on**, recorded beside every derived metric in `aggregated`. Resampling a derived metric means [recomputing it](#templates-where-parameters-are-defined), and a draw can legitimately have no answer: a resampled table with no variance makes a correlation `nan`, makes a hand-rolled ratio raise, and makes a careful `aggregate` return `None`. Which library the template happened to call is not a fact about whether the draw was degenerate, so all three are dropped alike and the percentiles are read off what survived. The field is `null` when resampling was never attempted, `0` when it was attempted and every draw was degenerate, and otherwise the surviving count — three different facts that `ci95: null` alone cannot tell apart.
 
@@ -2622,6 +2744,20 @@ results:
 
 **`n_paired` is the intersection, and a paired contrast has to record it.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
 
+A contrast whose axis is a `groups` axis and whose design declares a
+[`null_test`](#what-isnt-a-repeat) carries `p_value` beside its `ci95`, and `p_value_corrected`
+beside its `ci95_corrected` under every correction method that reports one. Both are absent — not
+`null` — where no `null_test` was declared, and `p_value` alone is `null` where the null was built
+and could not vary.
+
+**Every contrast entry carries the resolved `resample` echo beside it, whenever
+[`statistics.resample`](#weighted-samples) is declared** — the same `{method, n, stratify_by}` an
+`aggregated` metric block already carries, "so the number is never the result of an undocumented
+default." One route builds both: every arm, derived and column, paired and unpaired, whenever a
+`resample` is declared at all — not only the arms whose interval actually drew from it — because the
+declaration is a fact about the run, not about which construction one metric happened to route
+through. Absent, not null, on the same rule `weighted_by` follows.
+
 **Under [`weight_by`](#weighted-samples) a contrast entry carries two more keys**, and they are the
 same two facts a weighted per-condition block carries, arranged for a record that has no `n` mapping
 to join. `weighted_by` names the attribute, beside `method`, exactly as it sits beside a condition's
@@ -2667,11 +2803,12 @@ There is deliberately **no attribute-naming key** beside it. A clustered contras
 column** records a `method` carrying the `_clustered` suffix, so the record already discloses that the
 cluster was the draw — which is the disclosure a weighted contrast could not make, since a weighted
 *derived* metric keeps the unsuffixed spelling and needs `weighted_by` to say so at all. One fact,
-disclosed once. A **derived** metric whose key collides with a recorded column's is decided:
-`_comparison_step_blocks` reads the declared `cluster_by` and suppresses the contrast over that key
-— no delta, no draw, `method`/`delta`/`ci95` all `null`, the shape
-[`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) describes — and
-`n_paired_clusters` travels beside `n_paired` regardless, because both are facts about the paired
+disclosed once. A **derived** metric whose key collides with a recorded column's is dropped from
+that condition's own `aggregated` — [`E-STEP-KEY-COLLISION`](#errors-core-raises)'s containment —
+but the closures a comparison reads from were built before the collision is detected and survive
+it, so a contrast over the colliding key still computes, through the identical clustered
+construction an uncolliding derived key takes. `n_paired_clusters` travels beside `n_paired`
+regardless of whether the interval came back, because both are facts about the paired
 INTERSECTION rather than about whether a construction ran, and `n_paired` already keeps that shape
 when a draw is too thin or degenerate to publish. History of the corner, not a live gap, is in
 `docs/superpowers/spec-defects.md`.
@@ -2731,10 +2868,10 @@ clustered entry carries: a delta whose interval assumes neither shared units nor
 beside a `method` that does not say so, or beside no per-side counts at all, is a design honoured
 whose record is half delivered. `cohens_d` here is *d*s, over the pooled within-condition standard
 deviation, which is [§ Statistical reporting](#statistical-reporting)'s own split. A **derived**
-metric's unpaired contrast is suppressed on the same shape and for a second, independent reason:
-no per-side draw exists for a recomputed metric, so `delta`, `method` and `ci95` are all `null`
-with the per-side counts beside them, exactly as [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises)
-describes for a declared cluster.
+metric's unpaired contrast is suppressed, because no per-side draw exists for a recomputed
+metric — `aggregate` evaluated independently on each side's own resampled table is a construction
+this build does not have — so `delta`, `method` and `ci95` are all `null` with the per-side counts
+beside them regardless.
 
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 
@@ -2774,6 +2911,30 @@ aggregated:
 Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on. A subgroup claim you intend to *test* is a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) — declared before the run, named by a hypothesis, and corrected in that family. The split is deliberate: `report_by` gives you every subgroup for free because it claims nothing, and a subgroup you want to claim something about costs a place in the family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
 
 `validate` rejects a `report_by` attribute that isn't declared in `data.units.attributes`, and warns when a level would hold fewer units than `limits.min_reported_n` — before the run rather than at disclosure.
+
+**A `statistics.report_by` level's recorded-column interval is a `t_over_units`
+one even under a declared [`resample`](#statistical-reporting), and that is a documented limitation
+rather than a gap awaiting a slice.** A level's own metric block is summarized over that level's
+units without the column-resample routing a whole condition's block gets, so a run declaring both
+carries a stratified percentile interval for the condition and an unstratified *t* interval for each
+of its levels, in the same record. The two are distinguishable where it matters — a level's block
+carries no `resample` echo and no `resample_draws`, so a reader can see which construction produced
+which number — and a level is a description rather than a comparison, which is why it
+[joins no correction family](#sweeps-and-repeats) and why the asymmetry does not reach any interval a
+verdict rests on. This is a separate matter from a level's `n`, which is that level's own count, and
+from a `null_test` whose `shuffle` names a `report_by` attribute, which is
+[refused](#errors-validate-reports): that refusal is about which attribute is permuted, this
+limitation is about which construction a level's interval uses, and neither makes any part of the
+other unreachable.
+
+**A level's own derived metric carries no `p_value` either, even beside a `null_test` whose
+`shuffle` names some other attribute — a legal config, since the refusal above and this limitation
+are disjoint.** A level repeats metrics over a stratum "without adding executions or joining the
+correction family," so a permutation null over a level's own subset is a construction no document
+describes: a level describes rather than compares, and a description has no null to test against.
+The condition's own block, computed over the same roster, still carries one — the two sit side by
+side in the same record, which is how a reader tells "this level has no null" apart from "the null
+failed to run for the whole condition."
 
 ### Before you spend it
 
@@ -3068,6 +3229,13 @@ results:
 ```
 
 **The verdict records which number it compared, because the [hypothesis family](#sweeps-and-repeats) is corrected separately from the sweep's.** `family_size` and `family` carry it in the same idiom every other family uses, with a single breakout key because a hypothesis family multiplies nothing: it counts the confirmatory hypotheses whose observations core computed, where a sweep's family counts comparisons × metrics. A reader can check the level without re-deriving it, exactly as `family` beside a `vs_baseline` delta is auditable rather than asserted. Correction reaches a verdict only through a bound: a hypothesis evaluating on `observed` compares a point estimate, which has no α to adjust, while one evaluating on `ci95_lower` or `ci95_upper` reads the corrected bound at the level *this* family implies. `verdict_evaluated_on` names which of the three the comparison actually used — spelled out rather than echoing the config's `evaluate_on`, since a record field one letter from a config field is a typo waiting to be read as agreement. So a verdict is never a number a reader has to reconstruct from `evaluate_on` plus a correction rule.
+
+**`evaluate_on` names three bounds — `observed`, `ci95_lower`, `ci95_upper` — and none of them is a
+p-value, so no verdict ever rests on one.** A counted hypothesis's entry still records
+`p_value_corrected` when its member carries a p-value **and, under `holm`, an interval** — the same withholding the `holm` row above states, since this family is built from the same members — computed at the hypothesis family's own size
+rather than the sweep's, for the same reason `ci95_corrected` is: `corrected_for` is the same
+function called at a different `m`, and a reader auditing one bound alongside the other must not find
+them corrected at two different family sizes.
 
 **In the worked example the two available answers differ, and the field is what makes that legible.** The observed delta of 0.026 clears the declared threshold of 0.02, so `h1` is supported on `observed` — while the same delta's interval over 228 units, [−0.007, 0.059], does not exclude zero, so the same hypothesis written `evaluate_on: ci95_lower` would come back `supported: false`. Neither verdict is wrong; they answer different questions, and a reader who can see which one was asked can decide what the run showed. A record that reported only `supported: true` would be the version worth distrusting. See [What a hypothesis is tested against](#what-a-hypothesis-is-tested-against) for when to declare which.
 

@@ -114,6 +114,17 @@ class Member:
     lives inside `UnpairedEvidence` instead, where the two label vectors can be
     checked against the two value vectors they each belong to. `None` is the
     default and the shape every construction predating this field still builds.
+
+    `p_value`, when set, is the permutation p-value a declared
+    `statistics.null_test` produced for this metric — **a field rather than a
+    fourth kind of evidence**, and that is a decision rather than an omission. The
+    three kinds exist because `_corrected_bounds` rebuilds the SAME construction at
+    a smaller α; a p-value has no construction to rebuild, only a rank and a family
+    size, both of which `corrected_for` already holds. So it enters neither the
+    exactly-one rule nor any of `_corrected_bounds`' return paths. A member may
+    carry it with an interval, with no interval at all, or not at all: a permutation
+    p-value needs only the observed statistic and the null, both of which exist
+    where a thin pool or a degenerate column left no interval to report.
     """
 
     where: str
@@ -127,12 +138,12 @@ class Member:
     weights: tuple[Any, ...] | None = None
     clusters: tuple[str, ...] | None = None
     sides: UnpairedEvidence | None = None
+    p_value: float | None = None
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs`/`sides` is set whenever there is a
         `ci95` to correct — never two, never none. A member with no interval at
-        all (`ci95=None`, excluded by `family_members` before any of the three
-        fields is ever read) is exempt: it may still carry one.
+        all (`ci95=None`) is exempt: it may still carry one.
 
         This is `cli.py`'s bookkeeping error to make, not a plugin author's
         declaration to violate, so it raises plain `ValueError` rather than
@@ -243,14 +254,18 @@ def family_members(entries: Sequence[Member]) -> list[Member]:
     """The subset that is corrected, and therefore counted.
 
     `reference.md`: "Only metrics core corrects are counted — that is, `basis:
-    units` metrics, since a metric reported without an interval isn't a
-    comparison anyone can read as significant." A reported `Estimate` never
-    reaches here (core did not compute it and has no standing to correct it),
-    and neither does a reporting stratum (it describes rather than compares) —
-    both are excluded by `cli` never building a `Member` for them, which is
-    where the distinction is visible.
+    units` metrics, since a metric core computed nothing for is not a
+    comparison anyone can read as significant. A metric carrying a p-value and
+    no interval is counted: the exclusion is about metrics core has nothing to
+    say about, and a permutation p-value needs only the observed statistic and
+    the null, both of which exist where an interval could not be built." A
+    reported `Estimate` never reaches here (core did not compute it and has no
+    standing to correct it), and neither does a
+    reporting stratum (it describes rather than compares) — both are excluded by
+    `cli` never building a `Member` for them, which is where the distinction is
+    visible.
     """
-    return [e for e in entries if e.ci95 is not None]
+    return [e for e in entries if e.ci95 is not None or e.p_value is not None]
 
 
 def family_shape(members: Sequence[Member]) -> tuple[int, dict[str, int]]:
@@ -282,7 +297,9 @@ def _evidence_ratio(member: Member) -> float:
     A zero-width interval (a point-mass bootstrap, which S4b established is
     legitimate) has infinite evidence rather than a `ZeroDivisionError`.
     """
-    assert member.ci95 is not None  # family_members dropped the others
+    # `rank_family` never calls this for a member with no interval; the tier in
+    # its key decides that before the ratio is asked for.
+    assert member.ci95 is not None
     half = (member.ci95[1] - member.ci95[0]) / 2.0
     if half <= 0.0:
         return float("inf")
@@ -299,10 +316,20 @@ def rank_family(members: Sequence[Member]) -> list[Member]:
     earlier key broke ties by metric *name*, which is a different ordering that
     happened to be stable, and which reorders a family when a metric is renamed.
     """
-    return sorted(
-        members,
-        key=lambda m: (-_evidence_ratio(m), m.declaration_index),
-    )
+
+    def _key(member: Member) -> tuple[int, float, int]:
+        # The tier FIRST, and the ratio computed only inside it. A member with no
+        # interval has no evidence ratio — `_evidence_ratio` asserts as much — so a
+        # key evaluating the ratio for every member crashes during the sort, and a
+        # test that observed the crash would be testing the assert rather than the
+        # ranking. A sentinel ratio is the other wrong answer: `_evidence_ratio`
+        # returns exactly `0.0` for a member whose `delta` is 0 with a finite width,
+        # so a p-only member handed `0.0` sorts AMONG those rather than after them.
+        if member.ci95 is None:
+            return (1, 0.0, member.declaration_index)
+        return (0, -_evidence_ratio(member), member.declaration_index)
+
+    return sorted(members, key=_key)
 
 
 def _level_for(method: str, family_size: int, rank: int) -> float | None:
@@ -395,6 +422,39 @@ def _family(members: Sequence[Member]) -> list[Member]:
     return list({(m.where, m.step, m.metric): m for m in family_members(members)}.values())
 
 
+def _bh_adjusted(members: Sequence[Member], family_size: int) -> dict[tuple[str, str, str], float]:
+    """Benjamini-Hochberg's adjusted p-values, over the members that carry one.
+
+    `reference.md` § Statistical reporting: BH ranks on the ascending p-value, `m`
+    is the whole family, and each member's value is `min(1, m/i × p)` taken as a
+    running minimum from the largest *i* down. **The suffix minimum is the whole
+    reason this is a second pass** — every other adjustment this module computes is
+    a function of `(m, i)` alone, and this one is not.
+
+    *i* runs over the members PRESENT rather than over `family_size`, which matters
+    for `hypotheses.py`: its `size` is the declared count while its member list
+    drops counted hypotheses with no `Member`. Larger `m` with smaller *k* is the
+    conservative direction, and it is the same over-counting `family_shape`'s
+    docstring already licenses — "the product exceeds the number of members. That
+    is deliberate and conservative" — cited rather than restated as a second rule.
+    """
+    # Bound as `(p, index, member)` triples rather than sorted on `m.p_value`
+    # directly: the field is `float | None`, `mypy` refuses an ordering over it,
+    # and an `assert` inside the loop would be a narrowing the sort key already
+    # needed one line earlier.
+    carrying = sorted(
+        ((m.p_value, m.declaration_index, m) for m in members if m.p_value is not None),
+        key=lambda triple: (triple[0], triple[1]),
+    )
+    out: dict[tuple[str, str, str], float] = {}
+    running = float("inf")
+    for i in range(len(carrying), 0, -1):
+        p_value, _, member = carrying[i - 1]
+        running = min(running, family_size / i * p_value)
+        out[(member.where, member.step, member.metric)] = min(1.0, running)
+    return out
+
+
 def corrected_for(
     members: Sequence[Member],
     method: str,
@@ -422,6 +482,7 @@ def corrected_for(
     family = _family(members)
     if method == "none" or not family:
         return {}
+    bh = _bh_adjusted(family, family_size) if method == "fdr_bh" else {}
     out: dict[tuple[str, str, str], dict[str, Any]] = {}
     for rank, member in enumerate(rank_family(family), start=1):
         level = _level_for(method, family_size, rank)
@@ -432,8 +493,50 @@ def corrected_for(
             "correction_level": level,
             "family_size": family_size,
             "family": dict(shape),
-            "thin": level is not None and bounds is None,
+            # A member carrying only a p-value has no interval to rebuild, so a
+            # `None` bound there is not thinness: `W-STATS-CORRECTED-THIN`'s
+            # message says the resample's draws could not support the level, which
+            # is false of a member that never had a pool. `ci95` rather than the
+            # three evidence fields, because that is what `cli` writes the entry's
+            # own `ci95` from. Under `fdr_bh`, `level` is already `None` (`_level_for`
+            # implies no per-comparison level at all), so this can never fire there
+            # either — correctly rather than accidentally, since nothing was demanded
+            # that the draws could not support; `ci95_corrected: null` beside
+            # `correction: fdr_bh` already says what happened, with no warning owed.
+            "thin": level is not None and bounds is None and member.ci95 is not None,
         }
+        # `p_value_corrected` is the p at the level this member's interval was
+        # corrected at — `min(1, p × m)` under bonferroni and `min(1, p × (m − i +
+        # 1))` under holm, both per-member functions of `(m, i)`. Only BH's is an
+        # accumulation, computed above. ABSENT, not null, where there is no
+        # p-value: an explicit null would claim an adjustment was attempted and
+        # found nothing to do, which is the distinction `ci95_corrected` already
+        # makes under `correction: none`.
+        if method == "fdr_bh":
+            adjusted = bh.get((member.where, member.step, member.metric))
+        elif member.p_value is None:
+            adjusted = None
+        elif method == "bonferroni":
+            adjusted = min(1.0, member.p_value * family_size)
+        elif member.ci95 is None:
+            # Holm's `i` is the EVIDENCE rank `_evidence_ratio` orders — a value a
+            # p-only member does not have. `rank_family`'s tier places it after
+            # every interval-carrying member so the sort has a total order, but
+            # that placement is a tie-break for the sort, not a claim about where
+            # its evidence sits: publishing `min(1, p × (m − i + 1))` at that
+            # fabricated `i` makes two members with bit-identical raw p differ by
+            # `declaration_index` alone, which is nothing about either member's
+            # evidence. § Corrections item 5's identical argument, one field over
+            # — "false of a member that never had an interval" — and withheld the
+            # same way `thin` is, rather than published at a rank the tier
+            # invented. Bonferroni needs no rank (`family_size` alone) and `fdr_bh`
+            # ranks on the ascending p-value itself, so only Holm's per-member
+            # expression is affected.
+            adjusted = None
+        else:
+            adjusted = min(1.0, member.p_value * (family_size - rank + 1))
+        if adjusted is not None:
+            out[(member.where, member.step, member.metric)]["p_value_corrected"] = adjusted
     return out
 
 
