@@ -334,3 +334,26 @@ does not control.
   template plus a synthetic installed distribution — which is the same substitution every
   § Executability entry has documented since 2026-08-16, and it is a substitution, not the thing.
 - **A real metered probe.** Deliberately, per § 10.
+
+---
+
+## Correction, appended 2026-08-19 — § 0.3's exit-code claim is false
+
+**This replaces § 0.3's finding that "exit code 5 does not exist in this build."** It does:
+`EXIT_EXTERNAL = 5` is defined in `src/publishable/diagnostics.py` beside `EXIT_OK` through
+`EXIT_FAILED`. Verified at `27e397e` by reading the definition and by grepping `src/` and `tests/` for
+readers outside its own module — **there are none.**
+
+Found by the Part A design while measuring the same surface a few hours later, which is the second time
+on this project that **re-measuring a scoping the same week falsified one of its claims** —
+`H7b-SCOPING-2.md` lost seven that way.
+
+**Three consequences.** Part B's exit-code task is **narrower** than this document states: the constant
+ships, so what is owed is a reader and the precedence rule, not the constant. It is a **fourth
+shipped-but-unread member** of the family this scoping used to argue for declining the old charter's
+tasks 12–13, which **strengthens** that recommendation rather than weakening it. And it was **unfiled** —
+the Part A design's filings task closes that in `spec-defects.md`, which is where it belongs, not in a
+ledger line.
+
+**What did not change:** every other measurement here, including the task count, the 13/9 seam, and the
+zero/six/three figures. The correction is confined to one claim.
