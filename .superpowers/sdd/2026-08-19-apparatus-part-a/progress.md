@@ -166,3 +166,26 @@ One real escape found: comparing `value == cred_value` on the **raw** value lets
 as an **uncoded `ValueError`** — but **only when a credential is declared**, which is the worst shape for
 a conditional fault, since the `credentials={}` path is correctly coded and would be what a casual test
 exercises.
+
+**Fix round 1 — all four Majors and five Minors closed** (`c04d12d`, `6dbc8c8`), each verified by
+running. Suite **2395** passed, 1 skipped, 2 xfailed; four gates clean; **still no call site** —
+confirmed by grep for every new name outside `apparatus.py`, and `cli.py` still writes
+`"apparatus": None` unconditionally, which is what batch 4 replaces and what the guard pin covers.
+
+**The credential pin now exists, and the proof is the number that changed.** The review's exact
+heuristic mutation previously left the suite at **2392 passed with zero failures**; against the new
+third cell — non-empty `credentials` beside a credential-shaped value that is *not* a declared
+credential — it now gives **1 failed, 2394 passed.** That cell is decision 6's own ground, and it was
+the one shape no test instantiated. **This repo has shipped this class of leak twice; this is the pin
+that prevents the third.**
+
+**Major 2's fix was verified by reproducing the original bug rather than by trusting the guard.**
+Removing the `isinstance(value, str)` guard again gives `E-APPARATUS-FACT-TYPE` under `credentials={}`
+and an **uncoded `ValueError`** under a declared credential — the conditional shape being the whole
+finding, since the easy path is the one a casual test exercises.
+
+Two Minors were **filed rather than fixed**, both deliberately. A fact **key** equal to a credential
+value is a real narrowing question on decision 6's scope, filed **unassigned with the reason** rather
+than the forbidden vague-owner form. And the ordering between `append_observation` and `check_facts`
+is **hand-forwarded to batch 3 in both a docstring and a filing** — batch 3 being the first caller of
+both, so it is the first position from which the question can be answered rather than guessed.
