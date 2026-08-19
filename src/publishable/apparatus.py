@@ -7,14 +7,18 @@ same way a resolver is — `reference.md` § Creating a plugin — and `Apparatu
 is the one shape it may return.
 """
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from publishable.coercion import coerce_scalars
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
+from publishable.sweep import condition_dir_name
 
 
 @dataclass(frozen=True)
@@ -267,3 +271,50 @@ class Observations:
                     f"condition `{condition}`'s fact `{fact}` came back `null` on "
                     f"{nulls} of {total} probes",
                 )
+
+
+def condition_key(index: int, label: str | None) -> str:
+    """The key `probes.jsonl` and `provenance.apparatus.facts` both use for one
+    condition — the `<nn>_<label>` form `sweep.condition_dir_name` renders,
+    imported rather than formatted a second time (§ Corrections against the
+    code, correction 2). A run declaring no `sweep` has one condition whose
+    label is `None`; canonical JSON cannot sort a `null` key beside `str` keys
+    under `sort_keys=True`, so that case is `f"{index:02d}"` — the same scheme
+    with an empty body — rather than the string `"None"` or a literal `null`.
+    """
+    if label is None:
+        return f"{index:02d}"
+    return condition_dir_name(index, label)
+
+
+def append_observation(
+    run_dir: Path, *, phase: str, condition: str, probe: str, facts: Mapping[str, Any]
+) -> None:
+    """Append one line to the append-only ledger `apparatus/probes.jsonl`.
+
+    Exactly § The apparatus files' five keys — `at`, `phase`, `condition`,
+    `probe`, `facts` — nulls and undeclared facts included, one line per
+    probe call, written at the call rather than after the execution it
+    precedes: a failed execution never stops the run (`runner.execute_plan`'s
+    `except Exception` comment says so), so writing after it would still
+    write the line either way and would lose nothing there — but it WOULD
+    lose the observation for a run that dies inside the execution itself,
+    which is the run this ledger exists for. `condition` is the `<nn>_<label>`
+    key from `condition_key`, never the bare label.
+
+    `phase` is one of a closed vocabulary of four: `run_start`, `pre_execution`,
+    `dry_run`, `freeze`. Part A only ever calls this with the first two; the
+    other two are named here so H8's and H9's callers do not mint a fifth
+    spelling of a phase this module already has a name for.
+    """
+    ledger_dir = run_dir / "apparatus"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    line = {
+        "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "phase": phase,
+        "condition": condition,
+        "probe": probe,
+        "facts": dict(facts),
+    }
+    with (ledger_dir / "probes.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")

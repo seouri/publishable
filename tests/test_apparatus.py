@@ -378,3 +378,63 @@ def test_the_warning_is_one_finding_per_condition_and_fact_including_the_flaky_p
         ("00_baseline", "fact_c"),
         ("01_variant", "fact_c"),
     }
+
+
+def test_a_ledger_line_carries_exactly_the_five_documented_keys(tmp_path):
+    """Asserted as an exact key SET, in the shape `json.loads` gives back: a
+    sixth key nobody documented is what this catches."""
+    import json
+
+    from publishable.apparatus import append_observation
+
+    append_observation(
+        tmp_path, phase="run_start", condition="00_baseline", probe="p", facts={"a": 1}
+    )
+    line = json.loads((tmp_path / "apparatus" / "probes.jsonl").read_text().splitlines()[0])
+    assert set(line) == {"at", "phase", "condition", "probe", "facts"}
+
+
+def test_a_null_fact_and_an_undeclared_fact_both_reach_the_ledger(tmp_path):
+    """The ledger is every observation, nulls included — which is what makes a
+    fact that only started answering halfway through visible as exactly that."""
+    import json
+
+    from publishable.apparatus import append_observation
+
+    append_observation(
+        tmp_path,
+        phase="pre_execution",
+        condition="00_baseline",
+        probe="p",
+        facts={"declared_fact": None, "undeclared_fact": "x"},
+    )
+    line = json.loads((tmp_path / "apparatus" / "probes.jsonl").read_text().splitlines()[0])
+    assert line["facts"] == {"declared_fact": None, "undeclared_fact": "x"}
+
+
+def test_a_second_append_adds_a_line_and_rewrites_nothing(tmp_path):
+    """Append-only, asserted on the file's RAW text: both lines present, the
+    first byte-identical to what the first call wrote."""
+    from publishable.apparatus import append_observation
+
+    append_observation(
+        tmp_path, phase="run_start", condition="00_baseline", probe="p", facts={"a": 1}
+    )
+    ledger = tmp_path / "apparatus" / "probes.jsonl"
+    first_line = ledger.read_text()
+    append_observation(
+        tmp_path, phase="pre_execution", condition="00_baseline", probe="p", facts={"a": 2}
+    )
+    raw = ledger.read_text()
+    lines = raw.splitlines()
+    assert len(lines) == 2
+    assert raw.startswith(first_line)
+
+
+def test_the_condition_key_is_the_nn_label_form_and_a_labelless_condition_is_nn():
+    """`condition_dir_name`'s own spelling, imported rather than re-formatted, and
+    the no-sweep case that `reference.md`'s example never shows."""
+    from publishable.apparatus import condition_key
+
+    assert condition_key(0, "baseline") == "00_baseline"
+    assert condition_key(0, None) == "00"

@@ -2412,6 +2412,7 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 │                                               #   realized execution order, design digest
 ├── allocation.json                             # realized arm assignment and holdout split; present when either is declared
 ├── executions.jsonl                            # one record per finished execution — what `resume` reads
+├── apparatus/probes.jsonl                      # one line per probe call — see "The apparatus files"
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
 ├── shared/
