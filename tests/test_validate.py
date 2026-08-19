@@ -14210,3 +14210,19 @@ def test_a_local_claimants_credentials_reach_the_collector_despite_the_collision
 
     assert "E-TEMPLATE-COLLISION" in {f.code for f in c.findings}
     assert c.credentials.get("SHADOW_KEY") == "sk-c2-sentinel-9911"
+
+
+def test_the_yield_checks_are_not_sited_at_dry_run_alone():
+    """Decision 1: the projection, the credential check and the null warning are
+    phase-independent, so no document may site them at a command that does not
+    exist in this build. Asserted on the RAW text of both documents, with a
+    length guard so an empty or moved file cannot make it pass vacuously."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    reference = (root / "docs" / "reference.md").read_text()
+    designs = (root / "docs" / "experimental-designs.md").read_text()
+    assert len(reference) > 100000 and len(designs) > 10000
+    assert "warning at `dry-run`" not in reference
+    assert "`dry-run` warns instead of the run failing" not in designs
+    assert "wherever a probe runs" in reference
