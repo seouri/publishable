@@ -6824,7 +6824,7 @@ does not fire first) with `compute_of`/`compute_against` that still cancel to th
 difference on every draw — the recorded-column `_column_mean` closure over two conditions recording
 one metric identically is the shape already reachable through a real `run` today, clustered or not.
 
-## OPEN — a derived metric's permutation null has no clustered construction — **Owner: H4d task 21 or unassigned**
+## OPEN — a derived metric's permutation null has no clustered construction — **Owner: unassigned**
 
 `reference.md` § What isn't a repeat gives `null_test`'s relabelling two designs, gated on
 `cluster_by`: "within clusters, or whole clusters at a time." H4d task 20 built the write for a
@@ -6836,13 +6836,23 @@ unit's label and takes no cluster argument at all, so a design declaring `cluste
 clustered counterpart (`permutation_of_derived_clustered`, on `percentile_of_derived_clustered`'s
 precedent) exists in this build.
 
-**Not silently shipped as the wrong number.** `stats.summarize_step` gates the whole write —
-`p_value`, `null_draws`, and the `null_test` echo — on `clusters is None`: a derived metric under a
-declared `cluster_by` gets no p-value at all rather than one whose `level` echo would claim a
-construction that did not run. This is the honest form of the same standard `W-STATS-CORRECTED-THIN`
-already applies on the correction side — a `null` disclosing the gap outranks a plausible number
-that hides it. The contrast-side write (task 19, `stats.permutation_over_contrast`) is unaffected:
-it delegates to `permutation_over_units_clustered` (task 13), which does carry the within-cluster
+**Not silently shipped as the wrong number, but incomplete on disclosure.**
+`stats.summarize_step` gates the whole write — `p_value`, `null_draws`, and the `null_test` echo —
+on `clusters is None`: a derived metric under a declared `cluster_by` gets no p-value at all rather
+than one whose `level` echo would claim a construction that did not run. That much is right — no
+number is published that the construction did not earn. **What is not right, and is a second, live
+half of this same gap:** the three keys are simply absent, which is the exact shape a run that
+declared no `null_test` at all writes — so a user who DID declare one beside `cluster_by` gets a
+record indistinguishable from one that declared nothing. `p_value: null` beside the echo (§
+Statistical reporting's own precedent, "the resolved `null_test` echo sits beside the `null` p-value,
+which says the test ran and produced nothing") is not the fix either: the test did not run here at
+all, so writing that shape would claim the opposite of what happened. No run-level disclosure exists
+either — `null_test` never reaches `assemble_run_yaml`. This needs either a warning (`validate`
+cannot fire it, since it cannot know whether a template's `aggregate` will produce a derived metric
+at all — a declaration-time refusal would have to refuse `null_test` + `cluster_by` outright, which
+is a design call this entry does not make) or some other run-time disclosure; left open rather than
+guessed at. The contrast-side write (task 19, `stats.permutation_over_contrast`) is unaffected: it
+delegates to `permutation_over_units_clustered` (task 13), which does carry the within-cluster
 construction, so Fixture C1's `1/5001` is genuine and only the derived (C2) side is gapped.
 
 **Owner: unassigned.** Closing it needs a new construction (`permutation_of_derived_clustered`)
@@ -6850,10 +6860,52 @@ outside what task 20's own file list scopes (`stats.py` only for `summarize_step
 naming a successor here would invent one the plan does not have. Whoever claims it: draw `G`
 clusters' worth of labels as one unit exactly as `percentile_of_derived_clustered` draws `G`
 clusters' worth of rows, and gate `summarize_step`'s write on that construction existing rather than
-on `clusters is None`.
+on `clusters is None`. Whoever closes the CONSTRUCTION half should also close the DISCLOSURE half
+above in the same pass — building the clustered null makes the disclosure gap moot for that path,
+but does not retroactively fix the record a run wrote before it existed, and the two are one finding
+either way.
 
 **Found by:** H4d task 20, while writing Fixture C2 to the letter its own design spec
 (`docs/superpowers/specs/2026-08-18-null-test-design.md` § Fixture C) states — the spec's C2 promised
 `p_value: 1/5001` under a declared `cluster_by`, and direct computation against the shipped
 `permutation_of_derived` returned ≈0.4845 instead. Reported rather than adjusted: `CLAUDE.md`'s own
 rule is to report a fixture that disagrees with the code, not to force the fixture to agree.
+
+## OPEN — the contrast-side `null_test` write carries no `null_draws` — **Owner: unassigned**
+
+`docs/reference.md` § Statistical reporting: *"`null_draws` is what the p-value actually rests on …
+a metric-block sibling of `null_test`, not a key inside it,"* and *"present in every metric block
+carrying a `p_value`."* H4d task 19's contrast-side write (`cli.py`'s unpaired arm of
+`_comparison_step_blocks`) writes `p_value` and the `null_test` echo and nothing else — verified by
+running Fixture C1 through it and printing the entry's key list: `null_draws` is absent.
+
+**Not a write that was skipped by oversight — a write that has no number to write.**
+`stats.permutation_over_contrast` returns `float | None`, no survivor count, because it delegates
+entirely to `permutation_over_units`/`permutation_over_units_clustered`, neither of which returns
+one either (unlike `stats.permutation_of_derived`, task 12, whose per-draw `aggregate` recompute can
+raise or return `nan` and so needs a survivor count to disclose that). Closing this needs a
+signature change on whichever of the three functions actually drops draws — and it is not "equal by
+construction" for every one of them, which is this entry's second half: **the document's own claim
+is false for a clustered whole-cluster relabelling.** In `permutation_over_units_clustered`, a
+whole-cluster draw whose relabelling empties the `of` arm is `continue`d (dropped) rather than
+counted as a survivor — pre-existing to this slice, task 13's surface — so a contrast under
+`shuffle`'s `whole_cluster` level can genuinely rest on fewer than `n` draws, and `null_draws` there
+is not `n` "by construction" the way the recorded-column paragraph states. A within-cluster or
+unclustered (`rows`) contrast IS exactly `n`, because a permutation there only reorders a fixed
+label multiset and can never empty an arm — so the gap is narrower than "every contrast," but the
+document does not currently say which shape it applies to.
+
+**Owner: unassigned.** Closing it in full needs: (1) `permutation_over_units` and
+`permutation_over_units_clustered` to return `(float | None, int)` — a signature change with real
+blast radius, since both are called directly by roughly twenty already-merged tests in
+`tests/test_stats.py` expecting a bare `float | None`, so the change must update every one of those
+call sites in the same pass, not just the two production functions; (2) `permutation_over_contrast`
+threading the count through instead of returning its inner call's result directly; (3) `cli.py`'s
+contrast-side write adding `null_draws` to the metric block beside `p_value` and the echo; and (4)
+`reference.md`'s "equal for a recorded column by construction" sentence narrowed to the shapes it is
+actually true of (unclustered and within-cluster; not whole-cluster). Whoever claims it should do
+all four together — a `null_draws` key added without narrowing the document's own claim would still
+leave that sentence false.
+
+**Found by:** H4d batch 4's review, verified by running `_fixture_c1_call()` and printing
+`block["s"]["y"]`'s key set.

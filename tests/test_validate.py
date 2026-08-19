@@ -4494,6 +4494,84 @@ def test_the_inapplicable_correction_warning_still_fires_for_a_parameter_axis_co
     assert "W-STATS-CORRECTION-INAPPLICABLE" in found
 
 
+_GROUP_AXIS_WRONG_SHUFFLE_ROSTER = "patient_id,arm,site\n" + "".join(
+    f"p{i},{'treatment' if i % 2 else 'control'},s{i % 3}\n" for i in range(8)
+)
+
+
+def _group_axis_wrong_shuffle_doc(**extra) -> dict:
+    """M3's fixture: the SECOND disjunct, distinct from both existing ones. A
+    group axis (`arm`) exists and IS crossed by the declared contrast — so
+    disjunct 3 (every comparison is parameter-axis) does not apply, and
+    `null_test` IS declared — so disjunct 1 does not apply either — but
+    `shuffle` names `site`, an ordinary attribute no comparison in this family
+    crosses. `crossed_by_any_comparison` is `{"arm"}`, and `"site" not in
+    {"arm"}` is disjunct 2 firing on its own, isolated from the other two."""
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm", "site"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "statistics": {
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "site"},
+            "correction": "fdr_bh",
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_the_inapplicable_correction_warning_fires_when_shuffle_names_no_crossed_axis(
+    write_config, tmp_path
+):
+    """M3, closing the one disjunct the two existing tests do not reach:
+    `null_test` IS declared and a group axis IS crossed by a comparison in the
+    family, but `shuffle` names a different, ordinary attribute — so
+    `crossed_by_any_comparison` is non-empty and `shuffle` is not in it. Both
+    of the other tests' controls stay silent on this shape (the first disjunct
+    needs no declaration at all; the third needs an entirely parameter-axis
+    family), so only this fixture can tell disjunct 2 apart from either."""
+    (tmp_path / "input" / "index.csv").write_text(_GROUP_AXIS_WRONG_SHUFFLE_ROSTER)
+    doc = _group_axis_wrong_shuffle_doc()
+    found = codes(write_config(doc))
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+
+
+def _family_null_test_doc(n: int) -> dict:
+    """`_parameter_axis_null_test_doc`'s one-comparison shape (baseline + one
+    `grid` condition = 1 resolved comparison), with `null_test.n` overridden —
+    `W-STATS-NULLTEST-FAMILY` is not gated on `correction` or on which
+    disjunct of the sibling warning fires, only on `comparisons > 0` and a
+    declared `null_test`, so this fixture needs nothing beyond that."""
+    doc = _parameter_axis_null_test_doc()
+    doc["statistics"]["null_test"]["n"] = n
+    return doc
+
+
+def test_the_nulltest_family_warning_fires_below_the_honest_floor(write_config, tmp_path):
+    """M2. `min_honest_permutations(ALPHA / comparisons)` at `comparisons == 1`
+    is `floor(1 / 0.05) == 20` — a permutation p-value can never fall below
+    `1/(n+1)`, so `n = 19` cannot reach the `0.05` level this one-comparison
+    family needs even before any correction narrows it further."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    assert "W-STATS-NULLTEST-FAMILY" in codes(write_config(_family_null_test_doc(19)))
+
+
+def test_the_nulltest_family_warning_is_silent_at_the_honest_floor(write_config, tmp_path):
+    """The control: `n = 20` meets the same floor exactly, and the warning
+    must not fire — without this half, a warning that always fired regardless
+    of `n` would pass the test above identically."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    assert "W-STATS-NULLTEST-FAMILY" not in codes(write_config(_family_null_test_doc(20)))
+
+
 def _level_doc(**null_test) -> dict:
     """A config declaring `cluster_by: match_set` and a `null_test` shuffling
     `status` — the shared fixture both the ambiguity test and its control use."""

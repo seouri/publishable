@@ -5089,6 +5089,10 @@ def _check_sweep(
             "`statistics.correction` is `none` — every interval reported is uncorrected, and "
             "each records `correction: null` to say so",
         )
+    # Read once, not twice: this same declaration is read again below for
+    # `W-STATS-NULLTEST-FAMILY`, and a second independent read is how two
+    # checks over one declaration come to disagree about what it says.
+    null_test = (doc.get("statistics") or {}).get("null_test")
     if comparisons > 0 and correction == "fdr_bh":
         # Task 10. The three disjuncts of § Validation's *Correction can be
         # applied*: no `null_test` is declared at all, its `shuffle` names no
@@ -5097,7 +5101,6 @@ def _check_sweep(
         # carry a p-value from). `contrasts.crossed_group_axes` is the same
         # expression the pairing derivation above already reads, so this
         # cannot disagree with it about which comparisons are unpaired.
-        null_test = (doc.get("statistics") or {}).get("null_test")
         declared_null_test = isinstance(null_test, dict) and bool(null_test)
         shuffle = null_test.get("shuffle") if isinstance(null_test, dict) else None
         crossed_by_any_comparison: set[str] = set()
@@ -5129,7 +5132,6 @@ def _check_sweep(
                 f"`fdr_bh` adjusts p-values, and {reason} — every `ci95_corrected` will "
                 "be null. Use `holm` or `bonferroni`, whose corrections are interval-shaped",
             )
-    null_test = (doc.get("statistics") or {}).get("null_test")
     if comparisons > 0 and isinstance(null_test, dict) and null_test:
         # `W-STATS-RESAMPLE-FAMILY`'s twin: Holm's tightest level is still α/m at
         # rank 1, and a permutation p-value is only as fine-grained as `1/(n+1)` —

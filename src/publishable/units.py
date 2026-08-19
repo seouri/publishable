@@ -2586,12 +2586,16 @@ def null_test_level(
     that is not also a declared attribute matches nobody's attributes, so every
     unit would render `no value`, every cluster would read constant, and this
     would answer a confident `whole_cluster` for a roster it never actually
-    examined — the exact fail-open a review caught end to end. The caller,
-    `validate._check_null_test`, enforces the restriction by construction: it
-    calls this only when `shuffle in declared` (never when `shuffle` is an
-    axis-only name), and refuses the axis-plus-`cluster_by` combination outright
-    under `E-STATS-NULLTEST-LEVEL` rather than ever passing a value here that
-    is outside this function's domain.
+    examined — the exact fail-open a review caught end to end. Two callers now
+    reach this function — `validate._check_null_test` and `cli.command_run`
+    (task 20's per-condition null) — and neither passes an axis-only name:
+    `validate` calls this only when `shuffle in declared` and refuses the
+    axis-plus-`cluster_by` combination outright under `E-STATS-NULLTEST-LEVEL`;
+    `cli` is safe by a different route — an axis-only name with no `cluster_by`
+    returns `("rows", None)` before any attribute is read, and axis-only WITH
+    `cluster_by` is the same combination `validate` already refused before any
+    `run` reaches this call. Neither caller re-derives the restriction here;
+    both rest on `validate`'s own refusal.
     """
     if not cluster_by:
         return "rows", None

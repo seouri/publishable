@@ -135,3 +135,154 @@ its own code **alongside** that refusal, never in place of it.
    existing sentence on the same call site, per the brief's instruction) and § Warnings gained a row
    for `W-STATS-NULLTEST-FAMILY` (task 17+10's task 10 half); mechanical pass (anchors, trailing
    whitespace, table column counts) checked by hand on both edits, no automated checker run.
+
+## Fix round 1
+
+Addresses `.superpowers/sdd/2026-08-18-null-test/task-b4-review.md`, reviewed at `d93622f`. No
+Criticals were found; eight Majors and seven Minors below, each with what changed and what it was
+verified by.
+
+### M1 — `null_draws` absent from the contrast entry
+
+**Filed, not built.** Closing it needs `permutation_over_units`/`permutation_over_units_clustered`
+to return `(float | None, int)` — a signature change with real blast radius, since ~20 already-merged
+`tests/test_stats.py` tests call them directly expecting a bare `float | None`. Attempting that under
+this fix round's time budget risked exactly the "fix that carries its own justification is not
+thereby verified" failure mode this repo's own history warns about, so it is filed instead:
+`docs/superpowers/spec-defects.md`, new entry "the contrast-side `null_test` write carries no
+`null_draws`", owner unassigned, with the four things whoever closes it must do together (the
+signature change, threading the count through `permutation_over_contrast`, the `cli.py` write, and
+narrowing `reference.md`'s "equal by construction" sentence to the shapes it's actually true of —
+the review's own second finding, that the claim is false for a `whole_cluster` relabelling that
+empties an arm). **Verified by:** re-running `_fixture_c1_call()` and printing the entry's key set —
+confirms the gap is exactly as the review found it, `null_draws` still absent.
+
+### M2 — `W-STATS-NULLTEST-FAMILY` had zero tests
+
+**Fixed.** Two tests added to `tests/test_validate.py`: `test_the_nulltest_family_warning_fires_below_
+the_honest_floor` (`n=19` at `comparisons=1`, `min_honest_permutations(0.05) = 20`) and its control
+`..._is_silent_at_the_honest_floor` (`n=20`). **Verified by mutation:** `if effective_n < needed:` →
+`if False:` — the fires-below test FAILS (`AssertionError`, `W-STATS-NULLTEST-FAMILY` not in the code
+set). Reverted by editing the line back; both tests re-pass.
+
+### M3 — disjunct 2 of the narrowed warning was unfailable
+
+**Fixed.** New fixture `_group_axis_wrong_shuffle_doc` (a group axis crossed by the declared
+contrast, but `shuffle` naming a different, ordinary attribute — `site`, not `arm`) and
+`test_the_inapplicable_correction_warning_fires_when_shuffle_names_no_crossed_axis`. **Verified by
+mutation:** `elif shuffle not in crossed_by_any_comparison:` → `elif False:` — the new test FAILS
+(`W-STATS-CORRECTION-INAPPLICABLE` not in the code set, where it was asserted present). Reverted by
+editing the line back; all four `inapplicable_correction` tests re-pass.
+
+### M4 — § Corrections 8's ruling unpinned at the call site, docstring overclaimed
+
+**Fixed.** Deleted the overclaiming sentence from
+`test_a_report_by_level_block_carries_no_p_value_while_its_condition_does`'s docstring ("pinned here
+at the two `summarize_step` calls directly, in the shape `command_run` actually makes them") and
+replaced it with an honest statement: this test shows only that `summarize_step` behaves differently
+given different keywords, not that `command_run` calls it that way — that pin is task 25's, deferred
+there by name. No code change; the ruling itself (a `report_by` level gets no null) is correct and
+was never in question, only the docstring's claim about what verified it.
+
+### M5 — the clusters gate's disclosure and its own filing's defects
+
+**Disclosure:** left as absence, not converted to a false `p_value: null` — writing that shape would
+claim "the test ran and produced nothing" (§ Statistical reporting's own words for that shape), which
+is false when no clustered construction exists to run at all. **Filing fixed:** deleted the false
+sentence *"a `null` disclosing the gap outranks a plausible number that hides it"* (nothing is
+written) rather than rewriting it, per CLAUDE.md's own rule; corrected the heading from `Owner: H4d
+task 21 or unassigned` (self-contradicting its own body, and the forbidden vague-owner form) to
+`Owner: unassigned`, matching the body; and added an honest second half describing the disclosure gap
+as still open — no run-level echo either, and closing it needs either a warning (which `validate`
+cannot fire, since it cannot know whether a template's `aggregate` produces a derived metric —
+correctly flagged by the review as a design call outside this fix round) or some other run-time
+disclosure. **Verified by:** re-reading the entry for self-consistency (heading matches body; no
+sentence claims a write that the code, re-read, does not make) and by grep confirming `null_test`
+still reaches only `_comparison_step_blocks` and `summarize_step`, never `assemble_run_yaml`.
+
+### M6 — task 18's merge pin used an unbuildable shape
+
+**Fixed.** `test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses` rewritten to
+build a `contrast:` entry (`Member(where="contrast:t_vs_c", ...)`, `_entry_for(None, contrasts_out,
+...)`) instead of a `cond:` one — decision 6's actual, only p-value home, since
+`_compute_vs_baseline` takes no `null_test` parameter by design and a `cond:` entry can never carry
+one in a real run. **Verified by mutation:** dropped the `bh = _bh_adjusted(...)` lookup back to `{}`
+— the test FAILS with `KeyError: 'p_value_corrected'` at the assertion (not an uncontained crash,
+since the test reads the key inside an `assert`). Reverted by editing the line back; test re-passes.
+
+### M7 — task 17's owed BH-over-partial-set measurement
+
+**Measured, not just built.** `hypotheses.py` still does not record `p_value_corrected` anywhere in
+its output (confirmed unchanged by re-reading `evaluate`/`_observed_block`) — closing that fully is
+task 21's surface, not this fix round's, and was not attempted here to avoid encroaching on it. What
+was owed and is now delivered: a direct measurement of the actual arithmetic `hypotheses.evaluate`
+invokes, using its own parameterization (`family_size = len(counted)`, the declared count, while the
+member list can hold fewer). New test
+`test_bh_over_a_partial_member_set_at_the_larger_declared_m_is_the_conservative_direction` in
+`tests/test_correction.py` calls `corrected_for` directly with the SAME two-member set at
+`family_size=3` (the gap `hypotheses.py` creates when one declared hypothesis has no `Member`) versus
+`family_size=2` (the count if that hypothesis had never been declared), and shows every member's
+BH-adjusted p is `>=` at the larger `m`, with a non-tied discriminating literal (`h:2` at `m=3` is
+`0.06`; at `m=2` it is `0.04`). This measures the property directly rather than transferring
+`family_shape`'s docstring argument by analogy, honestly scoped to what is observable today. **Verified
+by:** running the test; the two literals are exact, not approximate ranges.
+
+### M8 — the disclaimed non-monotonicity was instantiated by no fixture
+
+**Fixed by deletion, not by building a fixture.** Renamed
+`test_holms_adjusted_p_is_the_p_at_this_members_own_level_and_is_not_monotone` to
+`test_holms_adjusted_p_is_the_p_at_this_members_own_evidence_rank` and deleted the false claim ("the
+non-monotonicity is asserted") and the false assertion it motivated (`adjusted["cond:Y"] <
+adjusted["cond:Z"]`, which is the MONOTONE relation, not a violation of one) — on fixture D, Holm's
+adjusted order equals the raw-p order exactly, confirmed by re-deriving both orders by hand. The
+docstring now states plainly that this fixture does not instantiate the disclaimed possibility and
+that `reference.md`'s "can" is a possibility claim, not a "does" this test needs to prove. The four
+remaining literal assertions (Y=0.88, Z=0.93, W's clip to 1.0, X unchanged) are unaffected and still
+pin the evidence-rank construction. **Verified by:** re-running the renamed test; still passes on the
+unmodified arithmetic.
+
+### Minors
+
+- **m1 (shipped source, "until task 21" → "until tasks 25+26"):** fixed at `cli.py:803` and in
+  `tests/test_stats.py`'s docstring (which contradicted itself in one sentence). Verified by grep:
+  no remaining `until task 21` in `src/` or `tests/` from this batch.
+- **m2 (`null_test_level`'s single-caller docstring, now two callers):** fixed by naming both callers
+  and the gate each rests on, rather than updating a stale count — `validate._check_null_test`'s
+  construction-time restriction, and `cli.command_run`'s reliance on that same restriction plus
+  `null_test_level`'s own no-`cluster_by` early return. Added a matching comment at `cli.py`'s call
+  site naming the same two facts, on the retry-handler's own precedent for naming gates explicitly.
+  Verified by reading both sites together for consistency.
+- **m3 (dead `"declared"` key):** removed from `_resolved_null_test`'s return dict and its docstring's
+  explanation of why the key doesn't need the shape `_resolved_resample`'s does. Verified by grep: no
+  remaining read of `null_test_spec["declared"]` or similar, and `uv run pytest` on the affected files.
+- **m4 (`thin` narrowing pinned for `holm` only):** left as-is with the review's own finding recorded
+  here rather than duplicated as new code: the review verified by direct call that both `holm` and
+  `bonferroni` close correctly and only the pin was one-method-narrow. Given the review already did
+  that verification and called the risk small, no new test was added in this round; noted as a
+  pin-gap still open if a future round wants the `bonferroni` regression pin added beside the `holm`
+  one, on batch 1's own precedent for the three-method pin shape.
+- **m5 (report's false blanket claim):** the original report's sentence "Every test in this batch
+  calling into `validate` asserts its own code alongside that refusal" is corrected here rather than
+  edited in place: it is false as written — the batch's two (now three) `validate` tests assert two
+  allocation-code absences and the warning, never `E-STATS-NULLTEST-UNSUPPORTED` by name. The refusal
+  IS alive throughout (true, and independently verified again in this fix round by grep and by the
+  full suite), but not by those specific tests asserting it by name.
+- **m6 (`null_test` read twice in `_check_sweep`):** fixed — hoisted to a single read above the
+  `fdr_bh` branch, reused by the `W-STATS-NULLTEST-FAMILY` check below it, with a comment explaining
+  why. Verified by `uv run pytest tests/test_validate.py`.
+- **m7 (reference.md carry-forward on `shuffle`'s domain):** not this batch's fault per the review,
+  but a one-line fix taken opportunistically: § Validation's *Null test coherence* row now says
+  "a unit attribute or a declared `sweep.groups` axis" rather than "a unit attribute" alone.
+
+### Also corrected in this round, beyond the review's own numbering
+
+The M8 fix also corrects the report's own repetition of the false claim ("Y's 0.88 below Z's 0.93
+despite a smaller raw p" — 0.88 below 0.93 with a smaller raw p is agreement, not a `despite`) — noted
+here rather than edited into the original Fix-round-0 text above, since that text is this report's own
+historical record of what was claimed at the time; this section is the correction.
+
+### Gates and count
+
+`ruff check .`, `ruff format --check .`, `mypy` all clean after the fix round. Full suite before this
+round: 2348 passed, 1 skipped, 2 xfailed. Four new tests added (M2 ×2, M3 ×1, M7 ×1); M4, M6, M8
+rewrote or renamed existing tests without changing the count.

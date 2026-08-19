@@ -1368,15 +1368,18 @@ def test_fdr_bh_leaves_every_corrected_interval_null_by_design():
     assert all(v["p_value_corrected"] is not None for v in fields.values())
 
 
-def test_holms_adjusted_p_is_the_p_at_this_members_own_level_and_is_not_monotone():
-    """Decision 2. Holm's level is α/(m − i + 1) at the EVIDENCE rank, so the p at
-    that level is `p × (m − i + 1)`, clipped at 1.
+def test_holms_adjusted_p_is_the_p_at_this_members_own_evidence_rank():
+    """Decision 2. Holm's level is α/(m − i + 1) at the EVIDENCE rank, not the
+    p-rank, so the p at that level is `p × (m − i + 1)`, clipped at 1 — computed
+    from `rank_family`'s evidence ordering (Y=1, Z=2, W=3, X=4 on this fixture),
+    never from sorting the raw p-values.
 
-    **The non-monotonicity is asserted, not merely tolerated**: Y's adjusted 0.88
-    sits below Z's 0.93 while Y's raw p is smaller — the evidence ranking showing
-    through. A later slice "fixing" that by ranking Holm on p would reintroduce
-    the two-orderings problem decision 1 avoids, and this assertion is what would
-    fail if it did.
+    On fixture D the adjusted order happens to equal the raw-p order — X < Y <
+    Z < W both ways — so this fixture does not exhibit `reference.md`'s
+    disclaimed possibility that "a member with a smaller raw p can carry a
+    larger adjusted one." That inversion is a real property of the CONSTRUCTION
+    (a `reference.md` "can", not a "does"), not one this fixture happens to
+    instantiate, and no claim of non-monotonicity is made here.
 
     W is where the clip is asserted: 0.9 × 2 = 1.8."""
     fields = corrected_for(_fixture_d(), "holm", 4, {"comparisons": 4, "metrics": 1})
@@ -1385,7 +1388,6 @@ def test_holms_adjusted_p_is_the_p_at_this_members_own_level_and_is_not_monotone
     assert adjusted["cond:Z"] == pytest.approx(0.9299999999999999)
     assert adjusted["cond:W"] == pytest.approx(1.0)
     assert adjusted["cond:X"] == pytest.approx(0.0001999600079984003)
-    assert adjusted["cond:Y"] < adjusted["cond:Z"]
 
 
 def test_bonferroni_reports_the_p_at_alpha_over_m_for_every_member():
@@ -1476,3 +1478,63 @@ def test_a_p_only_member_does_not_report_a_thin_correction():
     fields = corrected_for(members, "holm", 2, {"comparisons": 2, "metrics": 1})
     assert fields[("cond:1", "s", "m")]["thin"] is False
     assert fields[("cond:1", "s", "m")]["ci95_corrected"] is None
+
+
+def test_bh_over_a_partial_member_set_at_the_larger_declared_m_is_the_conservative_direction():
+    """Task 17's owed measurement, made directly against `corrected_for` rather
+    than transferred as an argument from `family_shape`'s docstring.
+
+    `hypotheses.evaluate` calls `corrected_for(family_members_, method, size,
+    {"hypotheses": size})` where `size = len(counted)` is the DECLARED
+    confirmatory-hypothesis count and `family_members_` drops any counted
+    hypothesis with no `Member` — so `m` (the family size argument) can be
+    LARGER than `k` (the number of members `_bh_adjusted` actually sees). This
+    measures that combination directly: three p-only members, called once at
+    `family_size=3` (one hypothesis declared with no resolvable `Member`, the
+    real `hypotheses.py` shape) and once at `family_size=len(members) == 3`
+    (no gap) versus a SEPARATE two-member call at `family_size=2` — the
+    smaller `m` a same-count family would use if the third hypothesis had
+    never been declared at all.
+
+    BH's own arithmetic (`m/i × p`, suffix-min) is monotone increasing in `m`
+    for a fixed `i`, so every member's adjusted value at `m=3` must be >= its
+    value at `m=2` for the same two members — the conservative direction
+    `family_shape`'s docstring names for the sweep family, measured here for
+    the case `hypotheses.py` actually creates rather than asserted by
+    analogy."""
+    two_of_the_three = [
+        Member(
+            where="h:1",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=0,
+            p_value=0.01,
+        ),
+        Member(
+            where="h:2",
+            step="s",
+            metric="m",
+            delta=0.1,
+            ci95=None,
+            pool=None,
+            diffs=None,
+            declaration_index=1,
+            p_value=0.04,
+        ),
+    ]
+    at_declared_three = corrected_for(two_of_the_three, "fdr_bh", 3, {"hypotheses": 3})
+    at_present_two = corrected_for(two_of_the_three, "fdr_bh", 2, {"hypotheses": 2})
+    for key in (("h:1", "s", "m"), ("h:2", "s", "m")):
+        larger_m = at_declared_three[key]["p_value_corrected"]
+        smaller_m = at_present_two[key]["p_value_corrected"]
+        assert larger_m >= smaller_m
+    # The discriminating literal: h:2 at m=3 is `min(1, 3/2 × 0.04) = 0.06`,
+    # strictly above its m=2 value `min(1, 2/2 × 0.04) = 0.04` — not merely
+    # `>=` by a tie, which a family_size that silently did nothing could also
+    # produce.
+    assert at_declared_three[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.06)
+    assert at_present_two[("h:2", "s", "m")]["p_value_corrected"] == pytest.approx(0.04)

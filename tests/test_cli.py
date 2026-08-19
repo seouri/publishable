@@ -12399,12 +12399,19 @@ def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
     that holds the metric. Both halves are asserted, because a key produced and
     never merged is the failure this test exists to catch.
 
+    **The `contrast:` shape, not `cond:`** — decision 6 makes a declared
+    `statistics.contrasts` entry the ONLY p-value home that joins the
+    correction family; `_compute_vs_baseline` takes no `null_test` parameter at
+    all (by design, since every `vs_baseline` comparison is paired), so a
+    `cond:` entry can never carry a `p_value` in a real run. A pin built on
+    that shape would be a pin against a proxy production cannot construct.
+
     `ci95_corrected` stays `null` by design and is asserted as such beside the
-    adjusted p — "reports nothing" and "reports only the p" are the two states this
-    method has been in, and only the second is correct."""
-    vs_baseline = {1: {"s": {"m": {"delta": 0.4, "p_value": 0.02}}}}
+    adjusted p — "reports nothing" and "reports only the p" are the two states
+    this method has been in, and only the second is correct."""
+    contrasts_out = [{"id": "t_vs_c", "s": {"m": {"delta": 0.4, "p_value": 0.02}}}]
     member = Member(
-        where="cond:1",
+        where="contrast:t_vs_c",
         step="s",
         metric="m",
         delta=0.4,
@@ -12417,12 +12424,12 @@ def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
     fields = corrected_fields([member], "fdr_bh")
     assert fields, "corrected_fields produced nothing to merge"
     for (where_id, step_name, metric_key), values in fields.items():
-        entry = _entry_for(vs_baseline, None, where_id, step_name, metric_key)
+        entry = _entry_for(None, contrasts_out, where_id, step_name, metric_key)
         assert entry is not None
         values = dict(values)
         assert values.pop("thin") is False
         entry.update(values)
-    entry = vs_baseline[1]["s"]["m"]
+    entry = contrasts_out[0]["s"]["m"]
     assert entry["p_value_corrected"] == pytest.approx(0.02)
     assert entry["ci95_corrected"] is None
     assert entry["correction"] == "fdr_bh"

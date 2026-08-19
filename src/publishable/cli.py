@@ -800,7 +800,7 @@ def _make_null_fn(
     Module-level, not a nested `def` closed over `command_run`'s locals — the
     earlier shape, moved out so a test can build and call this closure
     directly rather than only through a `run` no config can reach yet
-    (`E-STATS-NULLTEST-UNSUPPORTED` gates every declaration until task 21).
+    (`E-STATS-NULLTEST-UNSUPPORTED` gates every declaration until tasks 25+26).
     `aggregate_where` therefore arrives as a parameter rather than a captured
     name.
     """
@@ -1819,12 +1819,15 @@ def _resolved_null_test(doc: dict[str, Any]) -> dict[str, Any] | None:
     """`statistics.null_test` with every default filled in, resolved once —
     `_resolved_resample`'s shape, for the block this task gives a p-value home.
 
-    `None`, not a `declared: False` dict, when nothing is declared: every
+    `None` when nothing is declared, never a `declared: False` dict — every
     caller below gates on `null_test is not None`, so "no null test declared"
     and "this caller has not been taught about null tests" collapse to one
-    check rather than two — the direct call sites in the test suite take no
-    edit with no behavioural content, the same reasoning `weights`, `strata`
-    and `clusters` are already defaulted for.
+    check rather than two, and the returned dict itself carries no `declared`
+    key: unlike `_resolved_resample`'s twin (which distinguishes an explicit
+    `n: 2000` from an undeclared block that resolves to the same default),
+    there is no shape here that resolves to a truthy dict and still needs to
+    say "but nothing was actually declared" — a `None` return already says
+    that.
 
     **`.get("null_test") or {}`, never `.get("null_test", …)`**: `materialize.py`
     writes no `null_test` key at all and a hand-written config may write
@@ -1846,7 +1849,6 @@ def _resolved_null_test(doc: dict[str, Any]) -> dict[str, Any] | None:
         "n": n if isinstance(n, int) and not isinstance(n, bool) else 5000,
         "shuffle": shuffle if isinstance(shuffle, str) and shuffle else None,
         "level": None,
-        "declared": bool(declared),
     }
 
 
@@ -2464,6 +2466,16 @@ def command_run(config_path: Path) -> int:
             # the one place both the declaration and the roster are in scope.
             null_test_spec = _resolved_null_test(doc)
             if null_test_spec is not None and null_test_spec["shuffle"] is not None:
+                # `null_test_level`'s domain is a roster ATTRIBUTE, never a bare
+                # `sweep.groups` axis name — passing an axis-only name would
+                # fail open (every unit renders "no value", every cluster reads
+                # constant). This call is safe without re-deriving that check:
+                # `validate._check_null_test` already refuses an axis-only
+                # `shuffle` beside a declared `cluster_by` (`E-STATS-NULLTEST-
+                # LEVEL`), and `validate` gates every `run` this call executes
+                # inside of. An axis-only name with no `cluster_by` is also
+                # safe on its own — `null_test_level` returns `("rows", None)`
+                # before reading any attribute when `cluster_by` is falsy.
                 level, _ = null_test_level(eval_roster, cluster_by, null_test_spec["shuffle"])
                 null_test_spec["level"] = level
             # The per-condition derived-metric home (task 20) is the OTHER
