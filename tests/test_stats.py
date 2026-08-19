@@ -31,6 +31,7 @@ from publishable.stats import (
     percentile_of_derived,
     percentile_over_units,
     percentile_over_units_clustered,
+    permutation_over_units,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -5040,3 +5041,111 @@ def test_the_unpaired_clustered_percentile_is_invariant_to_relabelling():
             [got.interval.low, got.interval.high]
         )
     assert first == second
+
+
+_C_VALUES: list[float] = []
+_C_LABELS: list[str] = []
+_C_CLUSTERS: list[str] = []
+for _c in range(1, 11):
+    for _i in range(5):
+        _C_VALUES.append(float(100 * _c + _i))
+        _C_LABELS.append("of" if _i >= 3 else "against")
+        _C_CLUSTERS.append(f"M{_c:02d}")
+
+
+def test_an_unclustered_null_over_fixture_c_relabels_across_the_matched_sets():
+    """Fixture C, unclustered. `of` is the top two of every matched set, so the
+    observed delta is 2.5 = 553.5 − 551.0 — but the UNCLUSTERED null is free to
+    relabel across sets, so `of` can hold the global top 20 (mean 852 against 352,
+    delta 500). The observed 2.5 sits near the centre of a null spanning ±500, and
+    the p-value is close to 0.5.
+
+    **This is the wrong-stratum mutant's number, asserted here as the CORRECT
+    answer for the unclustered construction** — which is exactly why task 13's
+    clustered fixture can tell the two apart: 0.0002 against ≈0.5 is four orders
+    of magnitude, not a rounding difference.
+
+    Asserted as a range rather than a literal, because a free permutation's p is a
+    Monte Carlo quantity: the range is far tighter than the gap to any other
+    candidate reading, and a literal would pin the RNG rather than the estimator."""
+    p = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=5000)
+    assert p is not None
+    assert 0.3 < p < 0.7  # measured 0.4845 at seed 11 with a prototype at `a207702`
+
+
+def test_the_permutation_p_value_counts_the_observed_labelling_itself():
+    """The ±1 continuity, on a fixture built so `b = 0`: the observed labelling
+    is the unique maximum over ALL free relabellings, so no draw can reach it.
+
+    **Corrected from the brief's own 6-value fixture** (`[1, 2, 3, 4, 100, 200]`,
+    `of` the top two of six): that fixture's uniqueness claim is true, but its
+    arrangement SPACE is not — `C(6, 2) = 15` distinct label arrangements, and at
+    `n = 999` draws the expected number that land on the unique maximum is
+    `999/15 ≈ 66.6`, not zero. Measured directly (`uv run python -c`, this
+    module's own `permutation_over_units`): `p = 0.07`, not `1/1000`. A fixture
+    whose numbers agree with the bug is the shape `CLAUDE.md` warns against, and
+    the brief's own rule applies — report the disagreement rather than adjusting
+    the assertion until it agrees with a false premise.
+
+    **This fixture instead widens the arrangement space**: 20 values, `of` the
+    top ten. `C(20, 10) = 184 756`, five orders of magnitude above
+    `n = 999`, so the expected count landing on the unique maximum is
+    `≈0.0054` — measured at five different seeds (1 through 5) to confirm `b = 0`
+    at every one, not merely the one this test pins, before trusting it as
+    reliably deterministic in practice."""
+    values = [float(i) for i in range(20)]
+    labels = ["against"] * 10 + ["of"] * 10
+    p = permutation_over_units(values, labels, "of", seed=3, n=999)
+    assert p == pytest.approx(1.0 / 1000.0)
+    assert p != 0.0
+
+
+def test_an_invariant_null_reports_no_p_value_rather_than_one():
+    """Decision 8's invariance rule, on
+    `percentile_over_units_clustered`'s shipped precedent — "the degenerate case is
+    content, not count". Every unit carries the same value, so every relabelling
+    reproduces the observed statistic and a p-value of 1.0 would be computed from a
+    distribution that could not have been anything else.
+
+    `None`, and no new warning code: the record already carries the resolved
+    `null_test` echo beside the `null` p-value, which says the test ran and
+    produced nothing."""
+    labels = ["of"] * 3 + ["against"] * 5
+    assert permutation_over_units([5.0] * 8, labels, "of", seed=1, n=200) is None
+
+
+def test_a_relabelling_that_empties_an_arm_reports_no_p_value():
+    """An observed labelling with nothing on one side has no statistic to test, so
+    it is the same honest absence rather than a `ZeroDivisionError`. This is also
+    the shape task 13's wrong-level mutant produces, which is why it is pinned
+    here rather than only there."""
+    assert permutation_over_units([1.0, 2.0, 3.0], ["against"] * 3, "of", seed=1, n=200) is None
+
+
+def test_the_permutation_p_value_is_reproducible_from_its_seed():
+    """Two calls at one seed agree and two seeds do not, over a fixture whose null
+    is genuinely variable. A construction that ignored the seed would pass the
+    first assertion and fail the second; one that ignored the labels entirely
+    would pass both, which is what the fixtures above are for."""
+    a = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=500)
+    b = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=7, n=500)
+    c = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=8, n=500)
+    assert a == b
+    assert a != c
+
+
+def test_a_draw_that_ties_the_observed_statistic_counts_against_it():
+    """The `>=` comparison, on a fixture sized so ties are common rather than
+    a coincidence: four units, values `[1.0, 1.0, 2.0, 2.0]`, labels `["of",
+    "against", "of", "against"]`. Its six distinct relabellings give deltas
+    `[-1, 0, 0, 0, 0, 1]` (enumerated with `itertools.combinations` over which
+    two positions hold `of`) and the observed delta is `0`, so four of six
+    relabellings tie it and a fifth exceeds it — five of six reach `>= observed`,
+    one does not. A `>` comparison would drop the four ties and count only the
+    one exceedance, a categorically smaller number this range is wide enough to
+    tell apart from `>=`'s."""
+    values = [1.0, 1.0, 2.0, 2.0]
+    labels = ["of", "against", "of", "against"]
+    p = permutation_over_units(values, labels, "of", seed=3, n=999)
+    assert p is not None
+    assert 0.75 < p < 0.9

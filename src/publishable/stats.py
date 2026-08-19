@@ -867,6 +867,88 @@ def min_honest_permutations(level: float = 0.05) -> int:
     return math.floor(1.0 / level)
 
 
+def _label_delta(values: Sequence[float], labels: Sequence[str], of_level: str) -> float | None:
+    """The statistic a permutation null is built for: the mean over the units
+    labelled `of_level` minus the mean over the rest.
+
+    One expression, called for the observed labelling and for every draw, so the
+    `>=` comparison cannot be against a differently computed number. `reference.md`
+    § What isn't a repeat requires the comparison be "against the value the actual
+    run produced" — recomputed here rather than read off a record, so a delta that
+    was rounded, weighted or narrowed elsewhere cannot silently shift the count by
+    one at the identity draw.
+
+    `None` for an empty arm, which is not a delta of zero: `reference.md`
+    § Contrasts refuses that reading one construction over.
+    """
+    of = [v for v, label in zip(values, labels, strict=True) if label == of_level]
+    against = [v for v, label in zip(values, labels, strict=True) if label != of_level]
+    if not of or not against:
+        return None
+    return sum(of) / len(of) - sum(against) / len(against)
+
+
+def permutation_over_units(
+    values: Sequence[float],
+    labels: Sequence[str],
+    of_level: str,
+    seed: int,
+    n: int = 5000,
+) -> float | None:
+    """The permutation p-value for a label's effect, over rows.
+
+    `reference.md` § What isn't a repeat: a `null_test` "relabels units and
+    recomputes the metric", and "the permutation test compares the null it builds
+    against the value the actual run produced". So each draw is one relabelling of
+    `labels` — the multiset of labels is held fixed, which is what makes the arm
+    sizes constant across draws and the null a null about the LABEL rather than
+    about the design — and the statistic is recomputed from it.
+
+    **The estimator is `(1 + #{T >= T_obs}) / (n + 1)`, and the +1 is not a
+    rounding choice.** The observed labelling is itself one of the relabellings,
+    so it is counted; `b/n` can return exactly `0.0`, and a permutation test can
+    never legitimately report a probability of zero — it has only ever examined
+    `n` of them. The `>=` is deliberate too: a draw that ties the observed
+    statistic is evidence against the observed being extreme, so counting only
+    strict exceedances would report a smaller p than the evidence supports.
+
+    `None`, never a number, in three states, and each is an honest absence rather
+    than a failure: an arm the observed labelling left empty (no statistic to
+    test), fewer than two values (nothing to relabel), and a null whose every draw
+    reproduces the observed statistic. The last is decision 8 and it follows
+    `percentile_over_units_clustered`'s shipped rule that "the degenerate case is
+    content, not count" — a p-value of 1.0 from a distribution that could not have
+    been anything else is a number with no construction behind it. The record says
+    so by carrying the resolved `null_test` echo beside the `null`, exactly as
+    `ci95: null` beside a `resample` echo does.
+
+    One seeded `random.Random`, drawn in call order, for the reason every draw in
+    this module is: two identical runs must agree, and a generator taken from the
+    global state would make the p-value depend on what ran before it.
+    """
+    if len(values) < 2:
+        return None
+    observed = _label_delta(values, labels, of_level)
+    if observed is None:
+        return None
+    rng = random.Random(seed)
+    pool = list(labels)
+    reached = 0
+    varied = False
+    for _ in range(n):
+        rng.shuffle(pool)
+        drawn = _label_delta(values, pool, of_level)
+        if drawn is None:
+            continue
+        if drawn != observed:
+            varied = True
+        if drawn >= observed:
+            reached += 1
+    if not varied:
+        return None
+    return (1 + reached) / (n + 1)
+
+
 def percentile_over_units(
     values: Sequence[float],
     seed: int,
