@@ -13036,7 +13036,17 @@ def test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no
     """Fixture K, end to end: exit non-zero, `E-APPARATUS-FACT-CREDENTIAL` in
     the captured output, no `run.yaml`, and `lab7` in no byte of any file
     under the results directory — asserted on RAW text over a file list
-    proven non-empty first, on `_files_under`'s shape."""
+    proven non-empty first, on `_files_under`'s shape.
+
+    **Fix round 2, item 2.** `check_facts`'s credential-check message
+    interpolates the credential's NAME and the fact's KEY, never the value,
+    so `"E-APPARATUS-FACT-CREDENTIAL" in output` and `_ORDINARY_CRED_VALUE not
+    in output` both hold whether the diagnostic went through
+    `command_run`'s wrapper or escaped raw to `main`'s bare handler —
+    deleting this code from `APPARATUS_CODES` left the suite byte-identical.
+    `_assert_went_through_the_containment_wrapper` is what actually witnesses
+    this code's membership, the same way it does for the other four.
+    """
     site = installed(
         "dist-k9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9_probe_mod:probe"}}
     )
@@ -13053,11 +13063,13 @@ def test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no
         expect_exit=EXIT_WRONG,
     )
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-APPARATUS-FACT-CREDENTIAL" in output
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-CREDENTIAL")
     assert not list(doc["results_dir"].glob("run_*/run.yaml"))
 
     swept = _files_under(doc["results_dir"])
-    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
     for path in swept:
         assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
 
@@ -13091,7 +13103,9 @@ def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
     assert not list(doc["results_dir"].glob("run_*/run.yaml"))
 
     swept = _files_under(doc["results_dir"])
-    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
     for path in swept:
         assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
 
@@ -13386,7 +13400,9 @@ def test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run(
     assert not list(doc["results_dir"].glob("run_*/run.yaml"))
 
     swept = _files_under(doc["results_dir"])
-    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
     for path in swept:
         assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
 
@@ -13406,10 +13422,11 @@ def test_a_probe_s_entry_point_decorator_mismatch_is_a_diagnostic_not_a_tracebac
 ):
     """The sibling dispatch fault, `E-PLUGIN-DECORATOR`: the entry-point key
     and the `@register_probe` argument disagree. Carries no credential, but
-    must reach the SAME dispatch wrapper as `E-PLUGIN-LOAD` rather than
-    escaping to `main` as an unfiltered `ContractError` — a regression here
-    would mean the fix above narrowly patched one code rather than dispatch
-    as a whole.
+    must reach the SAME dispatch wrapper
+    `test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run` pins for
+    `E-PLUGIN-LOAD`, rather than escaping to `main` as an unfiltered
+    `ContractError` — a regression here would mean that fix narrowly patched
+    one code rather than dispatch as a whole.
     """
     site = installed(
         "dist-decomismatch",
@@ -13427,7 +13444,13 @@ def test_a_probe_s_entry_point_decorator_mismatch_is_a_diagnostic_not_a_tracebac
         expect_exit=EXIT_WRONG,
     )
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-PLUGIN-DECORATOR" in output
+    # Not just "the code string is somewhere in the output" — that passes
+    # whether the diagnostic came through the containment wrapper's
+    # `Collector` or escaped raw to `main`'s bare handler, since
+    # `E-PLUGIN-DECORATOR`'s own message names neither `experiment_type` nor
+    # a "problem" count. `_assert_went_through_the_containment_wrapper` is
+    # what actually witnesses the routing this docstring claims.
+    _assert_went_through_the_containment_wrapper(output, "E-PLUGIN-DECORATOR")
     assert not list(doc["results_dir"].glob("run_*/run.yaml"))
 
 
@@ -13628,3 +13651,56 @@ def test_a_summary_scoped_execution_is_probed_once_per_condition_and_runs_last(
         line["condition"]: line["facts"]["model_revision"] for line in summary_round
     }
     assert summary_by_condition == by_key
+
+
+# --- Fix round 2 ---
+
+
+def test_a_probe_dispatch_keyboard_interrupt_propagates_with_no_message(
+    installed, registries, monkeypatch, tmp_path, capsys
+):
+    """Fix round 2, item 1. The dispatch-site carve-out fix round 1 added
+    (`isinstance(exc, KeyboardInterrupt): raise KeyboardInterrupt from None`,
+    inside `command_run`'s wrapper around `apparatus._probe_for`) had no test
+    of its own: the existing `KeyboardInterrupt` pins cover the RESOLVER's
+    `except BaseException` arm
+    (`test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message`)
+    and `observe_once`'s probe-CALL path (`test_apparatus.py`) — neither
+    exercises `_probe_for`'s own dispatch site, so deleting the carve-out
+    there left the full suite green at 2409. A mutation deleting it would
+    fall through to the diagnostic below, report a finding and return
+    `EXIT_WRONG` instead of propagating — this test would then see no
+    `KeyboardInterrupt` at all and fail on `pytest.raises` itself.
+    """
+    import publishable.cli as cli_mod
+
+    # `validate._check_probe` answers from the same metadata scan
+    # `_probe_for` reads — a name no installed distribution registers is
+    # refused before `run` ever reaches the lock, which would make this test
+    # exit at `validate` rather than at dispatch. Registering the name (an
+    # entry point pointing at a module that need not even exist, since
+    # `_probe_for` itself is monkeypatched away below) is what lets the run
+    # reach `command_run`'s dispatch site at all.
+    installed(
+        "dist-ki-dispatch",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "unused_ki_probe_mod:probe"}},
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("dispatch failed near token lab7")
+
+    monkeypatch.setattr(cli_mod.apparatus, "_probe_for", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        run_a_project(
+            tmp_path,
+            capsys=capsys,
+            experiment_type="apparatus_assay",
+            parameters={"instrument": {"model": "m1"}},
+            _local_template=_APPARATUS_ASSAY_TEMPLATE,
+            expect_exit=EXIT_WRONG,
+        )
+    # The re-raised object carries no message — a fresh instance, not the
+    # dispatch call's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()

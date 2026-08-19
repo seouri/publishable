@@ -2462,11 +2462,13 @@ def command_run(config_path: Path) -> int:
                 observer=observer,
             )
         except ContractError as exc:
-            # The one containment site for a probe CALL's raise (dispatch
-            # failures are resolved, and redacted, above — before this `try`
-            # is ever entered): `main`'s own `PublishableError` handler prints
-            # `{exc}` with no collector in scope, so anything reaching it is
-            # un-redacted. Filtered to exactly `apparatus.APPARATUS_CODES` —
+            # The one containment site for a probe CALL's raise (a dispatch
+            # failure is resolved, and redacted, by `apparatus._probe_for`'s
+            # own `try/except` just before `observer` is built — that site
+            # never reaches this `try` at all): `main`'s own `PublishableError`
+            # handler prints `{exc}` with no collector in scope, so anything
+            # reaching it is un-redacted. Filtered to exactly
+            # `apparatus.APPARATUS_CODES` —
             # every other `ContractError` out of this block
             # (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`) keeps escaping
             # exactly as it does today; this slice does not change how core's
