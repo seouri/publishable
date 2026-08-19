@@ -38,14 +38,16 @@ from typing import Any
 # `.report_by`, and `data.units.assign` — are declared at their
 # own key with the one outer type that section gives them.
 # `statistics.resample` and `statistics.null_test` are no longer among them:
-# each is closed one level in, the same way `measurements` is — their fixed
-# keys (`method`, `n`, `stratify_by` for `resample`; `method`, `n`, `shuffle`
-# for `null_test`) are fixed, so leaving either block whole would make a typo
-# among them unreachable by any check. Unlike `measurements`, both are closed
-# before their own wholesale refusal retired (H4a task 12 for `resample`;
-# ahead of H4d's own retirement for `null_test`), not after — see the comment
-# at each one's `LEAF_TYPES` entry for why validating the shape had to precede
-# honouring the values.
+# each is closed one level in, the same way `measurements` is — their keys
+# (`method`, `n`, `stratify_by` for `resample`; `method`, `n`, `shuffle` for
+# `null_test`) are fixed, so leaving either block whole would make a typo
+# among them unreachable by any check. Unlike `measurements`, `resample` was
+# closed before its own wholesale refusal retired (H4a task 12), not after.
+# `null_test` is closed the same way, but its own wholesale refusal has not
+# retired yet — that is H4d task 25's, still ahead — so this is validating the
+# shape ahead of a retirement rather than before one that already happened.
+# See the comment at each one's `LEAF_TYPES` entry for why validating the
+# shape had to precede honouring the values.
 #
 # The table stopping at a key is the end of the line for everything under it:
 # the closure below never descends into a known leaf, and `_check_shape` checks

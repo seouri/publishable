@@ -6180,17 +6180,21 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
     - `E-STATS-NULLTEST-UNITS` — a `null_test` with no `data.units` at all.
     - `E-STATS-NULLTEST-METHOD` — the `method` enum.
     - `E-STATS-NULLTEST-N` — the `n` floor, `stats.min_honest_permutations`.
-    - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` naming neither a declared unit
-      attribute NOR a declared `sweep.groups` axis.
+    - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` that is absent or empty (there is
+      nothing to relabel), OR one naming neither a declared unit attribute NOR a
+      declared `sweep.groups` axis.
     - `E-STATS-NULLTEST-REPORTBY` — a `shuffle` naming a `statistics.report_by`
       attribute.
-    - `E-STATS-NULLTEST-LEVEL` — **reads `roster`**: a `shuffle` that varies
-      within some clusters and not others, so neither a within-cluster nor a
-      whole-cluster null applies.
+    - `E-STATS-NULLTEST-LEVEL` — **reads `roster`** for one of its two findings:
+      a `shuffle` that varies within some clusters and not others, so neither a
+      within-cluster nor a whole-cluster null applies; OR — roster-independent,
+      the declaration alone is enough — a `shuffle` naming a `sweep.groups` axis
+      alongside a declared `cluster_by`, which `null_test_level` cannot derive a
+      level for at all (see its own docstring).
 
-    **One of the six reads `roster`**, and it carries its own `roster is not None`
-    guard rather than leaning on a caller; a check added here must state which side
-    of that line it is on.
+    **Only one call in this function reads `roster`** (`null_test_level`'s), and
+    it carries its own `roster is not None` guard rather than leaning on a
+    caller; a check added here must state which side of that line it is on.
 
     **`shuffle` is checked against `data.units.attributes` UNION the declared
     `sweep.groups` axis names**, and the union is the load-bearing half rather than
@@ -6198,7 +6202,11 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
     correction family, so a check reading `attributes` alone would refuse the one
     shape a `null_test` is declared for. The precedent for admitting an axis name
     beside an attribute name is `units._stratum_groups`, which already does it for
-    `assign`.
+    `assign`. **`null_test_level` itself is never called with an axis name**,
+    though — its domain is a roster attribute, so this function calls it only
+    when `shuffle in declared`, and refuses outright (`E-STATS-NULLTEST-LEVEL`)
+    when `shuffle` is an axis-only name under a declared `cluster_by`, rather
+    than passing a value outside what that function was built to answer.
 
     Every check here presupposes the declaration is a mapping; a scalar or a list
     is `check_envelope`'s `E-CONFIG-TYPE`, and so is a wrong-typed child, because
@@ -6268,7 +6276,27 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
         if isinstance(by, str):
             axes.add(by)
     shuffle = null_test.get("shuffle")
-    if isinstance(shuffle, str) and shuffle and shuffle not in (declared | axes):
+    # `null_test` is declared FOR a relabelling, so an absent or empty `shuffle`
+    # is the block's missing subject — a declaration that permutes nothing and
+    # changes no behavior, the same class of hole task 8 closed one field over
+    # for a missing roster. `reference.md` § Validation's *Null test coherence*
+    # already states "requires `shuffle`"; this is the check behind that row.
+    # Read from the DECLARATION (`None` covers both an absent key and an
+    # explicit `shuffle: null`, which § The one config file treats as
+    # equivalent everywhere else), not from any derived state, so a wrong-typed
+    # `shuffle` (caught by the envelope's `E-CONFIG-TYPE`) is quietly skipped
+    # here rather than double-reported.
+    if shuffle is None or (isinstance(shuffle, str) and not shuffle):
+        c.error(
+            "E-STATS-NULLTEST-SHUFFLE",
+            "statistics.null_test.shuffle",
+            "is unset, so there is nothing to relabel — a declared `null_test` needs "
+            "a unit attribute or a `sweep.groups` axis to permute, or it changes no "
+            "behavior. `data.units.attributes` declares "
+            f"{', '.join(sorted(declared)) or 'none'}; `sweep.groups` declares "
+            f"{', '.join(sorted(axes)) or 'none'}",
+        )
+    elif isinstance(shuffle, str) and shuffle and shuffle not in (declared | axes):
         c.error(
             "E-STATS-NULLTEST-SHUFFLE",
             "statistics.null_test.shuffle",
@@ -6291,13 +6319,43 @@ def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector)
             "the contrast instead",
         )
     cluster_by = ((doc.get("data") or {}).get("units") or {}).get("cluster_by")
-    # The one check here that reads `roster`, guarded on its own rather than on
-    # the no-units exit above having not fired: `data.units` can be declared and
-    # fail to resolve, and `_check_units` owns that finding.
-    if roster is not None and isinstance(shuffle, str) and shuffle in (declared | axes):
+    cluster_declared = isinstance(cluster_by, str) and bool(cluster_by)
+    # `null_test_level`'s domain is a roster ATTRIBUTE: it reads
+    # `unit.attributes.get(shuffle)` per unit, so passing an axis name that is
+    # NOT also a declared attribute reads nothing for anybody — every unit
+    # renders "no value", every cluster reads constant, and the function
+    # returns a confident `whole_cluster` for a roster it never actually
+    # examined. That is the fail-open CLAUDE.md § Answering a question with a
+    # proxy warns about, found in review: a `sweep.groups` axis under a
+    # declared `cluster_by` has no roster-attribute derivation in this build,
+    # so this refuses the combination rather than silently guessing a level —
+    # never calling `null_test_level` with a bare axis name at all.
+    if (
+        cluster_declared
+        and isinstance(shuffle, str)
+        and shuffle in axes
+        and shuffle not in declared
+    ):
+        c.error(
+            "E-STATS-NULLTEST-LEVEL",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, a `sweep.groups` axis, alongside a declared "
+            f"`data.units.cluster_by: {cluster_by}` — an axis carries no per-unit "
+            "attribute value this build can read, so whether the relabelling is "
+            "within-cluster or whole-cluster cannot be derived from the roster at all, "
+            "rather than merely being ambiguous. Shuffle a unit attribute instead, or "
+            "drop `cluster_by` for an axis shuffle",
+        )
+    # The one remaining check here that reads `roster`, guarded on its own
+    # rather than on the no-units exit above having not fired: `data.units` can
+    # be declared and fail to resolve, and `_check_units` owns that finding.
+    # Restricted to `declared` (never `axes`) for the reason above: this is the
+    # only branch that may call `null_test_level`, and it must never do so with
+    # a value outside that function's own documented domain.
+    elif roster is not None and isinstance(shuffle, str) and shuffle in declared:
         try:
             level, witnesses = null_test_level(
-                roster, cluster_by if isinstance(cluster_by, str) else None, shuffle
+                roster, cluster_by if cluster_declared else None, shuffle
             )
         except ContractError:
             # A unit carrying no cluster value (`E-DATA-CLUSTER-UNKNOWN`), which

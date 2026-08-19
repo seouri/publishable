@@ -4269,6 +4269,30 @@ def test_a_shuffle_naming_nothing_declared_is_refused(write_config, tmp_path):
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
 
 
+def test_an_absent_shuffle_is_refused(write_config, tmp_path):
+    """Fix round 1, Major 2. `null_test` is declared FOR a relabelling; an
+    absent `shuffle` is the block's missing subject, and — before this fix —
+    validated clean, so once task 25 retires the wholesale refusal a
+    `{method, n}`-only `null_test` would too, permuting nothing and changing no
+    behavior. `reference.md` § Validation's *Null test coherence* already states
+    "requires `shuffle`"; this is the check behind that row."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc()))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_an_empty_shuffle_is_refused(write_config, tmp_path):
+    """The other half of Major 2: `shuffle: ""` is a declared value, not an
+    absent key, but it names nothing either — before this fix it validated
+    clean the identical way. Asserted separately from the absent case so a fix
+    that only guards `is None` cannot pass this one vacuously."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(shuffle="")))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
 def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
     """**The load-bearing case of this task.** Under decision 6 the group-axis
     contrast is the ONLY p-value home that joins the correction family, so a check
@@ -4296,6 +4320,60 @@ def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
         )
     )
     assert "E-STATS-NULLTEST-SHUFFLE" not in found
+
+
+def test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused(write_config, tmp_path):
+    """Fix round 1, Major 1. `null_test_level` reads `unit.attributes.get(shuffle)`
+    per unit — an axis name that is not also a declared attribute matches nobody's
+    attributes, so every unit silently renders `no value`, every cluster reads
+    constant, and the (unfixed) function answered a confident `whole_cluster` for
+    a roster it never examined. Reviewer's own end-to-end fixture: `arm`'s
+    membership (via `assign: {arm: {method: by_attribute, from: label}}`) is
+    itself ambiguous across `match_set` — `label` varies inside `M07` and is
+    constant inside `M12` — but the fix refuses the axis-plus-`cluster_by`
+    combination outright rather than trying to derive a level for it at all, so
+    this fires regardless of whether the underlying membership happens to be
+    ambiguous, within-cluster, or whole-cluster.
+
+    **The CONTROL is `shuffle: label` on the IDENTICAL roster** — a real unit
+    attribute, so `null_test_level` may run, and it reports the pre-existing
+    ambiguity refusal instead. Without this control the fixture would not tell
+    the axis-domain refusal apart from the ordinary ambiguity one."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,match_set,label\np1,M07,of\np2,M07,against\np3,M12,of\np4,M12,of\n"
+    )
+    axis_doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label", "match_set"],
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute", "from": "label"}},
+            "cluster_by": "match_set",
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["of", "against"]}]},
+        "statistics": {"null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"}},
+    }
+    axis_messages = messages_by_code(write_config(axis_doc))
+    assert "E-STATS-NULLTEST-LEVEL" in axis_messages
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in axis_messages
+    # Distinguishes this refusal from the ordinary ambiguity one below: the
+    # axis-domain message never claims to have read the roster's clustering at
+    # all, and names the axis rather than a pair of witness clusters.
+    assert "axis" in axis_messages["E-STATS-NULLTEST-LEVEL"]
+    assert "cannot be derived" in axis_messages["E-STATS-NULLTEST-LEVEL"]
+
+    attribute_doc = dict(axis_doc)
+    attribute_doc["statistics"] = {
+        "null_test": {"method": "permutation", "n": 5000, "shuffle": "label"}
+    }
+    attribute_messages = messages_by_code(write_config(attribute_doc))
+    assert "E-STATS-NULLTEST-LEVEL" in attribute_messages
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in attribute_messages
+    # The pre-existing ambiguity refusal, unaffected by this fix: it names both
+    # witness clusters rather than an axis.
+    assert "M07" in attribute_messages["E-STATS-NULLTEST-LEVEL"]
+    assert "M12" in attribute_messages["E-STATS-NULLTEST-LEVEL"]
 
 
 def test_a_null_test_with_no_units_is_refused_and_the_shape_faults_still_report(write_config):

@@ -2580,6 +2580,18 @@ def null_test_level(
 
     `rows` with no `cluster_by`: that is the absence of a clustering answer, not
     a third one.
+
+    **`shuffle` must name a roster ATTRIBUTE — never a `sweep.groups` axis
+    name.** `unit.attributes.get(shuffle)` is read per unit here; an axis name
+    that is not also a declared attribute matches nobody's attributes, so every
+    unit would render `no value`, every cluster would read constant, and this
+    would answer a confident `whole_cluster` for a roster it never actually
+    examined — the exact fail-open a review caught end to end. The caller,
+    `validate._check_null_test`, enforces the restriction by construction: it
+    calls this only when `shuffle in declared` (never when `shuffle` is an
+    axis-only name), and refuses the axis-plus-`cluster_by` combination outright
+    under `E-STATS-NULLTEST-LEVEL` rather than ever passing a value here that
+    is outside this function's domain.
     """
     if not cluster_by:
         return "rows", None

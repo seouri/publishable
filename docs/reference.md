@@ -2890,7 +2890,7 @@ Three properties, each a consequence of strata not being conditions. **No execut
 
 `validate` rejects a `report_by` attribute that isn't declared in `data.units.attributes`, and warns when a level would hold fewer units than `limits.min_reported_n` — before the run rather than at disclosure.
 
-**A [`statistics.report_by`](#reporting-strata) level's recorded-column interval is a `t_over_units`
+**A `statistics.report_by` level's recorded-column interval is a `t_over_units`
 one even under a declared [`resample`](#statistical-reporting), and that is a documented limitation
 rather than a gap awaiting a slice.** A level's own metric block is summarized over that level's
 units without the column-resample routing a whole condition's block gets, so a run declaring both
