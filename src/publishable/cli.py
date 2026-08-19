@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable import apparatus
 from publishable.artifacts import ResolverIO, allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
@@ -2391,25 +2392,79 @@ def command_run(config_path: Path) -> int:
             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
             alloc_hash = allocation_hash(alloc_doc)
 
-        results = execute_plan(  # phase 7
-            plan=plan,
-            run_dir=run_dir,
-            input_dir=input_dir,
-            cfgs=cfgs,
-            repeats=repeats,
-            digest=digest,
-            units=eval_roster,
-            max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
-            fold_members=fold_members,
-            arm_members=arm_members_map,
-            holdout_train=(
-                UnitList([u for u in roster if u.key in set(holdout_plan.train)])
-                if holdout_plan is not None and roster is not None
-                else None
-            ),
-            measurements=(units_decl or {}).get("measurements"),
-            credentials=credentials,
-        )
+        # `apparatus_probe` declared on the resolved template — the ordinary
+        # case declares none, and `observer` stays `None` so every downstream
+        # call site (the run-start round just below, and `execute_plan`'s
+        # per-execution round, task 10) is a no-op guarded on that, not on a
+        # property of `Observer` itself. Resolved through the same three-step
+        # dispatch a resolver name goes through (`apparatus._probe_for`) —
+        # deliberately OUTSIDE the `try` below, so a dispatch failure
+        # (`E-PROBE-UNKNOWN`, `E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`) escapes to
+        # `main` exactly as it does today, rather than being filtered by
+        # `apparatus.APPARATUS_CODES`, which names only the five
+        # `E-APPARATUS-*` codes a probe CALL can raise.
+        declared_probe = getattr(run_template, "apparatus_probe", None)
+        observer: apparatus.Observer | None = None
+        if isinstance(declared_probe, str) and declared_probe:
+            observer = apparatus.Observer(
+                probe_name=declared_probe,
+                probe=apparatus._probe_for(declared_probe),
+                declared_facts=list(getattr(run_template, "apparatus_facts", None) or []),
+                conditions=conditions,
+                cfgs=cfgs,
+                run_dir=run_dir,
+                credentials=credentials,
+            )
+
+        try:
+            # The run-start round: one probe call per resolved condition,
+            # before the first execution (Decision 2). `sweep.yaml` and
+            # `allocation.json` are already on disk; `run.yaml` is not, so a
+            # probe failure here leaves the same shape any other pre-`run.yaml`
+            # failure already leaves — no `run.yaml`, everything before it.
+            if observer is not None:
+                observer.observe_round(phase="run_start", condition_index=None)
+            results = execute_plan(  # phase 7
+                plan=plan,
+                run_dir=run_dir,
+                input_dir=input_dir,
+                cfgs=cfgs,
+                repeats=repeats,
+                digest=digest,
+                units=eval_roster,
+                max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+                fold_members=fold_members,
+                arm_members=arm_members_map,
+                holdout_train=(
+                    UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                    if holdout_plan is not None and roster is not None
+                    else None
+                ),
+                measurements=(units_decl or {}).get("measurements"),
+                credentials=credentials,
+                observer=observer,
+            )
+        except ContractError as exc:
+            # The one containment site for a probe's raise: `main`'s own
+            # `PublishableError` handler prints `{exc}` with no collector in
+            # scope, so anything reaching it is un-redacted. Filtered to
+            # exactly `apparatus.APPARATUS_CODES` — every other `ContractError`
+            # out of this block (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`, a
+            # stray dispatch code) keeps escaping exactly as it does today;
+            # this slice does not change how core's own inconsistencies are
+            # reported.
+            if exc.code not in apparatus.APPARATUS_CODES:
+                raise
+            probe_c = Collector()
+            # A FRESH collector: `c` was already rendered and printed above,
+            # so appending to it would re-print every earlier finding and
+            # inflate the counts line — the roster path's own shape.
+            # `credentials` reused, never recomputed: a second derivation is a
+            # second answer.
+            probe_c.credentials = credentials
+            probe_c.error(exc.code, "experiment_type", str(exc))
+            print(probe_c.render(), file=sys.stderr)
+            return EXIT_WRONG
 
         status = run_status(results)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`

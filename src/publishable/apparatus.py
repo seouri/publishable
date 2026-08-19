@@ -359,3 +359,107 @@ def append_observation(
     }
     with (ledger_dir / "probes.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(line) + "\n")
+
+
+APPARATUS_CODES: frozenset[str] = frozenset(
+    {
+        "E-APPARATUS-RAISED",
+        "E-APPARATUS-RETURN",
+        "E-APPARATUS-FACT-TYPE",
+        "E-APPARATUS-FACT-MISSING",
+        "E-APPARATUS-FACT-CREDENTIAL",
+    }
+)
+"""The five codes `check_facts` and `observe_once` raise, and the exact filter
+`cli.command_run`'s run-start wrapper uses (task 9). Deliberately narrow: the
+three dispatch codes (`E-PROBE-UNKNOWN`, `E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`)
+are outside it, because `validate_config` already answers `E-PROBE-UNKNOWN`
+from the same metadata scan `_probe_for` reads before `command_run` ever
+reaches the lock — reaching the wrapper with a dispatch code would need the
+installed set to change between `validate` and the lock, which no fixture in
+this plan reaches. A member with no test is exactly the shipped-but-unread
+shape this repo has already filed against other code, so the set stays five,
+every one pinned."""
+
+
+class Observer:
+    """One object per `run`, holding everything `observe_round` needs to make
+    a probe call phase-independent: which callable to call, under which cfg,
+    keyed by which condition, written where, and against which credentials.
+
+    `reference.md` § The apparatus core can only observe: an experiment
+    declaring no `apparatus_probe` records nothing, so `command_run` never
+    constructs one in that case — `observer` is `None` and every call site
+    (task 9's run-start round, task 10's per-execution round) is guarded on
+    that, not on some property of this class.
+
+    **Ruling on the ordering `spec-defects.md` left open, since this class is
+    the first caller of both `check_facts` and `append_observation`:**
+    `check_facts` runs BEFORE `append_observation`, every time. A probe
+    returning a value equal to a declared credential is refused by
+    `check_facts` before a single byte reaches `apparatus/probes.jsonl` — the
+    reverse order would put a credential-carrying fact on disk while
+    satisfying every ordering the design states, which is precisely the leak
+    Decision 6 exists to prevent. This closes the OPEN filing naming H7d batch
+    3 as owner; `_observe_one` below is where the order is fixed.
+    """
+
+    def __init__(
+        self,
+        *,
+        probe_name: str,
+        probe: Callable[..., Any],
+        declared_facts: Sequence[str],
+        conditions: Sequence[Any],
+        cfgs: Mapping[int, Any],
+        run_dir: Path,
+        credentials: Mapping[str, str],
+    ) -> None:
+        self.probe_name = probe_name
+        self.probe = probe
+        self.declared_facts = list(declared_facts)
+        self.conditions = list(conditions)
+        self.cfgs = cfgs
+        self.run_dir = run_dir
+        self.credentials = credentials
+        self.observations = Observations()
+
+    def observe_round(self, *, phase: str, condition_index: int | None) -> None:
+        """The phase-independent entry point every caller uses (Decision 2,
+        Decision 3). Given `condition_index=None` — the run-start round (task
+        9) and a condition-less execution (task 10) — this makes one call PER
+        RESOLVED CONDITION, each under that condition's own cfg, never the
+        wide one (`self.cfgs[-1]` is never read here). Given an index, one
+        call, under that condition's cfg.
+        """
+        if condition_index is None:
+            targets = self.conditions
+        else:
+            targets = [c for c in self.conditions if c.index == condition_index]
+        for condition in targets:
+            self._observe_one(phase, condition)
+
+    def _observe_one(self, phase: str, condition: Any) -> None:
+        cfg = self.cfgs[condition.index]
+        returned = observe_once(self.probe, cfg, probe_name=self.probe_name)
+        facts = check_facts(
+            returned,
+            self.declared_facts,
+            probe_name=self.probe_name,
+            credentials=self.credentials,
+        )
+        key = condition_key(condition.index, condition.label)
+        append_observation(
+            self.run_dir,
+            phase=phase,
+            condition=key,
+            probe=self.probe_name,
+            facts=facts,
+        )
+        self.observations.record(key, facts)
+
+    def warn_unanswered(self, c: Collector) -> None:
+        """`W-APPARATUS-UNANSWERED`, delegated to `Observations` — this
+        object's only job here is supplying the declared-facts narrowing
+        (Decision 8) so a caller need not carry it separately."""
+        self.observations.warn_unanswered(c, self.declared_facts)

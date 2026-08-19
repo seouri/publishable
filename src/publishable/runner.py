@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from publishable.apparatus import Observer
 from publishable.artifacts import StepIO
 from publishable.coercion import coerce_scalars
 from publishable.config import Config, SweptAway
@@ -473,6 +474,7 @@ def execute_plan(
     holdout_train: "UnitList | None" = None,
     measurements: dict[str, Any] | None = None,
     credentials: dict[str, str] | None = None,
+    observer: Observer | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 

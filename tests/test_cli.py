@@ -12882,3 +12882,215 @@ def test_a_run_with_no_declared_probe_records_a_null_apparatus_block_and_no_ledg
     ]
     assert run["provenance"]["apparatus"] is None
     assert not (doc["run_dir"] / "apparatus").exists()
+
+
+# --- H7d Part A task 9: the probe at run start ------------------------------
+
+_APPARATUS_ASSAY_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_assay")
+class ApparatusAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+_FIXED_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_SWEPT_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+_APPARATUS_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_cred_assay")
+class ApparatusCredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    apparatus_probe = "h7d_cred_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+_CRED_LEAKING_FACT_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": os.environ["PUBLISHABLE_TEST_TOKEN"]})
+"""
+
+_CRED_LEAKING_RAISE_PROBE_MODULE = """\
+import os
+
+from publishable import register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+    raise RuntimeError(f"could not reach the instrument near vault token {token}")
+"""
+
+# `lab7` is short and ordinary-looking on purpose (Fixture K): a value that
+# LOOKS random would make an exact-value check and a pattern check agree,
+# which is exactly the shape whose mutation could not discriminate (§ The
+# discriminating fixtures, Fixture K).
+_ORDINARY_CRED_VALUE = "lab7"
+
+
+def test_a_declared_probe_is_called_once_per_condition_at_run_start(
+    installed, registries, tmp_path, capsys
+):
+    """The end of the false `apparatus: null`. Two conditions, and the
+    ledger's `run_start` lines are asserted as the exact list of condition
+    keys read back from `sweep.yaml` — not a count, which cannot tell two
+    calls for one condition from one call for each."""
+    site = installed("dist-p9", "1.0", {"publishable.probes": {"h7d_probe": "p9_probe_mod:probe"}})
+    (site / "p9_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    expected_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(expected_keys) == 2, "the fixture must have two conditions"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    run_start_conditions = [line["condition"] for line in ledger if line["phase"] == "run_start"]
+    assert run_start_conditions == expected_keys
+
+
+def test_a_probe_reading_a_swept_parameter_gets_ITS_condition_s_value(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture S. The two conditions' recorded facts must DIFFER and each
+    equal its own swept value. NOT an assertion that `E-STEP-SWEPT-PARAM` was
+    not raised: no marker is present under this design, so that assertion is
+    true of a build that hands the probe nothing at all."""
+    site = installed("dist-s9", "1.0", {"publishable.probes": {"h7d_probe": "s9_probe_mod:probe"}})
+    (site / "s9_probe_mod.py").write_text(_SWEPT_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(set(by_key.values())) == 2, (
+        "the fixture's two conditions must sweep different values"
+    )
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    recorded = {
+        line["condition"]: line["facts"]["model_revision"]
+        for line in ledger
+        if line["phase"] == "run_start"
+    }
+    assert recorded == by_key
+    assert len(set(recorded.values())) == 2
+
+
+def test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no_run_yaml(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture K, end to end: exit non-zero, `E-APPARATUS-FACT-CREDENTIAL` in
+    the captured output, no `run.yaml`, and `lab7` in no byte of any file
+    under the results directory — asserted on RAW text over a file list
+    proven non-empty first, on `_files_under`'s shape."""
+    site = installed(
+        "dist-k9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9_probe_mod:probe"}}
+    )
+    (site / "k9_probe_mod.py").write_text(_CRED_LEAKING_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-FACT-CREDENTIAL" in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture K2, and the pin for the containment mechanism as a whole: exit
+    non-zero, `E-APPARATUS-RAISED` present, `<redacted:PUBLISHABLE_TEST_TOKEN>`
+    present, and `lab7` absent from stdout, from stderr and from every file
+    under the results directory."""
+    site = installed(
+        "dist-k2-9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k2_probe_mod:probe"}}
+    )
+    (site / "k2_probe_mod.py").write_text(_CRED_LEAKING_RAISE_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert _ORDINARY_CRED_VALUE not in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the leak check below would be vacuous"
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path

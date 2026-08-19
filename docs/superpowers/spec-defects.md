@@ -7009,7 +7009,7 @@ the task that touches its code.
 
 **Found by:** the controller, sweeping `Owner:` lines after H4d merged.
 
-## OPEN — `append_observation` writes `facts` verbatim with no ordering ruled against `check_facts` — **Owner: H7d (batch 3)**
+## CLOSED by H7d Part A batch 3 — `append_observation` writes `facts` verbatim with no ordering ruled against `check_facts`
 
 `apparatus.append_observation(run_dir, *, phase, condition, probe, facts)` writes its `facts` argument
 to `apparatus/probes.jsonl` unchecked — it performs no shape, credential, or scalar-type check of its
@@ -7028,6 +7028,8 @@ resolution.
 **Owner:** H7d, batch 3 (the first task that calls both functions from a real `run`). **Found by:**
 batch 2's review, verified by reading `apparatus.py`'s `append_observation` and every Decision in the
 design for an ordering rule against `check_facts` — none exists.
+
+**Ruled:** `apparatus.Observer._observe_one` (task 9) calls `check_facts` before `append_observation`, every time — a probe returning a value equal to a declared credential is refused before a byte reaches `apparatus/probes.jsonl`. Pinned by Fixture K's raw-text-over-the-run-directory assertion. **Closed by:** H7d Part A, batch 3, task 9.
 
 ## OPEN — a fact **key** equal to a credential value is not checked, and reaches a diagnostic via `coerce_scalars`'s `{key!r}` — **Owner: unassigned**
 
