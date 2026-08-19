@@ -155,7 +155,16 @@ def check_facts(
                 "not a `str` — `facts` keys are fact names",
                 code="E-APPARATUS-RETURN",
             )
-    # 2. credentials      → E-APPARATUS-FACT-CREDENTIAL      (task 6)
+    # 2. credentials      → E-APPARATUS-FACT-CREDENTIAL
+    for key, value in facts.items():
+        for cred_name, cred_value in credentials.items():
+            if value == cred_value:
+                raise ContractError(
+                    f"probe `{probe_name}` returned fact `{key}` equal to the value core "
+                    f"read for `{cred_name}` — a fact may not carry a credential's value, "
+                    "so this refuses rather than redacting it into the record",
+                    code="E-APPARATUS-FACT-CREDENTIAL",
+                )
     # 3. scalar walk      → E-APPARATUS-FACT-TYPE
     try:
         checked = coerce_scalars(dict(facts), f"probe `{probe_name}`")

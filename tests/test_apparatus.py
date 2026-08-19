@@ -251,3 +251,46 @@ def test_a_structural_fact_value_is_E_APPARATUS_FACT_TYPE_and_the_message_names_
     assert excinfo.value.code == "E-APPARATUS-FACT-TYPE"
     assert "a-credential-shaped-value-9182736" not in str(excinfo.value)
     assert "list" in str(excinfo.value)
+
+
+def test_a_fact_equal_to_a_declared_credential_value_is_refused():
+    """The value is `lab7`: short, lowercase, ordinary-looking, a whole word.
+    That is the point — a random-looking value makes an exact-value check and a
+    heuristic AGREE, so the mutation below would have two branches that cannot
+    differ."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"operator_note": "lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"})
+    assert excinfo.value.code == "E-APPARATUS-FACT-CREDENTIAL"
+
+
+def test_the_refusal_names_the_variable_and_never_the_value():
+    """A refusal that quoted the value would be the leak the check exists to
+    prevent. Assert `lab7` is absent from the message and the variable's name is
+    present."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"operator_note": "lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"})
+    message = str(excinfo.value)
+    assert "lab7" not in message
+    assert "INSTRUMENT_API_TOKEN" in message
+
+
+def test_a_value_core_never_read_is_not_matched():
+    """The documented limit: a probe reading `os.environ` for a name nothing
+    declared is outside what core saw. The control that keeps the check from
+    being a string-similarity heuristic in disguise."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+
+    returned = Apparatus(facts={"operator_note": "lab7"})
+    checked = check_facts(returned, [], probe_name="p", credentials={})
+    assert checked == {"operator_note": "lab7"}
