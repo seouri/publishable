@@ -5260,6 +5260,151 @@ def test_a_derived_permutation_relabels_and_recomputes_through_the_labels_argume
     assert survivors == 500
 
 
+def test_summarize_step_writes_a_derived_p_value_through_the_null_fns_closure():
+    """Task 20, fixture C2's spirit, RESHAPED against a measured gap. The
+    brief's own literal was `p_value == 1/5001` under a declared `cluster_by`
+    and `level: "within_cluster"` — measured directly against `permutation_of_derived`
+    at `a207702`-equivalent and found unreachable: that function does one free
+    `rng.shuffle` over every unit's label and takes no cluster argument at all,
+    so a declared `cluster_by` here gives the spec's OWN "permutes across
+    clusters (the wrong stratum)" answer, ≈0.4845, not the within-cluster
+    `1/5001` a `cluster_by` promises. Publishing that number beside
+    `level: "within_cluster"` would be a declaration accepted whose effect is
+    not delivered — worse than no p-value — so `summarize_step` gates this
+    write on `clusters is None` (see its docstring and the code comment beside
+    the gate) and this test is reshaped to the roster that gate actually
+    serves: no `cluster_by` declared, and the free relabelling's own number
+    asserted as a range, matching `test_a_derived_permutation_relabels_and_
+    recomputes_through_the_labels_argument`'s own pin on the same fixture.
+
+    The decision-5 assertion travels regardless of the reshape: no
+    `p_value_corrected` here, ever — the correction pass merges that in from
+    outside this call."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    block = out["delta_y"]
+    assert block["p_value"] is not None
+    assert 0.3 < block["p_value"] < 0.7
+    assert block["null_draws"] == 500
+    assert block["null_test"] == {
+        "method": "permutation",
+        "n": 500,
+        "shuffle": "label",
+        "level": "rows",
+    }
+    assert "p_value_corrected" not in block
+
+
+def test_summarize_step_writes_no_p_value_for_a_derived_metric_under_a_declared_cluster_by():
+    """The gate's own pin, as a relation between two calls over the SAME
+    roster rather than as a bare absence: without the unclustered control, a
+    `summarize_step` that wrote no p-value under any circumstance would pass
+    this half identically."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    clusters = {f"u{c:02d}_{i}": f"M{c:02d}" for c in range(1, 11) for i in range(5)}
+    shared_kwargs = dict(
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={
+            "method": "permutation",
+            "n": 500,
+            "shuffle": "label",
+            "level": "within_cluster",
+        },
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    clustered = summarize_step(collapsed, counts, clusters=clusters, **shared_kwargs)
+    unclustered = summarize_step(collapsed, counts, **shared_kwargs)
+    assert "p_value" not in clustered["delta_y"]
+    assert "null_draws" not in clustered["delta_y"]
+    assert "null_test" not in clustered["delta_y"]
+    assert unclustered["delta_y"]["p_value"] is not None
+    assert "null_draws" in unclustered["delta_y"]
+    assert "null_test" in unclustered["delta_y"]
+
+
+def test_a_per_condition_recorded_column_gets_no_p_value_at_all():
+    """Decision 7. `mean(column)` over a condition's units is invariant under
+    every relabelling, so a null would be the observed value repeated `n`
+    times and the p-value exactly 1.0 — a number that reads as a finding and
+    is an artifact of asking. Absent, not null, and not 1.0.
+
+    The DERIVED metric in the same block carries one, which is what says the
+    absence is a rule about columns rather than a `null_test` that failed to
+    run."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    for values in collapsed.values():
+        values["extra"] = 1.0
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    out = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    assert "p_value" not in out["y"]
+    assert "null_test" not in out["y"]
+    assert "p_value" not in out["extra"]
+    assert out["delta_y"]["p_value"] is not None
+
+
+def test_a_report_by_level_block_carries_no_p_value_while_its_condition_does():
+    """§ Corrections, correction 8 / task 20's ruling: `command_run`'s second
+    `summarize_step` call, once per `statistics.report_by` level, passes no
+    `null_test`, `labels` or `null_fns` — a level describes rather than
+    compares, so it joins no correction family and gets no null, while the
+    condition's own block, computed over the same roster, carries one.
+
+    Pinned here at the two `summarize_step` calls directly, in the shape
+    `command_run` actually makes them (one call threading `null_test`, a
+    second identical call that does not) — an end-to-end `run` cannot reach
+    this yet, since `E-STATS-NULLTEST-UNSUPPORTED` gates every declaration
+    until task 21; that verification is task 25's, named there.
+
+    Both halves in one test: asserting the level alone would pass identically
+    if the null had failed to run for the whole condition."""
+    collapsed = _c_collapsed()
+    counts = {"resolved": 50, "completed": 50, "ineligible": 0, "failed": 0}
+    derived = {"delta_y": _c_compute(UnitTable(collapsed), _c_labels())}
+    condition_block = summarize_step(
+        collapsed,
+        counts,
+        derived=derived,
+        seed=7,
+        draws=400,
+        null_test={"method": "permutation", "n": 500, "shuffle": "label", "level": "rows"},
+        labels=_c_labels(),
+        null_fns={"delta_y": _c_compute},
+    )
+    # The level call site: the same roster and the same derived value, but
+    # `command_run` passes none of the three null-test keywords — the ruling
+    # this test pins.
+    level_block = summarize_step(collapsed, counts, derived=derived, seed=7, draws=400)
+    assert condition_block["delta_y"]["p_value"] is not None
+    assert "p_value" not in level_block["delta_y"]
+    assert "null_test" not in level_block["delta_y"]
+
+
 def test_a_derived_permutation_drops_a_degenerate_draw_and_still_reports_its_count():
     """`None`, `nan` and a raise are one situation from three libraries.
 

@@ -3353,6 +3353,40 @@ def test_a_paired_comparison_carries_neither_p_value_nor_null_test():
     assert members[0].p_value is None
 
 
+def test_the_null_closure_moves_with_the_drawn_labels_not_the_roster():
+    """Task 20's erasure property, pinned against the REAL closure
+    (`cli._make_null_fn`) rather than a hand-built proxy that could not catch
+    the regression it exists to prevent: `_make_resample_fn`'s closure calls
+    `_attributed(units, attrs)`, which merges the roster's own attributes OVER
+    each row and would silently overwrite whatever `labels` a caller passed —
+    reporting the SAME value on every draw and a `p_value` of 1.0 for every
+    derived metric in every run. `_make_null_fn` merges the DRAWN label over
+    the roster's attributes instead, which is the one place it cannot be
+    overwritten — this test calls the closure with the roster's own labels and
+    then with them swapped, and the two must disagree."""
+    from publishable.cli import _make_null_fn
+    from publishable.config import Config
+    from publishable.stats import UnitTable
+    from publishable.templates.base import BaseTemplate
+
+    class _LabelDeltaTemplate(BaseTemplate):
+        def aggregate(self, units, cfg):
+            of = [row["y"] for row in units if row.get("label") == "of"]
+            against = [row["y"] for row in units if row.get("label") == "against"]
+            if not of or not against:
+                return {}
+            return {"delta_y": sum(of) / len(of) - sum(against) / len(against)}
+
+    units = UnitTable({"u1": {"y": 10.0}, "u2": {"y": 20.0}})
+    attrs = {"u1": {"label": "of"}, "u2": {"label": "against"}}
+    null_fn = _make_null_fn("delta_y", Config({}), _LabelDeltaTemplate(), attrs, "label", "test")
+    observed = null_fn(units, {"u1": "of", "u2": "against"})
+    swapped = null_fn(units, {"u1": "against", "u2": "of"})
+    assert observed == pytest.approx(10.0 - 20.0)
+    assert swapped == pytest.approx(20.0 - 10.0)
+    assert observed != swapped
+
+
 def test_an_unpaired_contrast_records_its_two_side_counts_and_no_n_paired():
     """Decision 5, and it is the first conditional write of `n_paired` in this
     codebase. § Contrasts defines `n_paired` as the intersection, and an unpaired

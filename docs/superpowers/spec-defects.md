@@ -6823,3 +6823,37 @@ were declared. A test fixture needs rows that genuinely vary (so `_drawable_cont
 does not fire first) with `compute_of`/`compute_against` that still cancel to the identical
 difference on every draw — the recorded-column `_column_mean` closure over two conditions recording
 one metric identically is the shape already reachable through a real `run` today, clustered or not.
+
+## OPEN — a derived metric's permutation null has no clustered construction — **Owner: H4d task 21 or unassigned**
+
+`reference.md` § What isn't a repeat gives `null_test`'s relabelling two designs, gated on
+`cluster_by`: "within clusters, or whole clusters at a time." H4d task 20 built the write for a
+derived metric's own `p_value` (`stats.permutation_of_derived`, task 12), and measured directly
+against Fixture C's roster: `permutation_of_derived` performs one free `rng.shuffle` over every
+unit's label and takes no cluster argument at all, so a design declaring `cluster_by` gets the
+**wrong** relabelling — the spec's own "permutes across clusters (the wrong stratum)" answer
+(≈0.4845 on Fixture C), not the within-cluster `1/5001` a declared `cluster_by` promises. No
+clustered counterpart (`permutation_of_derived_clustered`, on `percentile_of_derived_clustered`'s
+precedent) exists in this build.
+
+**Not silently shipped as the wrong number.** `stats.summarize_step` gates the whole write —
+`p_value`, `null_draws`, and the `null_test` echo — on `clusters is None`: a derived metric under a
+declared `cluster_by` gets no p-value at all rather than one whose `level` echo would claim a
+construction that did not run. This is the honest form of the same standard `W-STATS-CORRECTED-THIN`
+already applies on the correction side — a `null` disclosing the gap outranks a plausible number
+that hides it. The contrast-side write (task 19, `stats.permutation_over_contrast`) is unaffected:
+it delegates to `permutation_over_units_clustered` (task 13), which does carry the within-cluster
+construction, so Fixture C1's `1/5001` is genuine and only the derived (C2) side is gapped.
+
+**Owner: unassigned.** Closing it needs a new construction (`permutation_of_derived_clustered`)
+outside what task 20's own file list scopes (`stats.py` only for `summarize_step`'s signature), so
+naming a successor here would invent one the plan does not have. Whoever claims it: draw `G`
+clusters' worth of labels as one unit exactly as `percentile_of_derived_clustered` draws `G`
+clusters' worth of rows, and gate `summarize_step`'s write on that construction existing rather than
+on `clusters is None`.
+
+**Found by:** H4d task 20, while writing Fixture C2 to the letter its own design spec
+(`docs/superpowers/specs/2026-08-18-null-test-design.md` § Fixture C) states — the spec's C2 promised
+`p_value: 1/5001` under a declared `cluster_by`, and direct computation against the shipped
+`permutation_of_derived` returned ≈0.4845 instead. Reported rather than adjusted: `CLAUDE.md`'s own
+rule is to report a fixture that disagrees with the code, not to force the fixture to agree.

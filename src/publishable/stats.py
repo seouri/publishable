@@ -2713,6 +2713,9 @@ def summarize_step(
     clusters: dict[str, str] | None = None,
     resample_columns: bool = False,
     strata: dict[str, str] | None = None,
+    null_test: dict[str, Any] | None = None,
+    labels: dict[str, str] | None = None,
+    null_fns: "dict[str, Callable[[UnitTable, dict[str, str]], float | None]] | None" = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -2934,6 +2937,40 @@ def summarize_step(
     `resample_draws: draws` exactly as a clean sample would — a known, unfixed
     gap filed in `docs/superpowers/spec-defects.md`, not a guarantee this
     docstring is making.
+
+    `null_test`, `labels` and `null_fns` are a DERIVED metric's own p-value
+    path, and they never reach a recorded column: decision 7 gives a column no
+    null at all, because `mean(column)` over a condition's units is invariant
+    under every relabelling — the null would be the observed value repeated
+    `n` times and the p-value exactly 1.0, a number that reads as a finding
+    and is an artifact of asking rather than a fact about the design.
+    `null_test` is the resolved `{"method", "n", "shuffle", "level", ...}`
+    dict; `labels` is the roster-wide `{unit key: label}` mapping the
+    `shuffle` attribute takes; `null_fns` is `key → callable`, one per derived
+    metric, built the same way `resample`'s closures are — `cli.py`'s
+    `_make_null_fn`, a SECOND closure family rather than a keyword added to
+    `_make_resample_fn`'s (§ Corrections, correction 1): that closure's
+    `_attributed` merges the roster's declared attributes OVER each row, which
+    erases a relabelling written into the table before `aggregate` ever sees
+    it, so reusing it here would report `p_value: 1.0` for every derived
+    metric in every run. Where a key has both a callable and `null_test`
+    declared **and `clusters` is `None`**, `permutation_of_derived` runs and
+    the metric block gains `p_value`, `null_draws`, and the `null_test` echo —
+    uncorrected, per decision 5: the correction pass in `cli.py` merges
+    `p_value_corrected` in afterward from the family this member belongs to,
+    not from this call.
+
+    **A declared `cluster_by` suppresses this write, and that is a gap this
+    build has not closed rather than a design choice.** `permutation_of_derived`
+    (task 12) draws one free relabelling over every unit — it takes no cluster
+    argument, and no clustered counterpart exists in this build. § Clustered
+    units requires the opposite treatment for a design declaring `cluster_by`,
+    and measured directly against Fixture C's roster, the free draw lands on
+    the spec's own "permutes across clusters (the wrong stratum)" row (≈0.48),
+    not the within-cluster answer a declared `cluster_by` promises — so
+    reporting it beside `null_test.level: "within_cluster"` would be a
+    declaration accepted whose effect is not delivered, worse than the absent
+    p-value this gate chooses instead.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -3121,6 +3158,49 @@ def summarize_step(
                 # a clean 2000-draw one (see `percentile_of_derived`).
                 "resample_draws": draws_used,
             }
+            # Decision 7's other half: a DERIVED metric gets a p-value when a
+            # `null_test` is declared and a closure exists for this key — the
+            # closure is `null_fns`, never `resample`, for the reason the
+            # docstring above gives. `label` and `n` come from the resolved
+            # `null_test` dict; the level itself never reaches this function,
+            # since it changed nothing about the DRAW `permutation_of_derived`
+            # performs (unlike `permutation_over_units_clustered`, which reads
+            # it to choose whole-cluster versus within-cluster relabelling) —
+            # only the echo shows it, so a reader can see which relabelling a
+            # `shuffle` naming a clustered attribute actually ran.
+            null_fn = (null_fns or {}).get(key)
+            # **Gated on `clusters is None`, which is a spec gap this build has
+            # not closed rather than a stylistic choice.** `permutation_of_derived`
+            # (task 12) does one free `rng.shuffle` over every unit's label —
+            # it takes no cluster argument, and no clustered counterpart exists
+            # in this build. Measured directly against fixture C's own roster:
+            # a free relabelling gives ≈0.4845, the spec's own "permutes across
+            # clusters (the wrong stratum)" row, not the within-cluster
+            # `1/5001` a declared `cluster_by` promises. § Clustered units gives
+            # the two designs OPPOSITE treatments, so publishing that number
+            # beside `null_test.level: "within_cluster"` would be a declaration
+            # accepted whose effect is not delivered — worse than reporting no
+            # p-value at all, which is what this gate chooses instead. With it,
+            # `null_test.get("level")` can only ever have resolved to `"rows"`
+            # on a path that reaches this write, so the echo below cannot lie.
+            if (
+                null_test is not None
+                and null_fn is not None
+                and labels is not None
+                and seed is not None
+                and clusters is None
+            ):
+                p_value, null_draws = permutation_of_derived(
+                    collapsed, labels, null_fn, seed, n=null_test.get("n", 5000)
+                )
+                out[key]["p_value"] = p_value
+                out[key]["null_draws"] = null_draws
+                out[key]["null_test"] = {
+                    "method": null_test.get("method", "permutation"),
+                    "n": null_test.get("n", 5000),
+                    "shuffle": null_test.get("shuffle"),
+                    "level": null_test.get("level") or "rows",
+                }
     return out
 
 

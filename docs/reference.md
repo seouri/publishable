@@ -2911,6 +2911,15 @@ from a `null_test` whose `shuffle` names a `report_by` attribute, which is
 limitation is about which construction a level's interval uses, and neither makes any part of the
 other unreachable.
 
+**A level's own derived metric carries no `p_value` either, even beside a `null_test` whose
+`shuffle` names some other attribute — a legal config, since the refusal above and this limitation
+are disjoint.** A level repeats metrics over a stratum "without adding executions or joining the
+correction family," so a permutation null over a level's own subset is a construction no document
+describes: a level describes rather than compares, and a description has no null to test against.
+The condition's own block, computed over the same roster, still carries one — the two sit side by
+side in the same record, which is how a reader tells "this level has no null" apart from "the null
+failed to run for the whole condition."
+
 ### Before you spend it
 
 ```bash

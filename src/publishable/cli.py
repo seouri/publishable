@@ -775,6 +775,50 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     return unit_table_from_rows(rows)
 
 
+def _make_null_fn(
+    key: str,
+    cfg: Config,
+    tmpl: BaseTemplate,
+    attrs: dict[str, dict[str, Any]],
+    shuffle: str,
+    aggregate_where: str,
+) -> "Callable[[UnitTable, dict[str, str]], float | None]":
+    """The resample closure's counterpart (`_make_resample_fn`), taking the
+    drawn labels as an argument — a SECOND closure family rather than a
+    keyword added to that one (§ Corrections, correction 1).
+
+    `_make_resample_fn`'s closure calls `_attributed(units, attrs)` on every
+    draw, re-applying each unit's declared attributes from the roster — correct
+    for a bootstrap, which never changes what a unit's attributes ARE, and
+    fatal for a permutation: `_attributed` merges the roster's values OVER the
+    row, so a relabelling written into the table would be erased before
+    `aggregate` ever sees it, and every draw would reproduce the observed
+    statistic — a `p_value` of 1.0 for every derived metric in every run. So
+    the drawn label is merged over the roster's attributes here instead, which
+    is the one place it cannot be overwritten.
+
+    Module-level, not a nested `def` closed over `command_run`'s locals — the
+    earlier shape, moved out so a test can build and call this closure
+    directly rather than only through a `run` no config can reach yet
+    (`E-STATS-NULLTEST-UNSUPPORTED` gates every declaration until task 21).
+    `aggregate_where` therefore arrives as a parameter rather than a captured
+    name.
+    """
+
+    def null_fn(units: UnitTable, labels: dict[str, str]) -> float | None:
+        merged = {
+            unit_key: {**attributes, shuffle: labels[unit_key]}
+            for unit_key, attributes in attrs.items()
+            if unit_key in labels
+        }
+        value = coerce_scalars(
+            tmpl.aggregate(_attributed(units, merged), cfg), where=aggregate_where
+        ).get(key)
+        return None if value is None else float(value)
+
+    return null_fn
+
+
 def _comparison_step_blocks(
     comp: "Comparison",
     *,
@@ -2422,6 +2466,34 @@ def command_run(config_path: Path) -> int:
             if null_test_spec is not None and null_test_spec["shuffle"] is not None:
                 level, _ = null_test_level(eval_roster, cluster_by, null_test_spec["shuffle"])
                 null_test_spec["level"] = level
+            # The per-condition derived-metric home (task 20) is the OTHER
+            # `shuffle` domain from the contrast-side one (task 19): that one
+            # fires only when `shuffle` names a `sweep.groups` axis a
+            # comparison crosses, and this one only when it names an ORDINARY
+            # attribute — the two are mutually exclusive gates over the same
+            # resolved declaration, never both at once for one `null_test`.
+            group_axis_names = {
+                g.get("by")
+                for g in (doc.get("sweep") or {}).get("groups") or []
+                if isinstance(g, dict)
+            }
+            derived_null_test = (
+                null_test_spec
+                if null_test_spec is not None
+                and null_test_spec["shuffle"] is not None
+                and null_test_spec["shuffle"] not in group_axis_names
+                else None
+            )
+            # Roster-wide, the same `unit_attributes` shape below is built at,
+            # so a unit's label survives even when this condition's `collapsed`
+            # is a proper subset of the roster — `permutation_of_derived`
+            # indexes every key in `collapsed` and a `KeyError` there would be
+            # this mapping's fault, not that function's.
+            null_labels = (
+                {u.key: str(u.attributes.get(derived_null_test["shuffle"])) for u in eval_roster}
+                if derived_null_test is not None
+                else None
+            )
             # The resolved block, beside the interval rather than joining `n` —
             # `summarize_step`'s own rule for which carrier a fact takes, and
             # `weighted_by` is the precedent: a key that names a declaration
@@ -2581,6 +2653,9 @@ def command_run(config_path: Path) -> int:
                         )
                     derived = None
                     resample_fns: dict[str, Callable[[UnitTable], float | None]] | None = None
+                    null_fns: (
+                        dict[str, Callable[[UnitTable, dict[str, str]], float | None]] | None
+                    ) = None
                     if template is not None:
                         cond_cfg = cfgs[cond.index]
                         # Once per recording step, on this condition's own resolved
@@ -2660,6 +2735,18 @@ def command_run(config_path: Path) -> int:
                                 key: _make_resample_fn(key, cond_cfg, template, unit_attributes)
                                 for key in derived
                             }
+                            if derived_null_test is not None:
+                                null_fns = {
+                                    key: _make_null_fn(
+                                        key,
+                                        cond_cfg,
+                                        template,
+                                        unit_attributes,
+                                        derived_null_test["shuffle"],
+                                        aggregate_where,
+                                    )
+                                    for key in derived
+                                }
                     collapsed_by_key[(cond.index, step_name)] = collapsed
                     derived_by_key[(cond.index, step_name)] = derived
                     resample_fns_by_key[(cond.index, step_name)] = resample_fns
@@ -2689,6 +2776,9 @@ def command_run(config_path: Path) -> int:
                             clusters=clusters,
                             resample_columns=resample_spec["declared"],
                             strata=resample_strata,
+                            null_test=derived_null_test,
+                            labels=null_labels,
+                            null_fns=null_fns,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
