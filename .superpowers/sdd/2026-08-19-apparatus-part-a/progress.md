@@ -233,3 +233,33 @@ risk the deviation was accepted against.
 case, because task 15's test uses a mixed plan. But decision 3's *motivating* case — a `summary`-scoped
 execution — **is in no fixture**; the reviewer built it (`C=3, E_c=6, E_none=1` → **12** lines, summary
 probed once per condition, last) and the rule holds.
+
+**Fix round 1 — the Critical is closed and PINNED** (`f98ff7f`, `5cec0c3`), confirmed by an independent
+rebuild rather than by trusting the report: a fresh reviewer built its **own** template, credential and
+raising probe module and drove them through the real `main(["run", ...])`. The credential appears
+**nowhere** on stdout, stderr, or any file under the project tree, and the diagnostic prints
+`RuntimeError('cannot reach vault, secret=<redacted:PUBLISHABLE_RR_TOKEN>')` under `E-PLUGIN-LOAD`.
+**It also covered a `SystemExit`-at-import shape the fix's own tests do not** — also redacted. Reverting
+the containment fails a named test on its assertion. Dispatch sites were enumerated **by reading first,
+grep after**: `_probe_for` has exactly one caller, the unbuilt commands exit before anything, and
+`command_validate` never loads. Suite **2409**.
+
+**Major 4's rebuild was proven to discriminate the right way**, which is worth recording as a method: the
+reviewer mutated `_observe_one` and confirmed the new assertion fails, **then re-ran the same mutation
+against the pre-fix reconstruction and watched it pass vacuously.** A rebuilt assertion is only witnessed
+by showing the old one would not have caught it.
+
+**Three items stayed open after round 1, and all three are the repo's own recurring shape — a correct
+fix shipped unpinned.** The `KeyboardInterrupt` branch added by the Critical's own fix propagates
+correctly (`args == ()`, no message) but **deleting it leaves the suite green**, because the existing KI
+tests cover the *resolver* path and `observe_once`'s, **not this new dispatch site**.
+`E-APPARATUS-FACT-CREDENTIAL` is an unpinned member of `APPARATUS_CODES` — not a latent leak, since its
+message carries the credential's *name* and the fact *key* and never the value, but an enumeration with
+one free member is exactly what Major 2 was about. And the decorator test **passes with the containment
+fully reverted**: its docstring claims it proves routing, while it pins only the `exc.code` passthrough —
+*a test whose name claims the guarantee*, with a one-line fix available using **a helper the same commit
+already added.**
+
+**One regression introduced while closing a Minor:** the round that removed four positional locators
+**added four more**, one of them in shipped source prose. Locators have been wrong twice here in rows no
+diff touched, which is why the rule is to name what a sibling *does*.
