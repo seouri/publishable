@@ -839,6 +839,34 @@ def min_honest_draws(confidence: float = 0.95) -> int:
     return math.ceil(2.0 / tail)
 
 
+NULL_TEST_METHODS = ("permutation",)
+
+
+def min_honest_permutations(level: float = 0.05) -> int:
+    """The fewest relabellings a permutation p-value may be read off.
+
+    A DIFFERENT quantity from `min_honest_draws`, and inheriting that one
+    unexamined is the available shortcut and the wrong one: that floor is about a
+    percentile interval's two ranks being interior, while a permutation p-value's
+    resolution is `1/(n + 1)` — the smallest value it can take. The floor is the
+    smallest `n` at which the p-value can fall STRICTLY below the level being
+    tested: `1/(n + 1) < level` gives `n > 1/level − 1`, so `n >= floor(1/level)`
+    — 20 at 95 % confidence, where `min_honest_draws` is 80.
+
+    Derived from `level` rather than written as a literal, the way
+    `min_honest_draws` is derived from `confidence`, so a family tested at a
+    corrected level moves the floor with it.
+
+    `floor` rather than a search over `n`: at `level = 0.05/7` the two disagree,
+    a scan answering 139 because `1/140` and `0.05/7` differ by one ulp, where
+    exact arithmetic answers 140. The non-strict reading `1/(n + 1) <= level`
+    would be `ceil(1/level) - 1` and gives 19 at 95 %; `reference.md`
+    § Statistical reporting states the strict inequality and the integer
+    together so the two cannot drift.
+    """
+    return math.floor(1.0 / level)
+
+
 def percentile_over_units(
     values: Sequence[float],
     seed: int,

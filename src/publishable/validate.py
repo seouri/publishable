@@ -23,7 +23,7 @@ from publishable.replication import resolve_repeats
 from publishable.runner import resolve_wide_cfg
 from publishable.scope import step_name as _step_name
 from publishable.secrets import credential_values, load_env, missing_env
-from publishable.stats import min_honest_draws
+from publishable.stats import NULL_TEST_METHODS, min_honest_draws, min_honest_permutations
 from publishable.strata import levels_for
 from publishable.sweep import (
     NAMEABLE_CHAR,
@@ -739,6 +739,7 @@ def validate_config(
     # against it) must recompute that family locally rather than read it off
     # this call site.
     _check_resample(doc, roster, c, holdout_test=holdout_test)
+    _check_null_test(doc, roster, c)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -6168,6 +6169,82 @@ def _check_resample(
             "too narrow. This is a lower bound: the family is comparisons × metrics "
             "and the metric count is not knowable before the run, so the real "
             "requirement is at least this",
+        )
+
+
+def _check_null_test(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """Checks `statistics.null_test` gets so far — tasks 8 and 9 add three more
+    to this enumeration (`E-STATS-NULLTEST-UNITS`, `E-STATS-NULLTEST-REPORTBY`,
+    `E-STATS-NULLTEST-LEVEL`); this docstring names only what this function
+    currently does, not what the finished check will:
+
+    - `E-STATS-NULLTEST-METHOD` — the `method` enum.
+    - `E-STATS-NULLTEST-N` — the `n` floor, `stats.min_honest_permutations`.
+    - `E-STATS-NULLTEST-SHUFFLE` — a `shuffle` naming neither a declared unit
+      attribute NOR a declared `sweep.groups` axis.
+
+    `roster` is accepted now and unused, ahead of task 9's level derivation,
+    which is the one check here that will read it.
+
+    **`shuffle` is checked against `data.units.attributes` UNION the declared
+    `sweep.groups` axis names**, and the union is the load-bearing half rather than
+    a convenience: a group-axis shuffle is the only p-value home that joins the
+    correction family, so a check reading `attributes` alone would refuse the one
+    shape a `null_test` is declared for. The precedent for admitting an axis name
+    beside an attribute name is `units._stratum_groups`, which already does it for
+    `assign`.
+
+    Every check here presupposes the declaration is a mapping; a scalar or a list
+    is `check_envelope`'s `E-CONFIG-TYPE`, and so is a wrong-typed child, because
+    the block is closed one level in. A leaf type fault is deliberately non-fatal
+    in this module, so each value read here is `isinstance`-guarded and quietly
+    skipped when it is not a leaf the envelope types.
+    """
+    statistics = doc.get("statistics") or {}
+    null_test = statistics.get("null_test")
+    if not isinstance(null_test, dict) or not null_test:
+        return
+    method = null_test.get("method")
+    if method is not None and isinstance(method, str) and method not in NULL_TEST_METHODS:
+        c.error(
+            "E-STATS-NULLTEST-METHOD",
+            "statistics.null_test.method",
+            f"is `{method}`, not one of {', '.join(f'`{m}`' for m in NULL_TEST_METHODS)}",
+        )
+    n = null_test.get("n")
+    floor = min_honest_permutations()
+    # `bool` excluded explicitly: `isinstance(True, int)` is `True` in Python, and
+    # `n: true` is already `E-CONFIG-TYPE` from the envelope — a value flagged
+    # wrong-typed there must not also drive this check.
+    if n is not None and isinstance(n, int) and not isinstance(n, bool) and n < floor:
+        c.error(
+            "E-STATS-NULLTEST-N",
+            "statistics.null_test.n",
+            f"is {n}; a permutation p-value's smallest possible value is 1/(n+1), so "
+            f"below {floor} relabellings it cannot fall under 0.05 however extreme the "
+            "observed statistic is — the test would be incapable of the answer it was "
+            "declared to look for",
+        )
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
+    axes: set[str] = set()
+    for axis in (doc.get("sweep") or {}).get("groups") or []:
+        by = axis.get("by") if isinstance(axis, dict) else None
+        if isinstance(by, str):
+            axes.add(by)
+    shuffle = null_test.get("shuffle")
+    if isinstance(shuffle, str) and shuffle and shuffle not in (declared | axes):
+        c.error(
+            "E-STATS-NULLTEST-SHUFFLE",
+            "statistics.null_test.shuffle",
+            f"names `{shuffle}`, which is neither a unit attribute nor a `sweep.groups` "
+            "axis — the label is read per unit when the relabelling is drawn, so it has "
+            f"to be one. `data.units.attributes` declares "
+            f"{', '.join(sorted(declared)) or 'none'}; `sweep.groups` declares "
+            f"{', '.join(sorted(axes)) or 'none'}",
         )
 
 

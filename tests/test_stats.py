@@ -22,6 +22,7 @@ from publishable.stats import (
     kish_effective_n,
     mean_of,
     min_honest_draws,
+    min_honest_permutations,
     paired_delta_of_derived,
     paired_keys,
     paired_percentile_of_derived,
@@ -788,6 +789,32 @@ def test_the_honest_draw_floor_is_where_both_ranks_go_interior():
     assert min_honest_draws(0.99) == 400
     lo, hi = _percentile_ranks(min_honest_draws(0.95), 0.95)
     assert lo > 0 and hi < min_honest_draws(0.95) - 1
+
+
+def test_the_permutation_floor_is_the_smallest_n_whose_p_can_fall_below_the_level():
+    """`1/(n + 1) < level` gives `n > 1/level − 1`, so the floor is `floor(1/level)`
+    — 20 at alpha, 40 at alpha/2, 60 at alpha/3.
+
+    Asserted at three levels rather than one, because a single level cannot tell
+    `floor(1/level)` from any expression that happens to agree there: `ceil(1/level)
+    - 1` agrees with nothing here and gives 19/39/59, and `min_honest_draws`'
+    own `ceil(2/tail)` gives 80 at alpha, which is the wrong quantity entirely —
+    that one is about a percentile interval's two ranks being interior."""
+    assert min_honest_permutations(0.05) == 20
+    assert min_honest_permutations(0.025) == 40
+    assert min_honest_permutations(0.05 / 3) == 60
+    assert min_honest_permutations(0.05) != min_honest_draws(0.95)
+
+
+def test_the_permutation_floor_is_what_its_own_inequality_says():
+    """The floor and the inequality it comes from, checked against each other
+    rather than against a literal, so the two cannot drift: at the floor the
+    resolution `1/(n + 1)` is strictly below the level, and one draw fewer it is
+    not."""
+    for level in (0.05, 0.025, 0.05 / 3, 0.05 / 4):
+        n = min_honest_permutations(level)
+        assert 1.0 / (n + 1) < level
+        assert not 1.0 / n < level
 
 
 def test_no_interval_is_built_from_too_few_surviving_draws():

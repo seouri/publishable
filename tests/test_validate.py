@@ -4215,6 +4215,89 @@ def test_a_scalar_null_test_block_is_still_a_type_fault(write_config):
     assert "E-CONFIG-TYPE" in codes(write_config({"statistics": {"null_test": 5}}))
 
 
+def _null_test_doc(**null_test) -> dict:
+    """A config declaring a roster with two attributes and a `null_test` over it.
+
+    `label` and `site` are both declared, so a `shuffle` naming either is legal
+    and a `shuffle` naming anything else is the fault under test — which keeps a
+    refusal attributable rather than roster-incidental. Nineteen adversary
+    configs over one roster is how a previous slice made every refusal
+    roster-incidental; this helper varies the DECLARATION and holds the roster."""
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["label", "site"],
+        },
+        "statistics": {"null_test": {"method": "permutation", "n": 5000, **null_test}},
+    }
+
+
+_NULL_TEST_ROSTER = "patient_id,label,site\n" + "".join(
+    f"p{i},{'of' if i % 2 else 'against'},s{i % 3}\n" for i in range(8)
+)
+
+
+def test_an_out_of_enum_null_test_method_is_refused(write_config, tmp_path):
+    """Probed at `2a4dc53`: `method: bootsrap` earned `{E-STATS-NULLTEST-UNSUPPORTED}`
+    alone. Alongside, never instead — the wholesale refusal is alive until task 25."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(method="bootsrap", shuffle="label")))
+    assert "E-STATS-NULLTEST-METHOD" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_a_sub_floor_null_test_n_is_refused_and_the_floor_is_the_permutation_one(
+    write_config, tmp_path
+):
+    """`n: 19` is refused and `n: 20` is not, which is the assertion pair that
+    separates this floor from `resample`'s. A test asserting only that 19 is
+    refused would pass identically against `min_honest_draws`' 80, which refuses
+    both — so the CLEAN case is the discriminating half."""
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    refused = codes(write_config(_null_test_doc(n=19, shuffle="label")))
+    assert "E-STATS-NULLTEST-N" in refused
+    clean = codes(write_config(_null_test_doc(n=20, shuffle="label")))
+    assert "E-STATS-NULLTEST-N" not in clean
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in clean
+
+
+def test_a_shuffle_naming_nothing_declared_is_refused(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text(_NULL_TEST_ROSTER)
+    found = codes(write_config(_null_test_doc(shuffle="nope_not_an_attr")))
+    assert "E-STATS-NULLTEST-SHUFFLE" in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_a_shuffle_naming_a_group_axis_is_accepted(write_config, tmp_path):
+    """**The load-bearing case of this task.** Under decision 6 the group-axis
+    contrast is the ONLY p-value home that joins the correction family, so a check
+    scoped to `data.units.attributes` alone refuses the one shape the slice exists
+    to serve. The precedent for admitting an axis name beside an attribute name is
+    `units._stratum_groups`, which already does it for `assign`.
+
+    The axis name here is deliberately NOT also a declared attribute, or the test
+    would pass under either scoping — the fixture would agree with the bug, which
+    is this repo's most-repeated unfailable-check shape."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,of\np2,against\n")
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["label"],
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute", "from": "label"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["of", "against"]}]},
+                "statistics": {"null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"}},
+            }
+        )
+    )
+    assert "E-STATS-NULLTEST-SHUFFLE" not in found
+
+
 def test_declared_report_by_is_checked_rather_than_refused(write_config):
     """S4d retires the blanket refusal and checks the declaration for real: with
     no `data.units.attributes` declared at all, `sex` is not among them, so this
