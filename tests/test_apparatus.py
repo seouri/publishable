@@ -22,3 +22,73 @@ def test_apparatus_accepts_a_shape_core_will_later_refuse():
     from publishable import Apparatus
 
     assert Apparatus(facts={"nested": {"a": 1}}).facts["nested"] == {"a": 1}
+
+
+def test_a_registered_probe_name_resolves_to_the_decorated_function(
+    installed, registries, tmp_path
+):
+    """Positive control: without it, the two refusals below pass identically if
+    nothing resolves at all."""
+    import importlib
+    import sys
+
+    from publishable.apparatus import _probe_for
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.probes": {"llm_deployment": "loadable_p24:probe"}}
+    )
+    (site / "loadable_p24.py").write_text(
+        "from publishable import Apparatus, register_probe\n\n\n"
+        '@register_probe("llm_deployment")\n'
+        "def probe(cfg):\n    return Apparatus(facts={'model_revision': 'r1'})\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        assert _probe_for("llm_deployment")(None).facts == {"model_revision": "r1"}
+    finally:
+        sys.modules.pop("loadable_p24", None)
+
+
+def test_a_probe_name_no_distribution_registers_is_E_PROBE_UNKNOWN(installed, registries, tmp_path):
+    """Answered from metadata alone: assert the message names the group's other
+    registered member, which is what says the scan ran rather than an empty
+    dict being consulted."""
+    from publishable.apparatus import _probe_for
+    from publishable.errors import ContractError
+
+    installed("dist-one", "1.0", {"publishable.probes": {"llm_deployment": "no_one:probe"}})
+    with pytest.raises(ContractError) as excinfo:
+        _probe_for("llm_deploymemt")
+    assert excinfo.value.code == "E-PROBE-UNKNOWN"
+    assert "llm_deploymemt" in str(excinfo.value)
+    assert "llm_deployment" in str(excinfo.value)
+
+
+def test_a_probe_whose_module_declares_a_different_name_is_E_PLUGIN_DECORATOR(
+    installed, registries, tmp_path
+):
+    """The entry-point key and the `@register_probe` argument disagree — the
+    check that makes `validate`'s metadata answer and the registry agree."""
+    import importlib
+    import sys
+
+    from publishable.apparatus import _probe_for
+    from publishable.errors import ContractError
+
+    site = installed(
+        "dist-one", "1.0", {"publishable.probes": {"llm_deployment": "misnamed_p24:probe"}}
+    )
+    (site / "misnamed_p24.py").write_text(
+        "from publishable import Apparatus, register_probe\n\n\n"
+        '@register_probe("llm_screen")\n'
+        "def probe(cfg):\n    return Apparatus(facts={})\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            _probe_for("llm_deployment")
+    finally:
+        sys.modules.pop("misnamed_p24", None)
+    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
+    assert "llm_deployment" in str(excinfo.value)
+    assert "llm_screen" in str(excinfo.value)
