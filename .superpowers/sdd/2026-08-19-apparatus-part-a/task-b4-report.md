@@ -115,11 +115,31 @@ production code landed one commit earlier than its own task number. Placement,
 signature, and docstring all follow task 12's brief exactly (beside the
 builder, not in `hashes.py`, sha256 over canonical JSON of facts alone).
 
-No other brief, the design, or the plan disagreed with the code encountered
-during this batch. `reference.md` § The apparatus core can only observe
-already carried the exact five-key fenced example and the `hash` semantics —
-nothing there needed changing, matching both task 11's and task 12's "check
-and change nothing if it agrees" instruction.
+**Corrected in fix round 1 — this batch's report originally claimed zero
+brief/code disagreements. That was false.** Two are named below in full; see
+Fix round 1 for how each was found and closed.
+
+1. Task 11's own test docstring (`test_the_undeclared_fact_is_recorded_and_has_no_unobserved_entry`)
+   claimed it reached "Decision 4's fourth row, which no other test reaches."
+   Three tests already reach that row — `tests/test_apparatus.py:193`, `:373`
+   and `:463`, dated by `git log -S` to tasks 5 and 7, both landed before this
+   batch. The clause was carried verbatim from this report's own drafting
+   rather than checked against the code with a grep, which is exactly the
+   kind of claim this project's own `CLAUDE.md` § Habits that cost real work
+   warns against ("sweep for the claim, not for the file it was first noticed
+   in") — here it was a claim never swept for at all.
+2. Task 13's test docstring claimed its credential sweep was "sliced out of
+   `run.yaml`," while the test body sweeps the whole file's raw text. The
+   divergence is in the harmless direction (the implemented check is
+   strictly stronger than the one described), but it is a second instance of
+   the same failure mode: brief-style prose about what the code does,
+   asserted without checking it against the body of the test it describes.
+
+`reference.md` § The apparatus core can only observe itself needed no change
+— it already carried the exact five-key fenced example and the `hash`
+semantics, matching both task 11's and task 12's "check and change nothing if
+it agrees" instruction. The two disagreements above are both in this batch's
+*own test prose*, not between the code and the four documents.
 
 ## warn_unanswered's caller
 
@@ -131,3 +151,78 @@ Wired in this batch, at task 11, as instructed: `command_run` calls
 
 None outstanding. All three tasks' prescribed mutations discriminated as
 described; none was caught only by a crash or a string literal.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-19-apparatus-part-a/task-b4-review.md`,
+reviewed at `ec16254`. Spec compliance PASS; task quality PASS with findings —
+one Major, six Minor, every one a prose/claim defect, none changing behaviour.
+Commit: `e636f15`.
+
+**Major 1 — the false "no other test reaches" claim, and the corrected
+disagreement count.** Deleted the clause from
+`test_the_undeclared_fact_is_recorded_and_has_no_unobserved_entry`'s docstring
+rather than rewriting it, per house style. *Verified by*: `grep -rn "no other
+test reaches" tests/` now returns nothing, and the corrected report above
+names both disagreements this batch actually found, with `git log -S` dates
+for the three tests that already reach Decision 4's fourth row
+(`tests/test_apparatus.py:193`, `:373`, `:463`).
+
+**Minor 2 — the test name claiming a guarantee its body cannot witness.**
+Renamed `test_the_hash_does_not_cover_unobserved_or_the_probe_name` to
+`test_apparatus_hash_s_signature_admits_only_a_facts_mapping`, which is the
+narrower, accurate claim the body actually makes (the function's signature
+takes no `probe_name`/`unobserved` argument to diverge on). *Verified by*:
+re-ran it under the whole-block-hash mutation from task 12's own step 4 —
+still green, exactly as the review found, because the renamed claim is a
+signature-level fact this mutation cannot touch; the broader guarantee stays
+pinned by `test_the_apparatus_hash_is_recomputable_from_the_recorded_facts`,
+which fails under that same mutation.
+
+**Minor 3 — `apparatus.py`'s false gloss on `hashes.py`.** Deleted "which
+holds hashes over the three identity trees" — `hashes.py` holds `code_hash`,
+`parameters_hash` and `design_digest` (the last explicitly not an identity
+claim per `reference.md` § What `auto` derives from), `input_manifest_hash`
+lives in `manifest.py`, and only `code_hash` is over trees. The placement
+argument stands without the gloss: "beside the builder... and not in
+`hashes.py`." Also deleted the sibling "above" locator two paragraphs later
+("the exact `json.dumps` arguments above") in the same pass, replacing it
+with "this function uses" (folds into Minor 6, same file).
+
+**Minor 4 — task 13's "sliced out of `run.yaml`" claim.** The body always
+swept the whole file's raw text, which is stronger, not weaker, than
+described. Rewrote the docstring to say so plainly rather than narrow the
+check to match the false claim. *Verified by*: re-ran
+`test_the_recorded_apparatus_block_carries_no_credential_value` — still
+passes, the actual assertion is unchanged, only the words describing it
+moved to match what they describe.
+
+**Minor 5 — `x` for `×`.** Fixed the one instance the review named
+(`tests/test_cli.py`'s ledger-count assertion message,
+"two conditions x two repeats" → "two conditions × two repeats"); confirmed
+no sibling instance in this batch's new code via a targeted grep.
+
+**Minor 6 — the three new "above" locators.** Removed all three: `cli.py`'s
+warn-site comment ("stdout above" → "stdout"; "precedent above" → "precedent")
+and `apparatus.py`'s docstring (folded into Minor 3's edit above). Each named
+its referent already, so none was broken — this was a house-style cleanup,
+not a correctness fix.
+
+**Minor 7 — the ledger path join was asserted but never proven to resolve.**
+Added `assert (doc["run_dir"] / block["ledger"]).is_file()` immediately after
+`test_a_declared_probe_records_the_five_sub_keys_per_condition`'s existing
+`block["ledger"] == "apparatus/probes.jsonl"` literal check, joining the
+recorded string to the file it names rather than comparing two independent
+spellings to each other. *Verified by running*: passes today (the review's
+own finding that this was unpinned-not-broken), and the test still passes
+after the addition.
+
+**Gates and full suite, re-run after all seven fixes**: `uv run pytest` →
+**2417 passed, 1 skipped, 2 xfailed** (unchanged — no test was added or
+removed, only renamed and corrected). `ruff check`, `ruff format --check`
+(82 files), `mypy` (46 source files) all clean.
+
+**Lesson, stated as asked**: a brief's prose about other tests — or about
+what a test's own body does — is a claim about the code, and it is checkable
+by `grep` before it is written down. This round's Major and its Minor 4
+sibling were both exactly that: prose carried forward and never swept for.
