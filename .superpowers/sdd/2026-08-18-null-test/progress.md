@@ -468,3 +468,36 @@ only when it is labelled as such, and this one was promised as a check.
 instantiated by **no** fixture — Holm's adjusted order on fixture D **equals** its raw order, so a test
 named `..._is_not_monotone` asserts the monotone relation. The guard survives on its literals anyway,
 so the fix is deleting the name's claim, **not building a fixture to justify a name**.
+
+**Fix round 1 — twelve of fifteen findings closed** (`4e7b002`), confirmed by a scoped re-review that
+re-ran **all three mutations that had come back green** and got named assertion failures for two of
+them. Suite 2352 passed, 1 skipped, 2 xfailed.
+
+**The third is closed only as a docstring correction, and that is the honest outcome rather than a
+miss.** § Corrections 8's `report_by` ruling **remains genuinely unpinned at the `command_run` call
+site** — the re-reviewer threaded the null arguments in and the **full suite stayed at 2352** — but the
+test's docstring now says plainly that it pins only the two direct `summarize_step` calls and defers
+the real pin to task 25. **A pin that cannot exist yet, disclosed, is worth more than a pin claimed.**
+
+**Three rulings taken on the items left open.**
+
+**M1 stays filed rather than built, and the grounds were checked rather than accepted.** The
+re-reviewer counted the blast radius itself: **18 direct call sites across 13 test functions** expecting
+a bare `float | None`, so "roughly twenty" was fair. The filing names all four things a closer must do
+together **and** narrows `reference.md`'s "equal by construction" sentence, which is **false for a
+whole-cluster relabelling that empties an arm**. **Cost if wrong:** `null_draws` missing from one
+record shape, disclosed, against an unverified signature change across 18 call sites in a fix round.
+
+**M5 is ruled from documented precedent, not deferred to a design call.** `reference.md` states the
+distinction **twice** — **absent means "nothing was asked for", `null` means "attempted and came back
+empty"** — for `resample`/`resample_draws` and again for `n_paired`. A **declared** `null_test` gated
+off because clustered is **not** "a run that declared none", so writing absence produces exactly the
+collision the review found: indistinguishable from an undeclared run. **Ruling: write the `null_test`
+echo plus `p_value: null`.** The re-reviewer confirmed it needs **no new construction** — an `else`
+branch on the existing gate's write path — and flagged the one thing my ruling did not settle: whether
+`null_draws` accompanies that `null`, since its three-state vocabulary has no state meaning "gated
+before any attempt". **Folded into batch 5, with that sub-question named.**
+
+**m4 is a note that exists only in a report, which is not a filing.** The re-reviewer grepped
+`tests/`, `src/` and `spec-defects.md` and found no trace — and `CLAUDE.md` says plainly that a ledger
+line saying "filed" is not a filing. **Ruling: it gets a real filing or a test.** Batch 5 carries it.
