@@ -101,3 +101,26 @@ ahead of `_probe_for`'s metadata scan leaves the tests green, and **the decorato
 argues about has no fixture** — the *seam named in the brief and instantiated by no fixture* row.
 Mitigating, and worth carrying rather than hiding: **`units._resolver_for` has the identical hole**, so
 this is a **copied** gap, not a new class of one.
+
+**Fix round 1 — all three Majors and five Minors closed** (`8521f69`). Suite **2371** passed, 1
+skipped, 2 xfailed; four gates clean. Major 1's paraphrase now reads *"a warning, fired wherever a
+probe runs"*; Major 2's undated build claim is **deleted and replaced by a pointer** to § Executability
+on this build, with the reason stated in the file — *restating it here is exactly what leaves an undated
+claim behind for the next slice to falsify* — which is the procedure's own step 10 turned into prose.
+Major 3's decorator-only fixture now exists and fails under the reviewer's exact mutation. Minor 1's
+phantom § Errors claims were **closed by deletion**; confirmed gone by grep over `src/` and
+`reference.md`.
+
+**And the fix round's own closing note was false, which is the entry worth keeping.** It reported that
+`ruff format` had reformatted embedded Python fences in two `.md` files, and reverted them with
+`git checkout --`. **`ruff format` does not process `.md`** — measured by copying `reference.md`,
+running `uv run ruff format docs/`, and diffing: byte-identical, `git status` clean, and no
+`extend-include` in `pyproject.toml`. **So the `git checkout --` was performed on a misdiagnosis.**
+
+The outcome is sound — I verified both intended fixes by reading the committed diff rather than
+trusting the report, and the gates pass. But `CLAUDE.md` names that command as destroying uncommitted
+work *"twice mistaken for reverting a mutation"*, and **this is the third instance and the first whose
+justification was itself wrong.** **Flagging it is why it was caught**, and the rule it sharpens is
+narrower than *don't use it*: **a revert is verified by behaviour, never by `git status`, and least of
+all by a story about what caused the change.** Keeping a copy before mutating removes the need for a
+diagnosis at all.
