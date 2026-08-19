@@ -2536,6 +2536,33 @@ A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the interval
 
 **A derived metric is resampled whether or not you declare `statistics.resample`.** The two `basis: units` rows of the first table above — the column metric and the derived one — are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default: a `resample: {method, n, stratify_by}` sibling of `n`, present in every metric block of a run that declared one and **absent — not `null`** — from every metric block of a run that didn't, the same absent-not-null shape the recorded-column paragraph below states for its own `resample_draws` (`null` there already means an interval was attempted and came back empty, which is a different fact from nothing having been asked for — the derived metric's own `resample_draws` is a further, three-valued scheme and that rule does not extend to it). `resample.n` is what was *requested*; `resample_draws` beside it is what the interval actually *rests on* — equal for a column by construction, and equal for a derived metric unless a draw was degenerate, which is what [`W-STATS-RESAMPLE-THIN`](#warnings-core-reports) reports. `stratify_by` is always a list in the record, even where the config wrote a bare string — the record resolves what the config abbreviates, the same rule [`of`/`against`](#contrasts-claims-that-arent-condition-vs-baseline) follow. See the `mean_pred` example in [§ What isn't a repeat](#what-isnt-a-repeat) for the shape. **In this build a declared [`cluster_by`](#clustered-units) is the one case where core resamples nothing**: the clustered draw for a *recomputed* metric is a construction that doesn't exist yet, and reporting a unit-level percentile beside recorded columns that are cluster-robust would be the narrower interval this section exists to refuse — so core drops that step's derived metrics and says so. The refusal is [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) and the record is [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports) carrying that code in its message — the same containment every other `aggregate` fault gets, so the recorded columns keep their clustered intervals and the run keeps its `run.yaml`. It is a run-time refusal rather than a `validate` one for the reason that row gives: whether a template derives anything is not knowable before `aggregate` runs.
 
+**A declared `null_test` is echoed beside the p-value it produced**, resolved rather than as written:
+a `null_test: {method, n, shuffle, level}` sibling of `n`, **present in every metric block carrying a
+`p_value` and absent — not `null` — from every metric block of a run that declared none**, the same
+absent-not-null shape `resample` follows. `level` is the one resolved value the config never writes:
+it is **derived** from the roster — `rows` with no [`cluster_by`](#clustered-units), `within_cluster`
+when the shuffled attribute varies inside a cluster, `whole_cluster` when it does not — and it is
+recorded for exactly that reason, since a derived value a reader cannot recompute from the config is
+the kind this record exists to carry. `null_test.n` is what was *requested*; **`null_draws` beside it
+is what the p-value actually rests on**, on `resample_draws`' precedent — equal for a recorded column
+by construction, and smaller for a derived metric whenever a relabelled table's `aggregate` declined
+to produce a value.
+
+**A relabelling permutes the label and never the weights.** Under a declared
+[`data.units.weight_by`](#weighted-samples) each unit keeps its own weight through every draw: the
+weight represents what the unit stands for, and permuting it would test a null about the sampling
+design rather than about the label. Only the per-condition half of a `null_test` meets a live weight
+at all — a weighted cross-arm comparison is [refused](#errors-validate-reports) — so this is one rule
+rather than a construction.
+
+**A null whose every draw reproduces the observed statistic reports `p_value: null`.** It is the same
+fact one construction over from a draw whose every replicate reproduces the same value, which core
+already reports as no interval rather than as a zero-width one: a p-value of 1.0 computed from a
+distribution that could not have been anything else is a number with no construction behind it. The
+record says so without a warning of its own — the resolved `null_test` echo sits beside the `null`
+p-value, which says the test ran and produced nothing, exactly as `ci95: null` beside a `resample`
+echo does. An arm the relabelling emptied is reported the same way, for the same reason.
+
 **Resample methods.** `statistics.resample.method` names how the draws are taken, and the vocabulary is closed:
 
 | `method` | What one draw is |
@@ -2673,6 +2700,12 @@ results:
 ```
 
 **`n_paired` is the intersection, and a paired contrast has to record it.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
+
+A contrast whose axis is a `groups` axis and whose design declares a
+[`null_test`](#what-isnt-a-repeat) carries `p_value` beside its `ci95`, and `p_value_corrected`
+beside its `ci95_corrected` under every correction method that reports one. Both are absent — not
+`null` — where no `null_test` was declared, and `p_value` alone is `null` where the null was built
+and could not vary.
 
 **Under [`weight_by`](#weighted-samples) a contrast entry carries two more keys**, and they are the
 same two facts a weighted per-condition block carries, arranged for a record that has no `n` mapping
