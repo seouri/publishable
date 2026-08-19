@@ -395,3 +395,38 @@ remaining slice has that function as its surface, so a live gap with no owner is
 inventing a successor would be the anti-pattern.
 
 Suite 2325 passed, 1 skipped, 2 xfailed; four gates clean. Batch 3 complete.
+
+## Batch 4 — tasks 16, 17+10, 18, 19, 20 — the correction family — complete, review dispatched
+
+Commits `9f1fa46` (`Member.p_value`, widened family, tiered rank key), `7d182e2` (BH's suffix-`min`,
+per-member `p_value_corrected`, the warning narrowed — tasks 17 **and 10**, `hypotheses.py` being the
+second production caller of `corrected_for` no charter named), `f2f0e93` (`fdr_bh` end to end, the
+`thin`/`fdr_bh` interaction documented), `79baad8` (the contrast-side `p_value` and `null_test` echo),
+`14bd0d5` (the per-condition `p_value`), report `d93622f`. Suite 2325 → **2348** passed, 1 skipped,
+2 xfailed. Four gates clean. **Every prescribed mutation failed via an assertion, never a crash** —
+which is the standard batch 3 was measured against and missed.
+
+**`fdr_bh` is built rather than refused** — the slice's load-bearing decision, now executed.
+
+**Two implementer findings, both handed to the reviewer, and the first is a real spec defect.**
+
+**Fixture C2's prescribed literal is unreachable.** `permutation_of_derived` performs only a **free**
+(unclustered) relabelling, measured at **≈0.4845** on the exact roster the brief specifies — which is
+**the spec's own "wrong stratum" row**, i.e. the fixture as written would have asserted the value the
+fixture exists to reject. Rather than fabricate a clustered construction, the implementer **gated
+`summarize_step`'s derived-null write on `clusters is None`** — publishing nothing rather than a
+mislabelled number — reshaped the fixture to what the code does, and **filed the gap**. The reviewer
+adjudicates whether gating is right or silently drops a p-value a user asked for. **This is the sixth
+fixture on this slice to fail its own constraint**, and the first whose failure implies missing
+production code rather than bad arithmetic.
+
+**And a blind mutation caught before it shipped.** The brief's `_make_null_fn` as a **nested closure**
+would have been untestable — **no `run` can reach it while `E-STATS-NULLTEST-UNSUPPORTED` gates
+`validate`** — so the prescribed erasure-property mutation would have been blind. Hoisted to module
+level so the property is pinned **against the real closure** rather than a hand-built stand-in. That is
+the batch-3 lesson applied *before* the fact: a pin built against a proxy is not a pin.
+
+**Task 17 owed a measurement the spec could not settle** — whether BH over `hypotheses.py`'s partial
+member set with the larger `m` is right. The spec ruled by **transferring `family_shape`'s conservatism
+argument, which is reasoning rather than measurement**, and said so. The reviewer checks what was
+actually measured and whether it supports the ruling.
