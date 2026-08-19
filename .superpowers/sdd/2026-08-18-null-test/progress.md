@@ -501,3 +501,54 @@ before any attempt". **Folded into batch 5, with that sub-question named.**
 **m4 is a note that exists only in a report, which is not a filing.** The re-reviewer grepped
 `tests/`, `src/` and `spec-defects.md` and found no trace — and `CLAUDE.md` says plainly that a ledger
 line saying "filed" is not a filing. **Ruling: it gets a real filing or a test.** Batch 5 carries it.
+
+## Batch 5 — tasks 21, 22, 23, 25+26, 28, 29 — the retirement and its residue — complete
+
+Commits `89f7ea7`, `e04929a`, `0ca9d8b`, `d0e9345` (**`E-STATS-NULLTEST-UNSUPPORTED` retired**),
+`ba47107`, `095717a`. Suite 2352 → **2359** passed, 1 skipped, 2 xfailed. Measured 2026-08-19 against
+`d0e9345`: **zero configs unblocked, six with no remaining core-side blocker, three executable** —
+neither number moves.
+
+**A test was deleted rather than falsely repurposed**, and the reasoning is right: the sole surviving
+`-UNSUPPORTED` code **short-circuits `validate_config`**, so it cannot pair with an independent defect
+the way the retired code could. A test kept alive by redefining what it tests is worse than one deleted.
+
+## Independent whole-branch review: DO NOT MERGE — one Critical
+
+Review at `whole-branch-review.md`. **Task 29 was the slice's own self-review; it is not the gate**, and
+the independent gate found what it did not.
+
+**Critical: under `holm`, a p-only member is published a `p_value_corrected` at a rank the tier
+fabricates.** Reproduced **through a real `run`** — exit 0, zero errors, and two entries with
+**bit-identical raw p-values** `0.16976604679064186` receiving corrected values of **0.3395** and
+**0.1698**, differing only by `declaration_index`, **so reordering the columns swaps them.** Beside
+that, `correction_level: 0.025` sits next to `ci95_corrected: null`, while `reference.md` defines the
+key as *the p-value at the level this member's interval was corrected at* — and there is no interval.
+
+**The precedent was on this branch and was not carried across.** § Corrections item 5 fixed **the
+identical predicate one field over** — `thin`, guarded with `and member.ci95 is not None`. And the
+`holm` p-only pin covers `thin` and `ci95_corrected` **only**, so nothing in 2359 tests asserts it.
+**Ruling: fix and pin end to end** — two members with identical raw p-values whose corrected values must
+not depend on declaration order.
+
+**Major 1 is the rewriting trap again, and this is its fourth instance on the slice.** `reference.md`'s
+"a member with no interval takes no rank" is **false against the code** (a p-only member ranks 3 of 3
+and receives `correction_level: 0.05`) **and contradicts the passage it links to**, which this same
+slice repaired to say the opposite. `main`'s wording was **also** false — so task 1 **replaced one false
+claim with another**, which is precisely what *prefer deleting a claim to rewriting it* exists to
+prevent.
+
+**Major 3 is the second time this same pin gap has been recorded where nobody downstream reads it.**
+The `bonferroni` `thin` gap is "filed" only in a report; `spec-defects.md` has no entry, and the owner
+uses the forbidden *"whoever next touches X"* form. The guard **is** pinned via the `holm` arm, so it is
+record integrity rather than a fail-open — but a gap recorded twice in the wrong place is a process
+finding, not a clerical one.
+
+**What the gate confirmed sound, by running:** five faults → five distinct exact sets; **both batch-2
+fail-opens survive the retirement**, which was the entire point of fixing them; the floor exact at
+19/20; all five rejected repeat kinds returning `E-REPL-KIND`; `level` refused as a config input; no
+verdict resting on a p-value; **batch 1's guard pin at zero deleted lines and still failing a spurious
+key in all three arms**; fixture D recomputed independently and matched, monotonicity disclaimed with no
+test name claiming it; the retired code gone, enumerated by reading and confirmed by grep with a
+can-fail control; six minted codes each carrying one § Errors row; the worked example untouched; the
+date matching its commit; and the counts re-measured at six and three.
