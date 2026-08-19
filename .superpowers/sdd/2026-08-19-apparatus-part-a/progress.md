@@ -65,3 +65,39 @@ The plan step earned its place. The eight that changed a task's shape, in short:
 transcribed from `cli.py`. Its mutation is `"apparatus": {"probe": None}`, **exactly the `probe: null`
 spelling decision 7 rejects.** Tasks 11 and 12 replace what it covers, which is the point: the preceding
 slice's batch-1 pin caught a spurious key three batches later without ever being edited.
+
+## Batch 1 — tasks 18, 1, 2, 3 — the pin, the document change, `Apparatus`, dispatch
+
+Commits `7568a34` (guard pin), `0113fce` (check-placement), `4c1c0ae` (`Apparatus` + export),
+`d1590a4` (`_probe_for`). Branch `h7d-apparatus-part-a`. Suite 2363 → **2370** passed, 1 skipped,
+2 xfailed; mypy 45 → 46 source files.
+
+**The guard pin works, and it was captured rather than transcribed.** The reviewer applied the
+prescribed mutation **and invented a second** — an unconditional `apparatus` mkdir — and **both failed
+on assertions**. It confirmed the pin covers what tasks 8, 11 and 12 will move, which is the only reason
+a pin built before the code has value.
+
+### Review: both verdicts PASS with exceptions; three Majors, no Criticals
+
+**The implementer reported ZERO disagreements between the briefs, the design, the plan and the code**,
+and I asked the reviewer to treat that as a claim to test rather than a result to accept — `CLAUDE.md`
+records **six of six implementers on a recent slice finding a real one**, and this slice's own plan made
+fourteen. **The test was worth running.** Zero was right about the *code*, and wrong about the
+*documents*: `apparatus.py`'s docstrings **assert § Errors rows that do not exist**, `E-APPARATUS-RAISED`
+appearing nowhere but the docstring claiming it. Both were **carried from brief prose and never checked
+against the documents** — the converse of *assuming a documented rule has code behind it*, and the exact
+place a zero-disagreement report was weakest.
+
+**Major 1 is this repo's named habit, twice in one finding.** The `dry-run` siting task 1 removed
+**survives as a paraphrase** in the feasibility analysis — *"Resolved in § The apparatus core can only
+observe: declaring the fact buys a `dry-run` warning"*, attributing the old siting to **the very sentence
+task 1 rewrote**. Found by an unfiltered sweep across the four documents, `CLAUDE.md` and the analysis,
+all 34 hits read. **The design's sweep named the feasibility analysis; task 1's brief named only the four
+documents, and the sweep that ran followed the brief.** Recorded as a **plan defect**, not the
+implementer's alone — a brief that under-scopes a sweep produces exactly one file's worth of miss.
+
+**Major 3 is a fail-open the whole suite is blind to**: inserting `if name in PROBES: return PROBES[name]`
+ahead of `_probe_for`'s metadata scan leaves the tests green, and **the decorator-only case its docstring
+argues about has no fixture** — the *seam named in the brief and instantiated by no fixture* row.
+Mitigating, and worth carrying rather than hiding: **`units._resolver_for` has the identical hole**, so
+this is a **copied** gap, not a new class of one.
