@@ -552,3 +552,35 @@ key in all three arms**; fixture D recomputed independently and matched, monoton
 test name claiming it; the retired code gone, enumerated by reading and confirmed by grep with a
 can-fail control; six minted codes each carrying one § Errors row; the worked example untouched; the
 date matching its commit; and the counts re-measured at six and three.
+
+**Whole-branch fix round — the Critical is fixed, and the verifying reviewer found two more things
+before clearing it.**
+
+**The Critical is closed.** `holm` now **withholds** `p_value_corrected` for a p-only member, on the
+ground that its rank is a sort tie-break rather than evidence. Verified by rebuilding the end-to-end
+scenario: both entries come back p-only with bit-identical p-values and **neither carries the key**.
+The reviewer also established the sharper version of the order property — metric `declaration_index`
+comes from `sorted()` over metric names, so **the only expressible reorder of two recorded columns is a
+rename**, and it ran both namings. `correction_level` still follows the name, which is **pre-existing on
+`main`**, publishes no evidence-bearing number, and was outside the review's remedy. Recorded as a
+residual rather than smoothed over.
+
+**Two blockers the fix round created or left, both closed here.**
+
+**A normative row went false against the shipped code, with no filing** — the `holm` row promised
+`p_value_corrected` "when a `null_test` supplied a p-value", which the fix makes untrue, and the
+hypothesis sentence said the same thing at a second site **reachable because `hypotheses.evaluate`
+builds its family from the same members**. **Ruling: qualify both rather than file.** The withholding is
+a deliberate rule, not a gap, and a rule belongs in the document rather than in a defects list. **This is
+the same class as the Major the same fix round had just closed** — behaviour changed without the
+document following — which is why the gate caught it and the round did not.
+
+**And "pinned end to end" described a direct-call pin.** Nothing drove the p-only `holm` shape through
+`run`, and **the defect was only ever reproducible through `run`**. On a branch whose own record says
+five correct fixes shipped unpinned across three slices, that is the gap worth closing over any other.
+Closed: a run-level test now asserts `p_value_corrected` absent on **both** entries plus the
+bit-identical raw p-values — not a `method` string, since a mutation caught by a string literal is what
+let a Critical survive batch 3. Removing the guard fails it **on an assertion**. The report's claim was
+corrected by **appending**, not rewriting.
+
+Suite **2363** passed, 1 skipped, 2 xfailed; four gates clean. **All 29 tasks complete.**
