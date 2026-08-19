@@ -6972,3 +6972,39 @@ leave that sentence false.
 
 **Found by:** H4d batch 4's review, verified by running `_fixture_c1_call()` and printing
 `block["s"]["y"]`'s key set.
+
+## RE-OWNED 2026-08-19, after H4d merged — five entries named H4d as owner and H4d did not claim them
+
+`E-STATS-NULLTEST-UNSUPPORTED` retired with H4d at `3386dc9`, and **five filings still name
+`Owner: H4d`**. H4d's own task 23 was the claim/decline pass that should have annotated them; it did
+not, and the whole-branch review did not catch it because that review was scoped to code and documents
+rather than to the filings' owner state. Recorded here rather than by editing five bodies, so the
+sequence stays legible.
+
+The five, by what they are rather than by position: the **finite-inputs premise** for a column
+resample; the **`report_by`/`resample_columns` asymmetry** deferred beside the closed zero-width
+finding; the two **contrast-disclosure findings** (a contrast-scope `W-STATS-RESAMPLE-THIN`, and the
+`beside_n`-shaped parameter both comparison call sites would need); and the **clustered derived
+permutation construction**, re-declined most recently on the ground that building it while the
+two-ground guard was still being written was the riskier order.
+
+**Owner: unassigned — stated as a fact, with the reason.** Four of the five say in their own words that
+they are owned by *"the last remaining slice whose surface is the `statistics` block"*, and one says
+plainly that **"a fifth deferral past it is not available."** Both are now true statements about a slice
+that has shipped. No remaining slice in
+[the spine design](specs/2026-08-08-implementation-spine-design.md) has the `statistics` block as its
+surface, so naming a successor here would be the *"whichever slice does X"* form this file rejects by
+name elsewhere — and re-declining to a slice that does not exist is worse, because it reads as covered.
+
+**What that costs, said rather than implied.** These are **live gaps with no owner**, which is a
+different and weaker position than a deferral: nothing schedules them. Each already carries the check
+its closer must make, so none needs re-deriving. What none of them is, is closed.
+
+**The transferable finding is about the pass, not the entries.** A claim/decline task whose output is
+*annotations on other entries* leaves **no diff in the files a reviewer reads**, so it can be skipped
+silently — unlike a construction task, which fails a gate. A later slice putting a claim/decline pass in
+its plan should make its deliverable checkable: either the annotations are asserted by a test that
+greps for a closed slice named as an owner, or the pass is dropped in favour of ruling each entry inside
+the task that touches its code.
+
+**Found by:** the controller, sweeping `Owner:` lines after H4d merged.

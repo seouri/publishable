@@ -25,7 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4d → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H7d → the rest — the H4 family is complete.** Amended twice
+on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -91,7 +92,8 @@ weighted contrast **whose metric is derived** is the exception: core hands the t
 column and does not weight the delta itself, so the `method` stays unweighted and `cohens_d` is `null`
 while `weighted_by` and the effective size travel regardless. Out of scope with their routes: clusters
 through contrasts, **which H4b-2 has since retired** — see the entry below; the unpaired forms,
-**which H4c has since retired** — see its entry below too; `null_test` is H4d.
+**which H4c has since retired** — see its entry below too; and `null_test`, **which H4d has since
+built** — see its entry below, the last of the four.
 
 **H4b-2 (clusters through contrasts) merged on 2026-08-18.** `E-DATA-CLUSTER-CONTRAST` is retired,
 and `E-DATA-WEIGHT-CLUSTER-CONTRAST` is minted for the one combination still refused: a design
@@ -136,6 +138,30 @@ is **Welch-Satterthwaite over two cluster-robust per-side variances**, each cont
 df of 3.735 rather than either. **The derived-collision corner was given a fifth wrong ground here**,
 in a comment asserting `sides` was unreachable from a function that builds it fifty lines later —
 five wrong grounds across two slices, every one an answer from a proxy.
+
+**H4d (`statistics.null_test`) merged on 2026-08-19 — the last of the H4 family, and the last
+`NOT BUILT` block in the `statistics` family.** `E-STATS-NULLTEST-UNSUPPORTED` is retired. A permutation
+null runs at `rows`, `within_cluster` and `whole_cluster` level, over a recorded column, a derived metric
+and a contrast; a p-value is corrected **alongside** the intervals at the level its member's interval was
+computed at and **adds no place in the family**; and **`fdr_bh` is built rather than refused**, ranked on
+ascending p-value — sound because under `fdr_bh` the evidence ratio orders nothing, so there is one
+method and one ordering. **It unblocks zero configs** — all eight `statistics` blocks in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) carry `null_test: null`, which the
+truthy guard treats as undeclared, and none declares `fdr_bh` — so **six with no remaining core-side
+blocker and three executable both stay exactly where H4b-1 left them.** Four things worth carrying.
+**One code that returned for five distinct faults became five named refusals** plus
+`E-STATS-NULLTEST-REPORTBY`: the schema was closed one level in first, on `resample`'s and `holdout`'s
+precedent, because a whole-leaf entry is *why* a typo, an out-of-enum `method`, a `shuffle` naming
+nothing, a sub-floor `n` and a rosterless declaration were indistinguishable. **`Member` gained a
+p-value field rather than a fourth evidence kind** — modifiers change the draw, not the estimator, so a
+null does not replicate across the axes the three preceding slices filled six-fold — and
+`family_members` widened to admit a member with a p-value and no interval, which made
+`_evidence_ratio`'s assert reachable and forced a tiered rank key. **`holm` withholds
+`p_value_corrected` from such a member**, because its rank is a sort tie-break rather than evidence:
+without that, two entries with bit-identical p-values got corrected values differing only by
+declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
+`b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
+caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
 
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
