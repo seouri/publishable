@@ -134,3 +134,107 @@ code in every test, never on a total code set, per the binding convention — co
 each new test before finishing. No sentence in this batch's doc edits states or implies this slice
 unblocks any config; the counts (six no-remaining-core-side-blocker, three executable) are untouched
 and unmentioned here for that reason.
+
+---
+
+## Fix round 1
+
+Commit: `7495036` — "H4d fix round 1 (batch 2): close both fail-opens, and three minors".
+
+Gates before starting: 2297 passed, 1 skipped, 2 xfailed (as stated by the coordinator). Gates
+after: **2300 passed, 1 skipped, 2 xfailed**; `ruff check .` clean; `ruff format --check .` 80 files,
+0 to reformat; `mypy` 45 source files clean.
+
+### Major 1 — group-axis `shuffle` under a declared `cluster_by` fails open
+
+**Changed:** `_check_null_test` (`src/publishable/validate.py`) no longer ever calls
+`null_test_level` with a value outside that function's documented domain (a roster attribute).
+The call is now gated on `shuffle in declared` alone (never `declared | axes`), and a new branch
+fires `E-STATS-NULLTEST-LEVEL` when `shuffle` names a `sweep.groups` axis (and is *not* also a
+declared attribute) alongside a declared `cluster_by` — refusing the combination outright rather
+than deriving a level for it at all. `null_test_level`'s own docstring (`src/publishable/units.py`)
+now states the domain restriction and names the caller's enforcement.
+
+**Verified by:**
+- New test `test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused`, using the reviewer's
+  own end-to-end fixture (`arm`'s membership ambiguous across `match_set` via `label`). Two halves:
+  the axis case (`shuffle: arm`) now earns `E-STATS-NULLTEST-LEVEL` + `E-STATS-NULLTEST-UNSUPPORTED`,
+  with the message asserted to contain `"axis"` and `"cannot be derived"`; the control
+  (`shuffle: label`, identical roster) still earns the pre-existing ambiguity refusal, with the
+  message asserted to contain both witness clusters `M07`/`M12` — proving the two refusals are
+  distinguishable, not the same code firing for an unrelated reason.
+- **Mutation:** disabled the new refusal branch (`if (cluster_declared and ...)` → `if (False and
+  cluster_declared and ...)`). Full suite: **1 failed / 2299 passed** —
+  `test_a_group_axis_shuffle_under_a_declared_cluster_by_is_refused` failed on a real assertion
+  (`E-STATS-NULLTEST-LEVEL` absent, only `E-STATS-NULLTEST-UNSUPPORTED` present — exactly the
+  reviewer's original bug reproduction). Reverted by editing the line back; re-ran, confirmed
+  2300/1/2.
+
+### Major 2 — `shuffle` was optional
+
+**Changed:** `_check_null_test` now fires `E-STATS-NULLTEST-SHUFFLE` when `shuffle` is absent
+(`None`, covering both a missing key and an explicit `shuffle: null`) or an empty string, with a
+dedicated "is unset" message, before falling through to the pre-existing "names X, which is
+neither..." check for a genuinely present-but-wrong name (that check's own truthiness guard is
+unchanged, so it still only fires on a non-empty mismatched name — the new branch is the sole owner
+of the absent/empty case, not a redundant second path to the same finding).
+
+**Verified by:**
+- New tests `test_an_absent_shuffle_is_refused` (`_null_test_doc()` with no `shuffle` key) and
+  `test_an_empty_shuffle_is_refused` (`shuffle: ""`), both asserting `E-STATS-NULLTEST-SHUFFLE`
+  alongside `E-STATS-NULLTEST-UNSUPPORTED`.
+- **Mutation:** disabled the new presence check (`if shuffle is None or ...` → `if False and
+  (shuffle is None or ...)`). Full suite: **1 failed / 2299 passed** at first pass — only the absent
+  case failed, because the elif's guard at that point had already lost its `and shuffle` truthiness
+  clause during an earlier edit, so it silently absorbed the empty-string case too (firing the
+  *other* message, `"names \`\`, which is neither..."`, rather than being genuinely unreachable).
+  Restored the elif's `and shuffle` guard so the new branch is the sole path for absent/empty, then
+  re-ran the same mutation: **2 failed / 2298 passed**, both new tests failing on real assertions
+  (`E-STATS-NULLTEST-UNSUPPORTED`/`W-DATA-CLUSTER-UNDECLARED` alone, no `-SHUFFLE`). Reverted the
+  mutation by editing the line back; re-ran, confirmed 2300/1/2.
+
+### Minor 1 — the garbled `envelope.py` comment
+
+**Changed:** removed the redundant "fixed keys ... are fixed" tautology (now "their keys (...) are
+fixed", matching the original singular-block phrasing pluralised correctly), and split the
+overclaiming "both are closed before their own wholesale refusal retired" sentence into two: one
+naming `resample`'s already-past retirement (H4a task 12, true past tense), and one stating
+`null_test`'s refusal has **not** retired yet — that's H4d task 25, still ahead — so the shape is
+being validated ahead of a retirement rather than before one that already happened. Preferred editing
+the claim to what the history actually supports over inventing new wording, per CLAUDE.md's "prefer
+deleting a claim to rewriting it" (the redundant tautology was deleted outright; the tense claim was
+split rather than reworded into a single sentence trying to cover both cases).
+
+**Verified by:** reading the new text against the two facts it states — `resample`'s refusal
+(`E-STATS-RESAMPLE-UNSUPPORTED`) did retire at H4a task 12 (grepped: absent from `LEAF_TYPES`'s
+whole-family list and from the validate-time registry, confirmed by the batch's own prior reading);
+`null_test`'s (`E-STATS-NULLTEST-UNSUPPORTED`) is still live (grepped: present in every new test in
+this batch, asserted alongside every new code, per the binding convention). Not pinned by a test —
+it is a comment, not an executable claim, and no test asserts on comment text.
+
+### Minor 2 — five emittable codes have no § Errors row
+
+**No code or doc change made.** Re-read `docs/superpowers/plans/2026-08-18-null-test.md` task 28
+step 2, which already names all five codes explicitly: *"mint a § Errors `validate` reports row per
+new code — `E-STATS-NULLTEST-METHOD`, `-N`, `-SHUFFLE`, `-UNITS`, `-LEVEL`"*. The reviewer's ask was
+to "make sure the owner's brief... names all five" — confirmed already true, so there is nothing to
+add. Flagging this explicitly rather than silently doing nothing: the coordinator instruction to
+"close the Minors" is satisfied here by verification, not by an edit.
+
+### Minor 3 — self-referential cross-link
+
+**Changed:** `docs/reference.md`'s new limitation paragraph (§ Reporting strata) opened with
+`[statistics.report_by](#reporting-strata)` while sitting inside `#### Reporting strata` itself.
+Removed the link, leaving bare `` `statistics.report_by` `` text, since a section linking to itself
+serves no reader.
+
+**Verified by:** grep confirms no remaining self-referential `#reporting-strata` link inside that
+section; the anchor was harmless (resolved fine per the reviewer), so this is a clarity fix with no
+behavioral pin needed.
+
+### Concerns
+
+None outstanding. Every new test asserts `E-STATS-NULLTEST-UNSUPPORTED` alongside its new code,
+never on a total set. No sentence added in this round claims a config is unblocked. All mutations
+run against the full, unfiltered suite and reverted by editing the source back (never
+`git checkout --`), confirmed green by re-running after each revert.
