@@ -5645,6 +5645,16 @@ plainly that a `report_by` level's recorded-column interval does not honour a de
 `resample_columns`, so a reader stops expecting a fix that the charter no longer has a slice to
 deliver.
 
+**CONVERTED 2026-08-18 (H4d, task 24) — Finding 2 is now a documented permanent limitation.** The
+entry's own terminal instruction was that *"the correct move at that point is not another deferral —
+it is converting this into a documented, permanent limitation"*, and H4d is the last slice whose
+surface is the `statistics` block. `reference.md` § Statistical reporting now states plainly that a
+`report_by` level's recorded-column interval does not honour `resample_columns`, with the
+disclosure that distinguishes the two constructions in the record and the reason a level joins no
+correction family. **The code is unchanged**, which is what "limitation" means here: this is not a
+fix and must not be read as one. `W-STATS-REPORTBY-THIN`'s whole-roster-versus-arm gap is a
+*different* half of this entry and is left as § What isn't a repeat already records it.
+
 ## The contrast path discloses nothing about its resample, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (that half CLOSED by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third

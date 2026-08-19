@@ -252,6 +252,7 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
 | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
+| Shuffle respects the reporting strata | `statistics.null_test.shuffle` names an attribute `statistics.report_by` also names — relabelling it changes which units a stratum holds, so the null is of a different partition rather than of the same estimate |
 | Resample has a roster | `statistics.resample` is declared with no `data.units` — nothing to resample, and the declaration would run nothing |
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
 | Resample draws are honest | `statistics.resample: {n: 50}` — below 80 draws a percentile interval's lower endpoint is the sample minimum, so core reports none and every metric in the run loses its `ci95` |
@@ -568,6 +569,7 @@ likewise apart from those same two envelope rows, none of the others.
 | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
 | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
 | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+| `statistics.null_test.shuffle` names an attribute that `statistics.report_by` also names. A permutation of that attribute moves units between strata, so each drawn stratum holds a different set of units and the null describes a different partition rather than the same estimate under a null hypothesis. Shuffle an attribute the reporting strata do not use, or drop the level from `report_by` and read the contrast instead | `E-STATS-NULLTEST-REPORTBY` |
 | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
 | `statistics.resample.method` names a value other than `bootstrap` — the whole enum, [§ Statistical reporting](#statistical-reporting)'s *Resample methods*. Unset (`null`) is accepted and takes the documented default | `E-STATS-RESAMPLE-METHOD` |
 | `statistics.resample.n` is below 80, the fewest draws both percentile ranks are interior at. Refused rather than warned because under it core reports no interval at all, so a declared `n: 50` would null `ci95` on every metric in the run rather than narrowing one | `E-STATS-RESAMPLE-N` |
@@ -2887,6 +2889,21 @@ aggregated:
 Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on. A subgroup claim you intend to *test* is a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) — declared before the run, named by a hypothesis, and corrected in that family. The split is deliberate: `report_by` gives you every subgroup for free because it claims nothing, and a subgroup you want to claim something about costs a place in the family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
 
 `validate` rejects a `report_by` attribute that isn't declared in `data.units.attributes`, and warns when a level would hold fewer units than `limits.min_reported_n` — before the run rather than at disclosure.
+
+**A [`statistics.report_by`](#reporting-strata) level's recorded-column interval is a `t_over_units`
+one even under a declared [`resample`](#statistical-reporting), and that is a documented limitation
+rather than a gap awaiting a slice.** A level's own metric block is summarized over that level's
+units without the column-resample routing a whole condition's block gets, so a run declaring both
+carries a stratified percentile interval for the condition and an unstratified *t* interval for each
+of its levels, in the same record. The two are distinguishable where it matters — a level's block
+carries no `resample` echo and no `resample_draws`, so a reader can see which construction produced
+which number — and a level is a description rather than a comparison, which is why it
+[joins no correction family](#sweeps-and-repeats) and why the asymmetry does not reach any interval a
+verdict rests on. This is a separate matter from a level's `n`, which is that level's own count, and
+from a `null_test` whose `shuffle` names a `report_by` attribute, which is
+[refused](#errors-validate-reports): that refusal is about which attribute is permuted, this
+limitation is about which construction a level's interval uses, and neither makes any part of the
+other unreachable.
 
 ### Before you spend it
 
