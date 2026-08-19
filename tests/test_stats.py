@@ -33,6 +33,7 @@ from publishable.stats import (
     percentile_over_units_clustered,
     permutation_of_derived,
     permutation_over_units,
+    permutation_over_units_clustered,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -5276,3 +5277,82 @@ def test_a_derived_permutation_lets_the_unpermuted_calls_failure_out():
 
     with pytest.raises(ZeroDivisionError):
         permutation_of_derived(_c_collapsed(), _c_labels(), explodes, seed=1, n=10)
+
+
+def test_a_within_cluster_permutation_over_fixture_c_gives_exactly_one_over_n_plus_one():
+    """**The load-bearing literal of this slice.** Fixture C: 50 units in 10 matched
+    sets of 5, `of` holding each set's top two. With per-cluster arm counts held
+    fixed, `delta = ΣS_c/12 − 920` is strictly increasing in the sum of the `of`
+    values, so the observed labelling is the UNIQUE maximum over all 10¹⁰
+    within-cluster relabellings — `b = 0`, deterministically, since the observed
+    labelling is drawn with probability 5 × 10⁻⁷ over 5000 draws.
+
+    So the correct answer is exactly `1/5001`, and every wrong construction gives a
+    categorically different number: `b/n` gives 0.0, reusing the observed
+    assignment gives 1.0, permuting across clusters gives ≈0.5 (the free null spans
+    ±500 around an observed 2.5), and relabelling whole clusters empties the `of`
+    arm and gives `None`. **None of the four is within four orders of magnitude of
+    another**, which is what makes this fixture worth its arithmetic."""
+    p = permutation_over_units_clustered(
+        _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=5000, level="within_cluster"
+    )
+    assert p == pytest.approx(1.0 / 5001.0)
+
+
+def test_a_within_cluster_permutation_is_not_the_free_one_over_the_same_roster():
+    """The control that must report, and the number the wrong-stratum mutant lands
+    on. Free relabelling of fixture C lets `of` hold the global top 20 — mean 852
+    against 352 — so the null spans ±500 and the observed 2.5 sits near its centre.
+    Asserted as a relation between the two calls rather than as two literals, so
+    the test cannot pass by pinning one construction twice."""
+    within = permutation_over_units_clustered(
+        _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=5000, level="within_cluster"
+    )
+    free = permutation_over_units(_C_VALUES, _C_LABELS, "of", seed=11, n=5000)
+    assert within is not None and free is not None
+    assert free > 100 * within
+
+
+def test_a_whole_cluster_relabelling_of_fixture_c_empties_an_arm_and_reports_nothing():
+    """Every matched set's modal arm is `against` (3 against 2), so a cluster-level
+    relabelling puts NO unit in `of`. That is an empty arm, which decision 8 reports
+    as `null` rather than as a number — categorically distinct from every row above,
+    and the reason fixture C's clusters were built to hold both arms unequally."""
+    assert (
+        permutation_over_units_clustered(
+            _C_VALUES, _C_LABELS, _C_CLUSTERS, "of", seed=11, n=500, level="whole_cluster"
+        )
+        is None
+    )
+
+
+def test_a_whole_cluster_relabelling_permutes_the_clusters_own_labels():
+    """The whole-cluster construction, on a roster where it is the RIGHT one: four
+    sites, each entirely `of` or entirely `against`, unequal in size (3, 1, 1, 2).
+
+    **The six assignments of two `of` labels to four sites give six DIFFERENT
+    deltas** — enumerated at `a207702` as 8.5, 3.833, 2.6, −2.6, −3.833, −8.5 —
+    and the observed one is the strict maximum, so `b` counts exactly the draws
+    that reproduced the observed assignment: about `n/6`.
+
+    **No literal is assertable at |Π| = 6, and that is stated rather than worked
+    around.** The spec's own trap table says so: "with |Π| = 36 it is drawn ~139
+    times and no literal is assertable". So the assertion is a range around 1/6
+    (measured 0.148 at this seed) PLUS the within-cluster call on the same
+    fixture, which is `None` because permuting labels inside a single-label
+    cluster is a no-op. The pair is what discriminates: a construction taking the
+    wrong branch cannot produce both numbers."""
+    values = [10.0, 12.0, 11.0, 9.0, 1.0, 2.0, 3.0]
+    labels = ["of"] * 4 + ["against"] * 3
+    clusters = ["S1", "S1", "S1", "S2", "S3", "S4", "S4"]
+    p = permutation_over_units_clustered(
+        values, labels, clusters, "of", seed=4, n=999, level="whole_cluster"
+    )
+    assert p is not None
+    assert 0.10 < p < 0.25
+    assert (
+        permutation_over_units_clustered(
+            values, labels, clusters, "of", seed=4, n=999, level="within_cluster"
+        )
+        is None
+    )

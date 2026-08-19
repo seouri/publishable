@@ -949,6 +949,92 @@ def permutation_over_units(
     return (1 + reached) / (n + 1)
 
 
+def permutation_over_units_clustered(
+    values: Sequence[float],
+    labels: Sequence[str],
+    clusters: Sequence[str],
+    of_level: str,
+    seed: int,
+    n: int = 5000,
+    level: str = "within_cluster",
+) -> float | None:
+    """A permutation p-value that respects the clustering, at the level the
+    roster implies.
+
+    `reference.md` § Clustered units gives both rules and neither is a choice
+    made here: "if `shuffle` names an attribute that varies *within* clusters,
+    labels are permuted within each cluster independently — for matched
+    case-control that's a case/control swap inside each matched set, which is
+    the conditional test that design calls for. If the attribute is constant
+    within a cluster, whole clusters are relabelled, which is the null for a
+    cluster-randomized trial. Shuffling rows freely would destroy the structure
+    the null is supposed to hold fixed, and the two designs need opposite
+    treatments, so guessing is not an option."
+
+    **`level` arrives as a parameter rather than being derived here**, because
+    the derivation reads the roster and this module imports nothing:
+    `units.null_test_level` is the single expression, and `validate` refuses
+    the ambiguous roster before any caller reaches this. A caller passing a
+    level it did not derive is passing a guess, which is what that refusal
+    exists to prevent.
+
+    **Within-cluster: each cluster's own label multiset is permuted inside
+    it**, so every cluster keeps its arm counts and the null holds the
+    matching fixed. **Whole-cluster: the clusters' labels are permuted among
+    the clusters**, so a cluster's units move together and the arm sizes vary
+    from draw to draw with the cluster sizes — which is the construction, not
+    a defect of it. A whole-cluster draw that empties an arm has no statistic,
+    and `_label_delta` reports that as `None`; where EVERY draw empties one,
+    the p-value is `None` for decision 8's reason.
+
+    The estimator, the `>=`, the +1 and the invariance rule are
+    `permutation_over_units`' and are not restated in a second expression here
+    — the two differ in what one draw is, which is exactly what `reference.md`
+    says the cluster declaration changes.
+    """
+    if len(values) < 2:
+        return None
+    observed = _label_delta(values, labels, of_level)
+    if observed is None:
+        return None
+    rng = random.Random(seed)
+    positions: dict[str, list[int]] = {}
+    for index, cluster in enumerate(clusters):
+        positions.setdefault(cluster, []).append(index)
+    drawn_labels = list(labels)
+    # The cluster's own label, for the whole-cluster draw: constant within the
+    # cluster by `units.null_test_level`'s own answer, so the first position's
+    # label IS the cluster's. Read once rather than per draw, so a draw cannot
+    # read a label a previous draw wrote.
+    cluster_order = list(positions)
+    cluster_labels = [labels[positions[c][0]] for c in cluster_order]
+    reached = 0
+    varied = False
+    for _ in range(n):
+        if level == "whole_cluster":
+            rng.shuffle(cluster_labels)
+            for cluster, label in zip(cluster_order, cluster_labels, strict=True):
+                for index in positions[cluster]:
+                    drawn_labels[index] = label
+        else:
+            for cluster in cluster_order:
+                indices = positions[cluster]
+                within = [labels[i] for i in indices]
+                rng.shuffle(within)
+                for index, label in zip(indices, within, strict=True):
+                    drawn_labels[index] = label
+        drawn = _label_delta(values, drawn_labels, of_level)
+        if drawn is None:
+            continue
+        if drawn != observed:
+            varied = True
+        if drawn >= observed:
+            reached += 1
+    if not varied:
+        return None
+    return (1 + reached) / (n + 1)
+
+
 def percentile_over_units(
     values: Sequence[float],
     seed: int,
