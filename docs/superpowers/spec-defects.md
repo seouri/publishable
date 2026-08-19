@@ -6578,6 +6578,17 @@ claim.
 
 **Ruled by:** H4b-2, task 4. **Owner from here:** H4c.
 
+**Built by H4d, task 15 (2026-08-19), not H4c.** H4c deferred it again on a new ground — building it
+while the derived branch's two-ground suppression guard was being written would make one guard
+distinguish three states — and named the condition for building it: that the guard has shipped and
+survived a whole-branch review. It has, and H4d task 15a built the construction named here:
+`stats.percentile_of_derived_clustered`, a per-condition percentile draw over `G` clusters with
+replacement, pooling their units into a `UnitTable` built from a row list per replicate. Task 15b
+retired `E-DATA-CLUSTER-DERIVED` and routed `stats.summarize_step`'s derived branch through it, and
+removed `cli._comparison_step_blocks`' `clusters is None` suppression, so a derived paired contrast
+under `cluster_by` now computes through `stats.paired_percentile_of_derived`'s own clustered branch —
+built earlier, for the recorded-column arm — rather than publishing `null` beside `n_paired_clusters`.
+
 **CORRECTION, fix round 1 (task-b1 review, Major 2):** the "H4b-2 does not need it" paragraph above
 reasons from a proxy and overstates what it found. `_comparison_step_blocks` iterates
 `set(of_summary) & set(against_summary)` from **`aggregated`**, but the branch it takes —

@@ -2315,10 +2315,15 @@ def test_a_plain_holdout_declaration_is_now_accepted(write_config, tmp_path):
     declaration core honors — `cluster_by` counts the clusters, keeps one out
     of two folds, and makes every `basis: units` interval cluster-robust;
     `weight_by` computes Kish's effective size and weights every `basis: units`
-    column and interval, and, as of H4b-1, every weighted contrast too. What
-    `cluster_by` may not yet be combined with is checked by
-    `test_a_clustered_generated_comparison_is_refused` below, and, at run time,
-    by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`. `holdout` left the same family
+    column and interval, and, as of H4b-1, every weighted contrast too. The one
+    combination `cluster_by` still may not be combined with — a weighted
+    clustered contrast, `E-DATA-WEIGHT-CLUSTER-CONTRAST` — is checked by
+    `test_a_weighted_clustered_comparison_draws_its_own_refusal` below. A
+    derived metric under `cluster_by` resamples too, through
+    `stats.percentile_of_derived_clustered` (H4d task 15), with nothing left
+    for `validate` to check about it — as before, whether a template's
+    `aggregate` derives anything is not knowable from a declaration.
+    `holdout` left the same family
     with task 18: `_check_holdout` checks the declaration for real, and a
     plain, well-formed one earns none of its findings.
 

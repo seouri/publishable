@@ -995,22 +995,7 @@ def _comparison_step_blocks(
                 # metric the *previous* metric's draw pool, which nothing
                 # downstream could detect.
                 resampled = None
-                # **Two independent suppression conditions, stated as ONE guard
-                # naming both grounds.** Neither covers the other, and taking one as
-                # covering the other is a wrong ground this corner has already been
-                # given more than once.
-                #
-                # A DECLARED CLUSTER: no clustered draw exists for a recomputed
-                # metric (`E-DATA-CLUSTER-DERIVED`). A derived key colliding with a
-                # recorded column's name leaves `derived_by_key` AND
-                # `resample_fns_by_key` populated for it — `command_run` builds a
-                # closure for every key in `derived` before the raising call, and the
-                # `except ContractError` retry that follows the collision clears
-                # neither — so the two computes above are real callables and this
-                # branch would otherwise draw an UNCLUSTERED interval for a metric
-                # whose per-condition sibling is cluster-robust.
-                #
-                # AN UNPAIRED COMPARISON: no per-side derived draw exists either.
+                # **One suppression condition remains: AN UNPAIRED COMPARISON.**
                 # `unpaired_percentile_of_sides` serves a recorded column's own
                 # closure; a recomputed metric would need `aggregate` evaluated on
                 # each side's independently drawn table, which is a construction this
@@ -1019,20 +1004,20 @@ def _comparison_step_blocks(
                 # construction and publish whatever `paired_percentile_of_derived`
                 # returned over it.
                 #
+                # A declared cluster no longer suppresses this branch (H4d task
+                # 15b, `E-DATA-CLUSTER-DERIVED` retired): `paired_percentile_of_derived`
+                # already draws whole clusters when handed one — the same
+                # construction the recorded-column arm below uses — so a derived
+                # paired contrast under `cluster_by` computes rather than
+                # publishing `null`.
+                #
                 # **The unpaired ground reads `is_paired`, never `not base_keys`.**
                 # An empty intersection is a PROXY: it is also empty when two
                 # genuinely paired conditions share no completed units, which is a
                 # defect to report rather than a design to honour —
                 # `test_a_derived_contrast_over_an_empty_stratum_reports_no_delta` is
                 # that case, and it records `n_paired: 0` for exactly that reason.
-                # `clusters` is likewise the roster-wide declaration and not
-                # `col_clusters`, which this branch never builds.
-                if (
-                    compute_of is not None
-                    and compute_against is not None
-                    and clusters is None
-                    and is_paired
-                ):
+                if compute_of is not None and compute_against is not None and is_paired:
                     # Point estimate and interval from the same two calls over
                     # the same `base_keys`, so neither can drift onto a
                     # different unit set from the other.
@@ -1053,6 +1038,14 @@ def _comparison_step_blocks(
                             seed,
                             draws=draws,
                             strata=strata,
+                            method=(
+                                "paired_percentile_over_units_clustered"
+                                if clusters is not None
+                                else "paired_percentile_over_units"
+                            ),
+                            clusters=(
+                                None if clusters is None else {k: clusters[k] for k in base_keys}
+                            ),
                         )
                         interval = resampled.interval
                 # § Contrasts: `n_paired` is the intersection, and a PAIRED contrast has

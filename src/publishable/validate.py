@@ -3986,10 +3986,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
     # clusters, `partition_units` keeps one out of two folds, and
     # `summarize_step` gives every `basis: units` column a cluster-robust
-    # interval. What a clustered run may *not* yet do is resample a derived
-    # metric (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run
-    # time, not being knowable from a declaration at all), which refuses a
-    # combination rather than a declaration and is why it is not here.
+    # interval. A derived metric under a declared `cluster_by` also resamples,
+    # through `stats.percentile_of_derived_clustered` (H4d task 15a),
+    # dispatched from `stats.summarize_step` — no separate `validate` check
+    # for it, since whether a template's `aggregate` derives anything at all
+    # is not knowable from a declaration.
     #
     # `weight_by` is checked by `_check_weight_by`; `attrition` computes
     # Kish's effective size from it, and `summarize_step` weights every
@@ -4981,8 +4982,8 @@ def _check_sweep(
     # CLUSTER COUNT and not from Kish's effective size — § Weighted samples,
     # "`cluster_by` still decides the draw when both are declared" — and the two
     # coincide in any fixture not built to separate them, so the wrong choice
-    # would be invisible. Refused rather than approximated, on the precedent
-    # `E-DATA-CLUSTER-DERIVED` set for a construction that does not exist.
+    # would be invisible, so the combination is refused below rather than
+    # approximated.
     #
     # Reads the resolved family rather than the declaration: a `sweep.baseline`
     # with no axis beside it publishes no delta, and this guard should not

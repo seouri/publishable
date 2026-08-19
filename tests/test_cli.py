@@ -1528,35 +1528,24 @@ def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: P
     `stats.py`'s DERIVED-metric block (`aggregate`'s return, not a recorded
     column) IS a live consumer of `attrition`'s own figure — `"n": {**counts,
     "completed": len(collapsed)}` passes it straight through, unlike the
-    recorded-column path above. What keeps that path unreached here is a
-    narrower, run-time fact, not an unconditional refusal: `stats.py`'s gate
-    is `if clusters is not None and seed is not None:`, plus a non-empty
-    `drawable` (a per-key resample closure whose `statistics.resample` name
-    matches). `command_run` always supplies both — `resample_seed(digest)`
-    returns a real `int`, never `None`, and it builds a resample closure for
-    every derived key regardless of whether `statistics.resample` names it —
-    so the gate closes on every config `command_run` can produce today
-    (`E-DATA-CLUSTER-DERIVED`, confirmed by probe and pinned by
-    `test_a_clustered_derived_metric_is_refused_rather_than_drawn`), not
-    because the combination cannot exist in the code. A fourth call site
-    that omitted `seed` or built no `resample` closure would publish
-    `attrition`'s figure unmodified, and this claim would need re-checking
-    against it.
+    recorded-column path above.
 
-    **This "no config reaches `run.yaml` with `attrition`'s own clusters
-    figure" is therefore scoped to today's build, not a permanent property**:
-    `reference.md` marks `E-DATA-CLUSTER-DERIVED` *Temporary*, twice, both
-    saying H4 lifts it — once H4 lands, a derived metric under `cluster_by`
-    may again reach `run.yaml`, carrying `attrition`'s figure straight
-    through, and this test's own discriminating mutation site may need
-    revisiting then. `attrition`'s own arithmetic is not unpinned by any of
-    this — `tests/test_runner.py`'s
+    **This was true only through H4d task 15 (2026-08-19), when this passage
+    was corrected a second time**: `E-DATA-CLUSTER-DERIVED` is retired, and a
+    derived metric under a declared `cluster_by` now DOES reach `run.yaml`,
+    its `"n": {**counts, "completed": len(collapsed)}` carrying `attrition`'s
+    own condition-wide `clusters` figure straight through, unrecomputed —
+    exactly the shape this docstring once described as a future possibility.
+    `test_a_clustered_derived_metric_is_resampled_by_the_clustered_construction`
+    (`tests/test_stats.py`) now pins the computed interval directly; this
+    test's own discriminating mutation, over the recorded-column path alone,
+    is unaffected — it never touched the derived branch. `attrition`'s own
+    arithmetic is not unpinned by any of this — `tests/test_runner.py`'s
     `test_n_gains_clusters_under_a_clustered_design`,
     `test_every_attrition_return_site_agrees_about_clusters`, and
     `test_clusters_and_effective_are_independent_parts_of_n` each call it
-    directly and DO catch that mutation — it is simply not observable through
-    any `command_run`-produced `run.yaml` today. **This test's own
-    discriminating mutation is therefore in `stats.py`, not `runner.py`**:
+    directly and DO catch that mutation. **This test's own
+    discriminating mutation is in `stats.py`, not `runner.py`**:
     changing line ~1360's `cluster_count_of(clusters, column_keys)` to
     `cluster_count_of(clusters, clusters.keys())` moves both arms' printed
     figure from 3 to 4 (whole-roster count), which this test's exact-value
@@ -4097,11 +4086,17 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
     so the colliding key's closures **do** exist when the `except ContractError`
     retry leaves both maps uncleared. Modelled here with `resample_fns_by_key`
     empty regardless — a fixture that pins the null-beside-`n_paired_clusters`
-    shape as a *value*, without claiming this input shape is what the collision
-    actually produces. `test_a_derived_key_collision_under_a_cluster_end_to_end`
+    shape as a *value* that this function still produces whenever
+    `compute_of`/`compute_against` are `None` (an uncomputed derived metric,
+    for whatever reason), without claiming this input shape is what the real
+    collision produces. **It is not**: `test_a_derived_key_collision_under_a_cluster_end_to_end`
     below is the fixture that reproduces the real shape (populated closures,
-    reached through a genuine `run`) and pins the suppression that makes this
-    one's output the true one rather than a coincidence.
+    reached through a genuine `run`), and as of H4d task 15b that one no
+    longer stays null — the closures survive the collision AND the removed
+    `clusters is None` suppression, so the real shape now computes a genuine
+    clustered interval. This fixture's null output stays correct on its own
+    narrower premise (no closures at all), which is why it is kept rather than
+    retired alongside the suppression.
 
     **The decision: yes, `n_paired_clusters` belongs beside a null interval
     here, unchanged from what the code already does.** `n_paired` is written
@@ -4173,7 +4168,8 @@ def test_a_derived_key_collision_under_a_cluster_still_carries_the_intersection_
 
 def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     """The whole-branch review's Critical, reproduced through a real `run` (not
-    a direct call with hand-built maps) and pinned so it cannot regress silently.
+    a direct call with hand-built maps) — **converted, not deleted, now that
+    H4d task 15b removed the suppression that fixed it.**
 
     A clustered run whose template's `aggregate` returns a key colliding with
     the recorded column `pred` (`aggregate_returns="pred"`) reaches
@@ -4181,15 +4177,16 @@ def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     populated for the colliding key — `command_run` builds a closure for every
     key in `derived` before the call that can raise `E-STEP-KEY-COLLISION`, and
     the `except ContractError` retry that follows the collision clears neither
-    map. Before the clusters-guarded suppression this test pins, that left
-    `compute_of`/`compute_against` real and callable, so the derived branch
-    computed a genuine point estimate and drew a genuine (UNCLUSTERED)
-    percentile interval — `method: paired_percentile_over_units`, no
-    `_clustered` suffix — and published it beside `n_paired_clusters: 3`,
-    reading as if the cluster had been honoured when the number underneath it
-    was drawn as though every unit were independent. Verbatim the failure
-    `E-DATA-CLUSTER-CONTRAST` existed to prevent, on a path that refusal never
-    covered.
+    map, so `compute_of`/`compute_against` are real and callable. **What the
+    now-removed `clusters is None` suppression once prevented — an UNCLUSTERED
+    interval published beside `n_paired_clusters`, reading as if the cluster had
+    been honoured when it was drawn as though every unit were independent — H4d
+    task 15b closes a different way: `paired_percentile_of_derived` now takes
+    the same `clusters` mapping the recorded-column arm already draws through,
+    so the collision's surviving closures compute a genuinely CLUSTERED
+    interval instead.** `method: paired_percentile_over_units_clustered`, the
+    `_clustered` suffix present — verified directly below, over both call
+    sites into `_comparison_step_blocks`.
 
     Both the generated `vs_baseline` delta and the declared `results.contrasts`
     entry are asserted, since `_compute_vs_baseline` and
@@ -4218,9 +4215,9 @@ def test_a_derived_key_collision_under_a_cluster_end_to_end(tmp_path):
     )
     declared_entry = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
     for entry in (vs_baseline_entry, declared_entry):
-        assert entry["delta"] is None
-        assert entry["method"] is None
-        assert entry["ci95"] is None
+        assert entry["delta"] == 0.0
+        assert entry["method"] == "paired_percentile_over_units_clustered"
+        assert entry["ci95"] is not None
         assert entry["cohens_d"] is None
         assert entry["n_paired"] == 12
         assert entry["n_paired_clusters"] == 3
@@ -5001,8 +4998,10 @@ def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_ru
 
     A derived metric's unpaired contrast has nothing to compute — no per-side derived
     draw exists among the constructions this slice builds — so `delta`, `method` and
-    `ci95` are all `null` with the two side counts beside them, the shape
-    `E-DATA-CLUSTER-DERIVED` already uses and § Contrasts licenses.
+    `ci95` are all `null` with the two side counts beside them, the same
+    all-null-plus-counts shape a suppressed entry takes elsewhere and § Contrasts
+    licenses. Unrelated to `E-DATA-CLUSTER-DERIVED` (retired, H4d task 15), which
+    was about the PAIRED derived branch under a declared cluster, not this one.
 
     **The two counts are the presences that must report.** A test asserting only the
     three nulls passes identically if the whole entry were missing, and `is None` is
@@ -7865,13 +7864,15 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
     count are different numbers, which is the only way a reader — or this test —
     can tell which of the two is being reported.
 
-    **The derived half of this test was retired with H3b task 12's second refusal**
-    and moved to `test_a_clustered_derived_metric_is_refused_rather_than_drawn`
-    below: a derived metric under `cluster_by` no longer reaches the record at all,
-    so there is no `n` of its own to carry a cluster count. This one now asserts
-    the recorded column, which is where the count belongs and always did. The
-    project still derives `total` — the recorded column has to come from
-    somewhere — and the refusal drops it, which the test below is what pins."""
+    **The derived half of this test was retired with H3b task 12's second
+    refusal, and moved to what is now**
+    `test_a_clustered_derived_metric_is_now_resampled_by_the_clustered_construction`
+    below (H4d task 15 replaced the refusal it once pinned with a computed,
+    cluster-robust interval). This one asserts only the recorded column, which
+    is where the cluster count in `n` belongs and always did — a derived
+    metric's own `n` carries `attrition`'s condition-wide `clusters` figure
+    straight through rather than recomputing one of its own, which the test
+    below is what pins."""
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
@@ -7901,21 +7902,27 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
         assert re.search(r"\d+\.\d+", block) is None, block
 
 
-# --- H3b task 12: the clustered derived draw, refused rather than drawn --------
+# --- H3b task 12 / H4d task 15: the clustered derived draw ---------------------
 
 
-def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsys):
-    """§ Statistical reporting gives a derived metric "a percentile `ci95` from
-    resampling units — or clusters, when `cluster_by` is declared". The clustered
-    form of that draw does not exist, and `percentile_of_derived` draws units
-    unconditionally, so the combination is refused at run time under
-    `E-DATA-CLUSTER-DERIVED` — not at `validate`, because whether a template's
-    `aggregate` returns anything is not knowable from a declaration.
+def test_a_clustered_derived_metric_is_now_resampled_by_the_clustered_construction(
+    tmp_path, capsys
+):
+    """**Converted from a refusal test, `E-DATA-CLUSTER-DERIVED` now retired**
+    (H4d task 15). § Statistical reporting gives a derived metric "a percentile
+    `ci95` from resampling units — or clusters, when `cluster_by` is declared",
+    and the clustered form of that draw is now `stats.percentile_of_derived_clustered`
+    (task 15a), which `summarize_step` dispatches to whenever `clusters` is given
+    — end to end, through a real `run`, not only by direct call
+    (`tests/test_stats.py` owns that).
 
-    Three things at once, all of them exact: the derived metric is **absent** from
-    the record rather than present with a null interval, the identifier is
-    disclosed, and the recorded column beside it keeps its cluster-robust interval
-    — the refusal costs the derived mapping and nothing else."""
+    Kept alive against the code that survives rather than only asserting the old
+    refusal no longer fires: the derived metric is **present**, with a real
+    `ci95`, a `method` naming the clustered construction, and a `resample_draws`
+    count — `CLAUDE.md`'s own rule that a converted test must assert a positive,
+    since a test asserting only an absence would pass identically if the whole
+    derived branch had been deleted. The recorded column beside it keeps its own
+    cluster-robust interval, unaffected by the derived branch's new construction."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -7926,27 +7933,30 @@ def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsy
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    assert "total" not in aggregated
-    # Dropped, not published with `ci95: null` — that state already means "no
-    # resample callable, or no seed", and the record must not hold two meanings
-    # for it.
-    assert set(aggregated) == {"pred"}
+    assert set(aggregated) == {"pred", "total"}
     assert aggregated["pred"]["method"] == "t_over_units_clustered"
     assert aggregated["pred"]["n"]["clusters"] == 5
-    # The identifier reaches a reader, through the containment `cli` already had
-    # for a derived key collision.
+    assert aggregated["total"]["value"] == 7.0
+    assert aggregated["total"]["ci95"] is not None
+    assert aggregated["total"]["method"] == "percentile_of_derived_clustered"
+    assert aggregated["total"]["resample_draws"] == 2000
+    # `attrition`'s own condition-wide `clusters` figure, straight through —
+    # unlike the recorded column above, a derived metric has no per-column
+    # carrier set to recompute one of its own from.
+    assert aggregated["total"]["n"]["clusters"] == 5
+    # The identifier no longer reaches a reader: nothing was refused, and no
+    # `aggregate` fault was contained.
     out = doc["stdout"]
-    assert "E-DATA-CLUSTER-DERIVED" in out
-    assert "W-STATS-AGGREGATE-FAILED" in out
-    # And the run kept its record: a refusal after every execution is paid for
-    # must not cost the run its `run.yaml`.
+    assert "E-DATA-CLUSTER-DERIVED" not in out
+    assert "W-STATS-AGGREGATE-FAILED" not in out
     assert run["status"] == "completed"
 
 
 def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path, capsys):
     """The control that must report: the identical project without `cluster_by`
-    publishes `total` with a percentile interval over 2000 draws. The refusal is a
-    property of the combination, not of deriving a metric."""
+    publishes `total` with a percentile interval over 2000 draws — the unclustered
+    construction, `percentile_of_derived`, which the clustered project above no
+    longer takes now that `E-DATA-CLUSTER-DERIVED` is retired."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -7970,12 +7980,17 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
     the construction a declared `statistics.resample` puts around every recorded
     column (H4a whole-branch review, I1).
 
-    `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
-    derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
-    `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
-    `resample_draws` key — which `reference.md` § Statistical reporting makes
-    the shape of a run that declared NO resample — while `beside_n` went on
-    carrying the `resample` echo beside it. One block cannot say both.
+    **Retriggered through `E-STEP-KEY-COLLISION` rather than
+    `E-DATA-CLUSTER-DERIVED`**, which H4d task 15 retired — a derived key under
+    `cluster_by` now computes rather than faulting, so this test's own
+    collision (`aggregate_returns="pred"` names the SAME key the scaffolded step
+    records) is what still reaches `cli.py`'s retry path today. The property
+    under test is unchanged: the retry re-summarizes without the derived
+    metrics, and until an earlier fix it also dropped `resample_columns`/
+    `strata`/`seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered`
+    with no `resample_draws` key — which `reference.md` § Statistical reporting
+    makes the shape of a run that declared NO resample — while `beside_n` went
+    on carrying the `resample` echo beside it. One block cannot say both.
 
     `n: 500` rather than the 2000 default on purpose: `draws` is a separate
     parameter from the gate, and at its default a declared 500 would be resampled
@@ -7984,15 +7999,16 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
         tmp_path,
         capsys=capsys,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
-        aggregate_returns="total",
+        aggregate_returns="pred",
         roster_csv=_UNEVEN_CLUSTERS,
         units_overrides={"attributes": ["site"], "cluster_by": "site"},
         statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    # The fault fired and cost exactly the derived mapping, as before.
-    assert "E-DATA-CLUSTER-DERIVED" in doc["stdout"]
+    # The fault fired and cost exactly the derived mapping, as before — now
+    # through the collision rather than the retired cluster refusal.
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
     assert set(aggregated) == {"pred"}
     # And the recorded column came back with the construction the declaration
     # asked for, at the number of draws it asked for.
@@ -8007,13 +8023,16 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
     assert run["status"] == "completed"
 
 
-def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
-    """The blast radius of the refusal above, measured rather than asserted: core
-    ships exactly one template, and `generic` does not override `aggregate` at all
-    — `publishable init` therefore generates no project that can reach
-    `E-DATA-CLUSTER-DERIVED`. Only a user-written template that derives a metric
-    does, which is why the refusal is narrow enough to carry until H4 builds the
-    construction."""
+def test_the_shipped_template_derives_nothing_so_no_generated_project_reaches_a_derived_draw():
+    """Measured rather than asserted, and still true after `E-DATA-CLUSTER-DERIVED`
+    was retired (H4d task 15): core ships exactly one template, `generic`, and
+    it does not override `aggregate` at all — `publishable init` therefore
+    generates no project whose `aggregate` returns anything, so no generated
+    project's `run.yaml` ever carries a `percentile_of_derived`/
+    `percentile_of_derived_clustered` interval at all. Reaching either
+    construction, clustered or not, needs a user-written template that
+    overrides `aggregate` — every test above that does so patches
+    `GenericTemplate.aggregate` directly for exactly that reason."""
     from publishable.templates.base import BaseTemplate
     from publishable.templates.builtin.generic import GenericTemplate
 
