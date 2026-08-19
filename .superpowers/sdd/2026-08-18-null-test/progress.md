@@ -188,3 +188,31 @@ correction methods and their inner key sets **before** the functions it guards a
 The closed schema and the decomposed refusals: one code that today returns for five distinct faults
 becomes five, `statistics.null_test` is closed one level in on `resample`'s and `holdout`'s precedent,
 and `units.null_test_level` supplies the three-state answer `stratum_varies_within_cluster` cannot.
+
+## Batch 2 — tasks 5+24, 6, 7, 8, 9 — the closed schema and the decomposed refusals — complete, review dispatched
+
+Commits `5473585` (`E-STATS-NULLTEST-REPORTBY` minted **and** the `report_by` asymmetry converted to a
+documented limitation, one commit so the boundary between refusal and limitation is visible in one
+diff), `7aac5ad` (`statistics.null_test` closed one level in), `4fcc89f` (`_check_null_test` — enum,
+floor, shuffle over attributes ∪ group axes), `610c9e5` (`E-STATS-NULLTEST-UNITS`), `acc50cb` (the
+derived shuffle level, its ambiguity refusal, and the `report_by` guard), report `e0b4d18`.
+Suite 2280 → **2297** passed, 1 skipped, 2 xfailed. Four gates clean.
+`E-STATS-NULLTEST-UNSUPPORTED` alive; everything by direct call.
+
+**Five faults that returned one code should now return five.** That is the batch's whole claim, and
+the reviewer was told to probe each **as an exact set** by direct call rather than accept it —
+`validate` collects rather than aborting, so "distinguishable" has to mean the sets differ, not that
+a new code exists somewhere.
+
+**Three implementer findings handed to the reviewer.** Task 6's prescribed mutation came back
+**blind**, and the implementer **added a discriminating fixture permanently**, flagging it as a
+judgement call — the reviewer was asked to attempt an overturn and, if the blindness holds, to say
+whether the fixture is the right remedy or scope creep. Task 9's ambiguity mutation **crashes two
+unrelated tests** while the two named tests fail on real assertions — recorded because **a mutation
+caught by a crash is not a pin**, and the distinction is whether the *named* tests fail for the right
+reason. And task 7's docstring had its **scope narrowed by the implementer to avoid shipping a false
+guarantee** — the right instinct, given two false docstring claims shipped on a recent slice **because
+its briefs prescribed them**; the reviewer checks the new scope is true and did not narrow away
+something the code does provide.
+
+**No brief/spec disagreements this batch**, against eight found by the plan author and two by batch 1.
