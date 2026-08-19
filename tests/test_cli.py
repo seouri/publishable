@@ -17,11 +17,13 @@ from publishable.cli import (
     _apply_execution_order,
     _cond_roster,
     _condition_counts,
+    _entry_for,
     _evaluation_roster,
     _resolved_group_axes,
     _resolved_holdout,
     main,
 )
+from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
@@ -12252,3 +12254,38 @@ def test_a_clustered_run_leaves_a_summary_estimate_alone(tmp_path):
         for block in condition.get("vs_baseline", {}).values()
     )
     assert clustered_entry["method"] == "paired_t_over_units_clustered"
+
+
+def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
+    """The end-to-end shape of `fdr_bh`, minus the run: `corrected_fields` produces
+    the adjusted p-values and `_entry_for` resolves each `where_id` onto the entry
+    that holds the metric. Both halves are asserted, because a key produced and
+    never merged is the failure this test exists to catch.
+
+    `ci95_corrected` stays `null` by design and is asserted as such beside the
+    adjusted p — "reports nothing" and "reports only the p" are the two states this
+    method has been in, and only the second is correct."""
+    vs_baseline = {1: {"s": {"m": {"delta": 0.4, "p_value": 0.02}}}}
+    member = Member(
+        where="cond:1",
+        step="s",
+        metric="m",
+        delta=0.4,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        p_value=0.02,
+    )
+    fields = corrected_fields([member], "fdr_bh")
+    assert fields, "corrected_fields produced nothing to merge"
+    for (where_id, step_name, metric_key), values in fields.items():
+        entry = _entry_for(vs_baseline, None, where_id, step_name, metric_key)
+        assert entry is not None
+        values = dict(values)
+        assert values.pop("thin") is False
+        entry.update(values)
+    entry = vs_baseline[1]["s"]["m"]
+    assert entry["p_value_corrected"] == pytest.approx(0.02)
+    assert entry["ci95_corrected"] is None
+    assert entry["correction"] == "fdr_bh"
