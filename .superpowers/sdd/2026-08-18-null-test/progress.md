@@ -107,3 +107,31 @@ The per-condition/group-axis seam *is* speakable as a narrow refusal but is zero
 zero-payoff, and a documents-only first half inverts `CLAUDE.md`'s rule that the document leads.
 **Cost if wrong:** a long branch; mitigated by batched dispatch and by task 27 guarding from the first
 commit.
+
+## Batch 1 — tasks 27, 1, 2, 3, 4 — the guard pin and the documents — complete, review dispatched
+
+Commits `8a474df` + `fb60848` (the regression pin), `ef1d20c`, `c420227`, `2b7a190`, `65858ff`,
+report `f0f300a`. Suite 2275 → **2278** passed, 1 skipped, 2 xfailed — three new tests, all task 27's;
+tasks 1-4 are document edits and add none, as prescribed. Four gates clean.
+`E-STATS-NULLTEST-UNSUPPORTED` alive.
+
+**Ruling carried out of task 2, and it finishes something H4c started:** the group-axis p-value lands
+on **a declared `statistics.contrasts` entry, never `vs_baseline`** — H4c retired that same claim in
+§ Allocation and **left it standing in § What isn't a repeat**, one section over. The per-condition
+p-value is recorded **uncorrected**, and the `aggregated:` example's `p_value_corrected: 0.0028` was
+**deleted rather than re-derived** — decisive because it sat beside a `ci95` with no
+`ci95_corrected`. A recorded column gets **no p-value at all**.
+
+**Ruling carried out of task 4:** the floor is `math.floor(1.0/level)`, **not** the spec body's
+`ceil(1/level) − 1` — verified computationally at 20/40/60 against 19/39/59, matching the correction
+the plan author appended. **Cost if wrong:** every permutation count in the slice is off by one at the
+boundary, which is exactly the class of error a floor exists to prevent.
+
+**Two brief/reality disagreements, both handed to the reviewer.** Task 27's fourth pin literal —
+kendall's per-condition CI `[0.347, 0.477]` — **does not exist in `docs/reference.md`, only in
+`README.md`**; the implementer dropped it and documented the omission in the test's own docstring
+rather than writing an unbuildable assertion. The reviewer was asked whether that absence is itself a
+defect worth filing, since `CLAUDE.md` § The worked example names all three documents as carrying one
+experiment. And task 2's brief offered a can-fail control that **is not present in two of the four
+documents** it claims — harmless to the sweep, but a recipe stating its own control wrongly is the
+shape that makes a sweep unfalsifiable.
