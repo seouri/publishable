@@ -109,3 +109,121 @@ mutation" as their briefs state).
   touches validate-time behavior or retires any code.
 - Final state at `65858ff`: `uv run pytest` → 2278 passed, 1 skipped, 2 xfailed (baseline 2275 + 3
   new task-27 tests); `ruff check .`, `ruff format --check .` (80 files), and `mypy` all clean.
+
+---
+
+## Fix round 1
+
+Review: `.superpowers/sdd/2026-08-18-null-test/task-b1-review.md`, verdicts PASS/PASS with one Major
+each. Both credited items (task 27's exact literals + discriminating mutation, and each member's own
+α pinned) required no change. Fixed below in review order.
+
+### M2 — the pin guarded member identities, not inner keys, and `holm` alone
+
+Changed: `tests/test_correction.py`. Added `_PIN_INNER_KEYS = {ci95_corrected, correction,
+correction_level, family_size, family, thin}` and, for every block returned under `holm`, an
+`assert set(fields[key]) == _PIN_INNER_KEYS` alongside the existing per-member value assertions.
+Added two new tests, `test_bonferronis_corrected_bounds_are_unmoved_by_the_p_value_work` and
+`test_fdr_bhs_corrected_bounds_are_unmoved_by_the_p_value_work`, pinning the same `_PIN_MEMBERS`
+family under `bonferroni` (all three at `correction_level` 0.0166…, with their own `ci95_corrected`
+literals) and `fdr_bh` (`ci95_corrected: None`, `correction_level: None`, `thin: False` for all
+three), each also asserting the inner key set.
+
+Verified by running: computed all three methods' outputs against `_PIN_MEMBERS` directly
+(`corrected_fields(ms, method)` for `holm`/`bonferroni`/`fdr_bh`) and confirmed the literals matched
+the reviewer's captured baselines exactly before writing them into the test. `uv run pytest
+tests/test_correction.py -q` → 47 passed.
+
+**Re-ran the mutation against the widened pin**, per the coordinator's instruction: widened
+`family_members`'s comprehension to `[e for e in entries]`, cleared `__pycache__`, ran the full
+unfiltered suite. Result: **10 failed, 2270 passed** (up from the original 8 failed) — all three of
+`test_holms_corrected_bounds_are_unmoved_by_the_p_value_work`,
+`test_bonferronis_corrected_bounds_are_unmoved_by_the_p_value_work`, and
+`test_fdr_bhs_corrected_bounds_are_unmoved_by_the_p_value_work` now fail, alongside the same
+`test_a_member_with_no_interval_and_no_p_value_is_still_outside_the_family` and the same four
+`test_cli.py`/two shipped `test_correction.py` collateral failures as before. Reverted by editing the
+line back to `return [e for e in entries if e.ci95 is not None]`; diffed byte-for-byte against a
+pre-mutation copy (identical); re-ran, confirmed green.
+
+### M1 — `null_draws` had no example and an undetermined placement
+
+Changed: `docs/reference.md`, two sites. (1) The § Statistical reporting `null_test` echo paragraph
+now states placement explicitly: "`null_draws` is what the p-value actually rests on, on
+`resample_draws`'s own precedent **and at the same place in the record**: a metric-block sibling of
+`null_test`, not a key inside it — `resample_draws` sits beside `resample` rather than inside its
+map, and `null_draws` sits beside `null_test` the same way." (2) The § What isn't a repeat `enrichment`
+example — the sole p-value-carrying record example in the four documents, and a *derived* metric,
+which the prose says is exactly where `null_draws` can differ from `n` — now shows
+`null_draws: 4998` beside `resample_draws: 2000` in the metric block (not nested inside the
+`null_test: {...}` echo), with a new paragraph explaining the two-short count (two relabelled tables
+where the shuffle emptied an arm) and stating a recorded column's `null_draws` equals `null_test.n`
+exactly.
+
+Verified by: re-reading both edited paragraphs in full (not just the changed sentence, per
+`CLAUDE.md`'s docstring rule); confirming `null_draws` now appears in `docs/reference.md` twice more
+than before (`grep -c null_draws` → 3, was 1) with one of the three inside a worked-shape example;
+confirming the placement sentence answers the review's exact ambiguity (echo member vs. metric-block
+sibling) by naming the `resample_draws`/`resample` pair as the analogy rather than restating "beside
+it."
+
+### m6 — positional table-row locator ("by the row above")
+
+Changed: `docs/reference.md:2191` (renumbered after the M1 edit). "`ci95_corrected` is `null` for
+every member, by the row above" → "`ci95_corrected` is `null` for every member, which is what the
+`correction` table's `fdr_bh` row states" — names the row by what it contains rather than by its
+position in the file, per `CLAUDE.md`'s ban on the construct. Verified by re-reading the paragraph in
+file order and confirming no other positional locator ("above"/"below"/"the two rows") survives in
+the sentence.
+
+### m7 — an insertion pushed "the second row" away from its table
+
+Changed: `docs/reference.md`. "The second row isn't an exception to the first" → "The
+[`groups`](#expansion-modes)-axis row isn't an exception to the ordinary-attribute row" — names both
+referents instead of counting rows, so a later insertion between this sentence and the table cannot
+break it again. Verified by re-reading in file order with the new `null_draws` paragraph and the
+re-authored example both now sitting between this sentence and the landing-site table, confirming the
+sentence reads correctly regardless of what sits between it and the table.
+
+### m3 — task 28's site list omitted § Between-subjects, which holds the stronger stale clause
+
+Changed: `docs/superpowers/plans/2026-08-18-null-test.md`, task 28 step 4 (not
+`experimental-designs.md` itself — the review is explicit that the plan's late-documents task owns
+the fix, and this batch's job is only to record the omission where that task will find it). Added
+"§ Between-subjects" to the site list beside "§ Bootstrap and permutation, § Matched case-control and
+§ Allocation," and a note naming the specific stale clause ("derived from... rather than declared
+separately") and why it is the stronger of the two — it is wrong about whether the comparison exists
+at all now, not only about its pairing, against `docs/reference.md`'s new "A cross-arm comparison
+exists only as a declared `statistics.contrasts` entry." Verified by re-reading task 28 step 4 in full
+after the edit to confirm the added sentence doesn't contradict the surrounding "read them, do not
+grep for a spelling" instruction it sits beside.
+
+### m4 — the document pin's docstring claimed more than it guards
+
+Changed: `tests/test_validate.py`. Renamed
+`test_the_worked_examples_intervals_are_not_narrowed_by_the_null_test_work` to
+`test_the_worked_examples_intervals_in_reference_md_are_not_narrowed_by_the_null_test_work`, and
+reworded the docstring's second paragraph to open with "Guards `docs/reference.md` only" rather than
+stating the omission as an aside. No assertions changed. Verified by running
+`tests/test_validate.py -k worked_examples` (still the sole match) and confirming the new name and
+opening sentence match exactly what the function's body reads and asserts — `docs/reference.md` and
+nothing else.
+
+### m8 and m9 — confirmed, no action owed by this batch
+
+**m8** (forward `[refused]` link to `E-STATS-NULLTEST-REPORTBY`, no row yet): re-read
+`docs/superpowers/plans/2026-08-18-null-test.md` Task 5's step 2, which mints the § Errors row for
+this exact code as part of task 5's own commit. Confirmed rather than fixed, per the review's either/or.
+
+**m9** (§ Validation's *Null test coherence* row still says "unit attribute," pre-existing tension
+with the group-axis landing table): re-read task 28 step 1, which already restates this row's
+condition to "name the `sweep.groups` union and the `method`/`n` faults." Already owned and recorded;
+no additional edit needed.
+
+**m5** needed no action, per the review (already owned by the plan and `spec-defects.md`).
+
+### Final verification
+
+`uv run pytest` (full, unfiltered, foreground) → **2280 passed, 1 skipped, 2 xfailed** (2278 + 2 new
+`bonferroni`/`fdr_bh` pin tests). `ruff check .` → all checks passed. `ruff format --check .` → 80
+files already formatted. `mypy` → 45 source files, no issues. `git status` clean after four fix
+commits: `96815f9` (M2), `acccda7` (M1, m6, m7), `1273247` (m3), `6a22630` (m4).
