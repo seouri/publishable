@@ -524,9 +524,9 @@ That is a specification-integrity payoff, not an execution payoff, and it must b
 **Appended 2026-08-18 by the implementation plan's author
 ([`plans/2026-08-18-null-test.md`](../plans/2026-08-18-null-test.md)), measured against `main` at
 `a207702`. The body above is not edited** — a spec records what was decided when it was written, and
-a retro-edit destroys the evidence. Each entry names what it replaces and how it was verified. Six of
-the seven change a task's contents; none changes the task count, the ordering constraints or the
-payoff answer.
+a retro-edit destroys the evidence. Each entry names what it replaces and how it was verified. Every
+one of the eight changes a task's contents; none changes the task count, the ordering constraints or
+the payoff answer.
 
 **1. `percentile_of_derived`'s structure cannot express a permutation, because the roster's
 attributes are re-applied on every draw.** § Task decomposition's task 12 reads *"The derived
@@ -601,3 +601,16 @@ received none. **What moves is `observed.ci95_corrected`, from absent to `null`.
 `supported` (a bound test had no raw interval to read either, and `evaluate_on: observed` bypasses
 the flag) and `family_size` (it is `len(counted)`). **Recorded at that size in task 17's step 5**,
 with one test asserting exactly it — an inflated claim here would be worse than none.
+
+**8. The `statistics.report_by` level call site is a reachable cell the decisions do not name.**
+Decision 7 rules on a per-condition recorded column and on `shuffle` naming a `report_by` attribute;
+neither covers a level's own **derived** metric under a `shuffle` naming some *other* attribute —
+which § The refusal decision 7 mints establishes is a **legal** config, since the refusal and the
+limitation are disjoint. **Verified by reading `cli.command_run`:** `summarize_step` is called a
+second time per level, at the same site § The inherited filings' `resample_columns` asymmetry is
+about. **Added as a ruling to the plan's task 20** — a level's derived metric gets no `p_value`, on
+§ The unit table is the inference base's own ground that a level *"repeats metrics over strata
+without adding executions or joining the correction family"*, with `command_run` passing no
+`null_test` to that call and one test pinning it beside a condition block that does carry one. Ruled
+rather than left, because an unruled reachable cell inside the function pair task 24 is rewriting
+claims about is the shape a whole-branch review finds late.
