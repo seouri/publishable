@@ -2132,7 +2132,7 @@ vs_baseline:
 | `correction` | `ci95_corrected` | Also reports |
 |---|---|---|
 | `none` | absent | — |
-| `bonferroni` | The interval at α/m, for a family of size *m* | — |
+| `bonferroni` | The interval at α/m, for a family of size *m* | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
 | `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
 | `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted — so it needs p-values; see below |
 
@@ -2140,11 +2140,46 @@ vs_baseline:
 
 Holm's rank-implied level is the conventional companion to the procedure rather than a strictly simultaneous band, and calling it that is the honest description: it is what the step-down procedure tests each comparison at, so an interval excluding the threshold agrees with the procedure's verdict. It also means **the weakest comparison in a family is corrected by nothing** — at rank *m* the level is α itself — which the worked example shows: kendall's contrast carries far the stronger evidence, so spearman's is rank 2 of 2 and its corrected interval is its raw one. That is Holm behaving correctly, not a correction that failed to apply, and it is the property that makes Holm uniformly more powerful than Bonferroni. Benjamini-Hochberg has no interval that means anything of the kind — controlling a false discovery *rate* is a statement about a set, not a bound on any one comparison — so core reports the adjusted p-value and leaves `ci95_corrected` null rather than printing a number with no construction behind it. That asymmetry is deliberate and is the same standard the family count is held to below.
 
-**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [only metrics carrying an interval are counted](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave the family ordered by two statistics, which is not an ordering.
+**What `p_value_corrected` is, under each method that reports one.** It is the p-value expressed at
+the level this member's interval was corrected at, which is what [§ The unit table is the inference
+base](#the-unit-table-is-the-inference-base) already fixes — "corrected alongside the intervals when
+the method supplies one, at the same level the interval was computed at". So `bonferroni` reports
+`min(1, p × m)` and `holm` reports `min(1, p × (m − i + 1))` at this member's own evidence rank *i*,
+and both clip at 1.0 rather than reporting a probability above one. **This is not Holm's step-down
+adjusted p-value, and it is not monotone in the raw p.** There is no prefix maximum: a member with a
+smaller raw p can carry a larger adjusted one, because the rank the level came from is the evidence
+ranking rather than the p ordering. That is the evidence ranking showing through, and it is the
+intended reading rather than a defect to repair — ranking Holm on the p-value instead would leave the
+family ordered by two statistics, which is the arrangement the ranking paragraph below forecloses.
+`fdr_bh` is the exception and is defined in its own paragraph.
 
-**`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either — a correction declared and not applied, which is the state this section exists to prevent. So `validate` warns on the condition that decides it: **no comparison in the family will carry a p-value**, either because `statistics.null_test` is undeclared or because its `shuffle` reaches none of them. Use `holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that supplies the p-value.
+**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [a member with no interval takes no rank](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave a family whose intervals are built at a rank ordered by two statistics, which is not an ordering.
 
-Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
+**`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics
+carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either —
+a correction declared and not applied, which is the state this section exists to prevent. So
+`validate` warns on the condition that decides it: **no comparison in the family will carry a
+p-value**, either because `statistics.null_test` is undeclared, or because its `shuffle` reaches none
+of them, or because every member is a parameter-axis contrast, which can never supply one. Use
+`holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that
+supplies the p-value.
+
+**Where it does have them, `fdr_bh` ranks on the ascending p-value, and that creates no second
+ordering.** Benjamini-Hochberg's *i* is definitionally the rank in ascending p, and under this method
+no interval is ever built at a rank — `ci95_corrected` is `null` for every member, by the row above —
+so the evidence ratio decides nothing in an `fdr_bh` run. The family is unchanged: **m is the whole
+family**, counted exactly as it is under every other method, while *i* runs over the members that
+carry a p-value. A larger m is the conservative direction, which is the direction this section is
+held to throughout. Each member's adjusted value is `min(1, m/i × p)` taken as a running minimum from
+the largest *i* down, so an adjusted value is never smaller than one belonging to a larger p — the
+accumulation Holm's and Bonferroni's per-member expressions do not have.
+
+Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics,
+since a metric core computed nothing for is not a comparison anyone can read as significant. A
+metric carrying a p-value and no interval is counted: the exclusion is about metrics core has
+nothing to say about, and a permutation p-value needs only the observed statistic and the null, both
+of which exist where an interval could not be built. Under `fdr_bh` that member is the one whose
+p-value was the only thing there was to adjust. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
 **A "comparison" is a baseline contrast or a [declared one](#contrasts-claims-that-arent-condition-vs-baseline)** — both put an interval in front of a reader, so both count. Reporting strata do not: a stratum describes rather than compares, and a subgroup claim you intend to test is a [hypothesis](#pre-registration), corrected in that family.
 
