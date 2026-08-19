@@ -1968,15 +1968,32 @@ Both operate on `units.parquet`, resampling or relabelling it and recomputing th
 
 | `shuffle` names | The null it builds | Where the p-value lands |
 |---|---|---|
-| An ordinary unit attribute | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate |
-| A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On the contrast, in `vs_baseline` |
+| An ordinary unit attribute, where the metric is one a template's [`aggregate`](#templates-where-parameters-are-defined) derived from it | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate, and **uncorrected** — a per-condition estimate is not a comparison, so it joins no correction family |
+| A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On a [declared contrast](#contrasts-claims-that-arent-condition-vs-baseline) entry, which is the only cross-arm comparison a run generates |
+
+A cross-arm comparison exists only as a declared `statistics.contrasts` entry. A `sweep.baseline`
+fixing a group level is refused — the arms of a group axis are [peers](#expansion-modes), so none of
+them is the baseline — and a baseline fixing only a parameter axis expands over the group axis, which
+makes every generated comparison within-arm. So this is where a group-axis p-value lands, for the
+same reason an unpaired delta does.
+
+**A recorded column carries no p-value, and that is a property of the arithmetic rather than a gap.**
+A permutation null relabels units and recomputes; a condition's recorded-column metric is the mean of
+that column over that condition's units, which no relabelling of any attribute changes. The null
+would be the observed value repeated `n` times and the p-value exactly 1.0 — a number that reads as a
+finding and is an artifact of having asked. So the null attaches to a metric the shuffled attribute
+actually enters, which for a per-condition estimate means one a template's `aggregate` derived. The
+one case where an attribute does enter a column metric's computation is a
+[`statistics.report_by`](#reporting-strata) level, and that combination is
+[refused](#errors-validate-reports): relabelling a stratifying attribute changes which units a
+stratum holds, so the null is of a different partition rather than of the same estimate.
 
 ```yaml
 aggregated:                                    # shuffle names an ordinary attribute
   step03_screen:
-    prob: {value: 0.71, basis: units, method: t_over_units, ci95: [0.66, 0.76],
-           p_value: 0.0004, p_value_corrected: 0.0028,
-           null_test: {method: permutation, n: 5000, shuffle: label}}
+    enrichment: {value: 0.71, basis: units, method: percentile_over_units, ci95: [0.66, 0.76],
+                 p_value: 0.0004, resample_draws: 2000,
+                 null_test: {method: permutation, n: 5000, shuffle: label, level: rows}}
 ```
 
 The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
