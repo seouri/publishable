@@ -254,10 +254,10 @@ def test_a_structural_fact_value_is_E_APPARATUS_FACT_TYPE_and_the_message_names_
 
 
 def test_a_fact_equal_to_a_declared_credential_value_is_refused():
-    """The value is `lab7`: short, lowercase, ordinary-looking, a whole word.
-    That is the point — a random-looking value makes an exact-value check and a
-    heuristic AGREE, so the mutation below would have two branches that cannot
-    differ."""
+    """The value is `lab7`: short, lowercase, ordinary-looking, a whole word —
+    chosen so an exact-value check catches it regardless of what it looks
+    like, which is the property a pattern or entropy heuristic cannot be
+    relied on for."""
     from publishable import Apparatus
     from publishable.apparatus import check_facts
     from publishable.errors import ContractError
@@ -294,6 +294,47 @@ def test_a_value_core_never_read_is_not_matched():
     returned = Apparatus(facts={"operator_note": "lab7"})
     checked = check_facts(returned, [], probe_name="p", credentials={})
     assert checked == {"operator_note": "lab7"}
+
+
+def test_a_fact_value_with_elementwise_eq_is_E_APPARATUS_FACT_TYPE_even_beside_a_credential():
+    """Major 2 (batch 2 review): `value == cred_value` used to run on the RAW
+    value, before the scalar walk that would have refused it — so a NumPy
+    array fact escaped as an uncoded `ValueError` ("the truth value of an
+    array... is ambiguous"), but only when `credentials` was non-empty. With
+    `credentials={}` the same fact was correctly `E-APPARATUS-FACT-TYPE`,
+    which is what made the fault conditional on a declaration rather than on
+    the fact's own shape. The `isinstance(value, str)` guard fixes this: a
+    credential value is always a `str`, so nothing this check ever needs to
+    catch is skipped."""
+    import numpy as np
+
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"model_revision": np.array([1, 2])})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"})
+    assert excinfo.value.code == "E-APPARATUS-FACT-TYPE"
+
+
+def test_a_credential_shaped_value_that_is_not_a_declared_credential_is_kept():
+    """Major 3 (batch 2 review): the missing third cell. `credentials` is
+    NON-EMPTY here, so the comparison loop actually runs, and the fact value
+    is long, mixed-case-and-digit, credential-shaped text — exactly what a
+    pattern or entropy heuristic would flag — but it is not equal to the one
+    declared credential's value. Decision 6's own ground: "a pattern check …
+    fails closed on a config value that happens to look random." Kept, not
+    refused — the previous control (`credentials={}`) cannot exercise this,
+    because its comparison loop never runs at all."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+
+    returned = Apparatus(facts={"model_revision": "gpt-5.5-2026-06-11x9f3a2b8c"})
+    checked = check_facts(
+        returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"}
+    )
+    assert checked == {"model_revision": "gpt-5.5-2026-06-11x9f3a2b8c"}
 
 
 def test_the_first_answered_observation_wins_and_a_never_answered_fact_stays_null():
@@ -345,11 +386,14 @@ def test_unobserved_counts_declared_facts_only_and_counts_every_probe():
 
 
 def test_the_warning_is_one_finding_per_condition_and_fact_including_the_flaky_pair():
-    """Two conditions × three declared facts over six observations, arranged as
-    Fixture N: one never-answered pair, two partially answered pairs, and three
-    pairs with no null at all. Exactly THREE findings, asserted as a count and as
-    the exact set of (condition, fact) pairs — per-call emission would produce
-    eight, and a warning derived from `facts` alone would produce one."""
+    """Two conditions × three declared facts over FOUR `record` calls (not the
+    plan's Fixture N, which is a six-line `run`-level ledger owned by task 11
+    — this is a direct-call fixture built for this batch): one never-answered
+    pair, two partially answered pairs, and three pairs with no null at all.
+    Exactly THREE findings, asserted as a count and as the exact set of
+    (condition, fact) pairs — this fixture's four null observations mean a
+    per-null-observation emission would produce four, not three, and a
+    warning derived from `facts_document()` alone would produce one."""
     from publishable.apparatus import Observations
     from publishable.diagnostics import Collector
 
@@ -362,7 +406,7 @@ def test_the_warning_is_one_finding_per_condition_and_fact_including_the_flaky_p
     obs.record("01_variant", {"fact_a": "va", "fact_b": "vb", "fact_c": None})
 
     c = Collector()
-    obs.warn_unanswered(c)
+    obs.warn_unanswered(c, ["fact_a", "fact_b", "fact_c"])
     findings = [f for f in c.findings if f.code == "W-APPARATUS-UNANSWERED"]
     assert len(findings) == 3
     pairs = set()
@@ -378,6 +422,28 @@ def test_the_warning_is_one_finding_per_condition_and_fact_including_the_flaky_p
         ("00_baseline", "fact_c"),
         ("01_variant", "fact_c"),
     }
+
+
+def test_an_undeclared_facts_null_warns_of_nothing_beside_a_declared_null_that_must():
+    """Major 1 (batch 2 review): `warn_unanswered` fires only for a DECLARED
+    fact that came back `null` — Decision 8's opening clause and Decision 4's
+    fourth row. Both an undeclared and a declared fact come back `null` here,
+    so the control is not an absence-only assertion: the declared pair's
+    finding must be present at the same time the undeclared pair's is absent,
+    which is what a build filtering nothing (the plan-brief signature with no
+    `declared` parameter) cannot do."""
+    from publishable.apparatus import Observations
+    from publishable.diagnostics import Collector
+
+    obs = Observations()
+    obs.record("00_baseline", {"model_revision": None, "undeclared_diag": None})
+
+    c = Collector()
+    obs.warn_unanswered(c, ["model_revision"])
+    findings = [f for f in c.findings if f.code == "W-APPARATUS-UNANSWERED"]
+    assert len(findings) == 1
+    assert "model_revision" in findings[0].message
+    assert all("undeclared_diag" not in f.message for f in findings)
 
 
 def test_a_ledger_line_carries_exactly_the_five_documented_keys(tmp_path):
@@ -433,8 +499,15 @@ def test_a_second_append_adds_a_line_and_rewrites_nothing(tmp_path):
 
 def test_the_condition_key_is_the_nn_label_form_and_a_labelless_condition_is_nn():
     """`condition_dir_name`'s own spelling, imported rather than re-formatted, and
-    the no-sweep case that `reference.md`'s example never shows."""
+    the no-sweep case that `reference.md`'s example never shows. The labelled
+    branch is checked against `condition_dir_name` itself, computed rather than
+    a hard-coded literal — `condition_dir_name` is exactly `f"{index:02d}_{label}"`
+    with no sanitisation, so no mutation of "call the import" vs "inline the same
+    f-string" can ever be caught here; what this pins is the VALUE, not the
+    import."""
     from publishable.apparatus import condition_key
+    from publishable.sweep import condition_dir_name
 
+    assert condition_key(0, "baseline") == condition_dir_name(0, "baseline")
     assert condition_key(0, "baseline") == "00_baseline"
     assert condition_key(0, None) == "00"

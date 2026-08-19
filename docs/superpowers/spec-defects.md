@@ -7008,3 +7008,40 @@ greps for a closed slice named as an owner, or the pass is dropped in favour of 
 the task that touches its code.
 
 **Found by:** the controller, sweeping `Owner:` lines after H4d merged.
+
+## OPEN — `append_observation` writes `facts` verbatim with no ordering ruled against `check_facts` — **Owner: H7d (batch 3)**
+
+`apparatus.append_observation(run_dir, *, phase, condition, probe, facts)` writes its `facts` argument
+to `apparatus/probes.jsonl` unchecked — it performs no shape, credential, or scalar-type check of its
+own. Decision 6 rules that a fact value equal to a declared credential's value is *"not recorded"*,
+but no decision in `docs/superpowers/specs/2026-08-19-apparatus-part-a-design.md` orders the append
+against `apparatus.check_facts` — Decision 9 rules the append's position only relative to *the
+execution* it precedes, never relative to the credential check. A caller free to append the ledger
+line before calling `check_facts` would put a credential-carrying fact on disk while still satisfying
+every ordering rule this design states, because no rule forbids that order.
+
+No call site exists yet in this build (H7d Part A batch 2, `apparatus.py` only) — batch 3 owns the
+first one. `append_observation`'s docstring already states this gap and names the two ways to close
+it: order the call so `check_facts` runs first, or accept the record in this file with a different
+resolution.
+
+**Owner:** H7d, batch 3 (the first task that calls both functions from a real `run`). **Found by:**
+batch 2's review, verified by reading `apparatus.py`'s `append_observation` and every Decision in the
+design for an ordering rule against `check_facts` — none exists.
+
+## OPEN — a fact **key** equal to a credential value is not checked, and reaches a diagnostic via `coerce_scalars`'s `{key!r}` — **Owner: unassigned**
+
+`apparatus.check_facts`'s credential check (Decision 6) compares each fact **value** against every
+declared credential's value; it does not compare fact **keys**. `coercion._refuse`, which
+`check_facts` calls into for its scalar walk and re-codes as `E-APPARATUS-FACT-TYPE`, interpolates the
+offending value's key with `{key!r}`. A probe returning `{<a credential's value>: [1, 2]}` — a
+structural value keyed by a credential — reaches a diagnostic with that credential in the message.
+
+This is within Decision 6's letter: the ruling is stated for *"a fact value,"* not a fact key, and a
+credential value being used as a probe's key is a shape no fixture in this batch constructs. Whether
+core should also check keys is a real narrowing question the design does not settle, so this entry
+records it rather than resolving it by a code change that would put a second, unruled answer beside
+Decision 6's stated set.
+
+**Owner:** unassigned. **Found by:** batch 2's review, verified by reading `check_facts`'s ordering
+and `coercion._refuse`'s message format together.

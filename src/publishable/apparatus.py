@@ -162,6 +162,15 @@ def check_facts(
             )
     # 2. credentials      → E-APPARATUS-FACT-CREDENTIAL
     for key, value in facts.items():
+        # `isinstance(value, str)` guards the comparison itself: a credential
+        # value is always a `str` (`secrets.credential_values`'s return type),
+        # so this is behaviour-preserving for Decision 6's stated property —
+        # and without it, a fact value with an elementwise `__eq__` (a NumPy
+        # array is the standing example) reaches `value == cred_value` before
+        # the scalar walk below would have refused it, and raises an uncoded
+        # `ValueError` instead of `E-APPARATUS-FACT-TYPE`.
+        if not isinstance(value, str):
+            continue
         for cred_name, cred_value in credentials.items():
             if value == cred_value:
                 raise ContractError(
@@ -224,9 +233,7 @@ class Observations:
             elif pair not in self._first_answered:
                 # The FIRST answered observation wins — a fact whose first call
                 # answered `null` and whose second answered a value records the
-                # answer; a fact that never answers stays `null`. A build that
-                # kept the LAST observation instead cannot be told apart from
-                # this one by any fixture with fewer than three observations.
+                # answer; a fact that never answers stays `null`.
                 self._first_answered[pair] = value
 
     def facts_document(self) -> dict[str, dict[str, Any]]:
@@ -252,14 +259,25 @@ class Observations:
             out[fact] = {"null_probes": null_probes, "total_probes": total_probes}
         return out
 
-    def warn_unanswered(self, c: Collector) -> None:
-        """`W-APPARATUS-UNANSWERED`, once per (condition, fact) pair with at
-        least one `null` observation, read off the counts rather than emitted
-        per call — a per-call emission would print the same flaky pair's line
-        once for every probe that missed it. Never changes an exit code, on
-        `W-ENV-UNLOCKED`'s existing precedent."""
+    def warn_unanswered(self, c: Collector, declared: Sequence[str]) -> None:
+        """`W-APPARATUS-UNANSWERED`, once per (condition, DECLARED fact) pair
+        with at least one `null` observation, read off the counts rather than
+        emitted per call — a per-call emission would print the same flaky
+        pair's line once for every probe that missed it. Never changes an
+        exit code, on `W-ENV-UNLOCKED`'s existing precedent.
+
+        `declared` narrows exactly as `unobserved` does, on Decision 8's own
+        opening clause ("a **declared** fact that came back `null`") and
+        Decision 4's fourth row: an undeclared fact's `null` is recorded (in
+        `facts_document`) but warns about nothing, because the warning is
+        what a DECLARATION buys — a probe returning an extra, undeclared
+        diagnostic that happens to come back empty is not a disagreement
+        between the plugin and the template the way a missed declared fact
+        is."""
         for condition in self._conditions:
             for fact in self._facts_by_condition[condition]:
+                if fact not in declared:
+                    continue
                 pair = (condition, fact)
                 nulls = self._null_counts.get(pair, 0)
                 if not nulls:
@@ -281,6 +299,18 @@ def condition_key(index: int, label: str | None) -> str:
     label is `None`; canonical JSON cannot sort a `null` key beside `str` keys
     under `sort_keys=True`, so that case is `f"{index:02d}"` — the same scheme
     with an empty body — rather than the string `"None"` or a literal `null`.
+
+    **The import itself is not behaviourally pinnable.** `condition_dir_name`
+    is exactly `f"{index:02d}_{label}"` with no sanitisation, so a mutation
+    that inlined that f-string here instead of calling the import would
+    produce an identical result for every input — two branches that cannot
+    differ. What a test *can* pin is the labelled branch's output value
+    (`condition_key(0, "baseline") == "00_baseline"`, which would catch a
+    build that emitted the bare label — Decision 9's reading before
+    correction 2 overrode it) and the no-sweep branch's value and sort
+    behaviour under canonical JSON. The import is kept because it is the one
+    documented source of truth for this string, not because any test proves
+    calling it rather than re-deriving it.
     """
     if label is None:
         return f"{index:02d}"
@@ -295,17 +325,28 @@ def append_observation(
     Exactly § The apparatus files' five keys — `at`, `phase`, `condition`,
     `probe`, `facts` — nulls and undeclared facts included, one line per
     probe call, written at the call rather than after the execution it
-    precedes: a failed execution never stops the run (`runner.execute_plan`'s
-    `except Exception` comment says so), so writing after it would still
-    write the line either way and would lose nothing there — but it WOULD
-    lose the observation for a run that dies inside the execution itself,
-    which is the run this ledger exists for. `condition` is the `<nn>_<label>`
-    key from `condition_key`, never the bare label.
+    precedes: an execution that raises still gets its result appended and the
+    run continues (`runner.execute_plan`'s `except Exception` comment, "a
+    failed execution never stops the run") — the run also stops early when
+    `max_failed_fraction` is exceeded, which an after-the-execution append
+    would still have recorded correctly, so the qualification does not change
+    the ordering argument. What after-the-execution WOULD lose is the
+    observation for a run that dies *inside* the execution itself, or between
+    executions, before any later append runs — which is the run this ledger
+    exists for. `condition` is the `<nn>_<label>` key from `condition_key`,
+    never the bare label.
 
     `phase` is one of a closed vocabulary of four: `run_start`, `pre_execution`,
     `dry_run`, `freeze`. Part A only ever calls this with the first two; the
     other two are named here so H8's and H9's callers do not mint a fifth
     spelling of a phase this module already has a name for.
+
+    **No ordering is ruled here against `check_facts`.** This function writes
+    `facts` verbatim, with no check of its own — a caller that appends before
+    calling `check_facts` would put a credential-carrying fact on disk while
+    satisfying every ordering this module states. Batch 3, which owns the
+    first call site, must either call `check_facts` before this function or
+    the gap is `spec-defects.md`'s to carry with batch 3 as owner.
     """
     ledger_dir = run_dir / "apparatus"
     ledger_dir.mkdir(parents=True, exist_ok=True)
