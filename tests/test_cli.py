@@ -12846,3 +12846,39 @@ def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
     assert entry["p_value_corrected"] == pytest.approx(0.02)
     assert entry["ci95_corrected"] is None
     assert entry["correction"] == "fdr_bh"
+
+
+def test_a_run_with_no_declared_probe_records_a_null_apparatus_block_and_no_ledger(
+    tmp_path, capsys
+):
+    """The guard pin, captured at `4508ea6` before any H7d change.
+
+    `reference.md` § The apparatus core can only observe: an experiment whose
+    measurements never leave the machine declares nothing and records
+    `apparatus: null` — the WHOLE block. A block present with `probe: null`
+    beside four other nulls is a different record: it says a probe was asked for
+    and did not name itself. Template `generic` declares no probe, so this is
+    every run in this suite and the worked example both.
+
+    The full key LIST is asserted, not just `apparatus`: a sub-key or a sibling
+    added unconditionally by the record work is exactly what this catches, and
+    an assertion on `apparatus` alone would not see it.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert list(run["provenance"]) == [
+        "git",
+        "environment",
+        "apparatus",
+        "input_manifest",
+        "input_manifest_hash",
+        "input_manifest_changed",
+        "publishable_version",
+        "plugin_versions",
+        "units",
+        "units_hash",
+        "allocation",
+        "allocation_hash",
+    ]
+    assert run["provenance"]["apparatus"] is None
+    assert not (doc["run_dir"] / "apparatus").exists()
