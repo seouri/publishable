@@ -279,3 +279,33 @@ found by **probe**: `_attributed` merges roster attributes **over** each row, so
 into the table is **erased before `aggregate` sees it** — a one-argument `compute` would report
 `p_value: 1.0` for every derived metric in every run, which is the spec's own "reuses the observed
 assignment" mutant arriving as **default behaviour**.
+
+### Batch 3 — interrupted by a host disk exhaustion, recovered
+
+The host hit `ENOSPC` partway through the batch and **every** tool call failed — `Bash`, `Edit` and
+`Write` alike, because the harness could not create its own per-call output file. `df` itself would not
+run. Task 11's work was **complete, tested and mutation-checked but uncommitted**, which is the worst
+moment for a disk to fill.
+
+**What the implementer did right, and it is the reason nothing was lost:** it verified **by reading**
+that no mutation was left applied in `stats.py` before reporting, refused to fabricate the outcome of
+a monitor it had queued, and said plainly that it had not implemented tasks 12-15 rather than
+describing preparation as progress. **Recording it because the failure mode here is a report that
+reads as further along than the tree is** — and the controller then acts on the report.
+
+Recovered after space was freed: the uncommitted work survived intact (192 insertions across
+`stats.py` and `tests/test_stats.py`), but the interruption had landed **before the format pass**, so
+`ruff` failed on an unsorted import and an over-long line. Fixed, all four gates clean, suite
+**2306** passed — delta +6, matching task 11's brief. Committed as `0a69c8b`.
+
+**A fixture defect the implementer caught rather than patched around — the third on this slice.** The
+brief's own observed-labelling fixture claims `b = 0` "whatever the RNG drew" on `C(6,2) = 15`
+arrangements against `n = 999` draws; **measured `p = 0.07`**, about 66 expected hits rather than zero.
+Replaced with `C(20,10) = 184756` — five orders of magnitude above `n` — and confirmed `b = 0` at five
+seeds before being trusted. **A fixture is a claim too**, and this slice's briefs have now shipped
+three that failed their own constraints: a |Π| = 6 whole-cluster fixture where no literal is
+assertable, a tie fixture measured at 0.828 against a guessed 0.16, and this one.
+
+**And a site outside a task's stated file list, found while preparing:** `validate.py` carries a
+comment calling `E-DATA-CLUSTER-DERIVED` "a construction that does not exist", which **becomes false
+the moment 15a/15b land**. Task 15b's file list does not name `validate.py`. Carried forward.
