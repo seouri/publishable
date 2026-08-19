@@ -2166,7 +2166,7 @@ vs_baseline:
 |---|---|---|
 | `none` | absent | — |
 | `bonferroni` | The interval at α/m, for a family of size *m* | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
-| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
+| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value **and the member carries an interval**. A member with a p-value and no interval is ranked only by the tie-break its tier supplies, so `holm` withholds the key rather than publishing a level that rank fabricated |
 | `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted — so it needs p-values; see below |
 
 **Size `resample.n` against the family this table implies, not against the 80-draw floor alone.** A corrected interval at level α/m needs `min_honest_draws(1 − α/m)` ≈ 80·m draws off the same pool a raw interval draws from, so a family of `m = comparisons × metrics` costs roughly that many times the uncorrected floor — 15 members, as the family above, wants on the order of 1200 draws, not 80. A hypothesis family is corrected separately, at its own declared count rather than at the sweep's `comparisons × metrics`, so a config declaring both sizes `resample.n` against whichever family's m is larger.
@@ -3232,7 +3232,7 @@ results:
 
 **`evaluate_on` names three bounds — `observed`, `ci95_lower`, `ci95_upper` — and none of them is a
 p-value, so no verdict ever rests on one.** A counted hypothesis's entry still records
-`p_value_corrected` when its member carries a p-value, computed at the hypothesis family's own size
+`p_value_corrected` when its member carries a p-value **and, under `holm`, an interval** — the same withholding the `holm` row above states, since this family is built from the same members — computed at the hypothesis family's own size
 rather than the sweep's, for the same reason `ci95_corrected` is: `corrected_for` is the same
 function called at a different `m`, and a reader auditing one bound alongside the other must not find
 them corrected at two different family sizes.
