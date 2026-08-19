@@ -5517,6 +5517,94 @@ def test_fixture_c2_null_test_runs_end_to_end_with_a_p_value_when_unclustered(tm
     assert "p_value" not in seen
 
 
+_TWO_COLUMN_ECHO_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            value = float(unit.attributes["y_src"])
+            io.record(unit.key, {{"y": value, "z": value}})
+        return {{}}
+"""
+
+
+def _one_treatment_five_control_roster_csv() -> str:
+    rows = "\n".join(f"c{i},control,{i}" for i in range(5))
+    rows += "\nt0,treatment,5"
+    return f"patient_id,arm,y_src\n{rows}\n"
+
+
+def test_holm_withholds_p_value_corrected_through_a_real_run_for_two_tied_p_only_members(
+    tmp_path, capsys
+):
+    """Whole-branch review Critical 1's run-level pin. The direct-call test
+    `test_holm_withholds_p_value_corrected_for_a_p_only_member_rather_than_
+    fabricating_its_rank` in `tests/test_correction.py` pins `corrected_for`
+    itself, but the defect was only ever reproduced through a real `run` —
+    the whole-branch reviewer's own reproduction is the fixture below — and
+    nothing in the suite drove that shape through `main(["run", ...])`
+    before this test.
+
+    Same reproduction the reviewer used: 5 units at `arm=control`, 1 at
+    `arm=treatment`, `allocation: between` with `assign.arm.by_attribute`,
+    `sweep.groups` on `arm`, a declared contrast crossing it, `statistics.
+    null_test: {{method: permutation, n: 5000, shuffle: arm}}`, and
+    `correction: holm`. `n_of: 1` makes `welch_t_over_units` refuse both
+    recorded columns (`method`/`ci95` both `null`), leaving a p-only member
+    for each — and both columns echo the same per-unit value, so the two
+    members share one seed and one set of per-unit values and their real
+    permutation `p_value`s are bit-identical, exactly the shape that let
+    `holm`'s old fabricated rank publish two different numbers
+    (`p_value_corrected` 0.3395 and 0.1698) for evidence that does not
+    distinguish them at all.
+
+    The assertion that matters is `p_value_corrected` absent from both
+    entries — not a `method` string alone, which a mutation could satisfy
+    without the withholding this test exists to pin."""
+    roster_csv = _one_treatment_five_control_roster_csv()
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_TWO_COLUMN_ECHO_STEP,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "y_src"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "arm_effect", "of": "arm=treatment", "against": "arm=control"}],
+            "null_test": {"method": "permutation", "n": 5000, "shuffle": "arm"},
+            "correction": "holm",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    block = next(c for c in contrasts if c["id"] == "arm_effect")["step01_summarize_units"]
+    y_entry = block["y"]
+    z_entry = block["z"]
+
+    # A p-only member on both columns: `n_of: 1` refuses the interval.
+    assert y_entry["method"] is None and y_entry["ci95"] is None
+    assert z_entry["method"] is None and z_entry["ci95"] is None
+    assert y_entry["n_of"] == 1 and y_entry["n_against"] == 5
+    assert z_entry["n_of"] == 1 and z_entry["n_against"] == 5
+
+    # The bit-identical raw p-value that made the old fabricated rank visible.
+    assert y_entry["p_value"] is not None
+    assert y_entry["p_value"] == z_entry["p_value"]
+
+    # The withholding itself — the assertion this test exists for.
+    assert "p_value_corrected" not in y_entry
+    assert "p_value_corrected" not in z_entry
+
+
 def test_a_derived_metrics_unpaired_contrast_publishes_nothing_through_a_real_run(tmp_path, capsys):
     """Decision 8, and it is verified by `run` rather than by direct call for a
     measured reason: on H4b-2 the neighbouring corner survived four task batches and

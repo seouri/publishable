@@ -316,6 +316,19 @@ the original single `else`. The new test FAILS: `AssertionError: assert 'p_value
 check the review asked for). Reverted by editing the file back; `tests/test_correction.py` returns to
 61 passed.
 
+**Correction, appended 2026-08-19, replacing nothing above but qualifying "pinned end to end":** that
+phrase described a direct call to `corrected_for`, not a run. Nothing in the suite drove this shape
+through `main(["run", ...])` before this date, and the defect itself was only ever reproduced that
+way. Closed by `tests/test_cli.py::
+test_holm_withholds_p_value_corrected_through_a_real_run_for_two_tied_p_only_members` — 5 units at
+`arm=control`, 1 at `arm=treatment`, `allocation: between` with `assign.arm.by_attribute`,
+`sweep.groups` on `arm`, a declared contrast, `statistics.null_test` permutation on `shuffle: arm`,
+`correction: holm`, and a step recording two columns. It asserts `"p_value_corrected" not in entry`
+for both columns' contrast entries, plus their raw `p_value`s being bit-identical — not a `method`
+string alone. Verified by the same mutation (the `elif member.ci95 is None:` arm removed): this test
+fails on that assertion too, alongside the direct-call test above; reverted by editing the file back,
+and the full suite returns to 2363 passed, 1 skipped, 2 xfailed.
+
 ### Major 1 — `docs/reference.md:2189`'s false "no rank" claim
 
 **Fixed by replacing the false clause with a true one, not by a bare deletion** — Major 2 (below)
