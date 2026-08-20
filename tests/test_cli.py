@@ -14171,3 +14171,141 @@ def test_the_recorded_apparatus_block_carries_no_credential_value(
     assert block["facts"], "the block must be populated, not merely absent"
 
     assert _ORDINARY_CRED_VALUE not in run_yaml_text
+
+
+# --- Task 12: the guard pin, its literals captured at `814eadd` ------------
+
+_RECORDS_ONCE_THEN_RAISES_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_first = True
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        global _first
+        if _first:
+            _first = False
+            for unit in io.units:
+                io.record(unit.key, {{"value": 1.0}})
+            return {{"n": len(io.units)}}
+        raise RuntimeError("this execution fails on purpose")
+"""
+
+
+def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
+    """Fixture arm A — a clean run: `len(executions.jsonl)` equals
+    `len(sweep.yaml["execution_order"])`, which is Decision 5's
+    `len(plan) == len(results)` claim expressed as behaviour rather than as a
+    comment, and `run.yaml`'s top-level key list is asserted whole, as a
+    LIST rather than membership — a key added unconditionally by later record
+    work is exactly what a full-list assertion catches and a `status`-only
+    assertion would not. Captured by running at `814eadd`: 8 units, a `seed`
+    repeat of `n=4` (the default `n=5` is overridden so the count is
+    unambiguous against the other two arms), template `generic`, no probe
+    declared anywhere in this project."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=8,
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == len(sweep["execution_order"])
+    assert len(ledger) == 4
+
+    assert list(run.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+
+    results_entries = sorted(p.name for p in doc["results_dir"].iterdir())
+    assert results_entries == sorted(["latest", doc["run_dir"].name])
+
+
+def test_an_all_completed_truncation_stays_completed_at_exit_0(tmp_path, capsys):
+    """Fixture arm B — the all-completed truncation: the shipped
+    `max_failed_fraction` fixture's own shape
+    (`test_max_failed_fraction_is_measured_against_the_test_partition`),
+    re-run here as this slice's baseline rather than a second copy of it —
+    the brief's own instruction. Every execution that ran is `completed`, the
+    plan stopped short of `sweep.yaml`'s full length, and `run.yaml` still
+    reports `status: completed` at exit `0` — the untouched behaviour this
+    slice's neighbouring guard must keep, and the one Arms B and C together
+    exist to protect against a silent change."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_ALWAYS_FAILING_STEP,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == 2
+    assert len(sweep["execution_order"]) == 5
+    assert len(ledger) < len(sweep["execution_order"])
+    assert all(r["status"] == "completed" for r in ledger), ledger
+    assert run["status"] == "completed"
+
+
+def test_a_mixed_truncation_is_partial_at_exit_3(tmp_path, capsys):
+    """Fixture arm C — the mixed truncation, constructed rather than shipped
+    (§ Corrections against the code, correction 5: the design's claim that
+    this was "every shipped `EXIT_PARTIAL` truncation test's assertion" does
+    not survive — those tests are not truncations at all, since a step whose
+    every execution raises never records and so never trips
+    `max_failed_fraction`). `_RECORDS_ONCE_THEN_RAISES_STEP` records every
+    unit on its first execution, then raises on every later one:
+    `_units_failed_anywhere` unions failures across every recording
+    execution of the run, so after the raising execution every one of the 20
+    units is recorded under the first repeat label and not under the
+    second — 20 of 20 unresolved, past the declared `0.5` fraction. Measured
+    by running at `814eadd`: 2 of 5 executions recorded, statuses
+    `[completed, failed]`, `run.yaml status: partial`, exit `3`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_RECORDS_ONCE_THEN_RAISES_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == 2
+    assert len(sweep["execution_order"]) == 5
+    assert [r["status"] for r in ledger] == ["completed", "failed"]
+    assert run["status"] == "partial"
