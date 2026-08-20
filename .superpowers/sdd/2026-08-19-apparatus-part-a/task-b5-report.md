@@ -151,3 +151,138 @@ every row and filing written here matches what `apparatus.py`, `cli.py`, `valida
 - Concerns for review: none outstanding. The two self-corrections above are disclosed rather than
   hidden; both were caught before committing, by re-reading the cited section rather than trusting
   the first draft.
+
+## Whole-branch fix round
+
+Read `.superpowers/sdd/2026-08-19-apparatus-part-a/whole-branch-review.md` in full. Verdict: merge
+with items owed, no Critical, three Majors, four Minors — merge held on Major 2. Fixed Major 1,
+Major 2 and Major 3; closed Minors 1 and 2; recorded Minor 3 as a fact rather than a fix (there is
+nothing to change — see below). Commits `06bc38d`, `0f29b8a`, `eafb222`, `69c7ced`.
+
+### Major 2 — a fact value containing a declared credential was published verbatim
+
+**Changed:** `apparatus.check_facts`'s credential check (step 2) matched only by exact equality
+(`value == cred_value`); `secrets.redact`, over the identical value set
+(`credential_values(declared_credential_names(...))`), matches by substring. Changed to
+`cred_value and cred_value in value` — the same matching `redact` already uses, guarded against an
+unset credential the same way `redact` guards one. The refusal message still names the fact's key
+and the credential's name, never the value (unchanged from before, verified still true).
+`docs/reference.md`'s `E-APPARATUS-FACT-CREDENTIAL` row rewritten to say "exact value or substring
+containment."
+
+**Verified by:**
+- Wrote `test_a_fact_value_containing_a_declared_credential_is_refused` and
+  `test_the_containment_refusal_also_names_the_variable_and_never_the_value` in
+  `tests/test_apparatus.py` (direct call to `check_facts`). Ran against the pre-fix code first:
+  the first passed (mistakenly — see below) but the message test failed with `DID NOT RAISE`,
+  confirming the containment case slipped through.
+- Wrote `test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_end` in
+  `tests/test_cli.py`, driving a probe module returning
+  `{"endpoint": "https://api.example.com/v1?key=" + token}` through the real
+  `main(["run", ...])`. **Reverted the fix and re-ran**: the test failed, reproducing the review's
+  exact finding by a slightly different path — exit 1 but under `E-APPARATUS-FACT-MISSING` rather
+  than a clean exit 0, because this fixture's probe returns `endpoint` while the template declares
+  `apparatus_facts = ["model_revision"]`, so the missing-key check fires before the credential
+  check would have run at all either way. This confirms the fixture reaches the credential-check
+  code path in the fixed version, and that the reproduction is real rather than a fixture accident.
+  Restored the fix, re-ran: exit 1, `E-APPARATUS-FACT-CREDENTIAL`, no `run.yaml`, `lab7` absent from
+  every byte of every artifact under the results directory.
+- `diff` against a saved pre-fix copy of `apparatus.py` after restoring: byte-identical.
+
+### Major 1 — a non-`str` `apparatus_probe` silently read as "no apparatus" at both surfaces
+
+**Changed:** `validate._check_probe` (the sole place both surfaces route through, since
+`command_run` calls `validate_config` before ever inspecting `apparatus_probe` itself and returns
+on `c.has_errors`) now reports `E-PROBE-UNKNOWN` for any `apparatus_probe` that is not `None` and
+not a usable non-empty `str`. `None` stays the one documented spelling of "no probe declared" and
+draws nothing. `cli.py:2402`'s own `isinstance` guard is untouched — the review's own words, "which
+also makes `cli.py`'s isinstance the belt-and-braces it reads as," describe exactly why: with
+`validate` now refusing the malformed declaration and `command_run` returning before that line is
+ever reached, the guard there stops being reachable with bad data in the one built command that
+constructs an `Observer`. `docs/reference.md`'s `E-PROBE-UNKNOWN` row updated to state the type
+case.
+
+**Verified by:**
+- Wrote `test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped` in
+  `tests/test_validate.py`, with a project-local template declaring `apparatus_probe =
+  ["wbr_probe"]`. Ran against the pre-fix code: `KeyError: 'E-PROBE-UNKNOWN'` — confirmed silent.
+- Wrote `test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_exists` in
+  `tests/test_cli.py`, driving the same shape through `main(["run", ...])`. **Reverted the fix and
+  re-ran**: `assert main(...) == expect_exit` failed with `0 == 1` — the run completed, wrote
+  `run.yaml`, and (confirmed by the harness's own stdout capture) recorded nothing about the
+  malformed declaration. Restored the fix, re-ran: exit 1, `E-PROBE-UNKNOWN` in the output, no run
+  directory created at all (`doc["run_dir"] is None`, `not list(doc["results_dir"].glob("run_*"))`).
+- `diff` against a saved pre-fix copy of `validate.py` after restoring: byte-identical.
+
+### Major 3 — a sentence pointing at § Executability for an answer it did not contain
+
+**Changed:** added `### Measured on 2026-08-19 against commit `06bc38d` — after H7d Part A` to
+`docs/feasibility-llm-growth-studies.md` § Executability on this build, the section batch 1's
+rewrite (line 825, and the identical rewrite at line 937) pointed a reader at. States what the
+apparatus mechanism now does, the zero/six/three figures (cited from the whole-branch review's own
+re-measurement through `validate_config` on E1 and C1, rather than re-run a third time on an
+identical fixture — worded honestly as a citation, not as a fresh run I did not perform), and the
+honest statement of what changed: a probe-declaring run would now record five real sub-keys and
+could newly earn one of five codes or a warning, none of it exercised by these nine configs since
+none declares a probe a real plugin backs.
+
+**Verified by:** reading the section before and after (confirmed no other apparatus mention existed
+at any date, confirmed the new entry is the last one and precedes `## Cost and execution summary`
+correctly), and by the anchor-resolution script (24 links, 0 missing) run against this file after
+the edit.
+
+### Minor 1 — the no-sweep condition key `"00"`
+
+Added one sentence to § The apparatus files: a run declaring no `sweep` has one condition, keyed
+`"00"` (the `<nn>_<label>` scheme with an empty label) rather than `"None"` or a literal `null`,
+citing the canonical-JSON sort-keys reason already stated for the code's own choice.
+
+### Minor 2 — a three-place enumeration where reference.md now names four
+
+`docs/experimental-designs.md`'s apparatus row named `dry-run`, run start, and before every
+execution; added `freeze` as the fourth, matching `reference.md` and `condition_key`'s vocabulary.
+Confirmed by an **unfiltered** sweep of `dry-run` across all six documents (`README.md`,
+`design-principles.md`, `experimental-designs.md`, `reference.md`, `CLAUDE.md`,
+`feasibility-llm-growth-studies.md`) that no other three-place enumeration remains outside the
+feasibility analysis's own (exempt from the cross-document pass, as the review itself notes).
+
+### Minor 3 — noted, not fixed, because there is nothing to fix
+
+Task 16's report was correct: § Validation's "Probe is installed" row needed no change, because
+every check this slice adds needs a call and § Validation is the table of checks that don't.
+`reference.md`'s existing "Six things deliberately absent from that table" paragraph already states
+this. Recorded in `progress.md`'s fix-round entry so a later reader does not re-file "no
+`E-APPARATUS-*` § Validation row" as a missing row.
+
+### Minor 4 — batch 5 unreviewed
+
+Closed by the whole-branch review itself, which reviewed tasks 14, 16 and 17 directly and found
+them sound.
+
+### Ledger and CLAUDE.md, the other two items the review named as owed at merge
+
+- `progress.md`'s batch-5 entry and the whole-branch review's own findings were already recorded
+  (commit `4cb8ed1`, made before this fix round began) — confirmed present, not re-added. This
+  round appended its own "Fix round" entry recording what was changed and verified for each finding
+  (commit `69c7ced`).
+- `CLAUDE.md` gained an "H7d Part A" paragraph (merge date, the zero/six/three figures, the five
+  codes and one warning, the two Majors closed the same day) and the H7b Part B paragraph's stale
+  clause — *"filed, owned by H7d"*, describing the false `apparatus: null` gap in the present
+  tense after H7d Part A closed it — was amended in place with a forward pointer, on this repo's
+  own convention (`7fb413d` for H4d) of a separate `docs: CLAUDE.md records <slice>` commit
+  (`eafb222`).
+
+### Final state after the fix round
+
+- Commits: `06bc38d` (Major 1, Major 2, Minor 1, Minor 2), `0f29b8a` (Major 3),
+  `eafb222` (CLAUDE.md), `69c7ced` (ledger).
+- Test summary: **2423 passed, 1 skipped, 2 xfailed** (2418 baseline + 5 new tests: 2 direct-call
+  in `test_apparatus.py`, 2 end-to-end in `test_cli.py`, 1 direct-call in `test_validate.py`).
+- Gates: `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` (46 source files) —
+  all clean.
+- Every mutation (reverting a fix to reproduce the review's finding) checked against the body of
+  the test it reproduces first, run to completion, then reverted by restoring a saved pre-fix copy
+  and re-verified by re-running — never by `git checkout -- <file>`.
+- Findings not closed: none. All three Majors, both actionable Minors, and both remaining
+  "owed at merge" items (ledger, CLAUDE.md) are closed. Minor 3 needed a note, not a fix, and Minor
+  4 was closed by the review's own act of reviewing batch 5.
