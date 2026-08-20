@@ -288,26 +288,34 @@ class UpstreamResolver:
         self.output_dir = output_dir
         self.repo_root = repo_root
         self.ledger = ledger
-        # Keyed by `run_id`, never by the raw locator string: a relative
-        # locator IS a candidate run_id (Decision 1), so it is checked
-        # against this cache before `resolve_run` reads anything, and an
-        # absolute locator's run_id is unknown until its record is read, so
-        # it always resolves once and is cached under the run_id it turns
-        # out to name — which is also why a later *relative* call naming
-        # that same run_id is a cache hit too, one record read for however
-        # many calls name one upstream (Decision 6).
+        # Keyed by the locator EXACTLY AS GIVEN, never by the run_id it
+        # resolves to (task-b3-review.md Major 1 / Minor 3). Caching under
+        # run_id broke two things at once: an absolute locator's run_id is
+        # unknown until its record is read, so every absolute call re-read
+        # `run.yaml` regardless of repetition (Major 1 — Decision 6's "one
+        # answer per run" did not hold for that form, and a mid-run edit of
+        # the upstream could make two identical absolute calls disagree);
+        # and once ANY call populated the run_id key, a later RELATIVE call
+        # naming that run_id hit the cache without ever running `resolve_run`
+        # — skipping the "must sit under output_dir" check and the
+        # containment check for a run the config addressed only by run_id
+        # (Minor 3). Keying by the literal locator fixes both: the same
+        # locator asked twice is one read and one answer, and two different
+        # locators naming the same run are two independent queries, each
+        # checked on its own terms.
         self._records: dict[str, tuple[Path, dict[str, Any]]] = {}
 
     def resolve(self, locator: str) -> tuple[Path, dict[str, Any]]:
         """Resolve `locator` to `(run_dir, record)`, reading `run.yaml` at
-        most once per distinct upstream run."""
-        path = Path(locator)
-        if not path.is_absolute():
-            cached = self._records.get(locator)
-            if cached is not None:
-                return cached
+        most once per distinct LOCATOR — the same locator asked twice
+        returns the same answer even if the upstream's record changes
+        between the two calls (Decision 6: "an upstream edited mid-run
+        cannot give two answers inside one record")."""
+        cached = self._records.get(locator)
+        if cached is not None:
+            return cached
         run_dir, record = resolve_run(locator, output_dir=self.output_dir, repo_root=self.repo_root)
-        self._records[record["run_id"]] = (run_dir, record)
+        self._records[locator] = (run_dir, record)
         return run_dir, record
 
     def locate_step(self, record: dict[str, Any], run_dir: Path, step: str) -> Path:

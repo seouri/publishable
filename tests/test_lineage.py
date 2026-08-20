@@ -506,3 +506,175 @@ def test_a_step_reached_through_run_has_a_real_resolver_injected(tmp_path: Path)
     assert lines[0]["status"] == "failed"
     assert "E-UPSTREAM-RECORD-MISSING" in lines[0]["error"]
     assert lines[1]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (task-b3-review.md): Major 1 / Minor 3 — UpstreamResolver's
+# cache, keyed by locator rather than run_id, and its read-count guarantee.
+# ---------------------------------------------------------------------------
+
+
+def test_resolver_cache_reads_a_repeated_absolute_locator_only_once(tmp_path, monkeypatch):
+    """Major 1. Before the fix, the cache was consulted only on the relative
+    branch, so three identical ABSOLUTE calls did three `read_run_record`
+    reads — and a `run.yaml` edited between two of them could answer
+    differently each time, exactly the "two answers inside one record"
+    Decision 6 forbids. Verified by counting real reads through a
+    monkeypatched wrapper, not by reading the source.
+    """
+    import publishable.lineage as lineage_module
+
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_xxxxxx1"
+    upstream = tmp_path / "elsewhere" / "upstream"
+    _write_upstream(upstream, run_id)
+
+    calls: list[Path] = []
+    real_read = lineage_module.read_run_record
+
+    def counting_read(path: Path) -> dict:
+        calls.append(path)
+        return real_read(path)
+
+    monkeypatch.setattr(lineage_module, "read_run_record", counting_read)
+
+    resolver = lineage_module.UpstreamResolver(
+        output_dir=output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=lineage_module.UpstreamLedger(),
+    )
+    for _ in range(3):
+        _, record = resolver.resolve(str(upstream))
+        assert record["run_id"] == run_id
+    assert len(calls) == 1
+
+
+def test_resolver_cache_reads_a_repeated_relative_locator_only_once(tmp_path, monkeypatch):
+    """The relative-form half of the same guarantee, pinned the same way."""
+    import publishable.lineage as lineage_module
+
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_xxxxxx2"
+    _write_upstream(output_dir / run_id, run_id)
+
+    calls: list[Path] = []
+    real_read = lineage_module.read_run_record
+
+    def counting_read(path: Path) -> dict:
+        calls.append(path)
+        return real_read(path)
+
+    monkeypatch.setattr(lineage_module, "read_run_record", counting_read)
+
+    resolver = lineage_module.UpstreamResolver(
+        output_dir=output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=lineage_module.UpstreamLedger(),
+    )
+    for _ in range(3):
+        _, record = resolver.resolve(run_id)
+        assert record["run_id"] == run_id
+    assert len(calls) == 1
+
+
+def test_resolver_cache_a_mid_run_edit_between_two_identical_absolute_calls_cannot_leak_through(
+    tmp_path, monkeypatch
+):
+    """Decision 6's own stated consequence, reproduced directly: with the
+    fix, editing the upstream's `run.yaml` between two identical absolute
+    calls must NOT change the second call's answer, because the second call
+    is a cache hit and never re-reads."""
+    import publishable.lineage as lineage_module
+
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_xxxxxx3"
+    upstream = tmp_path / "elsewhere2" / "upstream"
+    upstream.mkdir(parents=True)
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "status": "completed",
+        "code_hash": "AAAA",
+    }
+    (upstream / "run.yaml").write_text(yaml.safe_dump(doc))
+
+    resolver = lineage_module.UpstreamResolver(
+        output_dir=output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=lineage_module.UpstreamLedger(),
+    )
+    _, first = resolver.resolve(str(upstream))
+    assert first["code_hash"] == "AAAA"
+
+    doc["code_hash"] = "BBBB"
+    (upstream / "run.yaml").write_text(yaml.safe_dump(doc))
+
+    _, second = resolver.resolve(str(upstream))
+    assert second["code_hash"] == "AAAA"  # cached — the edit must not leak through
+
+
+def test_resolver_cache_does_not_let_a_warm_absolute_call_shortcut_a_later_relative_one(
+    tmp_path,
+):
+    """Minor 3. Before the fix, an absolute call cached under the resolved
+    run_id, so a LATER relative call naming that same run_id hit the cache
+    and skipped `resolve_run` entirely — including the "must sit under
+    output_dir" check and the containment check — for a run the config
+    addressed only by run_id. Cold and warm must agree: both refuse.
+    """
+    import publishable.lineage as lineage_module
+
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_xxxxxx4"
+    outside = tmp_path / "elsewhere3" / "not_under_output_dir"
+    _write_upstream(outside, run_id)
+
+    resolver = lineage_module.UpstreamResolver(
+        output_dir=output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=lineage_module.UpstreamLedger(),
+    )
+    # cold: the relative form correctly fails, output_dir holds no such run
+    with pytest.raises(ContractError) as e:
+        resolver.resolve(run_id)
+    assert e.value.code == "E-UPSTREAM-RECORD-MISSING"
+
+    # warm the cache via the absolute form, under a DIFFERENT locator string
+    _, record = resolver.resolve(str(outside))
+    assert record["run_id"] == run_id
+
+    # the relative form, asked again, must still fail — the warm cache must
+    # not have created a run_id-keyed shortcut around output_dir
+    with pytest.raises(ContractError) as e:
+        resolver.resolve(run_id)
+    assert e.value.code == "E-UPSTREAM-RECORD-MISSING"
+
+
+# ---------------------------------------------------------------------------
+# Minor 2 — the relative form must return a RESOLVED path, not merely check
+# containment against a resolved probe while returning the unresolved one.
+# ---------------------------------------------------------------------------
+
+
+def test_relative_form_returns_a_resolved_path_not_merely_a_contained_one(tmp_path):
+    """`spec-defects.md`'s closed filing claimed this half was pinned; it was
+    not (task-b3-review.md Minor 2) — keeping containment on a resolved
+    probe while returning `output_dir / locator` unresolved left every
+    existing test green, because none of them route the run directory
+    itself through a symlink. This one does: `<output_dir>/<run_id>` is a
+    symlink to a differently-named real directory outside `output_dir`
+    (still outside the repo, so containment is not what this test is
+    about), and the returned path must be the real, resolved one.
+    """
+    output_dir = tmp_path / "output_dir"
+    output_dir.mkdir()
+    run_id = "run_2020-01-01T00-00-00Z_xxxxxx5"
+    real_target = tmp_path / "real_target_elsewhere"
+    _write_upstream(real_target, run_id)
+    (output_dir / run_id).symlink_to(real_target, target_is_directory=True)
+    repo_root = tmp_path / "unused_repo_root"
+
+    resolved, record = resolve_run(run_id, output_dir=output_dir, repo_root=repo_root)
+    assert resolved == real_target.resolve()
+    assert resolved != output_dir / run_id  # the unresolved form the old code returned
+    assert record["run_id"] == run_id

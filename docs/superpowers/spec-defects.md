@@ -7358,9 +7358,7 @@ review (Minor 1, the second face). Filed here per the controller's ruling that a
 (`(output_dir / locator).resolve()`, following symlinks) and runs
 `resolves_inside_repo` on the result before reading the record — exactly the
 check the absolute branch already ran, on the same predicate, so the two
-branches cannot drift apart again. This also closes "the second half of the
-same finding" below: the relative form now returns a resolved path, the same
-kind the absolute form always did. Pinned by
+branches cannot drift apart again. Pinned by
 `tests/test_lineage.py::test_relative_form_containment_refuses_a_symlink_under_output_dir_into_the_repo`
 (the exact shape this filing verified by running — a symlink under
 `output_dir` addressing an in-repo run, now refused with
@@ -7369,6 +7367,20 @@ kind the absolute form always did. Pinned by
 (an ordinary, non-symlinked run directory must keep reading). Both mutations
 — dropping the fix, and re-checking the control — were run and confirmed to
 discriminate.
+
+**AMENDED, fix round 1 (`task-b3-review.md` Minor 2).** The claim above that
+this also closed "the second half of the same finding" — the relative form
+returning a resolved path — named a pin that did not exist: the two tests
+named above stay green under a mutation that keeps the containment check on
+a resolved *probe* while returning `output_dir / locator` **unresolved**,
+because neither test routes the run directory itself through a symlink. Now
+actually pinned by
+`tests/test_lineage.py::test_relative_form_returns_a_resolved_path_not_merely_a_contained_one`
+(`<output_dir>/<run_id>` is itself a symlink to a differently-named real
+directory; asserts the returned path equals the real directory's own
+`.resolve()`, not the unresolved `output_dir / locator`), confirmed by
+running the reviewer's exact mutation against it (fails) and against the
+full suite (only this one test fails).
 
 `src/publishable/lineage.py`'s `resolve_run` (H8a task 2) exempts the relative form
 (`reuse_from("run_id", ...)`) from `provenance.resolves_inside_repo` entirely, on Decision 1's
@@ -7407,3 +7419,37 @@ safe against a symlink under `output_dir` specifically (not merely against an or
 subdirectory).
 
 **Found by:** H8a task-b2 review, Minor 8, verified by running.
+
+## OPEN — `provenance.resolves_inside_repo` fails open when its `repo_root` argument is not already resolved — **Owner: unassigned**
+
+`src/publishable/provenance.py`'s `resolves_inside_repo(resolved, repo_root)` is a pure path
+comparison — `resolved == repo_root or repo_root in resolved.parents` — and does not resolve
+`repo_root` itself. Every shipped caller (`validate._check_data`, `generators.experiment.
+generate_experiment`, and H8a's `lineage.resolve_run`) passes a `repo_root` that came from
+`find_repo_root`, which resolves before returning, so the gap has never fired in production.
+
+**Verified by running** (H8a task-b3 review, "Not checked, or checked only by reading"): with an
+unresolved `repo_root` under a path containing a symlinked component (`/tmp` on macOS, which is
+itself a symlink to `/private/tmp`) and a `resolved` candidate already computed under the
+*resolved* form (`/private/tmp/...`), `resolves_inside_repo` answers **`False`** even though the
+candidate is genuinely inside that repo — `repo_root in resolved.parents` never matches, because
+one side carries the symlink component and the other does not. The containment check this
+function backs (`CLAUDE.md` § Invariants: `input_dir`/`output_dir` may never resolve inside the
+git repo) would silently not fire for a caller that hands it an unresolved `repo_root`.
+
+**The check its owner must make.** Either (a) `resolves_inside_repo` resolves `repo_root` itself
+before comparing — `repo_root.resolve()`, done once inside the function rather than trusted from
+every caller — or (b) the function's docstring states the precondition explicitly (*"`repo_root`
+must already be resolved; the caller is responsible"*) and every call site is swept to confirm it
+passes one. (a) is cheaper and removes the precondition from every future caller's list of things
+to remember; a predicate that fails open on an ordinary-looking unresolved path is exactly the
+shape `CLAUDE.md` § Misreadings names as "the proxy is the bug, not the guard" one level down —
+here the proxy is *an unresolved path standing in for a resolved one*, not a different kind of
+mistake, but the fix is the same: answer the direct question (does the resolved candidate sit
+under the resolved repo root) rather than one that is only usually equivalent to it.
+
+**Not a batch defect.** Every H8a test hands `resolve_run` a `repo_root` built from `tmp_path`,
+which is already canonical under pytest, so no shipped test is affected either way; this is filed
+against the function itself, for the next caller that does not route through `find_repo_root`.
+
+**Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.

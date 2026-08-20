@@ -1785,6 +1785,20 @@ def test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink
         io.reuse_from(run_id, "step01", str(secret))
     assert e.value.code == "E-UPSTREAM-NAME"
 
+    # Minor 1 (task-b3-review.md): an absolute path pointing INSIDE the step
+    # directory itself. The `..` and outside-absolute arms above are each
+    # already refused by the `startswith` half of `_contained`'s check
+    # (their target sits outside `resolved_base`), so deleting
+    # `Path(name).is_absolute() or` from `_contained` leaves them green —
+    # this arm is refused ONLY by the absolute-path clause, since its
+    # target exists inside the step directory and `startswith` alone would
+    # happily return it.
+    inside_absolute = step_dir / "ok.json"
+    inside_absolute.write_text('{"who": "INSIDE_BUT_ABSOLUTE"}')
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", str(inside_absolute))
+    assert e.value.code == "E-UPSTREAM-NAME"
+
     # A symlink inside the step directory leading outside it.
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
