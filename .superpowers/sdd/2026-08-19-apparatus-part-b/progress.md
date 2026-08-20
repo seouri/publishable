@@ -335,3 +335,53 @@ line it sits on — task 8 is committed and did not.
 paid-for executions on disk, no `run.yaml`, no `latest`.** Not a finding (plan correction 2 blesses the
 bare assert, and it is unreachable), but *every execution paid for, the record lost* is this repo's named
 habit, and now that assert's price is a measurement instead of a claim.
+
+**Fix round 1 — Major 1 fixed and the guard now branches on the stop reason** (`57a0734`, `82fbb3a`).
+Suite **2453**. **I verified the fix I had caused myself**: deleting the
+`stop.reason == "apparatus_unreachable"` arm fails
+`test_fixture_z_arm_3_zero_results_unreachable_case` and nothing else, so the row I got wrong is now
+pinned by a named fixture rather than by the fix's presence. Reverted byte-identical.
+
+## Batch 6 — tasks 9, 10, 11 — no policy knob, `batch` independence, the rows and filings
+
+Commits `0e40403`, `70c2283`, `db7f187`, report `600b207`. Suite 2453 → **2456**.
+
+**Task 10's fixture originally could not discriminate its own mutation** — it used a constant-fact probe —
+and **the implementer caught that itself and rebuilt it on a changing-fact schedule** with both arms
+stopping at the same execution index. Task 9's arm (b) likewise needed a probe schedule extended by one
+entry to avoid an uninteresting `IndexError`. **Both are the *a mutation is a claim too* discipline
+applied before a reviewer had to supply it**, which is the first time on this slice that happened twice
+in one batch.
+
+**And one filing the brief listed as owed turned out already written** — the non-`str` carve-out's
+`run.yaml` surface — **verified by reading rather than trusting the brief, with no duplicate created.**
+That is the exact check five wrong "no disagreements" reports on this project needed.
+
+## Independent whole-branch review: MERGE — no Critical, no Major, four Minors
+
+**And it found a gap in my process rather than in the code: batch 6 was never given a task review.** I
+dispatched it and went straight to the whole-branch gate, breaking the pattern the other five batches
+got. The gate served as its first review and **it came back clean** — no `src/` touched, both fixtures
+non-degenerate, and **its three filings called the branch's strongest artifacts.** Nothing is owed, but
+the coverage was verified **at** the gate instead of before it. **Recording it because the failure mode is
+mine and invisible from inside any batch:** a controller running six batches can drop one review and no
+implementer or reviewer is positioned to notice.
+
+The reviewer also declined to fix the two `src/` Minors itself, on the grounds that **a reviewer editing
+the branch it is gating** is a move this repo has been burned by. Correct, and worth keeping.
+
+**A third cross-batch stale claim**, the shape this branch has now produced three times: task 5 wrote that
+Fixture U pins `EXIT_PARTIAL`, **task 8 falsified it**, and nothing re-read it. Alongside a docstring
+claiming *"no shipped test calls it that way"* about a test committed one batch later.
+
+**And the one-file-short sweep recurred** — `docs/feasibility-llm-growth-studies.md` still says "its own
+first observation" where both normative documents now say "first *answered*". Batch 1's Major was the same
+shape in the same file, which `CLAUDE.md` names **by name** as the file a sweep must include.
+
+**Verified sound by running:** all four Decision 4 rows on the reviewer's own fixtures with exit code and
+status byte asserted **separately**; **seven no-false-stop runs, zero false stops**; credentials clean as
+an int, a substring, and in a raise message, **with a positive control that leaked**; the third stop
+reason genuinely read; the batch-1 pin still failing under the `stopped_at` shape; an apparatus stop
+truncating **mid-step-sequence** (its `break` sits at the loop top, unlike `max_failed_fraction`'s),
+driven through a `summary`-scope tail and a hypothesis naming its unrun `Estimate` — **record coherent,
+not merely non-crashing**; and zero/six/three re-measured with a can-fail control.
