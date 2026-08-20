@@ -424,3 +424,31 @@ three of batch 5's tasks directly rather than as a seam check and found them sou
 
 Four gates clean at every commit in this round. Full `uv run pytest`: **2423 passed, 1 skipped, 2
 xfailed.**
+
+**Whole-branch fix round — both Majors fixed, and then I found one of the fixes unpinned.**
+
+Commits `06bc38d` (Majors 1 and 2, Minors 1-2), `0f29b8a` (the dated § Executability entry),
+`eafb222` (`CLAUDE.md`), `69c7ced`, `edd2244`. Suite **2423**.
+
+Major 2's fix matches **the way `redact` already matches** rather than inventing a third rule, which was
+the constraint that mattered: two mechanisms over the same value set disagreeing is what produced the
+leak. Major 1 is fixed at `validate._check_probe`.
+
+**Then, checking a claim rather than accepting it, I mutated Major 1's guard away and the full suite
+stayed green at 2423.** Replacing `if not isinstance(declared, str) or not declared:` with `if False:`
+changed **nothing** — so the behaviour was right and **the protection was asserted by nothing.** Reverted
+by editing the line back, confirmed byte-identical against a pre-mutation copy.
+
+**What prompted the check is worth recording, because it generalizes.** The `CLAUDE.md` paragraph the
+same round wrote says the fix lands *"at the one place both surfaces share … which is also what closes
+`run`'s copy of the same guard without touching it, since `command_run` validates first."* **That is a
+safety argument in prose**, and this repo's rule is that such a claim needs a mutation. The claim may
+well be true; it was **argued rather than asserted**, and the argued form is what this branch's Critical
+came from. **Ruling: pin both surfaces separately — `validate` and a real `run` — and if the `run`-level
+assertion cannot be made to fail, delete the sentence rather than rewrite it.**
+
+**This is the fourth correct-but-unpinned fix on this branch alone** — batch 3's `KeyboardInterrupt`
+carve-out, three `APPARATUS_CODES` members, and now this — **every one found by mutation after being
+reported closed, and none by reading.** `CLAUDE.md` already counts five such across three prior slices.
+The rule earns its place: **verify by probe, then pin by mutation**, and a report saying "closed" is the
+beginning of that sentence rather than the end.
