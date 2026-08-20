@@ -58,3 +58,32 @@ and self-contradicting. The clause reads *"`EXIT_EXTERNAL` **was** the same faul
 `field_convention` as the **sole remaining** example. **Deleting it would remove the row's own evidence
 that it retires entries as readers land**, which is the property that makes it self-maintaining. **A plan
 correction is a claim too**, and this one was not checked against the text it quotes.
+
+## Batch 1 — tasks 13, 14 — the pin and the document ruling, before anything moves
+
+Commits `152688f` (seven-arm pin), `af87572` (the document ruling), `5223383` (report), `bf56ed3` (fix
+round). Suite 2513 → **2522**. **Both verdicts PASS; one Major, seven Minors.**
+
+**The document ruling was verified additive in both senses I required:** 13 insertions / 2 deletions in
+one file, **each deletion a sentence replaced by a superset of itself**, and no verdict, status or exit
+code described as moving. That was the specific risk in letting `run` write two new artifacts, so it is
+the right thing to have measured rather than argued.
+
+**The Major is the sixth consecutive falsified zero-disagreements report, and it has now earned a
+`CLAUDE.md` row.** Two arms claimed *"no existing test asserts this"* and shipped tests do —
+`test_acceptance.py` compares the embedded config to the file as a whole mapping, and `test_sweep.py`
+asserts each condition entry by full dict equality, which already covers `selectors`. **The arms keep
+residual power in the swept case**, so the sentences were false rather than the coverage redundant, and
+the fix was to say what each arm genuinely adds.
+
+**All six instances hid in the same place: a claim about other tests or other rows, never about the
+implementer's own code** — a docstring asserting no test covers something, a § Errors row asserted that
+did not exist, a fixture named that was absent, a brief's *"no fixture can reach it"* that a bare call
+falsified. **Brief-supplied prose is where zero hides, because it reads as established rather than as a
+claim.** The check is mechanical and catches all six: **grep before repeating any claim a brief makes
+about the code, and report what you grepped rather than a count.**
+
+**And the authorized-editor clause was missing its auditable half** — the requirement that task 3's report
+show the diff is exactly one entry per arm with nothing reordered. Sole editor, post-edit lists in advance
+and the finding-not-an-edit clause were all present; **the missing sentence is the one that makes the
+mechanism checkable rather than trusted**, which is the whole difference between this and a licence.
