@@ -687,3 +687,71 @@ def test_changed_is_scoped_per_condition_never_across():
     # The second condition's own FIRST observation — must not be compared
     # against "00_a"'s "rev-a", even though it differs.
     assert obs.changed("01_b", {"model_revision": "rev-b"}) is None
+
+
+def test_check_changed_raises_E_APPARATUS_CHANGED_naming_both_values_and_the_condition():
+    """Decision 2: the message names the condition key, the fact, and both
+    values, joined by `→` (never `->`), and never either value's own Python
+    variable name — the fact and condition and values are read from the
+    exception, not transcribed from the call site. Paired with the control
+    that must report: the same helper, called where nothing changed, returns
+    silently rather than merely not-raising-for-this-fact — a control
+    asserting only an absence would pass identically if `check_changed` did
+    nothing at all, so this asserts the return value too."""
+    from publishable.apparatus import Observations, check_changed
+    from publishable.errors import ContractError
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1"})
+    assert check_changed(obs, "00", {"pinned": "r1"}) is None
+
+    obs.record("00", {"pinned": "r2"})
+    with pytest.raises(ContractError) as excinfo:
+        check_changed(obs, "00", {"pinned": "r2"})
+    assert excinfo.value.code == "E-APPARATUS-CHANGED"
+    message = str(excinfo.value)
+    assert "r1 → r2" in message
+    assert "->" not in message
+    assert "pinned" in message
+    assert "00" in message
+
+
+def test_a_credential_carrying_value_cannot_reach_check_changed_because_check_facts_runs_first():
+    """The ordering the message's safety rests on, asserted rather than
+    assumed: `check_facts` runs before a value ever reaches
+    `Observations.record`/`changed`, so a credential-carrying fact value
+    never becomes a first-answered value or an incoming one. Calling the two
+    in the chain's own order and watching `check_facts` raise ITS OWN code —
+    never `E-APPARATUS-CHANGED` — is the control that must report: if the
+    ordering were reversed, this test would see `check_changed` run first
+    and either raise nothing (the credential became the first-answered
+    value) or raise `E-APPARATUS-CHANGED` naming it, and it would silently
+    pass through this test's `pytest.raises` if it named the wrong code."""
+    from publishable import Apparatus
+    from publishable.apparatus import Observations, check_changed, check_facts
+    from publishable.errors import ContractError
+
+    obs = Observations()
+    obs.record("00", {"calibration_id": "CAL-2026-07-19"})
+
+    returned = Apparatus(facts={"calibration_id": "lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        checked = check_facts(
+            returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"}
+        )
+        # check_changed is never reached if check_facts refuses first — this
+        # line only runs if the ordering under test has already broken.
+        check_changed(obs, "00", checked)
+    assert excinfo.value.code == "E-APPARATUS-FACT-CREDENTIAL"
+
+
+def test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on():
+    """Plan correction 4: `E-APPARATUS-CHANGED` must NOT join
+    `APPARATUS_CODES` — that frozenset is `command_run`'s containment filter
+    for a probe CALL, and a changed fact never crosses it. `STOP_CODES` is
+    the separate, both-members-pinned enumeration task 3 mints."""
+    from publishable.apparatus import APPARATUS_CODES, STOP_CODES
+
+    assert STOP_CODES == {"E-APPARATUS-RAISED", "E-APPARATUS-CHANGED"}
+    assert "E-APPARATUS-CHANGED" not in APPARATUS_CODES
+    assert "E-APPARATUS-RAISED" in APPARATUS_CODES

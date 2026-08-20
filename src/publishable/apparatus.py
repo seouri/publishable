@@ -341,6 +341,40 @@ class Observations:
                 )
 
 
+def check_changed(
+    observations: Observations, condition_key_value: str, facts: Mapping[str, Any]
+) -> None:
+    """The gate's caller-facing helper (Decision 2): calls `Observations.changed`
+    and raises `E-APPARATUS-CHANGED` for the first contradicting triple, or
+    returns silently.
+
+    **What the message may name, and why it is safe.** The message names the
+    condition key, the fact name, and both values — `condition `00`'s fact
+    `pinned` changed: r1 → r2` — in the shape `diff`'s own apparatus row
+    prints. Naming both values is safe because `check_facts` (Part A) refuses
+    a fact value that equals or contains a declared credential **before**
+    anything is recorded, so by the time `Observations.changed` sees a pair
+    of values, core has already established that neither is a credential it
+    read. That ordering is reused here, not re-derived: this function does
+    not repeat the containment check, because repeating it would be a second
+    answer to the question `check_facts` already answered once.
+
+    Not called anywhere yet — task 5 wires this into `Observer._observe_one`,
+    after `Observations.record`, on the order Decision 3 fixes. This function
+    exists as its own direct-call surface so that ordering can be tested
+    before the wiring exists, the same way `check_facts` and `observe_once`
+    were exercised directly before `Observer` did.
+    """
+    result = observations.changed(condition_key_value, facts)
+    if result is None:
+        return
+    fact, first, incoming = result
+    raise ContractError(
+        f"condition `{condition_key_value}`'s fact `{fact}` changed: {first} → {incoming}",
+        code="E-APPARATUS-CHANGED",
+    )
+
+
 def condition_key(index: int, label: str | None) -> str:
     """The key `probes.jsonl` and `provenance.apparatus.facts` both use for one
     condition — the `<nn>_<label>` form `sweep.condition_dir_name` renders,
@@ -428,6 +462,31 @@ are NOT pre-answered by `validate` — `validate._check_probe` never calls
 `command_run`'s own dispatch-time wrapper around `_probe_for` (the roster
 wrapper's shape, redacting before `main` ever sees it), sited before this
 filter's `try` is even entered — not by admitting the two codes here."""
+
+
+STOP_CODES: frozenset[str] = frozenset(
+    {
+        "E-APPARATUS-RAISED",
+        "E-APPARATUS-CHANGED",
+    }
+)
+"""The two codes `execute_plan`'s loop breaks on (task 5), each pinned by its
+own fixture — `E-APPARATUS-RAISED` by Fixture U, `E-APPARATUS-CHANGED` by
+Fixture G1 — rather than one shared assertion, on `APPARATUS_CODES`'s own
+precedent that every member of a code-filtering frozenset here earns its own
+pin (Part A's Major 2: deleting three of that set's five members left the
+suite byte-identical).
+
+**`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
+That frozenset is `command_run`'s containment filter for a probe CALL
+crossing the run-start round or the `execute_plan` boundary; after task 5 a
+changed fact never reaches that filter at all, because the loop this
+constant names breaks on it first. Admitting it to `APPARATUS_CODES` would
+add a member nothing exercises through that filter — an unpinned addition to
+an enumeration this project has already been burned by once. This is not a
+claim that a changed fact **cannot** reach a run-start call: task 13 is where
+that claim is made to happen, by fixture, and a comment asserting it here
+without that fixture is the shape that produced Part A's only Critical."""
 
 
 class Observer:
