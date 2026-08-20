@@ -7235,7 +7235,7 @@ the same absence of a `STOP_CODES` membership, so the same shape is expected of 
 **Unassigned is a fact with a reason:** no chartered slice contains this work. No sentence in
 `reference.md` sites a fact-*contract* failure (a probe returning the wrong shape, a credential
 leaking through a fact, a declared key never answered) at run time as anything other than an
-immediate refusal — the four rows in [§ Errors core raises](reference.md#errors-core-raises) all
+immediate refusal — the four rows in [§ Errors core raises](../reference.md#errors-core-raises) all
 read as ending the command, which was true until a mid-plan call could reach them. There is
 therefore no section whose owner this defect could be assigned to without inventing one.
 
@@ -7249,7 +7249,7 @@ therefore no section whose owner this defect could be assigned to without invent
    `STOP_CODES` — but `E-APPARATUS-RETURN`, `-FACT-TYPE` and `-FACT-CREDENTIAL` are shape/credential
    faults, closer to the first case than the second, and this entry does not decide which of the
    two existing mechanisms (or a third) any of the four should join.
-2. **What `status` such a record would carry.** [§ What `status` means](reference.md#what-status-means-and-when-a-run-keeps-going)
+2. **What `status` such a record would carry.** [§ What `status` means](../reference.md#what-status-means-and-when-a-run-keeps-going)
    has no row for "the run stopped because what the apparatus returned could not be trusted, as
    opposed to what it reported." `failed` and `partial` are both live candidates and neither is
    compelled by the existing table.
@@ -7270,7 +7270,7 @@ failed executions, so a step that completes every execution while recording noth
 every execution `status: completed`. Measured by running at this branch's HEAD: `units=20`,
 `limits.max_failed_fraction: 0.5`, a step that never records — 2 of 5 planned executions run, all
 `completed`, `run.yaml` reports `status: completed`, exit `0`. This is task 1's remainder — H7d
-Part B's own document task settled [§ What `status` means](reference.md#what-status-means-and-when-a-run-keeps-going)
+Part B's own document task settled [§ What `status` means](../reference.md#what-status-means-and-when-a-run-keeps-going)
 for the apparatus alone and named this state explicitly as left open, on the controller's ruling
 that a slice about the apparatus may not widen a neighbouring guard's semantics to make its own
 document edit tidy. Both halves are one document-versus-code disagreement about one guard, filed
