@@ -14318,3 +14318,91 @@ def test_a_mixed_truncation_is_partial_at_exit_3(tmp_path, capsys):
     assert len(sweep["execution_order"]) == 5
     assert [r["status"] for r in ledger] == ["completed", "failed"]
     assert run["status"] == "partial"
+
+
+# --- H7d Part B task 4: the ordering chain, and the two assertions only it
+# can make -------------------------------------------------------------------
+
+_APPARATUS_G1_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_g1_assay")
+class ApparatusG1Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_g1_probe"
+    apparatus_facts = ["pinned", "appears", "vanishes"]
+"""
+
+# Fixture G1's own by-call schedule (design § The discriminating fixtures):
+# one condition, four `seed` repeats (4 executions planned). Call 1 is the
+# run-start round; calls 2-4 are the per-execution `pre_execution` round,
+# one per planned execution, in order. `sometimes` is an undeclared fact,
+# answered only on call 1, to pin the fourth transition (absence is never a
+# change). `pinned` changes on call 4, before execution 3 runs.
+_G1_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = [
+    {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+]
+_calls = {"n": 0}
+
+
+@register_probe("h7d_g1_probe")
+def probe(cfg):
+    facts = dict(_schedule[_calls["n"]])
+    _calls["n"] += 1
+    return Apparatus(facts=facts)
+"""
+
+
+def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture G1's ledger (task 4 step 3): the run-level pin for
+    append-before-gate. At THIS commit — before task 5 wires `execute_plan`'s
+    `break` — the raise escapes `execute_plan` uncaught: `E-APPARATUS-CHANGED`
+    is deliberately not a member of `apparatus.APPARATUS_CODES` (§ Corrections
+    against the code, correction 4), so it re-raises past `command_run`'s
+    containment filter to `main`'s own bare `PublishableError` handler —
+    `EXIT_WRONG`, unredacted, with no `run.yaml`. **This expectation is task
+    5's to change; changing it there is expected, not a regression.**
+
+    The ledger is written on the raise path regardless — Part A's measured
+    shape, a mid-plan refusal preserves every line already appended — so all
+    4 probe calls are on disk despite the command's own exit code, and the
+    fourth line is the one that ended it."""
+    site = installed(
+        "dist-t4g1", "1.0", {"publishable.probes": {"h7d_g1_probe": "t4g1_probe_mod:probe"}}
+    )
+    (site / "t4g1_probe_mod.py").write_text(_G1_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_g1_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_G1_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    # `run_a_project`'s `EXIT_WRONG` branch assumes a `validate`-time refusal
+    # and returns `run_dir: None` without globbing — but this raise happens
+    # mid-plan, well after a run directory (and its ledger) was created, so
+    # this test globs `results_dir` itself rather than trusting that branch.
+    run_dir = next(doc["results_dir"].glob("run_*"))
+    assert not (run_dir / "run.yaml").exists()
+    ledger = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 4
+    assert ledger[-1]["facts"]["pinned"] == "r2"
+
+    stderr = doc["stderr"] or ""
+    assert "pinned" in stderr
+    assert "r1 → r2" in stderr

@@ -391,11 +391,13 @@ def check_changed(
     naming for whoever wires the diagnostic, not a claim this function makes
     good on itself.
 
-    Not called anywhere yet — task 4 wires this into `Observer._observe_one`,
-    after `Observations.record`, on the order Decision 3 fixes. This function
-    exists as its own direct-call surface so that ordering can be tested
-    before the wiring exists, the same way `check_facts` and `observe_once`
-    were exercised directly before `Observer` did.
+    Task 4 wires this into `Observer._observe_one`, after
+    `Observations.record`, on the order Decision 3 fixes — a raise here still
+    reaches `command_run`'s containment as an ordinary `ContractError` until
+    task 5 gives `execute_plan`'s loop a `break` to catch it on. This
+    function still has its own direct-call surface (`test_apparatus.py`), the
+    same way `check_facts` and `observe_once` are exercised directly as well
+    as through `Observer`.
     """
     result = observations.changed(condition_key_value, facts)
     if result is None:
@@ -580,6 +582,17 @@ class Observer:
             self._observe_one(phase, condition)
 
     def _observe_one(self, phase: str, condition: Any) -> None:
+        """Task 4 (Decision 3): the order inside one probe round is fixed and
+        every step of it is load-bearing — `check_facts` (a credential-carrying
+        fact is refused before a byte reaches the ledger), then
+        `append_observation` (the moving observation is on disk before
+        anything can stop the run — the earlier-period-plus-ledger guarantee
+        § The apparatus files and § The apparatus core can only observe both
+        state), then `Observations.record` (the moving call is counted in
+        `unobserved.total_probes` like any other probe — a census of calls,
+        not of agreements), and only then the gate. Nothing else in this
+        method moves. The gate raises here; task 5 is what turns the raise
+        into a stop rather than letting it escape."""
         cfg = self.cfgs[condition.index]
         returned = observe_once(self.probe, cfg, probe_name=self.probe_name)
         facts = check_facts(
@@ -597,6 +610,7 @@ class Observer:
             facts=facts,
         )
         self.observations.record(key, facts)
+        check_changed(self.observations, key, facts)
 
     def warn_unanswered(self, c: Collector) -> None:
         """`W-APPARATUS-UNANSWERED`, delegated to `Observations` — this

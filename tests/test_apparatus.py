@@ -781,3 +781,67 @@ def test_changed_is_reflexivity_safe_for_a_constant_nan_fact():
     assert fact == "drift"
     assert isinstance(first, float) and math.isnan(first)
     assert incoming == 1.5
+
+
+# --- H7d Part B task 4: the ordering chain, and the two assertions only it
+# can make ---------------------------------------------------------------
+
+
+def test_the_ordering_chain_counts_the_moving_call_before_the_gate_fires(tmp_path):
+    """Task 4 step 2: the direct-call pin for record-before-gate. Fixture G1's
+    own schedule, driven through `Observer` across four rounds — the raise on
+    round 4 (`pinned: r1 -> r2`) must have already been counted in
+    `unobserved.total_probes` for `pinned`, because `Observations.record` runs
+    before the gate compares (Decision 3, `_observe_one`'s own order).
+    `_first_answered` never overwrites an answered pair, so no *value*
+    assertion can tell this ordering from the reverse — only a count can,
+    which is why the plan's own correction and Fixture G1 both name this as
+    the discriminator for this clause.
+
+    A direct call rather than end to end: at this commit the raise still
+    ends the command before `run.yaml` is written, so
+    `provenance.apparatus.unobserved` does not exist to read — task 7
+    re-asserts the same number end to end."""
+    from collections import namedtuple
+
+    from publishable.apparatus import Apparatus, Observer
+    from publishable.errors import ContractError
+
+    Condition = namedtuple("Condition", ["index", "label"])
+    conditions = [Condition(0, None)]
+
+    schedule = [
+        {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+        {"pinned": "r1", "appears": "A1", "vanishes": None},
+        {"pinned": "r1", "appears": "A1", "vanishes": None},
+        {"pinned": "r2", "appears": "A1", "vanishes": None},
+    ]
+    calls = {"n": 0}
+
+    def probe(cfg):
+        facts = dict(schedule[calls["n"]])
+        calls["n"] += 1
+        return Apparatus(facts=facts)
+
+    observer = Observer(
+        probe_name="p",
+        probe=probe,
+        declared_facts=["pinned", "appears", "vanishes"],
+        conditions=conditions,
+        cfgs={0: None},
+        run_dir=tmp_path,
+        credentials={},
+    )
+
+    phases = ["run_start", "pre_execution", "pre_execution", "pre_execution"]
+    raised: ContractError | None = None
+    for phase in phases:
+        try:
+            observer.observe_round(phase=phase, condition_index=None)
+        except ContractError as exc:
+            raised = exc
+            break
+    assert raised is not None
+    assert raised.code == "E-APPARATUS-CHANGED"
+    assert calls["n"] == 4, "the raise must not preempt the fourth call"
+    assert observer.observations.unobserved(["pinned"])["pinned"]["total_probes"] == 4
