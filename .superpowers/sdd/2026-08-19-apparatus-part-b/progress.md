@@ -127,3 +127,43 @@ mechanical traps.** The narrow lesson is not *don't restore*: it is that **whate
 was something else**, and a diagnosis naming the wrong cause leaves the real one in place to recur. Both
 times the agent flagged it, which is why both were caught; neither checked it, which is why both
 recurred.
+
+## Batch 2 — tasks 2, 3 — the comparison and its code, and not one call site
+
+Commits `c46e07d` (`Observations.changed`), `a384dbd` (`E-APPARATUS-CHANGED` and `STOP_CODES`), report
+`bfe1818`. Suite 2426 → **2435**. Nothing wired, confirmed by grep.
+
+### Review: spec compliance PASS; quality PASS conditional on one Major closing before task 4
+
+**All five of Decision 1's readings plus per-condition scope behave as ruled** — verified by the
+reviewer's **own** sequences, built independently of the shipped fixture, and the shipped fixture
+confirmed able to separate them by a non-degenerate most-recent mutation failing exactly the reading-5
+test.
+
+**Major: a `nan` fact reports a change against itself, and it is precisely Part B's named risk arriving
+before the wiring.** `coerce_scalars` admits non-finite floats, so a `nan` fact returns
+`('f', nan, nan)` **on its first observation** — `changed: nan → nan`. Not reachable at this commit, but
+**the moment task 4 wires the gate a probe with a constant `nan` fact stops the run at the run-start
+round**, which falsifies Decision 11 directly. **Ruling: close it in batch 2, not task 4** — task 4's
+prescribed fixtures cannot see it, so deferring is shipping it. The owner was **determined rather than
+guessed**: `reference.md`'s `E-APPARATUS-FACT-TYPE` row admits `float` **unqualified**, so the remedy is
+a reflexivity-safe comparison rather than a narrowed type.
+
+**Second Major: a docstring naming two fixtures that do not exist, to disclaim the mechanism that
+actually pins the thing.** `STOP_CODES`' docstring claimed each member was "pinned by its own fixture —
+Fixture U … Fixture G1 — rather than one shared assertion"; **both fixtures are absent from `tests/`**
+and the only pin **is** the shared set-equality assertion it disclaims. The comparison is also
+**inverted** — `APPARATUS_CODES` is the set with genuine per-member pins, which the reviewer confirmed by
+deleting a member and watching its own named test fail. **A reader greps for those fixture names and
+finds nothing.**
+
+**And a mutation whose two branches could not differ was read as the stronger evidence.** The batch's
+most-recent shim updated inside `record`, making the comparison `x vs x` for **every** transition, and
+the report called that *"a stronger discriminator"*. The reviewer built the non-degenerate two-map shim
+and got the correct result. **The fixture was sound; the reasoning about it was not** — which is the
+distinction *a mutation is a claim too* exists to draw.
+
+**Fifth "no disagreements" claim, fifth time wrong, and again in prose the brief supplied** — the brief's
+*"no fixture can reach it"* was false, and the batch's own narrowing of that assert was correct and
+necessary while being filed as a clarification. **The check that would have caught all five is the same
+one: grep what the brief asserts before repeating it.**
