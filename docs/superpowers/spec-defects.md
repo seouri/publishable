@@ -3277,7 +3277,7 @@ Routed by feature:
 |---|---|
 | `provenance.environment.os`, `.hostname`, `.hardware` | **H6 Hashes and provenance** — environment capture is its subject |
 | `provenance.allocation`, `provenance.allocation_hash` | **H3 Units**, which lands `allocation` and `holdout`; both write the one `allocation.json` the hash covers |
-| `provenance.upstream` | **H8 Studies and reporting**, which owns lineage and upstream chains |
+| ~~`provenance.upstream`~~ | **CLOSED 2026-08-20 (H8a task 7).** `command_run` now writes it — see the amendment below |
 
 **Also recorded, and deliberately not fixed:** the example's `provenance` key order differs from
 `cli.py`'s construction order. Cosmetic — YAML mappings are unordered and no reader depends on it —
@@ -3293,6 +3293,19 @@ use. `holdout` is not part of this: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses e
 it, so the file's `holdout` key stays unwritten until H3d lands it. The table's other two rows —
 `provenance.environment.os`/`.hostname`/`.hardware` and `provenance.upstream` — are unaffected and
 still unwritten.
+
+**AMENDED 2026-08-20 (H8a task 7): the `provenance.upstream` row is now written, and struck from
+the table above.** `command_run` sets `provenance["upstream"]` to `UpstreamLedger.entries()`,
+inserted after `allocation_hash` — its documented position relative to a sibling that already
+ships — and always a list: `[]` when no `io.reuse_from` call returned anything, never `None`, on
+`input_manifest_changed`'s precedent rather than `apparatus: null`'s (`upstream` has no declaration
+anywhere for a `null` to mean "declared and did not apply"). Each entry carries exactly the four
+keys § The two files' example shows — `run_id`, `code_hash`, `parameters_hash`, `used` — and no
+fifth; H8a hashes nothing new. The remaining row, `provenance.environment.os`/`.hostname`/
+`.hardware`, is unaffected and still unwritten, still owned by H6. The "deliberately not fixed"
+key-order note two paragraphs above is unaffected by this amendment: `upstream` was inserted at
+`cli.py`'s own last position (after `allocation_hash`), which is a cosmetic divergence from § The
+two files' example in exactly the pre-existing way that note already covers, not a new one.
 
 ## `register_template` appears outside § The importable surface — checked, not a defect
 

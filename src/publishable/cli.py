@@ -3662,6 +3662,13 @@ def command_run(config_path: Path) -> int:
             # `None`.
             "allocation": "allocation.json" if alloc_doc is not None else None,
             "allocation_hash": alloc_hash,
+            # Decision 7: always a list, `[]` when nothing was read — on
+            # `input_manifest_changed`'s precedent, not `apparatus: null`'s.
+            # `upstream` has no declaration anywhere for a `null` to mean
+            # "declared and did not apply", so there is no third state to
+            # write, and a `None` here would be a reader hazard for the
+            # ordinary `for u in provenance["upstream"]`.
+            "upstream": upstream_ledger.entries(),
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
             run_id=run_dir.name,
