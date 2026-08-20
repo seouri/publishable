@@ -18,6 +18,7 @@ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
 
 if TYPE_CHECKING:
+    from publishable.lineage import UpstreamResolver
     from publishable.units import ArmPlan, HoldoutPlan, UnitList
 
 SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
@@ -371,11 +372,16 @@ class StepIO:
         condition_label: str | None = None,
         repeat_label: str | None = None,
         measurements: dict[str, Any] | None = None,
+        upstream: "UpstreamResolver | None" = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
         self.run_dir = run_dir
         self.resumed = False
+        # Private and read by no step: `output_dir` never reaches `io` at all
+        # (Decision 2, `docs/superpowers/specs/2026-08-20-lineage-design.md`)
+        # — a step gets exactly the one method, `reuse_from`, and no field.
+        self._upstream = upstream
         self._recorded_keys: set[str] = set()
         self._units = units
         self._rows: dict[str, dict[str, Any]] = {}
@@ -858,6 +864,31 @@ class StepIO:
                 )
             base = self._nest_repeat(base, target, self._repeat_label)
         return self._read(base / step / name)
+
+    def reuse_from(self, locator: str, step: str, name: str) -> Any:
+        """Read a named artifact from a completed upstream run.
+        `docs/reference.md` § Lineage between runs / § Steps and artifacts.
+
+        Task 3 wires the resolver in and resolves the locator and the step
+        directory through it; task 5 (next in this slice) completes this
+        method with `name`'s containment check and the coded
+        `E-UPSTREAM-ARTIFACT-MISSING` refusal. What this partial version
+        already gets right, and what its own wiring test pins: a call with
+        no upstream resolver injected is core's own bug, not a config's or a
+        step's, so it is a bare `assert` rather than a coded refusal.
+        """
+        # Core's own bug, not a config's or a step's: `runner.py` always
+        # threads an `UpstreamResolver` from `command_run` (Decision 2), so a
+        # missing one means core called `execute_plan` without it, which no
+        # config can cause and no step can trigger.
+        assert self._upstream is not None, (
+            "`io.reuse_from` was called with no upstream resolver injected — "
+            "this is core's own bug; `runner.py` always threads one from "
+            "`command_run`"
+        )
+        run_dir, record = self._upstream.resolve(locator)
+        step_dir = self._upstream.locate_step(record, run_dir, step)
+        return self._read(step_dir / name)
 
     @staticmethod
     def _read(path: Path) -> Any:

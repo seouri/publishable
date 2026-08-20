@@ -112,6 +112,19 @@ def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Pat
     because a location can point at anything; a relative one may not, because
     `latest` is not a `run_id` and the record there says so. That asymmetry is a
     property, not an oversight.
+
+    **The repo-containment check runs on both forms.** `spec-defects.md`'s
+    "`resolve_run`'s relative form skips the repo-containment check" (owner:
+    H8a tasks 3 and 5) closes here: Decision 1's grounds for exempting the
+    relative form — "`output_dir` was checked at `validate` and again by
+    `run`" — hold for an ordinary subdirectory of `output_dir` and not for a
+    **symlink** under it, and core writes one itself (`point_latest`'s
+    `<output_dir>/latest`). A symlink under `output_dir` pointing into the
+    git repo would otherwise read an in-repo run through the relative form
+    with no check at all. So the relative form's path is resolved (symlinks
+    followed) *before* the containment check, exactly as the absolute form's
+    already is — one check, run on both branches, rather than two checks
+    that could drift.
     """
     path = Path(locator)
     if path.is_absolute():
@@ -130,7 +143,13 @@ def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Pat
             "were a run_id, and provenance.upstream would record a value that is not one",
             code="E-UPSTREAM-LOCATOR",
         )
-    resolved = output_dir / locator
+    resolved = (output_dir / locator).resolve()
+    if resolves_inside_repo(resolved, repo_root):
+        raise ContractError(
+            f"upstream run {locator!r} resolves inside this repo ({repo_root}) — "
+            "copy it outside the repo, or address it by run_id under output_dir",
+            code="E-UPSTREAM-REPO-CONTAINED",
+        )
     record = read_run_record(resolved)
     if record.get("run_id") != locator:
         detail = (
@@ -206,13 +225,18 @@ def resolve_step(record: dict[str, Any], run_dir: Path, step: str) -> Path:
             code="E-UPSTREAM-STEP-UNKNOWN",
         )
 
-    # Minor 6 (task-b2-review.md): a hand-edited record whose `shared`/`summary`
-    # entry is not a mapping reaches `.get` here and raises `AttributeError`
-    # rather than a diagnostic — this is a read, not a run: there is no call
-    # site yet, and once one exists `execute_plan`'s bare `except Exception`
-    # records it as a failed execution rather than surfacing a traceback.
-    # Whether this earns its own coded refusal is task 5's decision, not
-    # this task's.
+    # Minor 6 (task-b2-review.md), ruled by task 5: a hand-edited record whose
+    # `shared`/`summary` entry is not a mapping reaches `.get` here and raises
+    # `AttributeError` rather than a diagnostic. Left as is, deliberately: this
+    # is a fault in a hand-edited `run.yaml`, not in a config or a step, and
+    # `read_run_record` (Decision 3) already draws the line at three narrow
+    # refusals — `schema_version`, `run_id`, and parse/mapping validity —
+    # rather than validating the whole document's shape. Minting a code here
+    # would require widening that line with no config-reachable case to
+    # justify it. `execute_plan`'s bare `except Exception` still contains it —
+    # the execution is recorded `failed` and the plan still continues
+    # (Decision 10) — so nothing here regresses "nothing in H8a stops or
+    # alters a run" merely because the exception is uncoded.
     if entry.get("status") != "completed":
         raise ContractError(
             f"`{step}` in the upstream run did not complete (status: "
@@ -221,3 +245,75 @@ def resolve_step(record: dict[str, Any], run_dir: Path, step: str) -> Path:
             code="E-UPSTREAM-STEP-INCOMPLETE",
         )
     return base
+
+
+class UpstreamLedger:
+    """The accumulating `provenance.upstream` entries for one run.
+
+    Built once in `command_run` and shared across every execution's `StepIO`
+    (Decision 2 / Decision 6) — one instance for the whole run, so it
+    outlives every per-execution `StepIO` and survives an execution that
+    later fails, rather than resetting between executions the way a
+    `StepIO`-owned collection would.
+
+    This class is deliberately a bare container at this point in the slice:
+    task 6 owns the accumulation rule itself (an entry is added only when a
+    `reuse_from` call *returns*, kept across a failing execution, `used`
+    deduplicated and sorted, entries sorted by `run_id` rather than by
+    insertion order). Tasks 3 and 5 build the plumbing this rests on —
+    construction, injection, and the read path itself — without yet writing
+    to it, on the plan's own ordering constraint: "nothing accumulates until
+    something reads."
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[str, dict[str, Any]] = {}
+
+
+class UpstreamResolver:
+    """Resolves a `reuse_from` locator to a run directory, its record, and a
+    step's published directory within it — the one object `command_run`
+    builds per run and injects into every execution's `StepIO` as a private
+    keyword-only argument (Decision 2), so `output_dir` itself never reaches
+    a step: a step can call the one method `io` documents and read no field
+    of this object at all.
+
+    `__init__` does no I/O and cannot raise. A resolver is constructed at run
+    start for a config whose `output_dir` may hold no prior run at all —
+    `allocate_run_dir` creates the directory later — so nothing about
+    building one may depend on `output_dir` already existing.
+    """
+
+    def __init__(self, *, output_dir: Path, repo_root: Path, ledger: "UpstreamLedger") -> None:
+        self.output_dir = output_dir
+        self.repo_root = repo_root
+        self.ledger = ledger
+        # Keyed by `run_id`, never by the raw locator string: a relative
+        # locator IS a candidate run_id (Decision 1), so it is checked
+        # against this cache before `resolve_run` reads anything, and an
+        # absolute locator's run_id is unknown until its record is read, so
+        # it always resolves once and is cached under the run_id it turns
+        # out to name — which is also why a later *relative* call naming
+        # that same run_id is a cache hit too, one record read for however
+        # many calls name one upstream (Decision 6).
+        self._records: dict[str, tuple[Path, dict[str, Any]]] = {}
+
+    def resolve(self, locator: str) -> tuple[Path, dict[str, Any]]:
+        """Resolve `locator` to `(run_dir, record)`, reading `run.yaml` at
+        most once per distinct upstream run."""
+        path = Path(locator)
+        if not path.is_absolute():
+            cached = self._records.get(locator)
+            if cached is not None:
+                return cached
+        run_dir, record = resolve_run(locator, output_dir=self.output_dir, repo_root=self.repo_root)
+        self._records[record["run_id"]] = (run_dir, record)
+        return run_dir, record
+
+    def locate_step(self, record: dict[str, Any], run_dir: Path, step: str) -> Path:
+        """`resolve_step`, reached through the resolver rather than imported
+        directly by `artifacts.py` — which cannot import this module at all
+        (Decision 2's third ground: `artifacts → lineage → run_record →
+        runner → artifacts` would close a cycle `TYPE_CHECKING` alone does
+        not open back up)."""
+        return resolve_step(record, run_dir, step)

@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from publishable import apparatus
 from publishable.apparatus import Observer
@@ -20,6 +20,15 @@ from publishable.secrets import redact
 from publishable.stats import handed_to, kish_effective_n
 from publishable.sweep import Condition, condition_dir_name
 from publishable.units import UnitList, cluster_count_of
+
+if TYPE_CHECKING:
+    # A plain import here would reopen the cycle from the other side —
+    # `lineage → run_record → runner → lineage` — that Decision 2
+    # (`docs/superpowers/specs/2026-08-20-lineage-design.md`) closes by
+    # injecting `UpstreamResolver` rather than importing it. Replacing this
+    # with a plain import undoes that decision rather than tidying an
+    # import.
+    from publishable.lineage import UpstreamResolver
 
 
 @dataclass(frozen=True)
@@ -497,6 +506,7 @@ def execute_plan(
     credentials: dict[str, str] | None = None,
     observer: Observer | None = None,
     stop: StopSignal | None = None,
+    upstream: "UpstreamResolver | None" = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -563,6 +573,13 @@ def execute_plan(
     takes, which also records its reason on the same signal below. A stop
     never retries (Decision 10): the `break` is the last thing either guard
     does.
+
+    `upstream` is `None` for a caller that builds no resolver (no shipped
+    caller omits one; `command_run` always builds one per run) and is
+    otherwise threaded straight into every execution's `StepIO` as its own
+    private `upstream=` keyword (H8a Decision 2) — a defaulted keyword on
+    `observer=`/`stop=`'s own precedent, so no existing caller or test
+    changes.
     """
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this
@@ -734,6 +751,7 @@ def execute_plan(
             # measurements is honoured at the input path and refused at the step
             # path, which is the same declaration answering two different ways.
             measurements=measurements,
+            upstream=upstream,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()

@@ -4,6 +4,7 @@ per `docs/superpowers/plans/2026-08-20-lineage.md` task 1 and
 `docs/superpowers/specs/2026-08-20-lineage-design.md` § 3.
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pytest
 import yaml
 from tests.test_cli import run_a_project
 
+from publishable.diagnostics import EXIT_PARTIAL
 from publishable.errors import ContractError
 from publishable.lineage import read_run_record, resolve_run, resolve_step
 from publishable.run_record import SCHEMA_VERSION
@@ -405,3 +407,102 @@ def test_a_repeat_scoped_step_nested_under_its_repeat_label_is_also_refused(tmp_
     with pytest.raises(ContractError) as e:
         resolve_step(doc, run_dir, "step_repeat")
     assert e.value.code == "E-UPSTREAM-STEP-SCOPED"
+
+
+# ---------------------------------------------------------------------------
+# spec-defects.md: "resolve_run's relative form skips the repo-containment
+# check" (owner: H8a tasks 3 and 5) — closed here, on `resolve_run` itself.
+# ---------------------------------------------------------------------------
+
+
+def test_relative_form_containment_refuses_a_symlink_under_output_dir_into_the_repo(
+    tmp_path: Path,
+):
+    """The gap `task-b2-review.md` Minor 8 found: the relative form exempted
+    itself from `resolves_inside_repo` entirely, on the grounds that
+    `output_dir` was already checked at `validate`/`run` — true for an
+    ordinary subdirectory and false for a SYMLINK under it, and core writes
+    one itself (`point_latest`'s `<output_dir>/latest`). Built exactly as the
+    review verified it: a real git repo holding the upstream record, and an
+    `output_dir` elsewhere with a same-named symlink pointing into it — the
+    relative form must now refuse this precisely as the absolute form
+    already does for a plain in-repo directory.
+    """
+    repo_root = tmp_path / "downstream_repo"
+    repo_root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+    run_id = "run_2020-01-01T00-00-00Z_ppppppp"
+    in_repo_run = repo_root / "in_repo_run"
+    _write_upstream(in_repo_run, run_id)
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    (output_dir / run_id).symlink_to(in_repo_run, target_is_directory=True)
+    with pytest.raises(ContractError) as e:
+        resolve_run(run_id, output_dir=output_dir, repo_root=repo_root)
+    assert e.value.code == "E-UPSTREAM-REPO-CONTAINED"
+
+
+def test_relative_form_containment_control_reads_an_ordinary_subdirectory(tmp_path: Path):
+    """The control the fix must not break: an ORDINARY (non-symlink) run
+    directory under `output_dir`, outside any repo, still reads through the
+    relative form exactly as before — the widened check must not refuse the
+    case Decision 1 always meant to allow.
+    """
+    output_dir = tmp_path / "results"
+    run_id = "run_2020-01-01T00-00-00Z_qqqqqqq"
+    _write_upstream(output_dir / run_id, run_id)
+    repo_root = tmp_path / "unused_repo_root"
+    resolved, record = resolve_run(run_id, output_dir=output_dir, repo_root=repo_root)
+    assert resolved == (output_dir / run_id).resolve()
+    assert record["run_id"] == run_id
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — UpstreamResolver/UpstreamLedger, injected: the wiring test, at
+# `run` level (§ Steps and artifacts; the plan's task 3 step 6).
+# ---------------------------------------------------------------------------
+
+_REUSE_FROM_MISSING_RECORD_STEP = """\
+# generated for the H8a task 3 wiring test
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        io.reuse_from("run_2020-01-01T00-00-00Z_zzzzzzz", "step01", "x.json")
+        return {{}}
+"""
+
+
+def test_a_step_reached_through_run_has_a_real_resolver_injected(tmp_path: Path):
+    """Task 3 step 6. Asserted through behaviour a step can observe — not by
+    reaching into `io._upstream` — because Decision 2 gives the step-facing
+    surface zero readable fields. The cheapest honest shape: a generated
+    step calls `io.reuse_from` against a `run_id` no run ever wrote, and the
+    SPECIFIC code that locator earns, `E-UPSTREAM-RECORD-MISSING` (not a
+    wildcard `E-UPSTREAM-*`), lands in the failed execution's ledger line —
+    which it can only do if a real `UpstreamResolver` reached this step's
+    `io` and `resolve_run` actually ran.
+
+    A second, later step still completing is the same property Global
+    Constraints requires of every refusal-touching test in this slice: the
+    failed execution is contained, the run continues, and `run.yaml` is
+    still produced — nothing in H8a stops or alters a run (Decision 10).
+    """
+    project = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=8,
+        _starter_step=_REUSE_FROM_MISSING_RECORD_STEP,
+        extra_steps=["after"],
+        expect_exit=EXIT_PARTIAL,
+    )
+    run_dir = project["run_dir"]
+    assert (run_dir / "run.yaml").exists()
+    lines = [json.loads(line) for line in (run_dir / "executions.jsonl").read_text().splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["status"] == "failed"
+    assert "E-UPSTREAM-RECORD-MISSING" in lines[0]["error"]
+    assert lines[1]["status"] == "completed"
