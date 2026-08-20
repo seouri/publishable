@@ -12846,3 +12846,1328 @@ def test_fdr_bh_writes_an_adjusted_p_value_onto_the_record_entry_it_addresses():
     assert entry["p_value_corrected"] == pytest.approx(0.02)
     assert entry["ci95_corrected"] is None
     assert entry["correction"] == "fdr_bh"
+
+
+def test_a_run_with_no_declared_probe_records_a_null_apparatus_block_and_no_ledger(
+    tmp_path, capsys
+):
+    """The guard pin, captured at `4508ea6` before any H7d change.
+
+    `reference.md` § The apparatus core can only observe: an experiment whose
+    measurements never leave the machine declares nothing and records
+    `apparatus: null` — the WHOLE block. A block present with `probe: null`
+    beside four other nulls is a different record: it says a probe was asked for
+    and did not name itself. Template `generic` declares no probe, so this is
+    every run in this suite and the worked example both.
+
+    The full key LIST is asserted, not just `apparatus`: a sub-key or a sibling
+    added unconditionally by the record work is exactly what this catches, and
+    an assertion on `apparatus` alone would not see it.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert list(run["provenance"]) == [
+        "git",
+        "environment",
+        "apparatus",
+        "input_manifest",
+        "input_manifest_hash",
+        "input_manifest_changed",
+        "publishable_version",
+        "plugin_versions",
+        "units",
+        "units_hash",
+        "allocation",
+        "allocation_hash",
+    ]
+    assert run["provenance"]["apparatus"] is None
+    assert not (doc["run_dir"] / "apparatus").exists()
+
+
+# --- H7d Part A task 9: the probe at run start ------------------------------
+
+_APPARATUS_ASSAY_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_assay")
+class ApparatusAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+_FIXED_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_SWEPT_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+_APPARATUS_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_cred_assay")
+class ApparatusCredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    apparatus_probe = "h7d_cred_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+_CRED_LEAKING_FACT_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": os.environ["PUBLISHABLE_TEST_TOKEN"]})
+"""
+
+_CRED_LEAKING_EMBEDDED_FACT_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+    return Apparatus(facts={"endpoint": f"https://api.example.com/v1?key={token}"})
+"""
+
+_CRED_LEAKING_RAISE_PROBE_MODULE = """\
+import os
+
+from publishable import register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+    raise RuntimeError(f"could not reach the instrument near vault token {token}")
+"""
+
+# `lab7` is short and ordinary-looking on purpose (Fixture K): a value that
+# LOOKS random would make an exact-value check and a pattern check agree,
+# which is exactly the shape whose mutation could not discriminate (§ The
+# discriminating fixtures, Fixture K).
+_ORDINARY_CRED_VALUE = "lab7"
+
+
+_NON_STR_PROBE_ASSAY_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_wbr_assay")
+class ApparatusWbrAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = ["h7d_probe"]
+    apparatus_facts = ["model_revision"]
+"""
+
+
+def test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_exists(
+    tmp_path, capsys
+):
+    """Whole-branch review Major 1, end to end: a template declaring
+    `apparatus_probe = ["h7d_probe"]` — plausible, since `apparatus_facts`
+    the very next line *is* a list — used to validate clean and record
+    `apparatus: null`. `validate._check_probe` now reports `E-PROBE-UNKNOWN`
+    for it, and since `command_run` calls `validate_config` first and returns
+    before ever inspecting `apparatus_probe` itself when `c.has_errors`, this
+    one fix closes both surfaces: `run` refuses before any run directory is
+    created at all, so there is no `apparatus/` directory and the probe is
+    never called.
+
+    **This is the run-level pin for the same claim, and the discriminator
+    matters here too**: `_check_probe`'s registration-check fallback also
+    reports `E-PROBE-UNKNOWN` (with a different message) when the type guard
+    is skipped, so `"E-PROBE-UNKNOWN" in output` alone cannot tell "refused
+    for being the wrong type" from "refused for not being registered" —
+    confirmed by a coordinator's mutation (`if False:` in place of the type
+    guard) leaving the whole suite green. The phrase asserted below is the
+    type-check branch's alone."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_wbr_assay",
+        parameters={},
+        _local_template=_NON_STR_PROBE_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "an `apparatus_probe` name is a non-empty `str`" in output
+    assert doc["run_dir"] is None
+    assert not list(doc["results_dir"].glob("run_*"))
+
+
+def test_a_declared_probe_is_called_once_per_condition_at_run_start(
+    installed, registries, tmp_path, capsys
+):
+    """The end of the false `apparatus: null`. Two conditions, and the
+    ledger's `run_start` lines are asserted as the exact list of condition
+    keys read back from `sweep.yaml` — not a count, which cannot tell two
+    calls for one condition from one call for each."""
+    site = installed("dist-p9", "1.0", {"publishable.probes": {"h7d_probe": "p9_probe_mod:probe"}})
+    (site / "p9_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    expected_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(expected_keys) == 2, "the fixture must have two conditions"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    run_start_conditions = [line["condition"] for line in ledger if line["phase"] == "run_start"]
+    assert run_start_conditions == expected_keys
+
+
+def test_a_probe_reading_a_swept_parameter_gets_ITS_condition_s_value(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture S. The two conditions' recorded facts must DIFFER and each
+    equal its own swept value. NOT an assertion that `E-STEP-SWEPT-PARAM` was
+    not raised: no marker is present under this design, so that assertion is
+    true of a build that hands the probe nothing at all."""
+    site = installed("dist-s9", "1.0", {"publishable.probes": {"h7d_probe": "s9_probe_mod:probe"}})
+    (site / "s9_probe_mod.py").write_text(_SWEPT_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(set(by_key.values())) == 2, (
+        "the fixture's two conditions must sweep different values"
+    )
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    recorded = {
+        line["condition"]: line["facts"]["model_revision"]
+        for line in ledger
+        if line["phase"] == "run_start"
+    }
+    assert recorded == by_key
+    assert len(set(recorded.values())) == 2
+
+
+def test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no_run_yaml(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture K, end to end: exit non-zero, `E-APPARATUS-FACT-CREDENTIAL` in
+    the captured output, no `run.yaml`, and `lab7` in no byte of any file
+    under the results directory — asserted on RAW text over a file list
+    proven non-empty first, on `_files_under`'s shape.
+
+    **Fix round 2, item 2.** `check_facts`'s credential-check message
+    interpolates the credential's NAME and the fact's KEY, never the value,
+    so `"E-APPARATUS-FACT-CREDENTIAL" in output` and `_ORDINARY_CRED_VALUE not
+    in output` both hold whether the diagnostic went through
+    `command_run`'s wrapper or escaped raw to `main`'s bare handler —
+    deleting this code from `APPARATUS_CODES` left the suite byte-identical.
+    `_assert_went_through_the_containment_wrapper` is what actually witnesses
+    this code's membership, the same way it does for the other four.
+    """
+    site = installed(
+        "dist-k9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9_probe_mod:probe"}}
+    )
+    (site / "k9_probe_mod.py").write_text(_CRED_LEAKING_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-CREDENTIAL")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+def test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_end(
+    installed, registries, tmp_path, capsys
+):
+    """Whole-branch review Major 2, end to end. The probe returns the
+    credential EMBEDDED in a larger value (an endpoint URL carrying
+    `?key=<token>`), not equal to it — the shape the exact-equality check let
+    through and `secrets.redact` would have caught over the identical value
+    set. Same assertions as Fixture K's exact-equality sibling: exit
+    non-zero, `E-APPARATUS-FACT-CREDENTIAL` in the output, no `run.yaml`, and
+    `lab7` in no byte of any file under the results directory, asserted on
+    RAW text over a file list proven non-empty first."""
+    site = installed(
+        "dist-k9c", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9c_probe_mod:probe"}}
+    )
+    (site / "k9c_probe_mod.py").write_text(_CRED_LEAKING_EMBEDDED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-CREDENTIAL")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture K2, and the pin for the containment mechanism as a whole: exit
+    non-zero, `E-APPARATUS-RAISED` present, `<redacted:PUBLISHABLE_TEST_TOKEN>`
+    present, and `lab7` absent from stdout, from stderr and from every file
+    under the results directory."""
+    site = installed(
+        "dist-k2-9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k2_probe_mod:probe"}}
+    )
+    (site / "k2_probe_mod.py").write_text(_CRED_LEAKING_RAISE_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert _ORDINARY_CRED_VALUE not in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+# --- H7d Part A task 10: the probe before every execution -------------------
+
+_LEDGER_COUNTING_RUN_STEP = """\
+from pathlib import Path
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        ledger = Path(io.run_dir) / "apparatus" / "probes.jsonl"
+        seen = len(ledger.read_text().splitlines()) if ledger.exists() else 0
+        io.write("seen.json", {{"lines": seen}})
+        return {{}}
+"""
+
+
+def test_the_ledger_line_precedes_the_execution_it_covers(installed, registries, tmp_path, capsys):
+    """`seen.json` holds 4: the two run-start lines and this execution's own
+    round, both written before the step ran. An after-the-execution append
+    gives 2 — a different number, not a crash.
+
+    **Computed, not transcribed.** Two conditions (`sweep.grid` over
+    `instrument.model`) mean the run-start round is `C = 2` calls, one per
+    condition (task 9). The counting step is `run`-scoped — belongs to no
+    condition — so Decision 3 probes it once per resolved condition before it
+    runs: `C = 2` more calls. `2 + 2 = 4`, all written before `Step.run`
+    reads the ledger. The design's own prescribed mutation for this placement
+    (a step that raises, leaving the ledger short by one line) cannot work
+    here: a failed execution never stops the run, so an after-the-execution
+    append would still land the line — this fixture is arithmetic instead
+    (§ Corrections against the code, correction 6).
+    """
+    site = installed(
+        "dist-t10a", "1.0", {"publishable.probes": {"h7d_probe": "t10a_probe_mod:probe"}}
+    )
+    (site / "t10a_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    # `_starter_step`, not `extra_steps`: the scaffolded step itself becomes
+    # the ONLY step in the plan, run-scoped. A second, condition-scoped or
+    # repeat-scoped step would also be probed (once per its own condition) and
+    # its `pre_execution` lines would land under the same condition keys the
+    # run-scoped round writes, making the run-scoped round's own contribution
+    # unobservable from the ledger alone — exactly the confound this fixture
+    # is built to avoid.
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        _starter_step=_LEDGER_COUNTING_RUN_STEP,
+    )
+    seen = json.loads(
+        (doc["run_dir"] / "shared" / "step01_summarize_units" / "seen.json").read_text()
+    )
+    assert seen["lines"] == 4
+
+
+def test_a_condition_less_execution_is_probed_once_per_condition(
+    installed, registries, tmp_path, capsys
+):
+    """The `pre_execution` lines for the `run`-scoped step carry BOTH
+    condition keys, and both keys have an observed fact. The wide-cfg reading
+    would produce one line whose condition is absent from both.
+
+    **Deviation from the brief, reported rather than silently written.** The
+    brief's docstring asks this to be checked against `provenance.apparatus.
+    facts` in `run.yaml` — but that assembly is task 11's (`Observer.block()`
+    plus its `cli.py` wiring), out of scope for this batch, and
+    `command_run` still writes `"apparatus": None` unconditionally. Asserting
+    against `run.yaml` here would fail on task 11's absence, not on this
+    task's own property. This test instead reconstructs the same
+    (condition → fact) view `Observations.facts_document()` would publish,
+    directly from `counter_lines` — the `pre_execution` round alone, NOT the
+    whole ledger. **Fix round 1:** the first version of this test reconstructed
+    from the whole ledger, which made the final assertion pass even under a
+    mutation that skipped the condition-less round entirely, because the
+    `run_start` round already carries both condition keys with a non-null
+    fact. Restricting to `counter_lines` is what makes this test about task
+    10's own property, and it now fails under that exact mutation.
+    """
+    site = installed(
+        "dist-t10b", "1.0", {"publishable.probes": {"h7d_probe": "t10b_probe_mod:probe"}}
+    )
+    (site / "t10b_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    # Same reason as the previous test: `_starter_step` makes the run-scoped
+    # counting step the ONLY execution in the plan, so every `pre_execution`
+    # line in the ledger is unambiguously its own — no condition-scoped
+    # execution's probe can share a condition key with it and mask the
+    # property under test.
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        _starter_step=_LEDGER_COUNTING_RUN_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    expected_keys = {f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]}
+    assert len(expected_keys) == 2, "the fixture must have two conditions"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    counter_lines = [line for line in ledger if line["phase"] == "pre_execution"]
+    pre_execution_conditions = {line["condition"] for line in counter_lines}
+    assert pre_execution_conditions == expected_keys
+
+    # Restricted to `counter_lines` (the `pre_execution` round only), not the
+    # whole ledger: the `run_start` round already carries both condition keys
+    # with a non-null `model_revision` (task 9), so reconstructing from every
+    # line would make this assertion pass whether or not the condition-less
+    # round ran at all — an assertion implied by another in the same test,
+    # which is what `assert pre_execution_conditions == expected_keys` above
+    # already is. Restricting to `counter_lines` is what makes THIS
+    # assertion about task 10's own property rather than task 9's.
+    facts_first_answered: dict[tuple[str, str], Any] = {}
+    for line in counter_lines:
+        for fact, value in line["facts"].items():
+            key = (line["condition"], fact)
+            if value is not None and key not in facts_first_answered:
+                facts_first_answered[key] = value
+    for condition_key in expected_keys:
+        assert (condition_key, "model_revision") in facts_first_answered
+
+
+# --- H7d Part A task 15: the call-count contract ----------------------------
+
+_COUNT_CONTRACT_RUN_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        return {{}}
+"""
+
+
+def test_the_call_count_contract_is_pinned_by_the_ordered_pair_list_not_a_count(
+    installed, registries, tmp_path, capsys
+):
+    """`C + E_c + C × E_none`. Fixture F, computed rather than transcribed:
+    `sweep.grid` over one axis, two levels (`C = 2`); `replication.repeats`
+    pinned to a single `seed` repeat, so the scaffolded `repeat`-scoped step
+    contributes one execution per condition (`E_c = 2`); one extra
+    `run`-scoped step (`E_none = 1`). `2 + 2 + 2 × 1 = 6` ledger lines.
+
+    **Five rejected readings, and their line counts — two of them collide,
+    which is why the assertion below is the ORDERED `(phase, condition)`
+    pair list and not the count:**
+
+    | Reading | Lines |
+    |---|---|
+    | Once per run, full stop | 1 |
+    | Once per condition, at run start only | 2 |
+    | Run start per condition, then before condition-BEARING executions only | 2 + 2 = 4 |
+    | Once per run at run start, full per-execution probing otherwise | 1 + 2 + 2×1 = 5 |
+    | Run start per condition, ONE wide-cfg call for the condition-less execution | 2 + 2 + 1 = 5 |
+
+    The third row is Decision 3's rejected narrowing; the fifth is the other
+    rejected reading (a wide-cfg call instead of one per condition).
+
+    The last two both land on **5**: with two conditions, "probe once for the
+    whole run at run start" and "probe the condition-less execution once,
+    wide-cfg" are indistinguishable by count alone. This design's own line
+    count, 6, is not shared with either — but the pair list is asserted
+    anyway, because a fixture that only pins a total that happens to be
+    unique among six readings is one edit away (a third condition, say) from
+    losing that property silently; the ordered list separates all six by
+    construction, not by this fixture's particular size.
+
+    **Execution order**, verified directly against this fixture at H7d Part A
+    batch 3 (this commit): the `run`-scoped step executes FIRST, before
+    either condition's repeat-scoped execution — `scope.build_plan` orders by
+    scope rather than by declaration order in `experiment.steps`, where the
+    extra step was appended.
+    """
+    site = installed(
+        "dist-t15", "1.0", {"publishable.probes": {"h7d_probe": "t15_probe_mod:probe"}}
+    )
+    (site / "t15_probe_mod.py").write_text(_FIXED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        extra_steps=["counter"],
+        extra_step_source=_COUNT_CONTRACT_RUN_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    condition_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(condition_keys) == 2, "the fixture must have two conditions"
+
+    # Ground truth for execution order — read off `executions.jsonl` rather
+    # than assumed, so a plan-ordering change would move this test's own
+    # expectation rather than silently invalidating it.
+    exec_lines = [
+        json.loads(line) for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+    ]
+    condition_bearing_order = [
+        f"{e['condition']:02d}_"
+        + next(c["label"] for c in sweep["conditions"] if c["index"] == e["condition"])
+        for e in exec_lines
+        if e["condition"] is not None
+    ]
+    assert condition_bearing_order == condition_keys, (
+        "the repeat-scoped executions must run in ascending condition order for "
+        "this test's expected pair list to hold"
+    )
+    assert exec_lines[0]["condition"] is None, "the run-scoped counter must run first"
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    pairs = [(line["phase"], line["condition"]) for line in ledger]
+
+    expected = (
+        [("run_start", k) for k in condition_keys]
+        + [("pre_execution", k) for k in condition_keys]  # the run-scoped counter's round
+        + [("pre_execution", k) for k in condition_keys]  # the two repeat-scoped executions
+    )
+    assert len(pairs) == 6
+    assert pairs == expected
+
+
+# --- Fix round 1, Critical 1: a probe's DISPATCH failure must redact too ----
+
+_LOAD_FAILING_CRED_PROBE_MODULE = """\
+import os
+
+raise RuntimeError("plugin import failed near token " + os.environ["PUBLISHABLE_TEST_TOKEN"])
+"""
+
+
+def test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run(
+    installed, registries, tmp_path, capsys
+):
+    """Critical 1. `apparatus._probe_for`'s `load_entry_point` step imports a
+    plugin's top level — user code — exactly as `units._resolver_for` does
+    for a resolver, and `validate._check_probe` answers only `E-PROBE-UNKNOWN`
+    from package metadata: it never calls `EntryPoint.load()`, so a plugin
+    whose module raises at import gets no verdict from `validate` at all and
+    is reachable on the FIRST `run` of an unchanged machine — no fixture
+    needs to change what is installed between `validate` and the lock.
+
+    Before this fix, `_probe_for` was dispatched outside the containment
+    `try`, so this exact shape printed `RuntimeError('plugin import failed
+    near token lab7')` straight to stderr through `main`'s bare
+    `PublishableError` handler. The fix moves dispatch into its own wrapper,
+    the roster wrapper's own shape, sited before that `try` is ever entered.
+    """
+    site = installed(
+        "dist-loadfail",
+        "1.0",
+        {"publishable.probes": {"h7d_cred_probe": "loadfail_probe_mod:probe"}},
+    )
+    (site / "loadfail_probe_mod.py").write_text(_LOAD_FAILING_CRED_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-PLUGIN-LOAD" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert _ORDINARY_CRED_VALUE not in output
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_DECORATOR_MISMATCH_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("a_different_name_entirely")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_a_probe_s_entry_point_decorator_mismatch_is_a_diagnostic_not_a_traceback(
+    installed, registries, tmp_path, capsys
+):
+    """The sibling dispatch fault, `E-PLUGIN-DECORATOR`: the entry-point key
+    and the `@register_probe` argument disagree. Carries no credential, but
+    must reach the SAME dispatch wrapper
+    `test_a_probe_that_fails_to_load_is_a_redacted_diagnostic_at_run` pins for
+    `E-PLUGIN-LOAD`, rather than escaping to `main` as an unfiltered
+    `ContractError` — a regression here would mean that fix narrowly patched
+    one code rather than dispatch as a whole.
+    """
+    site = installed(
+        "dist-decomismatch",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "decomismatch_probe_mod:probe"}},
+    )
+    (site / "decomismatch_probe_mod.py").write_text(_DECORATOR_MISMATCH_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    # Not just "the code string is somewhere in the output" — that passes
+    # whether the diagnostic came through the containment wrapper's
+    # `Collector` or escaped raw to `main`'s bare handler, since
+    # `E-PLUGIN-DECORATOR`'s own message names neither `experiment_type` nor
+    # a "problem" count. `_assert_went_through_the_containment_wrapper` is
+    # what actually witnesses the routing this docstring claims.
+    _assert_went_through_the_containment_wrapper(output, "E-PLUGIN-DECORATOR")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+# --- Fix round 1, Major 2: each APPARATUS_CODES member individually pinned --
+
+_RETURN_BAD_PROBE_MODULE = """\
+from publishable import register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return {"model_revision": "r1"}
+"""
+
+_FACT_TYPE_BAD_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": [1, 2]})
+"""
+
+_FACT_MISSING_BAD_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={})
+"""
+
+
+def _assert_went_through_the_containment_wrapper(output: str, code: str) -> None:
+    """The discriminator Major 2's fix needs: `main`'s own bare
+    `PublishableError` handler prints one line, `f"  error   {code:<20}
+    {exc}"`, with no `path` field and no summary line. `command_run`'s
+    wrapper renders through a real `Collector` — `probe_c.error(exc.code,
+    "experiment_type", str(exc))` — which prints the path `experiment_type`
+    on its own line and a `"N problem(s)"` summary neither of those bare
+    fixture messages contains. A code removed from `APPARATUS_CODES` re-raises
+    past the wrapper and this assertion fails on BOTH counts, not just the
+    code string, which is why deleting a member from the frozenset must show
+    up here rather than only in an unfiltered exit-code check.
+    """
+    assert code in output, output
+    assert "experiment_type" in output, output
+    assert "1 problem (1 error, 0 warnings)" in output, output
+
+
+def test_E_APPARATUS_RETURN_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe returning a bare `dict` instead of an `Apparatus`."""
+    site = installed(
+        "dist-return-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "return_bad_probe_mod:probe"}},
+    )
+    (site / "return_bad_probe_mod.py").write_text(_RETURN_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-RETURN")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+def test_E_APPARATUS_FACT_TYPE_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe returning an `Apparatus` whose fact value is a
+    structural (list) value, not a scalar."""
+    site = installed(
+        "dist-facttype-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "facttype_bad_probe_mod:probe"}},
+    )
+    (site / "facttype_bad_probe_mod.py").write_text(_FACT_TYPE_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-TYPE")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+def test_E_APPARATUS_FACT_MISSING_is_individually_pinned_through_the_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Major 2. A probe omitting a declared `apparatus_facts` key entirely."""
+    site = installed(
+        "dist-factmissing-bad",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "factmissing_bad_probe_mod:probe"}},
+    )
+    (site / "factmissing_bad_probe_mod.py").write_text(_FACT_MISSING_BAD_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-MISSING")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+
+# --- Fix round 1, Minor 6: Decision 3's motivating case, a summary-scoped ---
+# --- condition-less execution, witnessed by a fixture -----------------------
+
+_SUMMARY_SCOPED_COUNT_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{}}
+"""
+
+
+def test_a_summary_scoped_execution_is_probed_once_per_condition_and_runs_last(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 3's own motivating case, absent from every fixture the batch
+    committed: *"a `summary`-scoped execution runs after every
+    condition-bearing execution, so under any narrowing the most recent
+    observation preceding it can be hours old."* Every fixture in the
+    original batch used `run` scope for its condition-less execution — this
+    is the `summary`-scoped counterpart.
+
+    **Computed, not transcribed.** `sweep.grid` over one axis, three levels
+    (`C = 3`); `replication.repeats` pinned to two `seed` repeats, so the
+    scaffolded `repeat`-scoped step contributes `C × 2 = 6` executions
+    (`E_c = 6`); one extra `summary`-scoped step (`E_none = 1`).
+    `C + E_c + C × E_none = 3 + 6 + 3 × 1 = 12` ledger lines.
+    """
+    site = installed(
+        "dist-summary9", "1.0", {"publishable.probes": {"h7d_probe": "summary9_probe_mod:probe"}}
+    )
+    (site / "summary9_probe_mod.py").write_text(_SWEPT_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2", "m3"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+        extra_steps=["summarizer"],
+        extra_step_source=_SUMMARY_SCOPED_COUNT_STEP,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    condition_keys = [f"{c['index']:02d}_{c['label']}" for c in sweep["conditions"]]
+    assert len(condition_keys) == 3, "the fixture must have three conditions"
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(set(by_key.values())) == 3, "the three conditions must sweep distinct values"
+
+    exec_lines = [
+        json.loads(line) for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+    ]
+    assert exec_lines[-1]["scope"] == "summary", "the summary execution must run last"
+    assert exec_lines[-1]["condition"] is None
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 12
+
+    # The summary execution's own round is the LAST three `pre_execution`
+    # lines in the ledger — everything before them belongs to run-start or
+    # to the six repeat-scoped executions' own condition-bearing rounds.
+    summary_round = ledger[-3:]
+    assert all(line["phase"] == "pre_execution" for line in summary_round)
+    summary_by_condition = {
+        line["condition"]: line["facts"]["model_revision"] for line in summary_round
+    }
+    assert summary_by_condition == by_key
+
+
+# --- Fix round 2 ---
+
+
+def test_a_probe_dispatch_keyboard_interrupt_propagates_with_no_message(
+    installed, registries, monkeypatch, tmp_path, capsys
+):
+    """Fix round 2, item 1. The dispatch-site carve-out fix round 1 added
+    (`isinstance(exc, KeyboardInterrupt): raise KeyboardInterrupt from None`,
+    inside `command_run`'s wrapper around `apparatus._probe_for`) had no test
+    of its own: the existing `KeyboardInterrupt` pins cover the RESOLVER's
+    `except BaseException` arm
+    (`test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message`)
+    and `observe_once`'s probe-CALL path (`test_apparatus.py`) — neither
+    exercises `_probe_for`'s own dispatch site, so deleting the carve-out
+    there left the full suite green at 2409. A mutation deleting it would
+    fall through to the diagnostic below, report a finding and return
+    `EXIT_WRONG` instead of propagating — this test would then see no
+    `KeyboardInterrupt` at all and fail on `pytest.raises` itself.
+    """
+    import publishable.cli as cli_mod
+
+    # `validate._check_probe` answers from the same metadata scan
+    # `_probe_for` reads — a name no installed distribution registers is
+    # refused before `run` ever reaches the lock, which would make this test
+    # exit at `validate` rather than at dispatch. Registering the name (an
+    # entry point pointing at a module that need not even exist, since
+    # `_probe_for` itself is monkeypatched away below) is what lets the run
+    # reach `command_run`'s dispatch site at all.
+    installed(
+        "dist-ki-dispatch",
+        "1.0",
+        {"publishable.probes": {"h7d_probe": "unused_ki_probe_mod:probe"}},
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("dispatch failed near token lab7")
+
+    monkeypatch.setattr(cli_mod.apparatus, "_probe_for", _boom)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        run_a_project(
+            tmp_path,
+            capsys=capsys,
+            experiment_type="apparatus_assay",
+            parameters={"instrument": {"model": "m1"}},
+            _local_template=_APPARATUS_ASSAY_TEMPLATE,
+            expect_exit=EXIT_WRONG,
+        )
+    # The re-raised object carries no message — a fresh instance, not the
+    # dispatch call's original one, so a constructed credential cannot reach
+    # Python's own uncaught-exception printer.
+    assert excinfo.value.args == ()
+
+
+# --- H7d Part A task 11: provenance.apparatus's five sub-keys ---------------
+
+_APPARATUS_NULLABLE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_nullable_assay")
+class ApparatusNullableAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_nullable_probe"
+    apparatus_facts = ["firmware", "calibration_id"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+# Fixture N. Two conditions (`m1`/`m2`) times two `seed` repeats gives four
+# `pre_execution` calls, plus one `run_start` call per condition: six calls
+# total, three per condition. `_calls` counts per-model so each condition's
+# three calls are told apart without a condition argument the probe signature
+# doesn't have (`probe(cfg)` only).
+#
+# `m1`'s `firmware` never answers (the "never-answered pair"); `m2`'s always
+# does (no warning). Both models' `calibration_id` answers `null` on exactly
+# their first call and a value afterward (the "two partially answered ones").
+_PARTIAL_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_calls = {}
+
+
+@register_probe("h7d_nullable_probe")
+def probe(cfg):
+    model = cfg.parameters.instrument.model
+    n = _calls.get(model, 0)
+    _calls[model] = n + 1
+    firmware = None if model == "m1" else "3.11.2"
+    calibration_id = None if n == 0 else f"CAL-{model}"
+    return Apparatus(facts={"firmware": firmware, "calibration_id": calibration_id})
+"""
+
+
+def test_a_declared_probe_records_the_five_sub_keys_per_condition(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture N end to end. Asserts the block's exact key SET, then `facts`
+    per condition with the unanswered fact `None` and the answered one
+    holding its value, then `unobserved` RECOMPUTED from the ledger the test
+    just read — the two numbers are never hard-coded."""
+    site = installed(
+        "dist-t11a", "1.0", {"publishable.probes": {"h7d_nullable_probe": "t11a_probe_mod:probe"}}
+    )
+    (site / "t11a_probe_mod.py").write_text(_PARTIAL_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_nullable_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_NULLABLE_TEMPLATE,
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    by_key = {
+        f"{c['index']:02d}_{c['label']}": c["values"]["instrument.model"]
+        for c in sweep["conditions"]
+    }
+    assert len(by_key) == 2, "the fixture must have two conditions"
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    assert set(block) == {"probe", "ledger", "hash", "facts", "unobserved"}
+    assert block["probe"] == "h7d_nullable_probe"
+    assert block["ledger"] == "apparatus/probes.jsonl"
+    # The recorded string actually resolves — joins the record to the file it
+    # names rather than comparing two independent spellings to each other.
+    assert (doc["run_dir"] / block["ledger"]).is_file()
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 6, "run_start (2) + pre_execution (4, two conditions × two repeats)"
+
+    for key, model in by_key.items():
+        assert block["facts"][key]["calibration_id"] == f"CAL-{model}"
+    m1_key = next(k for k, m in by_key.items() if m == "m1")
+    m2_key = next(k for k, m in by_key.items() if m == "m2")
+    assert block["facts"][m1_key]["firmware"] is None
+    assert block["facts"][m2_key]["firmware"] == "3.11.2"
+
+    # `unobserved` recomputed from the ledger itself, per fact, over every
+    # probe call regardless of condition.
+    expected_unobserved: dict[str, dict[str, int]] = {}
+    for fact in ("firmware", "calibration_id"):
+        total = sum(1 for line in ledger if fact in line["facts"])
+        nulls = sum(1 for line in ledger if line["facts"].get(fact) is None)
+        expected_unobserved[fact] = {"null_probes": nulls, "total_probes": total}
+    assert block["unobserved"] == expected_unobserved
+
+
+_UNDECLARED_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1", "extra_diagnostic": None})
+"""
+
+
+def test_the_undeclared_fact_is_recorded_and_has_no_unobserved_entry(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 4's fourth row, reached end to end through
+    `provenance.apparatus`. The presence assertion and the absence assertion
+    are one pair: the absence alone would pass if the probe had never run."""
+    site = installed(
+        "dist-t11b", "1.0", {"publishable.probes": {"h7d_probe": "t11b_probe_mod:probe"}}
+    )
+    (site / "t11b_probe_mod.py").write_text(_UNDECLARED_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    only_condition = next(iter(block["facts"].values()))
+    assert only_condition["extra_diagnostic"] is None
+    assert "extra_diagnostic" not in block["unobserved"]
+    assert "model_revision" in block["unobserved"]
+
+
+def test_the_unanswered_warning_fires_once_per_condition_and_fact_with_a_null(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture N: exactly THREE `W-APPARATUS-UNANSWERED` lines in stdout
+    across six probe calls — the never-answered pair and the two partially
+    answered ones — and none for a fact that always answered or for the
+    undeclared fact. A count assertion and an exact pair set, because
+    per-call emission would print eight and a warning derived from `facts`
+    alone would print one. The exit code stays 0, on `W-ENV-UNLOCKED`'s
+    precedent."""
+    site = installed(
+        "dist-t11c", "1.0", {"publishable.probes": {"h7d_nullable_probe": "t11c_probe_mod:probe"}}
+    )
+    (site / "t11c_probe_mod.py").write_text(_PARTIAL_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_nullable_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _local_template=_APPARATUS_NULLABLE_TEMPLATE,
+    )
+    out = doc["stdout"] or ""
+    warn_lines = [line for line in out.splitlines() if "W-APPARATUS-UNANSWERED" in line]
+    assert len(warn_lines) == 3, out
+
+
+# --- H7d Part A task 12: provenance.apparatus.hash --------------------------
+
+_HASH_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe")
+def probe(cfg):
+    # `model_revision` satisfies the template's declared `apparatus_facts`;
+    # `zeta_field`/`alpha_field` are inserted in the REVERSE of sorted order,
+    # so a build that dropped `sort_keys=True` would hash a different byte
+    # string than one that kept it (Decision 10's own prescribed mutation,
+    # step 4).
+    return Apparatus(
+        facts={"model_revision": "r1", "zeta_field": "z1", "alpha_field": "a1"}
+    )
+"""
+
+_HASH_FACT_PROBE_MODULE_CHANGED = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_probe2")
+def probe(cfg):
+    return Apparatus(
+        facts={"model_revision": "r1", "zeta_field": "z1", "alpha_field": "a2"}
+    )
+"""
+
+_APPARATUS_ASSAY_TEMPLATE_2 = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_assay_2")
+class ApparatusAssay2(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_probe2"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+
+def test_the_apparatus_hash_is_recomputable_from_the_recorded_facts(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture H. Recomputed by the test from the `facts` mapping it read out
+    of `run.yaml`, with `json.dumps(..., sort_keys=True, separators=(",",
+    ":"), ensure_ascii=False)`. A digest literal would pass under an encoder
+    that changed and hide it."""
+    site = installed(
+        "dist-t12a", "1.0", {"publishable.probes": {"h7d_probe": "t12a_probe_mod:probe"}}
+    )
+    (site / "t12a_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["provenance"]["apparatus"]
+    recomputed = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                block["facts"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    assert block["hash"] == recomputed
+
+
+def test_two_runs_with_identical_facts_share_a_hash_and_one_changed_fact_moves_it(
+    installed, registries, tmp_path, capsys
+):
+    """The property a literal would have hidden: identical facts, different
+    `run_id`s and different timestamps, identical hash — and a probe
+    returning one different value gives a different hash. Both halves,
+    because the first alone passes for a constant."""
+    site = installed(
+        "dist-t12b", "1.0", {"publishable.probes": {"h7d_probe": "t12b_probe_mod:probe"}}
+    )
+    (site / "t12b_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE)
+
+    doc1 = run_a_project(
+        tmp_path / "run1",
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    doc2 = run_a_project(
+        tmp_path / "run2",
+        capsys=capsys,
+        experiment_type="apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE,
+    )
+    run1 = yaml.safe_load((doc1["run_dir"] / "run.yaml").read_text())
+    run2 = yaml.safe_load((doc2["run_dir"] / "run.yaml").read_text())
+    # Two independently scaffolded runs, in two different result directories
+    # (`doc1["run_dir"] != doc2["run_dir"]`) — not the same run read twice —
+    # yet identical facts hash identically.
+    assert doc1["run_dir"] != doc2["run_dir"]
+    assert run1["provenance"]["apparatus"]["hash"] == run2["provenance"]["apparatus"]["hash"]
+
+    site2 = installed(
+        "dist-t12c", "1.0", {"publishable.probes": {"h7d_probe2": "t12c_probe_mod:probe"}}
+    )
+    (site2 / "t12c_probe_mod.py").write_text(_HASH_FACT_PROBE_MODULE_CHANGED)
+    doc3 = run_a_project(
+        tmp_path / "run3",
+        capsys=capsys,
+        experiment_type="apparatus_assay_2",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_APPARATUS_ASSAY_TEMPLATE_2,
+    )
+    run3 = yaml.safe_load((doc3["run_dir"] / "run.yaml").read_text())
+    assert run3["provenance"]["apparatus"]["hash"] != run1["provenance"]["apparatus"]["hash"]
+
+
+def test_apparatus_hash_s_signature_admits_only_a_facts_mapping():
+    """Direct call: two facts documents that differ in nothing hash the same,
+    and the argument is the facts mapping alone — the assertion is on the
+    function's signature-level behaviour rather than on a comment claiming
+    it. `apparatus_hash` takes no `probe_name` or `unobserved` parameter at
+    all, so two callers who disagree about either but agree on `facts` are
+    physically unable to make it return different digests."""
+    from publishable.apparatus import apparatus_hash
+
+    facts = {"00_baseline": {"model_revision": "r1"}}
+    h1 = apparatus_hash(facts)
+    h2 = apparatus_hash(dict(facts))
+    assert h1 == h2
+    assert h1.startswith("sha256:")
+
+
+# --- H7d Part A task 13: the recorded block is publishable as-is -----------
+
+_ORDINARY_FACT_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    # Deliberately does NOT read `PUBLISHABLE_TEST_TOKEN` — the property
+    # under test is that a run whose TEMPLATE declares a credential still
+    # publishes an apparatus block carrying no credential value, not that a
+    # probe returning one gets caught (Fixture K, task 9, covers that raise
+    # path already).
+    return Apparatus(facts={"model_revision": "seq-4000", "firmware": "3.11.2"})
+"""
+
+
+def test_the_recorded_apparatus_block_carries_no_credential_value(
+    installed, registries, tmp_path, capsys
+):
+    """Two assertions, and neither alone is the property. First: the run
+    COMPLETES and the block is populated — a block that is `null` because
+    nothing ran would pass an absence sweep trivially. Second: no declared
+    credential value appears anywhere in `run.yaml`'s RAW text, read whole
+    rather than re-serialized, because a defect in how a value is written is
+    one a parsing reader undoes before the assertion — and sweeping the
+    whole file rather than a slice of the apparatus block is the stronger
+    check, since a leak anywhere else in the document would still fail it.
+
+    The credential is DECLARED and PRESENT in the environment for this run —
+    a sweep for a value core never read would pass whatever the code did.
+
+    **What this does NOT prove**: it is the RECORD's property, not the
+    ledger's and not the terminal's. Fixture K
+    (`test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no_run_yaml`)
+    covers a probe that DOES return the credential, and Fixture K2
+    (`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`) covers the
+    raise path — both in task 9, both unaffected by this test either way.
+    """
+    site = installed(
+        "dist-t13", "1.0", {"publishable.probes": {"h7d_cred_probe": "t13_probe_mod:probe"}}
+    )
+    (site / "t13_probe_mod.py").write_text(_ORDINARY_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+    )
+    run_yaml_text = (doc["run_dir"] / "run.yaml").read_text()
+    run = yaml.safe_load(run_yaml_text)
+    block = run["provenance"]["apparatus"]
+    assert block is not None
+    assert block["facts"], "the block must be populated, not merely absent"
+
+    assert _ORDINARY_CRED_VALUE not in run_yaml_text

@@ -820,9 +820,9 @@ apparatus_facts = ["provider", "model_id", "api_version",
 
 **Three consequences worth stating before a run is scheduled.**
 
-1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys — in the specification; see [§ Executability on this build](#executability-on-this-build) — is the `dry-run` warning and the `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
+1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys — in the specification; see [§ Executability on this build](#executability-on-this-build) — is a warning, fired wherever a probe runs, plus an `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
 2. **The probe runs before *every* execution.** A hosted deployment re-tuned during the E4 benchmark's 4.4 hours, or the C3 run's 12 hours, fails the run with no policy knob. That is correct — two deployment states are not one dataset — but it is an operational precondition, not a footnote. The ledger keeps both observations, so the evaluable earlier period stays reportable.
-3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. None of that can be exercised yet, and the reason is worth being precise about: the apparatus mechanism is unbuilt in **core**, not merely unimplemented by this proposed plugin. `apparatus_probe` and `apparatus_facts` exist as declarable attributes on the template base class and are read by nothing; there is no `Apparatus` type, no `register_probe`, and no probe execution anywhere in the package ([§ Executability on this build](#executability-on-this-build)).
+3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. None of that can be exercised yet, and the reason is worth being precise about: whether core's apparatus mechanism is built, and how much of it, is a build fact that moves — see [§ Executability on this build](#executability-on-this-build) for what is true today rather than restating it here, since restating it here is exactly what leaves an undated claim behind for the next slice to falsify.
 
 ### Parameters
 
@@ -937,7 +937,7 @@ Retry ledgers, execution manifests, timestamped run directories, `reproduce` com
 
 Three, all now closed in the specification. Each is recorded here with the case that surfaced it, because a gap's motivating example is the thing a later reader needs and the fixed text no longer carries.
 
-1. **`apparatus_facts` conflated "must be yielded" with "gated on change."** A hosted deployment's revision fingerprint is returned on most calls and omitted on some. Declaring it made absence fatal; not declaring it left the change gate ambiguous, and the only safe move was to stop declaring a pin the study depends on. *Resolved* in `reference.md` § The apparatus core can only observe: a declared fact must be supplied as a **key**, `null` is a legal value meaning the apparatus did not answer, the gate compares two *observations* so an absence is never a change, and declaring the fact buys a `dry-run` warning plus an `unobserved` count. Every returned fact is gated whether declared or not, so there is no longer any reason to leave one out.
+1. **`apparatus_facts` conflated "must be yielded" with "gated on change."** A hosted deployment's revision fingerprint is returned on most calls and omitted on some. Declaring it made absence fatal; not declaring it left the change gate ambiguous, and the only safe move was to stop declaring a pin the study depends on. *Resolved* in `reference.md` § The apparatus core can only observe: a declared fact must be supplied as a **key**, `null` is a legal value meaning the apparatus did not answer, the gate compares two *observations* so an absence is never a change, and declaring the fact buys a warning, fired wherever a probe runs, plus an `unobserved` count. Every returned fact is gated whether declared or not, so there is no longer any reason to leave one out.
 2. **`required_env` was static, but a sweep can span providers.** [E6](#e6--compiled-program-transfer) is the case: `validate` would either demand an Azure key from a run that never selects Azure or stay silent about one a later condition needs. *Resolved* by `reference.md` § A credential can belong to a parameter value — `Param(requires_env={...})` keyed by the parameter's `choices`, checked over the conditions the sweep actually resolves. The requirement travels with the decision that creates it, which is the same boundary `apparatus_facts` sits on read from the other side.
 3. **Nothing showed the metered quantity before a run.** `limits.max_executions` warns on an execution count, which is not what a metered run is billed by: 20 executions over a 100,000-unit corpus is cheap by that measure and ruinous in practice. *Resolved* in `reference.md` § Before you spend it — `dry-run` now prints **unit-executions**, the sum of `len(io.units)` over every planned execution. Deliberately *not* resolved with a `limits` field: core has no price list and cannot count tokens, and a threshold in a currency it cannot measure would be the "looks handled and isn't" failure the correction family is held against. A budget that must be pre-registered is a template parameter, hashed with everything else.
 
@@ -1358,6 +1358,48 @@ deferred a fifth time.
 
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2359 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
+
+### Measured on 2026-08-19 against commit `06bc38d` — after H7d Part A
+
+H7d Part A opens the apparatus: a template declaring an `apparatus_probe` no longer writes a false
+`apparatus: null`. Core resolves the declared probe through the same three-step dispatch a resolver
+already uses, calls it at run start and before every execution, projects its returned facts onto a
+declared `apparatus_facts` set, refuses a fact that is a credential core read (by exact value **or**
+substring containment, closed by this same slice's whole-branch fix round) or a value core cannot
+encode, records every observation in an append-only ledger (`apparatus/probes.jsonl`), and
+assembles `provenance.apparatus`'s five sub-keys from what it observed. **H7d Part A unblocks ZERO
+configs, and both counts stay unmoved: six with no remaining core-side blocker, three executable.**
+Confirmed by the whole-branch review's own re-measurement through `validate_config` on E1 and
+C1's `data`/`statistics` blocks — the same method every entry above uses, re-cited here rather than
+re-run a third time on the identical fixture:
+
+| Config | Codes reported |
+|---|---|
+| E1 | `W-DATA-CLUSTER-UNDECLARED`, `W-TEMPLATE-VERSION` (plus two harness artifacts of the reviewer's own scaffold, not of the design: `E-NAME-DIR`, from the config not living under `configs/<name>/`, and a stand-in `template_version`) |
+| C1 | the same three codes |
+| E1 with `holdout.frac → 0` (**can-fail control**) | the same **plus** `E-DATA-HOLDOUT-FRAC` |
+
+No `E-APPARATUS-*` and no `E-PROBE-UNKNOWN` on either, and none is reachable for any of the nine
+configs in this analysis: `generic` — the template every config here validates against, since
+`publishable-llm`'s `llm_screen`/`llm_deployment` are a design rather than code — declares no
+`apparatus_probe`, so `command_run` never constructs an `Observer` regardless of what this slice
+built. **The only direction this slice, or any slice retiring no refusal, can move a config-level
+count is down**: once a projection exists, a probe that fails to yield a declared key is a **new**
+error a run can hit, not a narrower one.
+
+**What did change, honestly stated rather than left to the pointer at § 3 of this entry's own
+predecessor.** A run of `llm_screen` as designed — `apparatus_probe = "llm_deployment"`,
+`apparatus_facts` naming five keys including `deployment_revision` — would, if the plugin existed,
+now record the five real sub-keys this section documents instead of the unconditional `null` every
+prior measurement in this analysis found; and it would newly earn one of five error codes
+(`E-APPARATUS-RAISED`, `-RETURN`, `-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`) or one warning
+(`W-APPARATUS-UNANSWERED`) it could not have earned before this slice. None of that is exercised by
+the nine configs measured here, because none declares a probe a real plugin backs — the same
+substitution [§ The apparatus probe is the sharpest fit](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk)
+already named as a gap this build cannot close.
+
+`uv run pytest` at this commit: 2423 passed, 1 skipped, 2 xfailed; `ruff check`, `ruff format
+--check` and `mypy` all clean.
 
 ## Cost and execution summary
 

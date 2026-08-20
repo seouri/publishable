@@ -6082,6 +6082,15 @@ checks it against the installed `publishable.probes` distributions (`E-PROBE-UNK
 family this entry's `field_convention` belongs to is now `field_convention` and `apparatus_facts`
 only.
 
+**Amended 2026-08-19 — H7d Part A task 5:** `apparatus_facts` gained a reader too.
+`cli.command_run` passes `getattr(run_template, "apparatus_facts", None) or []` to `Observer` as
+`declared_facts`, and `apparatus.check_facts` reads it to project a probe's returned `facts` and to
+raise `E-APPARATUS-FACT-MISSING` for a declared key that did not come back — re-verified against
+`src/publishable/apparatus.py` and `src/publishable/cli.py` at this branch's HEAD, not carried from
+the design. `field_convention` is now the **sole** remaining member of this entry's family. Still
+unassigned; H7d Part A does not adopt it — folding it in here would make this slice the owner of a
+gap it did not find.
+
 ## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
 
 `docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
@@ -6202,11 +6211,19 @@ both of decision 3's serialization boundaries (`runner.execute_plan`'s step-erro
 cannot know what to redact without a global carrying the run's declared credentials into a
 function that today takes only `argv`.
 
-The demonstrated path into it is closed: task 12's review found `template.validate(doc)` raising
-unguarded in `validate.py`, letting a credential-bearing raise reach this exact handler verbatim,
-and the fix (commit `cd72c3a`) routed that call through `Collector.render()` instead, closing the
-one path this slice built that could reach it with a declared value. The handler itself is
-unchanged and remains reachable by any other `PublishableError` raised outside a collector.
+**A demonstrated path into it was closed, then a second was found and closed too — the handler
+itself is still un-redacted and still reachable by construction.** Task 12's review found
+`template.validate(doc)` raising unguarded in `validate.py`, letting a credential-bearing raise
+reach this exact handler verbatim, and the fix (commit `cd72c3a`) routed that call through
+`Collector.render()` instead. **H7d Part A batch 3 then built a second path**, unrelated to the
+first: `apparatus._probe_for` (a plugin's entry-point dispatch, called from `cli.command_run`) sat
+outside the batch's own containment `try`, so a probe plugin whose module raised at import with a
+declared credential reached this exact handler again, verbatim — found by that batch's review and
+closed in the same batch's fix round by wrapping dispatch in a redacting `except BaseException`,
+the roster wrapper's own shape. **The handler itself received neither fix and remains reachable by
+any other `PublishableError` raised outside a collector** — this is the third time this repo has
+shipped this class of leak, and the second time the fix closed one call site rather than the
+handler's own construction.
 
 **Owner:** unassigned. Not a task for this slice — closing it would mean giving `main` a way to
 know which values are credentials, which is a design question (a module-level or threaded
@@ -6303,7 +6320,18 @@ declaration named, never an installed template's class, so it does nothing for t
 case — a config naming an installed *template* still resolves no class. Amended, not closed; owner
 stays unassigned.
 
-## OPEN — `PROBES` and `RESOLVERS` are written by their decorators and read by nothing
+## `PROBES` and `RESOLVERS` are written by their decorators and read by nothing — `PROBES` half CLOSED by H7d Part A task 3
+
+**CLOSED (`PROBES` half) 2026-08-19 (H7d Part A task 3).** Re-verified against the code at this
+branch's HEAD before striking: `apparatus._probe_for` calls
+`declared_names(PROBE_GROUP, fn)`, which resolves `PROBE_GROUP = "publishable.probes"` through
+`plugins._registry_for` to the `PROBES` dict itself — `grep -n "PROBES" src/publishable/plugins.py
+src/publishable/apparatus.py` shows the write site in `plugins.py` and the read through
+`declared_names` in `apparatus.py`. This is exactly the reader this entry's own reasoning said
+would close it: *"a reader for `PROBES` means executing a probe"* — `_probe_for` is the probe's
+three-step dispatch, the first thing this slice ships. `RESOLVERS`'s half of this entry was
+already amended closed by H7b Part B task 30, below — this closes the `PROBES` half the same
+amendment left open, naming H7d as its owner.
 
 H7b Part A tasks 12 and 13 gave `publishable.plugins` two more module-level registries.
 `RESOLVERS["<name>"] = fn` is set by `register_resolver`'s decorator (task 12) and
@@ -6461,7 +6489,15 @@ so a name that resolves outside it never matches an entry either. Neither needs 
 to make `hash_index` correct; one would be a change to what a resolver may read, which is a decision
 this task was not asked to make.
 
-## OPEN — a run whose template declares an installed probe records a false `apparatus: null` — **Owner: H7d**
+## a run whose template declares an installed probe records a false `apparatus: null` — CLOSED by H7d Part A task 11
+
+**CLOSED 2026-08-19 (H7d Part A task 11).** Re-verified against the code at this branch's HEAD
+before striking: `src/publishable/cli.py`'s provenance document no longer writes the literal
+`None` unconditionally — `grep -n '"apparatus"' src/publishable/cli.py` shows
+`"apparatus": observer.block() if observer is not None else None,` — so a run whose template
+declares an installed, resolvable probe now records the five real sub-keys `apparatus.py`'s
+`Observer.block()` builds, and a run whose template declares none still records `null`, honestly.
+The original text is kept below as filed.
 
 `cli.command_run`'s provenance document writes `"apparatus": None` unconditionally — there is no
 branch reading a template's `apparatus_probe` at all. `reference.md` § The apparatus core can only
@@ -7008,3 +7044,100 @@ greps for a closed slice named as an owner, or the pass is dropped in favour of 
 the task that touches its code.
 
 **Found by:** the controller, sweeping `Owner:` lines after H4d merged.
+
+## CLOSED by H7d Part A batch 3 — `append_observation` writes `facts` verbatim with no ordering ruled against `check_facts`
+
+`apparatus.append_observation(run_dir, *, phase, condition, probe, facts)` writes its `facts` argument
+to `apparatus/probes.jsonl` unchecked — it performs no shape, credential, or scalar-type check of its
+own. Decision 6 rules that a fact value equal to a declared credential's value is *"not recorded"*,
+but no decision in `docs/superpowers/specs/2026-08-19-apparatus-part-a-design.md` orders the append
+against `apparatus.check_facts` — Decision 9 rules the append's position only relative to *the
+execution* it precedes, never relative to the credential check. A caller free to append the ledger
+line before calling `check_facts` would put a credential-carrying fact on disk while still satisfying
+every ordering rule this design states, because no rule forbids that order.
+
+No call site exists yet in this build (H7d Part A batch 2, `apparatus.py` only) — batch 3 owns the
+first one. `append_observation`'s docstring already states this gap and names the two ways to close
+it: order the call so `check_facts` runs first, or accept the record in this file with a different
+resolution.
+
+**Owner:** H7d, batch 3 (the first task that calls both functions from a real `run`). **Found by:**
+batch 2's review, verified by reading `apparatus.py`'s `append_observation` and every Decision in the
+design for an ordering rule against `check_facts` — none exists.
+
+**Ruled:** `apparatus.Observer._observe_one` (task 9) calls `check_facts` before `append_observation`, every time — a probe returning a value equal to a declared credential is refused before a byte reaches `apparatus/probes.jsonl`. Pinned by Fixture K's raw-text-over-the-run-directory assertion. **Closed by:** H7d Part A, batch 3, task 9.
+
+## OPEN — a fact **key** equal to a credential value is not checked by `check_facts` itself, though the diagnostic it produces is redacted at `run` — **Owner: unassigned**
+
+`apparatus.check_facts`'s credential check (Decision 6) compares each fact **value** against every
+declared credential's value; it does not compare fact **keys**. `coercion._refuse`, which
+`check_facts` calls into for its scalar walk and re-codes as `E-APPARATUS-FACT-TYPE`, interpolates the
+offending value's key with `{key!r}`. A probe returning `{<a credential's value>: [1, 2]}` — a
+structural value keyed by a credential — reaches `E-APPARATUS-FACT-TYPE` with that credential in the
+exception's own message.
+
+**Corrected by H7d Part A batch 3's fix round 1: this is not a live leak at `run`.** The batch 3
+review verified by running that the fixture above produces
+`E-APPARATUS-FACT-TYPE experiment_type` with the value rendered as
+`<redacted:PUBLISHABLE_TEST_TOKEN>` — because `E-APPARATUS-FACT-TYPE` is a member of
+`apparatus.APPARATUS_CODES`, and `command_run`'s wrapper redacts every code in that set through a
+credential-bearing `Collector` before anything reaches a stream. The original entry's claim
+("reaches a diagnostic with that credential in the message") was true of the raw `ContractError`
+object and false of what is actually printed — it did not check the render path. **The redaction
+this rests on is now individually pinned** (`test_E_APPARATUS_FACT_TYPE_is_individually_pinned_
+through_the_wrapper`), closing the qualification the batch 3 review attached to this entry (Major 2:
+"the redaction rests on a set membership no test can see").
+
+**What is still genuinely open:** Decision 6's check itself compares values, not keys — the ruling
+is stated for *"a fact value,"* not a fact key — so `check_facts` still has no rule of its own
+against a credential-valued key; it is `APPARATUS_CODES` membership downstream, not a check inside
+`check_facts`, that happens to redact this particular shape today. A future code added outside that
+set (or a future call site printing the raw exception rather than a `Collector`) would reopen the
+leak with no check_facts-level guard against it. Whether core should also check keys, inside
+`check_facts` itself, is the real narrowing question the design does not settle, so this entry
+stays open on that question rather than being struck.
+
+**Owner:** unassigned. **Found by:** batch 2's review, verified by reading `check_facts`'s ordering
+and `coercion._refuse`'s message format together. **Corrected by:** H7d Part A batch 3, fix round 1,
+verified by running.
+
+## OPEN — `EXIT_EXTERNAL = 5` ships and is read by nothing — **Owner: Part B**
+
+`src/publishable/diagnostics.py` defines `EXIT_EXTERNAL = 5` alongside `EXIT_OK`, `EXIT_WRONG`,
+`EXIT_INVOCATION`, `EXIT_PARTIAL` and `EXIT_FAILED` — one definition, `grep -rn "EXIT_EXTERNAL"
+src/publishable/ tests/` at this branch's HEAD returns only that line. Nothing in `src/` or
+`tests/` reads the name, returns it, or tests it: no command constructs it, `cli.main` never
+selects it, and no fixture asserts a process exit code of `5`. `docs/reference.md` § Exit codes
+and diagnostics already documents its meaning and its precedence in the present tense — *"Something
+outside the machine refused… `5` is separate from all of them because it is the class you retry…
+so when both apply, `5` wins"* — which is a correct **specification** claim (the surface it
+describes, `EXIT_EXTERNAL` itself, is shipped) but not yet a **build** fact: no code path in this
+build can currently exit `5`, including the one this slice adds. H7d Part A's own probe-failure
+paths (Decision 12) end a command through `EXIT_WRONG`, not `EXIT_EXTERNAL` — filed rather than
+fixed, on Decision 12's own ruling: Part A refuses, it does not truncate a run or write
+`status: partial`, and choosing an exit code for the unreachable-apparatus case is Part B's
+`run_status` contract change, not a wiring task this slice can absorb quietly.
+
+This is a fourth member of the shipped-but-unread family `CLAUDE.md`'s misreading table already
+tracks under *reading an unbuilt reader as a defect* (`required_env`, `apparatus_probe` and
+`apparatus_facts`, in that order, each closed by giving it a reader) — `EXIT_EXTERNAL` is the same
+shape outside `BaseTemplate`, a module-level constant rather than a class attribute.
+
+**What retiring it needs, narrower than a plain "add the reader" would suggest:** a reader in
+`cli.main` or `command_run` that returns `5` for the unreachable-apparatus case *and* the documented
+precedence rule (`5` wins over `3` and `4` when both would otherwise apply) — not the constant
+itself, which already exists, and not a general-purpose exit-code registry. That reader is its own
+task in
+[`docs/superpowers/specs/2026-08-19-apparatus-part-a-design.md`](specs/2026-08-19-apparatus-part-a-design.md)
+§ Out of scope (Part B, task 18), which depends on two sibling tasks named in the same table: the
+`run_status` contract change (task 17 — nothing today compares `len(results)` against the plan, so
+a truncated all-completed plan still records `completed`) and the unreachable-probe path
+distinguished from the moved-fact path (task 19 — `partial` + `5` versus a failed run). This entry
+does not restate any of those three decisions — it files the narrower, previously-unfiled fact that
+the constant itself predates all of that work and has never had a reader at any point in this
+repo's history.
+
+**Owner:** Part B. **Found by:**
+[`docs/superpowers/plans/2026-08-19-apparatus-part-a.md`](plans/2026-08-19-apparatus-part-a.md)
+§ Corrections against the code, correction 13, re-confirmed here by grep at this branch's HEAD
+before filing rather than carried from that measurement unchecked.

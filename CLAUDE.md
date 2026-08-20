@@ -67,7 +67,8 @@ through `validate_config` rather than re-derived from emit sites, in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. Both
 qualifications stay attached to that number: the plugin must exist and be installed, and a declared
 apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
-regardless of what a template declares — filed, owned by H7d). Six stayed blocked on two causes neither
+regardless of what a template declares — filed, owned by H7d, **which H7d Part A has since built** —
+see the entry below, where the executable count stays unmoved all the same). Six stayed blocked on two causes neither
 of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
 for C1–C3, **which H4b-1 has since retired** — see the entry below, where C1–C3 stay non-executable on
 `io.reuse_from` alone. Also closed: `hash_index` was broken for every source, table and glob included,
@@ -185,6 +186,31 @@ already named on H3d's branch, once drawing within a cell is built** — accepta
 experiment in that analysis declares a group axis. The reasoning lives in the spine design's *Order,
 amended against outside evidence*, which is now tracked — cite it rather than restating it.
 
+**H7d Part A (the apparatus: observe and record) merged on 2026-08-19.** A template declaring an
+`apparatus_probe` no longer writes a false `apparatus: null` — core resolves the declared probe
+through the same three-step dispatch a resolver already uses, calls it at run start and before
+every execution, projects its facts onto a declared `apparatus_facts` set, refuses a fact that is a
+credential core read or a value core cannot encode, records every observation in an append-only
+ledger, and assembles `provenance.apparatus`'s five sub-keys from what it observed. **It retires no
+refusal and unblocks ZERO configs; six with no remaining core-side blocker and three executable both
+stay exactly where H4b-1 left them** — the nine configs in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) declare no `apparatus_probe` at
+all, since `generic` is the template they validate against. Five error codes are minted
+(`E-APPARATUS-RAISED`, `-RETURN`, `-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`) plus one
+warning (`W-APPARATUS-UNANSWERED`), and this closes the filing named above —
+*"`cli.py` writes `apparatus: null` unconditionally regardless of what a template declares"* — which
+is now stale and struck in `docs/superpowers/spec-defects.md` rather than left to mislead. A
+whole-branch review held the merge on two Majors, both closed the same day: a fact value
+*containing* a declared credential (not merely equal to one) was published verbatim in
+`provenance.apparatus.facts` and the ledger, because the credential check matched by exact equality
+while `secrets.redact`, over the identical value set, matches by substring — fixed by matching the
+way `redact` already matches; and a non-`str` `apparatus_probe` (`["a_probe"]` being the plausible
+mistake, since `apparatus_facts` sits on the very next line and *is* a list) silently read as "no
+probe declared" at both `validate` and `run`, reproducing the just-closed filing's defect through a
+different route — fixed at the one place both surfaces share, `validate._check_probe`, which is
+also what closes `run`'s copy of the same guard without touching it, since `command_run` validates
+first.
+
 ## The documents
 
 | File | Role |
@@ -259,7 +285,7 @@ every session.
 | Reading a subprocess probe as a pin | A probe proves the moment; a test proves tomorrow. H7b Part B's credential-leak fix was verified through the real console script for every shape at both commands — and the reviewer's combined mutation then left the suite **unchanged**, because the fix commit added one test. **Five times in three slices a correct fix shipped unpinned.** Verify by probe, then pin by mutation |
 | Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
-| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe, which stays H7d's. `apparatus_facts` remains, owned by H7d, and so does `field_convention`, owned by nobody — this parenthetical claimed the first was sole while the row itself named the second, and H7d's scoping caught the contradiction. `EXIT_EXTERNAL` is the same fault outside `BaseTemplate`: defined in `diagnostics.py`, read by nothing) |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody. `EXIT_EXTERNAL` is the same fault outside `BaseTemplate`: defined in `diagnostics.py`, read by nothing) |
 
 ### Writing checks that can fail
 

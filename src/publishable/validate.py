@@ -967,10 +967,26 @@ def _check_probe(name: str, template: Any, c: Collector) -> None:
     A template declaring no probe is the ordinary case and draws nothing —
     `reference.md` § The apparatus core can only observe: an experiment whose
     measurements never leave the machine declares nothing and records
-    `apparatus: null`.
+    `apparatus: null`. `None` is the one documented spelling of that —
+    anything else that is not a usable name (a list, an empty string, any
+    other non-`str`) is a declaration that disagrees with itself and is
+    reported rather than silently read as "no probe": `cli.command_run`
+    calls `validate_config` before it ever inspects `apparatus_probe` itself
+    and returns before constructing an `Observer` when `c.has_errors`, so
+    this is also what keeps `run` from silently skipping a malformed
+    declaration the same way — whole-branch review, Major 1.
     """
     declared = getattr(template, "apparatus_probe", None)
+    if declared is None:
+        return
     if not isinstance(declared, str) or not declared:
+        c.error(
+            "E-PROBE-UNKNOWN",
+            "experiment_type",
+            f"resolves template `{name}`, which declares `apparatus_probe` as "
+            f"{declared!r} — an `apparatus_probe` name is a non-empty `str`; `null` "
+            'is the only spelling of "no probe declared"',
+        )
         return
     known = names("publishable.probes")
     if declared in known:

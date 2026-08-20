@@ -14086,6 +14086,53 @@ def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write
     assert "`plugin` says" not in plain
 
 
+_NON_STR_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("wbr_probing")
+class WbrProbing(BaseTemplate):
+    apparatus_probe = ["wbr_probe"]
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {}
+"""
+
+
+def test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped(git_repo, write_config):
+    """Whole-branch review Major 1: `_check_probe`'s guard was `if not
+    isinstance(declared, str) or not declared: return` — a plausible mistake
+    (`apparatus_facts` on the very next line *is* a list) silently read as "no
+    probe declared" rather than being reported. `None` (the documented
+    no-probe spelling) must still draw nothing; anything else non-`str` must
+    be refused.
+
+    **The mutation-resistant assertion, found owed by a coordinator's own
+    mutation** (`if False:` in place of the type-check guard leaves the
+    branch dead but the suite green): `_check_probe` falls through to the
+    registration check below when the type guard is skipped, and that check
+    ALSO reports `E-PROBE-UNKNOWN` — with a *different* message — for a
+    declared value no installed distribution registers, since
+    `["wbr_probe"] in known` is `False` for any `known`. That fallback
+    message still contains the substring `wbr_probe` (inside its own
+    `repr`), so asserting only the probe name's presence cannot tell the two
+    branches apart. The phrase below appears in the type-check branch's
+    message alone — never in the registration-check branch's — so it is
+    what actually distinguishes "refused for being the wrong type" from
+    "refused for not being registered"."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "wbr_probing.py").write_text(_NON_STR_PROBE_TEMPLATE)
+
+    found = messages_by_code(
+        write_config({"experiment_type": "wbr_probing", "parameters": {"unknown_param": 1}})
+    )
+    # Asserted ALONGSIDE another finding this config also earns — never on a total code
+    # set, which `validate` collecting rather than aborting makes the wrong shape of test.
+    assert "E-PARAM-UNKNOWN" in found
+    message = found["E-PROBE-UNKNOWN"]
+    assert "an `apparatus_probe` name is a non-empty `str`" in message
+
+
 _PROBING_TEMPLATE = """\
 from publishable import BaseTemplate, register_template
 
@@ -14131,6 +14178,52 @@ def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_dr
         write_config({"experiment_type": "probing", "parameters": {}})
     )
     assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none
+
+
+_LOUD_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("loud_probing")
+class LoudProbing(BaseTemplate):
+    apparatus_probe = "loud_probe"
+    parameter_spec = {}
+"""
+
+
+def test_no_validate_path_calls_a_declared_probe(
+    installed, registries, git_repo, write_config, tmp_path
+):
+    """The probe writes a flag file and then raises: a call core made cannot be
+    silent, and a call it made and swallowed would still leave the flag on disk.
+    The findings-set assertion is the control that must REPORT — an exact set,
+    because `validate` collects rather than aborting and a refusal elsewhere never
+    makes a later check unreachable, so a control asserting only the flag's
+    absence would pass identically if `validate` never got far enough to resolve
+    the probe at all. THE CONTROL is that set: it is exactly `set()`, the same
+    empty set a `generic` golden config produces (`write_config()` above), which
+    says `validate` reached and passed every other check — including
+    `_check_probe`'s metadata scan, which resolves `loud_probe` successfully —
+    without ever invoking it.
+    """
+    flag = tmp_path / "probe_called.flag"
+    site = installed("dist-one", "1.0", {"publishable.probes": {"loud_probe": "loud_p14:probe"}})
+    (site / "loud_p14.py").write_text(
+        "from pathlib import Path\n"
+        "from publishable import Apparatus, register_probe\n\n\n"
+        '@register_probe("loud_probe")\n'
+        "def probe(cfg):\n"
+        f"    Path({str(flag)!r}).write_text('called')\n"
+        "    raise RuntimeError('a validate path called the probe')\n"
+    )
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "loud_probing.py").write_text(_LOUD_PROBE_TEMPLATE)
+
+    found = codes(write_config({"experiment_type": "loud_probing", "parameters": {}}))
+
+    assert not flag.exists()
+    assert found == set()
 
 
 def test_a_from_mapping_declaring_both_glob_and_resolver_is_refused(write_config):
@@ -14210,3 +14303,20 @@ def test_a_local_claimants_credentials_reach_the_collector_despite_the_collision
 
     assert "E-TEMPLATE-COLLISION" in {f.code for f in c.findings}
     assert c.credentials.get("SHADOW_KEY") == "sk-c2-sentinel-9911"
+
+
+def test_the_yield_checks_are_not_sited_at_dry_run_alone():
+    """Decision 1: the projection, the credential check and the null warning are
+    phase-independent, so no document may site them at a command that does not
+    exist in this build. Asserted on the RAW text of both documents, with a
+    length guard so an empty or moved file cannot make it pass vacuously."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    reference = (root / "docs" / "reference.md").read_text()
+    designs = (root / "docs" / "experimental-designs.md").read_text()
+    assert len(reference) > 100000 and len(designs) > 10000
+    assert "warning at `dry-run`" not in reference
+    assert "`dry-run` warns instead of the run failing" not in designs
+    assert "wherever a probe runs" in reference
+    assert "warns, wherever a probe runs, instead of the run failing" in designs

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable import apparatus
 from publishable.artifacts import ResolverIO, allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
@@ -2391,25 +2392,99 @@ def command_run(config_path: Path) -> int:
             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
             alloc_hash = allocation_hash(alloc_doc)
 
-        results = execute_plan(  # phase 7
-            plan=plan,
-            run_dir=run_dir,
-            input_dir=input_dir,
-            cfgs=cfgs,
-            repeats=repeats,
-            digest=digest,
-            units=eval_roster,
-            max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
-            fold_members=fold_members,
-            arm_members=arm_members_map,
-            holdout_train=(
-                UnitList([u for u in roster if u.key in set(holdout_plan.train)])
-                if holdout_plan is not None and roster is not None
-                else None
-            ),
-            measurements=(units_decl or {}).get("measurements"),
-            credentials=credentials,
-        )
+        # `apparatus_probe` declared on the resolved template — the ordinary
+        # case declares none, and `observer` stays `None` so every downstream
+        # call site (`Observer.observe_round`'s run-start round, and
+        # `execute_plan`'s per-execution round, task 10) is a no-op guarded on
+        # that, not on a property of `Observer` itself.
+        declared_probe = getattr(run_template, "apparatus_probe", None)
+        observer: apparatus.Observer | None = None
+        if isinstance(declared_probe, str) and declared_probe:
+            # `apparatus._probe_for` is the same three-step dispatch a
+            # resolver name goes through, and its middle step
+            # (`load_entry_point`) imports a plugin's top level — user code —
+            # exactly as `units._resolver_for` does for a resolver.
+            # `validate._check_probe` answers only `E-PROBE-UNKNOWN` from
+            # package metadata and never loads anything, so a load-time
+            # failure (`E-PLUGIN-LOAD`, `E-PLUGIN-DECORATOR`) gets no verdict
+            # from `validate` at all and can carry a credential the plugin's
+            # own import-time body read — this wrapper is the roster
+            # wrapper's own shape (`except BaseException`, `KeyboardInterrupt`
+            # re-raised fresh and argument-less, a FRESH credential-bearing
+            # `Collector`), for the identical reason.
+            try:
+                probe_fn = apparatus._probe_for(declared_probe)
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt):
+                    raise KeyboardInterrupt from None
+                dispatch_c = Collector()
+                dispatch_c.credentials = credentials
+                dispatch_code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
+                dispatch_c.error(dispatch_code, "experiment_type", str(exc))
+                print(dispatch_c.render(), file=sys.stderr)
+                return EXIT_WRONG
+            observer = apparatus.Observer(
+                probe_name=declared_probe,
+                probe=probe_fn,
+                declared_facts=list(getattr(run_template, "apparatus_facts", None) or []),
+                conditions=conditions,
+                cfgs=cfgs,
+                run_dir=run_dir,
+                credentials=credentials,
+            )
+
+        try:
+            # The run-start round: one probe call per resolved condition,
+            # before the first execution (Decision 2). `sweep.yaml` and
+            # `allocation.json` are already on disk; `run.yaml` is not, so a
+            # probe failure here leaves the same shape any other pre-`run.yaml`
+            # failure already leaves — no `run.yaml`, everything before it.
+            if observer is not None:
+                observer.observe_round(phase="run_start", condition_index=None)
+            results = execute_plan(  # phase 7
+                plan=plan,
+                run_dir=run_dir,
+                input_dir=input_dir,
+                cfgs=cfgs,
+                repeats=repeats,
+                digest=digest,
+                units=eval_roster,
+                max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+                fold_members=fold_members,
+                arm_members=arm_members_map,
+                holdout_train=(
+                    UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                    if holdout_plan is not None and roster is not None
+                    else None
+                ),
+                measurements=(units_decl or {}).get("measurements"),
+                credentials=credentials,
+                observer=observer,
+            )
+        except ContractError as exc:
+            # The one containment site for a probe CALL's raise (a dispatch
+            # failure is resolved, and redacted, by `apparatus._probe_for`'s
+            # own `try/except` just before `observer` is built — that site
+            # never reaches this `try` at all): `main`'s own `PublishableError`
+            # handler prints `{exc}` with no collector in scope, so anything
+            # reaching it is un-redacted. Filtered to exactly
+            # `apparatus.APPARATUS_CODES` —
+            # every other `ContractError` out of this block
+            # (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`) keeps escaping
+            # exactly as it does today; this slice does not change how core's
+            # own inconsistencies are reported.
+            if exc.code not in apparatus.APPARATUS_CODES:
+                raise
+            probe_c = Collector()
+            # A FRESH collector: `c` was already rendered and printed above,
+            # so appending to it would re-print every earlier finding and
+            # inflate the counts line — the roster path's own shape.
+            # `credentials` reused, never recomputed: a second derivation is a
+            # second answer.
+            probe_c.credentials = credentials
+            probe_c.error(exc.code, "experiment_type", str(exc))
+            print(probe_c.render(), file=sys.stderr)
+            return EXIT_WRONG
 
         status = run_status(results)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
@@ -3452,7 +3527,7 @@ def command_run(config_path: Path) -> int:
                 "uv_lock": "environment/uv.lock" if lock_path is not None else None,
                 "uv_lock_hash": lock_hash,
             },
-            "apparatus": None,
+            "apparatus": observer.block() if observer is not None else None,
             "input_manifest": "manifest/input.json",
             "input_manifest_hash": manifest_hash(manifest),
             "input_manifest_changed": changed_inputs,
@@ -3504,6 +3579,19 @@ def command_run(config_path: Path) -> int:
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
+
+        # `W-APPARATUS-UNANSWERED`, once at run end: `run.yaml` has no
+        # diagnostics channel of its own — the same reason `aggregate_c`'s
+        # findings print to stdout rather than joining the document — so
+        # this is a FRESH `Collector` (never `c`, already rendered and
+        # printed) rendered to stdout. A warning never changes the exit code,
+        # on `W-ENV-UNLOCKED`'s own precedent.
+        if observer is not None:
+            warn_c = Collector()
+            warn_c.credentials = credentials
+            observer.warn_unanswered(warn_c)
+            if warn_c.findings:
+                print(warn_c.render())
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")
