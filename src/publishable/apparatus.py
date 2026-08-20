@@ -481,6 +481,70 @@ def append_observation(
         fh.write(json.dumps(line) + "\n")
 
 
+def replay_ledger(run_dir: Path) -> Observations:
+    """Reconstruct a run's own baseline `Observations` from
+    `<run_dir>/apparatus/probes.jsonl`, replayed through the SHIPPED
+    `Observations.record` — never reimplemented, and no keyword added to it.
+
+    **Filtered to `phase` in `"run_start"`/`"pre_execution"`, in file order.**
+    Those are exactly the calls the run's own in-memory `Observations` held
+    while it executed. A `freeze` line is not one of them: including it
+    would let a fact FIRST answered to a `freeze` become a pin the run's own
+    gate never adopted, so a second `freeze` would report a change the run
+    will never fail on — the false stop H7d Part B's null handling exists to
+    prevent. A `dry_run` line is excluded for the same reason, and one more:
+    nothing appends one yet (§ Refusals routes that gap to H9). A line whose
+    `phase` is neither of these two names — including a well-formed `freeze`
+    or `dry_run` line, and any future phase this build has no name for — is
+    SKIPPED rather than refused: the ledger is append-only, and refusing an
+    unread phase would make this build unable to replay a newer run's
+    ledger, for no benefit gained.
+
+    Because this replays the shipped `Observations.record`, the
+    first-answered rule, the per-condition scoping, the `null → value` and
+    `value → null` transitions, and `_unchanged`'s `nan` reflexivity
+    carve-out all come along unchanged — none of them is re-derived here.
+
+    **The one refusal.** A line that is not valid JSON, not a JSON object,
+    or missing `phase`, `condition` or `facts` is
+    `E-FREEZE-LEDGER-UNREADABLE`. An ABSENT ledger file is deliberately NOT
+    this refusal — it returns an empty `Observations`, because "there is no
+    baseline" is `freeze`'s own `E-FREEZE-LEDGER-MISSING` to report, and
+    that one code has to cover both "no file at all" and "a file with no
+    qualifying line," since both land here as an empty baseline and both
+    share the one remedy: the run has not probed yet, and probing now would
+    pin a fact the run never adopted. Do not mint a second code for the
+    second case.
+    """
+    path = run_dir / "apparatus" / "probes.jsonl"
+    observations = Observations()
+    if not path.exists():
+        return observations
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ContractError(
+                f"apparatus/probes.jsonl line {line_no} is not valid JSON: {exc}",
+                code="E-FREEZE-LEDGER-UNREADABLE",
+            ) from exc
+        if not isinstance(doc, Mapping):
+            raise ContractError(
+                f"apparatus/probes.jsonl line {line_no} is not a JSON object",
+                code="E-FREEZE-LEDGER-UNREADABLE",
+            )
+        missing = [key for key in ("phase", "condition", "facts") if key not in doc]
+        if missing:
+            raise ContractError(
+                f"apparatus/probes.jsonl line {line_no} is missing {', '.join(missing)}",
+                code="E-FREEZE-LEDGER-UNREADABLE",
+            )
+        if doc["phase"] not in ("run_start", "pre_execution"):
+            continue
+        observations.record(doc["condition"], doc["facts"])
+    return observations
+
+
 APPARATUS_CODES: frozenset[str] = frozenset(
     {
         "E-APPARATUS-RAISED",

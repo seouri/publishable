@@ -937,3 +937,336 @@ def test_the_ordering_chain_records_before_it_gates(tmp_path):
         apparatus_mod.check_changed = real_check_changed
 
     assert order == ["record", "check_changed"], order
+
+
+# --- H8b task 1: `replay_ledger` — the baseline, replayed through the
+# shipped `Observations` -------------------------------------------------
+
+
+def _write_ledger(run_dir, lines):
+    import json
+
+    ledger_dir = run_dir / "apparatus"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    (ledger_dir / "probes.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+_H8B_T1_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h8b_t1_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+_H8B_T1_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h8b_t1_assay")
+class H8bT1Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h8b_t1_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+
+def test_replay_ledger_against_a_real_run_reproduces_provenance_apparatus_facts(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture P's shape, driven to completion: a synthetic installed
+    distribution registering a probe, a project-local template declaring
+    `apparatus_probe`/`apparatus_facts`, two swept conditions. The pin is
+    that `replay_ledger`'s `facts_document()` reproduces
+    `provenance.apparatus.facts` — both read back from the artifacts a real
+    `run` wrote (`apparatus/probes.jsonl`, `run.yaml`), never asserted as a
+    literal. This is the arm that pins that the reader reads what the
+    writer wrote."""
+    import yaml
+    from tests.test_cli import run_a_project
+
+    from publishable.apparatus import replay_ledger
+    from publishable.diagnostics import EXIT_OK
+
+    site = installed(
+        "dist-h8b-t1", "1.0", {"publishable.probes": {"h8b_t1_probe": "h8b_t1_probe_mod:probe"}}
+    )
+    (site / "h8b_t1_probe_mod.py").write_text(_H8B_T1_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h8b_t1_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H8B_T1_TEMPLATE,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    observations = replay_ledger(doc["run_dir"])
+    assert observations.facts_document() == run["provenance"]["apparatus"]["facts"]
+    assert {v["model_revision"] for v in observations.facts_document().values()} == {"m1", "m2"}
+
+
+def test_replay_ledger_two_conditions_scope_independently(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_a",
+                "probe": "p",
+                "facts": {"f": "x"},
+            },
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "01_b",
+                "probe": "p",
+                "facts": {"f": "y"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_a": {"f": "x"}, "01_b": {"f": "y"}}
+
+
+def test_replay_ledger_null_then_value_keeps_the_answer(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "v"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": "v"}}
+
+
+def test_replay_ledger_value_then_null_keeps_the_answer(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "v"},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": "v"}}
+
+
+def test_replay_ledger_excludes_freeze_and_dry_run_lines_from_the_baseline(tmp_path):
+    """Decision 9: only `run_start`/`pre_execution` lines feed the baseline.
+    A well-formed `freeze` line and a well-formed `dry_run` line, each
+    answering the fact a `run_start` line left `null`, must both be
+    invisible to `facts_document()` — the fact stays `null`."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+            {
+                "at": "t",
+                "phase": "freeze",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "from-freeze"},
+            },
+            {
+                "at": "t",
+                "phase": "dry_run",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "from-dry-run"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": None}}
+
+
+def test_replay_ledger_an_unrecognized_phase_is_skipped_not_refused(tmp_path):
+    """The ledger is append-only; a phase this build has no name for must not
+    make an old `freeze` unable to read a newer run's ledger."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "some_future_phase",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "z"},
+            }
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json at all {{{",
+        "[1, 2, 3]",
+        '{"phase": "run_start", "condition": "00_x"}',
+    ],
+    ids=["not-json", "not-a-mapping", "missing-facts"],
+)
+def test_replay_ledger_a_malformed_line_is_E_FREEZE_LEDGER_UNREADABLE(tmp_path, raw):
+    from publishable.apparatus import replay_ledger
+    from publishable.errors import ContractError
+
+    ledger_dir = tmp_path / "apparatus"
+    ledger_dir.mkdir()
+    (ledger_dir / "probes.jsonl").write_text(raw + "\n")
+
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path)
+    assert excinfo.value.code == "E-FREEZE-LEDGER-UNREADABLE"
+
+
+def test_replay_ledger_with_no_ledger_file_returns_an_empty_observations(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+def test_replay_ledger_with_an_empty_ledger_file_returns_an_empty_observations(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    ledger_dir = tmp_path / "apparatus"
+    ledger_dir.mkdir()
+    (ledger_dir / "probes.jsonl").write_text("")
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+def test_m8_fixture_a_second_freezes_own_answer_agrees_because_freeze_lines_are_excluded(
+    tmp_path,
+):
+    """Decision 9's stated risk, pinned directly (Mutation M8's non-mutated
+    half — see the task report for the mutated half, which needs editing
+    `replay_ledger`'s filter and is exercised by hand rather than shipped).
+
+    A `run_start` line leaves `pinned` `null`; a constructed `freeze` line
+    (task 6 builds the real `freeze` command; this ledger is hand-written
+    to stand in for one) answers it `"a"`. `replay_ledger` must exclude that
+    line, so a SECOND freeze's own `record`-then-`changed` call — simulating
+    what `freeze` does against the replayed baseline — sees no prior answer,
+    adopts `"b"` as this pair's first-answered value via `record`, and then
+    `changed` compares `"b"` against the value it just adopted: no
+    contradiction. Were the `freeze` line admitted to the baseline instead,
+    `record` would find the pair already answered `"a"` and never overwrite
+    it, and `changed` would then report `"a"` vs `"b"` as a contradiction —
+    two different exit codes downstream, not two different internal states."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": None},
+            },
+            {
+                "at": "t",
+                "phase": "freeze",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "a"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    observations.record("00_x", {"pinned": "b"})
+    assert observations.changed("00_x", {"pinned": "b"}) is None
+
+
+def test_m9_fixture_the_baseline_is_first_answered_not_most_recent(tmp_path):
+    """Mutation M9's fixture: `pinned` goes `r1 → null → r2` across three
+    `pre_execution` lines — the one transition that distinguishes *first
+    answered* from *most recent*, since with only two values the first is
+    also the last-but-one. Under the shipped rule the baseline is `r1`, so
+    an incoming `r1` agrees. `replay_ledger` calling `Observations.record`
+    per line (rather than assigning `_first_answered[pair]` unconditionally
+    per line) is what this pins; see the task report for the mutated run."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "r1"},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": None},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "r2"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    observations.record("00_x", {"pinned": "r1"})
+    assert observations.changed("00_x", {"pinned": "r1"}) is None
