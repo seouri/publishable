@@ -364,3 +364,63 @@ the hash **not** a fourth hash (`hashes.py` absent from the whole diff, `HASHED_
 **the guard pin byte-identical to its capture and still discriminating**; **zero deleted test lines
 branch-wide**; and E1 and C1 re-measured through `validate_config` with a can-fail control —
 **zero, six and three all unmoved.**
+
+**Fix round — Majors 1-3 closed, Minors 1-2 closed, Minor 3 noted** (`06bc38d`, `0f29b8a`,
+`eafb222`, plus the CLAUDE.md amendment). Suite 2418 → **2423** (five new tests, four end to end
+through `main(["run", ...])`, one direct-call). Every fix verified by reverting to a saved pre-fix
+copy, re-running to confirm the reproduction, then restoring and re-confirming green — never by
+`git checkout -- <file>`.
+
+**Major 2 closed.** `apparatus.check_facts`'s credential check now matches by containment
+(`cred_value and cred_value in value`), the same way `secrets.redact` already matches over the
+identical value set, rather than exact equality alone. Pinned direct-call
+(`test_a_fact_value_containing_a_declared_credential_is_refused`,
+`test_the_containment_refusal_also_names_the_variable_and_never_the_value` — the message still
+names the fact key and the credential's name, never the value) and end to end
+(`test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_end`): reverting the
+fix reproduces the review's exact finding, a different code even (`E-APPARATUS-FACT-MISSING`, since
+the fixture's probe doesn't return the declared key `model_revision` at all — the credential check
+never runs before that other refusal fires, which is itself evidence the containment check is what
+closes the gap rather than an unrelated fixture accident). `reference.md`'s
+`E-APPARATUS-FACT-CREDENTIAL` row now says "exact value or substring containment."
+
+**Major 1 closed at the one place both surfaces share.** `validate._check_probe` now reports
+`E-PROBE-UNKNOWN` for any `apparatus_probe` that is not `None` and not a usable non-empty `str` —
+`None` stays the sole spelling of "no probe declared." Since `command_run` calls `validate_config`
+first and returns before ever inspecting `apparatus_probe` when `c.has_errors`, this closes `run`'s
+copy of the same silent skip without touching `cli.py`'s own guard, which becomes the harmless
+belt-and-braces the review says it reads as. Pinned direct-call
+(`test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped`) and end to end
+(`test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_exists` — reverting the
+fix reproduces the review's exact finding: exit 0, `run.yaml` written, `apparatus: null`).
+
+**Major 3 closed.** A dated entry, "Measured on 2026-08-19 against commit `06bc38d` — after H7d
+Part A," added to `feasibility-llm-growth-studies.md` § Executability on this build — the section
+batch 1's rewrite pointed at and that said nothing about the apparatus at any date. States the
+zero/six/three figures (re-cited from this review's own re-measurement rather than re-run a third
+time on an identical fixture) and the honest statement of what changed: a probe-declaring run would
+now record five real sub-keys and could newly earn one of five codes or one warning, none of it
+exercised by these nine configs since none declares a probe a real plugin backs.
+
+**Minor 1 closed.** One sentence in § The apparatus files: a no-sweep run's condition key is `"00"`,
+the same `<nn>_<label>` scheme with an empty label — a record value the code already produced and no
+document had named.
+
+**Minor 2 closed.** `experimental-designs.md`'s apparatus row named three probe placements
+(`dry-run`, run start, before every execution); `reference.md` names four, `freeze` included, since
+task 1's re-siting. Fourth added. The identical three-place enumeration in the feasibility analysis
+is correctly left — that file is exempt from the cross-document pass.
+
+**Minor 3 noted, not fixed, because there is nothing to fix.** Task 16's report read § Validation's
+"Probe is installed" row, confirmed it unchanged, and said so — correctly: every check this slice
+adds needs a call, and § Validation is the table of checks that don't. `reference.md`'s own "Six
+things deliberately absent from that table" paragraph already states this for the apparatus
+generally ("whether the apparatus is reachable is checked by `dry-run`" / "a probe is metered by
+somebody else"). Recorded here so a later reader does not re-file "no `E-APPARATUS-*` § Validation
+row" as a missing row: **none is owed**, and this is the fact, not a filing.
+
+**Minor 4 (batch 5 unreviewed) is closed by the whole-branch review itself**, which reviewed all
+three of batch 5's tasks directly rather than as a seam check and found them sound.
+
+Four gates clean at every commit in this round. Full `uv run pytest`: **2423 passed, 1 skipped, 2
+xfailed.**
