@@ -11,8 +11,9 @@ import yaml
 from tests.test_cli import run_a_project
 
 from publishable.errors import ContractError
-from publishable.lineage import read_run_record, resolve_run
+from publishable.lineage import read_run_record, resolve_run, resolve_step
 from publishable.run_record import SCHEMA_VERSION
+from publishable.sweep import condition_dir_name
 
 
 def _write_run_yaml(run_dir: Path, doc: dict) -> None:
@@ -257,3 +258,85 @@ def test_containment_guard_control_reads_when_moved_outside_the_repo(tmp_path: P
     resolved, record = resolve_run(str(outside), output_dir=output_dir, repo_root=root)
     assert resolved == outside.resolve()
     assert record["run_id"] == run_id
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — resolve_step: Fixture S (the scope refusal, built so the mutant
+# succeeds)
+# ---------------------------------------------------------------------------
+
+
+def _execution_with_all_scopes() -> dict:
+    return {
+        "shared": {"step_shared": {"status": "completed"}},
+        "summary": {"step_summary": {"status": "completed"}},
+        "conditions": [
+            {
+                "index": 0,
+                "label": "cond_a",
+                "steps": {"step_cond": {"status": "completed"}},
+            }
+        ],
+    }
+
+
+def test_a_condition_scoped_step_is_refused_even_though_its_artifact_exists(tmp_path: Path):
+    """The condition-scoped artifact genuinely exists on disk, at the location a
+    mutant resolving into the condition directory would find it — without that,
+    a test asserting only "it raises" would pass a mutant that succeeds.
+    """
+    run_dir = tmp_path / "upstream"
+    doc = _write_upstream(
+        run_dir, "run_2020-01-01T00-00-00Z_hhhhhhh", execution=_execution_with_all_scopes()
+    )
+    cond_dir = run_dir / "conditions" / condition_dir_name(0, "cond_a") / "step_cond"
+    cond_dir.mkdir(parents=True)
+    (cond_dir / "out.json").write_text('{"x": 1}')
+    with pytest.raises(ContractError) as e:
+        resolve_step(doc, run_dir, "step_cond")
+    assert e.value.code == "E-UPSTREAM-STEP-SCOPED"
+
+
+def test_a_step_absent_from_the_execution_block_is_step_unknown(tmp_path: Path):
+    """A fallback to `shared/` for an absent step would find something to read
+    here, so the fixture writes bait at exactly that location.
+    """
+    run_dir = tmp_path / "upstream"
+    doc = _write_upstream(
+        run_dir, "run_2020-01-01T00-00-00Z_iiiiiii", execution=_execution_with_all_scopes()
+    )
+    absent_dir = run_dir / "shared" / "step_absent"
+    absent_dir.mkdir(parents=True)
+    (absent_dir / "x.json").write_text('{"y": 2}')
+    with pytest.raises(ContractError) as e:
+        resolve_step(doc, run_dir, "step_absent")
+    assert e.value.code == "E-UPSTREAM-STEP-UNKNOWN"
+
+
+def test_a_present_but_incomplete_step_is_step_incomplete(tmp_path: Path):
+    """The failed step's artifact exists on disk too, so a mutant that skips the
+    `status == "completed"` check would return it rather than raise.
+    """
+    run_dir = tmp_path / "upstream"
+    execution = {
+        "shared": {"step_failed": {"status": "failed"}},
+        "summary": {},
+        "conditions": [],
+    }
+    doc = _write_upstream(run_dir, "run_2020-01-01T00-00-00Z_jjjjjjj", execution=execution)
+    failed_dir = run_dir / "shared" / "step_failed"
+    failed_dir.mkdir(parents=True)
+    (failed_dir / "out.json").write_text('{"z": 3}')
+    with pytest.raises(ContractError) as e:
+        resolve_step(doc, run_dir, "step_failed")
+    assert e.value.code == "E-UPSTREAM-STEP-INCOMPLETE"
+
+
+def test_a_run_scoped_and_summary_scoped_step_resolve_to_shared_and_summary(tmp_path: Path):
+    """Decision 4's positive path: the only two addressable locations."""
+    run_dir = tmp_path / "upstream"
+    doc = _write_upstream(
+        run_dir, "run_2020-01-01T00-00-00Z_kkkkkkk", execution=_execution_with_all_scopes()
+    )
+    assert resolve_step(doc, run_dir, "step_shared") == run_dir / "shared" / "step_shared"
+    assert resolve_step(doc, run_dir, "step_summary") == run_dir / "summary" / "step_summary"

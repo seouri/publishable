@@ -139,3 +139,71 @@ def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Pat
             code="E-UPSTREAM-RUNID-MISMATCH",
         )
     return resolved, record
+
+
+def resolve_step(record: dict[str, Any], run_dir: Path, step: str) -> Path:
+    """Locate the directory an upstream `step` published to, from `record`'s own
+    `execution` block — never from a condition or repeat selector, which
+    `reuse_from` does not take.
+
+    § `reuse_from` addresses an artifact argues there is no condition or repeat
+    selector because one would couple a downstream config to an upstream run's
+    layout, which a renumbering silently moves. The same argument decides where a
+    read may land: the only two locations that carry no condition and no repeat
+    coordinate are `shared/` (a `run`-scoped step) and `summary/` (a
+    `summary`-scoped step) — so a step recorded under `execution.shared` resolves
+    to `<run_dir>/shared/<step>/` and one under `execution.summary` to
+    `<run_dir>/summary/<step>/`.
+
+    A step recorded under `execution.conditions` — a `condition`- or
+    `repeat`-scoped step — is refused, `E-UPSTREAM-STEP-SCOPED`, even in the one
+    case where the ambiguity does not actually exist: an *unswept* run's
+    condition- or repeat-scoped step writes directly into the run directory
+    (`<run_dir>/<repeat>/<step>/`, never under `conditions/`) and so has an
+    unambiguous location the blanket refusal deliberately declines to use. An
+    upstream that is unswept today and gains a level tomorrow would relocate that
+    artifact while every hash still matches, and a downstream read that worked
+    before the level was added and reads a different cell after it is the exact
+    failure the missing selector exists to prevent.
+
+    A step present in neither `shared`, `summary` nor any condition's `steps` is
+    `E-UPSTREAM-STEP-UNKNOWN`. A step that is addressable but whose recorded
+    `status` is not `completed` is `E-UPSTREAM-STEP-INCOMPLETE` — a refusal
+    rather than a read, because an artifact from an execution that did not finish
+    is exactly what "lineage is recorded, not resolved" exists to stop being
+    silently consumed.
+    """
+    execution = record.get("execution") or {}
+    shared = execution.get("shared") or {}
+    summary = execution.get("summary") or {}
+    conditions = execution.get("conditions") or []
+
+    if step in shared:
+        entry = shared[step]
+        base = run_dir / "shared" / step
+    elif step in summary:
+        entry = summary[step]
+        base = run_dir / "summary" / step
+    else:
+        for cond in conditions:
+            if step in (cond.get("steps") or {}):
+                raise ContractError(
+                    f"`{step}` is a condition- or repeat-scoped upstream step and has "
+                    "no single location `reuse_from` can address without a condition "
+                    "or repeat selector it does not take — republish it from a "
+                    "`summary` step in the upstream run",
+                    code="E-UPSTREAM-STEP-SCOPED",
+                )
+        raise ContractError(
+            f"`{step}` is not a recorded step in this upstream run",
+            code="E-UPSTREAM-STEP-UNKNOWN",
+        )
+
+    if entry.get("status") != "completed":
+        raise ContractError(
+            f"`{step}` in the upstream run did not complete (status: "
+            f"{entry.get('status')!r}) — an artifact from an execution that did not "
+            "finish is not read",
+            code="E-UPSTREAM-STEP-INCOMPLETE",
+        )
+    return base
