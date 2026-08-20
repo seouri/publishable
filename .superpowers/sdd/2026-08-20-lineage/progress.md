@@ -197,3 +197,56 @@ discriminates (an absolute name pointing **inside** the step dir); the closed fi
 addressed; and the `resolves_inside_repo` fail-open is **filed rather than fixed**, correctly — it is not
 this batch's code, and a guard that fails open for an unresolved argument is worth a named owner rather
 than a drive-by change.
+
+## Batch 4 — task 12 alone — the containment rule on the two shipped readers
+
+Commits `406a86a`, `68a1726`. Suite 2499 → **2503**, **+4 exactly with zero deletions** in `tests/`
+(`git show --numstat` → `140 0`). **Both verdicts PASS; four Minors, all prose.**
+
+**The isolation earned its seam.** Task 12 was put in a batch alone so a suite-count change would be
+attributable to it and nothing else — and the +4-with-zero-deletions result **answers the plan's own
+unmeasurable question**: nothing in this repo reads through a `..` segment, so a behaviour change to two
+shipped readers moved no existing test.
+
+**The rule does not overshoot, verified in both directions.** Widening `_contained` to refuse any
+separator fails **all three** positive controls including the pre-existing `reuse_from` one, and **each of
+the three grounds discriminates alone** — the reviewer ran three separate mutations and read each at its
+failing `pytest.raises` line. **Batch 3's finding is not repeated:** the absolute arm's fixture is an
+absolute name pointing **inside** the step dir, so `Path(name).is_absolute()` is the only clause that can
+refuse it.
+
+**A split ownership worth recording:** the stale design claim (task 5 "closed" the wiring) is confirmed,
+but its sites split — the § Errors row half is task 9's and the `spec-defects.md` half is task 10's — and
+**the design is development record, which neither consistency pass governs and which is not
+retro-edited.** So the right disposition is *not to edit those rows at all*, which is different from
+fixing them late.
+
+## Batch 5 — tasks 6, 7 — the ledger and the record key
+
+Commits `ea8174e` (accumulation), `d6e65ed` (`provenance.upstream`, **both pin edits**), `63439cb`
+(report). Suite 2503 → **2510**.
+
+**The named-authorized-editor mechanism completed its cycle and worked.** Batch 1 captured arm B with
+task 7 named as its sole editor and the post-edit state specified in advance; batch 1's review then found
+the twelve-key list was pinned **twice**, the second being a shipped H7d test, and carried it; **task 7
+edited both with the same one-key diff and showed both.** A pin that had to move, moved once, by the
+named task, with no assertion weakened. **That is the answer to five earlier slices editing a pin to
+accommodate new work.**
+
+**Two mutation-quality catches the batch made before shipping, both of the kind reviewers have had to
+supply here.** A "record an entry when the read raised" mutation **caught nothing** because the fixture's
+raise came from the **wrong call site** — upstream of the accumulation line — and was retargeted to the
+exact site. And `used` was originally a **`set`**, so the delete-`sorted()` mutation would have rested on
+**Python's randomized hash order** rather than a deterministic insertion order; storing a deduplicated
+list made the mutation mean something, re-verified across three runs. **A mutation over an unordered
+container is not a sort pin.**
+
+### A controller error worth recording
+
+**I ran batch 4's review and batch 5's implementation concurrently in the same worktree**, and the review
+measured a moving tree: collection went 2506 → 2513 mid-review, and it **could not re-run the baseline**
+because the attempt measured polluted state. It handled that correctly — it did **not** revert another
+session's work, established `+4` from `git show --numstat` instead of a suite diff, and noted that the
+concurrent delta sat entirely **after** `_contained` returns so its mutation matrix was unaffected. **The
+mutation matrix being immune was luck, not design.** Reviews and implementations do not share a worktree;
+either serialize them or give one its own.
