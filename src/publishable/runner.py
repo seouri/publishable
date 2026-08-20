@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from publishable import apparatus
 from publishable.apparatus import Observer
 from publishable.artifacts import StepIO
 from publishable.coercion import coerce_scalars
@@ -32,6 +33,26 @@ class ExecutionResult:
     recorded: frozenset[str] = frozenset()
     skipped: frozenset[str] = frozenset()
     rows: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass
+class StopSignal:
+    """A small mutable record `execute_plan`'s caller constructs and passes,
+    so the loop can report WHY it stopped short of the full plan without a
+    return-shape change. Not exported from `publishable` (Decision 13: the
+    three reasons are core's own vocabulary, not a document surface a user
+    writes against) and not written into any artifact — `run_record.run_status`
+    reads `.reason` and `cli.command_run` reads `.code`/`.message` to render a
+    diagnostic, but neither persists this object itself.
+
+    One instance per `run`, shared by `execute_plan`'s `max_failed_fraction`
+    guard and its apparatus gate — the same reason vocabulary either can set,
+    which is what lets `run_status` consult a single field regardless of
+    which of the two stopped the plan."""
+
+    reason: str | None = None
+    code: str | None = None
+    message: str | None = None
 
 
 def _counts(
@@ -475,6 +496,7 @@ def execute_plan(
     measurements: dict[str, Any] | None = None,
     credentials: dict[str, str] | None = None,
     observer: Observer | None = None,
+    stop: StopSignal | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -531,6 +553,16 @@ def execute_plan(
     **empty** for a plan with no condition-scoped step, so the round instead
     reads the resolved conditions held on `observer` itself, the same
     single-authority rule `holdout_plan` and `group_axes` already follow.
+
+    `stop` is `None` for a caller that has not yet wired the apparatus gate
+    into its own containment (H7d Part B, Decision 3): with no signal to
+    write a reason onto, an `apparatus.STOP_CODES` raise from the
+    pre-execution probe round is re-raised exactly as before, unchanged. When
+    given, that raise instead sets `stop.reason`/`.code`/`.message` and
+    `break`s — the same `break` `max_failed_fraction`'s own guard already
+    takes, which also records its reason on the same signal below. A stop
+    never retries (Decision 10): the `break` is the last thing either guard
+    does.
     """
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this
@@ -587,7 +619,29 @@ def execute_plan(
         # execution, which is `Observer.observe_round`'s own signal to probe
         # once per resolved condition rather than being narrowed here.
         if observer is not None:
-            observer.observe_round(phase="pre_execution", condition_index=execution.condition_index)
+            try:
+                observer.observe_round(
+                    phase="pre_execution", condition_index=execution.condition_index
+                )
+            except ContractError as exc:
+                # One seam, not two (Decision 3): `observe_round` raises for
+                # both an unreachable probe and a moved fact, and this is the
+                # ONLY call this loop wraps. Every other `ContractError` —
+                # the four contract refusals of Decision 9 included — is
+                # re-raised unconditionally, keeping Part A's containment
+                # path byte for byte. `stop is None` means the caller has not
+                # wired the gate (H7d Part B not yet landed at that call
+                # site), so re-raising is the only correct behaviour there
+                # too.
+                if stop is None or exc.code not in apparatus.STOP_CODES:
+                    raise
+                stop.reason = (
+                    "apparatus_unreachable"
+                    if exc.code == "E-APPARATUS-RAISED"
+                    else "apparatus_changed"
+                )
+                stop.code, stop.message = exc.code, str(exc)
+                break
         started = datetime.now(UTC)
         clock = time.monotonic()
 
@@ -764,5 +818,7 @@ def execute_plan(
             resolved = len(units)
             failed = _units_failed_anywhere(results, units, fold_members, arm_members)
             if resolved and len(failed) / resolved > max_failed_fraction:
+                if stop is not None:
+                    stop.reason = "max_failed_fraction"
                 break
     return results

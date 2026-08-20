@@ -14416,6 +14416,104 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     assert "r1 → r2" in stderr
 
 
+# --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
+# precedent — Fixture U, unreachable mid-plan ---------------------------------
+
+_APPARATUS_U_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_u_assay")
+class ApparatusUAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_unreachable_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Design's own Fixture U probe (§ The discriminating fixtures, plan's
+# "Computed expectations"): one condition, `{kind: seed, n: 4}` — 4 planned
+# executions. Call 1 is the run-start round; calls 2-4 are the per-execution
+# `pre_execution` round, one per planned execution. The probe raises on its
+# 4th call, which is the round guarding the 3rd execution — so 2 executions
+# run before the raise, and the raise happens inside `observe_once`, before
+# `check_facts` and before any append, so the probe ledger holds 3 lines
+# (calls 1-3), never 4.
+_GATE_UNREACHABLE_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_unreachable_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    if _n >= 4:
+        raise RuntimeError("the instrument stopped responding")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_g_fixture_u_unreachable_mid_plan_at_this_commit(installed, registries, tmp_path, capsys):
+    """Fixture U (task 5 step 4). AT THIS COMMIT — before task 6 wires a
+    `StopSignal` through `cli.command_run` — `execute_plan` is still called
+    with `stop=None` (the default), so the wrapped `except ContractError`
+    clause added this task re-raises unconditionally
+    (`if stop is None or exc.code not in apparatus.STOP_CODES: raise`), and
+    the raise reaches `command_run`'s existing containment exactly as it did
+    before this task: `EXIT_WRONG`, no `run.yaml`. **This is unchanged
+    behaviour, not a regression** — task 6 is what starts constructing a
+    `StopSignal` and passing it through, and task 7/8 are what give this same
+    fault a written record and `EXIT_EXTERNAL` (the design's own computed
+    expectations for this fixture, reached at those later commits, not this
+    one).
+
+    The ledger is written on the raise path regardless — the same
+    measured shape Fixture G1's test above pins for `E-APPARATUS-CHANGED` —
+    so `executions.jsonl` holds the 2 executions that ran before the raise,
+    and `apparatus/probes.jsonl` holds the 3 calls that completed
+    (`observe_once` raises before `check_facts`/`append_observation` on the
+    4th, so nothing is appended for it)."""
+    site = installed(
+        "dist-tu5", "1.0", {"publishable.probes": {"h7d_unreachable_probe": "tu5_probe_mod:probe"}}
+    )
+    (site / "tu5_probe_mod.py").write_text(_GATE_UNREACHABLE_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_u_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_U_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    # Same reason as Fixture G1's test: this raise happens mid-plan, well
+    # after a run directory (and its ledger) exist, so `run_a_project`'s
+    # `EXIT_WRONG` branch (which assumes a `validate`-time refusal and
+    # returns `run_dir: None` without globbing) does not apply here.
+    run_dir = next(doc["results_dir"].glob("run_*"))
+    assert not (run_dir / "run.yaml").exists()
+
+    executions = [
+        json.loads(line)
+        for line in (run_dir / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
+
+    probes = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 3
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
+
+
 # --- H7d Part B batch 3 fix round 1, Major 1: a moved non-`str` credential
 # fact must not reach `main`'s un-redacted printer ---------------------------
 

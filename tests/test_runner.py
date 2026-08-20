@@ -13,6 +13,7 @@ from publishable.hashes import parameters_hash
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
+    StopSignal,
     _handed_keys,
     _units_failed_anywhere,
     attrition,
@@ -125,6 +126,8 @@ def harness(
     fold_members=None,
     arm_members=None,
     measurements=None,
+    observer=None,
+    stop=None,
 ):
     class P(BaseExperiment):
         pass
@@ -155,6 +158,8 @@ def harness(
         fold_members=fold_members,
         arm_members=arm_members,
         measurements=measurements,
+        observer=observer,
+        stop=stop,
     )
     return run_dir, results, repeats
 
@@ -2042,3 +2047,79 @@ def test_a_holdout_beside_cells_is_a_core_defect_not_a_silent_choice(tmp_path):
             fold_members=None,
             arm_members={0: frozenset({"u0"})},
         )
+
+
+# --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
+# precedent -------------------------------------------------------------------
+
+
+class _RaisingOnNthRoundObserver:
+    """A fake `Observer`: `execute_plan` only ever calls `.observe_round`, so
+    this duck-types that one method rather than building a real `Observer`,
+    which needs a registered probe and resolved conditions this test has no
+    use for. Raises on its `n`-th call, whichever `code` the test names."""
+
+    def __init__(self, n: int, code: str, message: str = "boom") -> None:
+        self._n = n
+        self._calls = 0
+        self._code = code
+        self._message = message
+
+    def observe_round(self, *, phase: str, condition_index: int | None) -> None:
+        self._calls += 1
+        if self._calls == self._n:
+            raise ContractError(self._message, code=self._code)
+
+
+def test_a_stop_signal_records_the_reason_and_the_contract_error_does_not_escape(
+    tmp_path: Path,
+):
+    """Task 5's first direct-call pin (Decision 3). A fake observer raises
+    `E-APPARATUS-RAISED` on its second `pre_execution` round — one call per
+    planned execution, so this is the round guarding the second of three —
+    and `execute_plan`'s loop catches it: `results` is short (one execution
+    ran, not three), `stop.reason` is `"apparatus_unreachable"`, `stop.code`
+    and `stop.message` carry the raw diagnostic, and the `ContractError`
+    itself does not escape to this test's own call."""
+    observer = _RaisingOnNthRoundObserver(
+        2, "E-APPARATUS-RAISED", "the instrument stopped responding"
+    )
+    stop = StopSignal()
+    _, results, _ = harness(
+        tmp_path,
+        [Analyze],
+        repeats=[
+            Repeat("seed", "seed1", 1),
+            Repeat("seed", "seed2", 2),
+            Repeat("seed", "seed3", 3),
+        ],
+        observer=observer,
+        stop=stop,
+    )
+    assert len(results) == 1
+    assert stop.reason == "apparatus_unreachable"
+    assert stop.code == "E-APPARATUS-RAISED"
+    assert "the instrument stopped responding" in (stop.message or "")
+
+
+def test_a_stop_signal_re_raises_a_contract_refusal_unchanged(tmp_path: Path):
+    """Task 5's second direct-call pin (Decision 9). `E-APPARATUS-FACT-MISSING`
+    is one of the four contract refusals kept OUT of `apparatus.STOP_CODES` —
+    the plugin and the template disagreeing about what the probe supplies, not
+    a stop. Even with a `StopSignal` given, this code still escapes
+    `execute_plan` exactly as it did before this slice, and `stop.reason` stays
+    unset."""
+    observer = _RaisingOnNthRoundObserver(
+        1, "E-APPARATUS-FACT-MISSING", "a declared fact never came back"
+    )
+    stop = StopSignal()
+    with pytest.raises(ContractError) as excinfo:
+        harness(
+            tmp_path,
+            [Analyze],
+            repeats=[Repeat("seed", "seed1", 1)],
+            observer=observer,
+            stop=stop,
+        )
+    assert excinfo.value.code == "E-APPARATUS-FACT-MISSING"
+    assert stop.reason is None
