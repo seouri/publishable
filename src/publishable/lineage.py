@@ -7,9 +7,9 @@ This module holds `read_run_record`, the reader over a `run.yaml` this build wro
 wrote. `artifacts.py` **may not** import this module: measured, `run_record` imports
 `runner`, which imports `artifacts`, so `artifacts` importing `lineage` (which imports
 `run_record`) would close a cycle: `artifacts → lineage → run_record → runner →
-artifacts`. `run_record.py` itself is refused as the reader's home on the same grounds —
-its own first line is "Assemble run.yaml. Assembles only — computes nothing" — and on
-that identical cycle, since a reader living there would need no import of itself.
+artifacts`. `run_record.py` itself is refused as the reader's home on its own
+docstring's grounds — its own first line is "Assemble run.yaml. Assembles only —
+computes nothing."
 """
 
 from pathlib import Path

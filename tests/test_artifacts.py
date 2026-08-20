@@ -951,7 +951,7 @@ def test_h8a_arm_d_the_shipped_positive_read_upstream_read(tmp_path: Path):
     under `shared/`, and a narrower step reads it back through the ordinary
     `run`-scoped path `test_a_narrower_step_reads_a_wider_one_normally`
     already exercises. See `docs/superpowers/plans/2026-08-20-lineage.md`
-    task 11 and `.superpowers/sdd/2026-08-20-lineage/task-11-brief.md`.
+    task 11.
     """
     io = make_io(tmp_path, scope="repeat", step_scopes={"step01": "run"})
     (io.run_dir / "shared" / "step01").mkdir(parents=True)

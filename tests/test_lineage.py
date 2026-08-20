@@ -46,20 +46,31 @@ def test_invalid_yaml_is_record_unreadable(tmp_path: Path):
 
 
 def test_a_yaml_document_that_is_not_a_mapping_is_record_unreadable(tmp_path: Path):
+    """Shares its code with `test_a_mapping_with_no_run_id_is_record_unreadable` below,
+    so the code alone does not pin this fault: a mutant that deletes the `isinstance`
+    guard falls through to `"run_id" not in doc`, which is `True` for a list too, and
+    raises the SAME code from the OTHER site. The message text is what tells the two
+    faults apart (`CLAUDE.md`'s one-code-several-faults lesson, one level below the
+    code split H4d made).
+    """
     run_dir = tmp_path / "run_x"
     run_dir.mkdir()
     (run_dir / "run.yaml").write_text("- just\n- a\n- list\n")
     with pytest.raises(ContractError) as e:
         read_run_record(run_dir)
     assert e.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+    assert "did not parse to a mapping" in str(e.value)
 
 
 def test_a_mapping_with_no_run_id_is_record_unreadable(tmp_path: Path):
+    """Shares its code with the not-a-mapping test above — see that docstring for why
+    the message is asserted rather than the code alone."""
     run_dir = tmp_path / "run_x"
     _write_run_yaml(run_dir, {"schema_version": SCHEMA_VERSION, "status": "completed"})
     with pytest.raises(ContractError) as e:
         read_run_record(run_dir)
     assert e.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+    assert "has no `run_id`" in str(e.value)
 
 
 def test_a_schema_version_this_build_does_not_read_is_record_version(tmp_path: Path):

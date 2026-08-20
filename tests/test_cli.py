@@ -15310,10 +15310,10 @@ def test_fixture_b_batch_and_the_apparatus_stay_independent(
 
 def test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit(tmp_path):
     """Arm A. A clean run's `run.yaml` top-level key list, in order — a key
-    added by accident anywhere in this slice is exactly what a full-list
-    assertion catches and a `status`-only assertion would not — plus
-    `status == "completed"`, `expect_exit == EXIT_OK` (asserted inside
-    `run_a_project` itself), and `len(executions.jsonl) == len(execution_order)`.
+    added by accident is exactly what a full-list assertion catches and a
+    `status`-only assertion would not — plus `status == "completed"`,
+    `expect_exit == EXIT_OK` (asserted inside `run_a_project` itself), and
+    `len(executions.jsonl) == len(execution_order)`.
     """
     doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=8)
     run_dir = doc["run_dir"]
