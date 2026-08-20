@@ -14206,7 +14206,16 @@ def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
     assertion would not. Captured by running at `814eadd`: 8 units, a `seed`
     repeat of `n=4` (the default `n=5` is overridden so the count is
     unambiguous against the other two arms), template `generic`, no probe
-    declared anywhere in this project."""
+    declared anywhere in this project.
+
+    **The key-list assertion's boundary**: this is the only one of the three
+    arms that asserts it, and it does so only on a CLEAN run. It therefore
+    catches a key added unconditionally to `assemble_run_yaml`'s document —
+    what its docstring claims and what the report's mutation proves — but it
+    is blind to a key written only on a STOP path, since arms B and C (both
+    truncations) assert no key list at all. A later batch adding a
+    stop-only key is invisible to this pin; read `run.yaml`'s shape for that
+    case directly rather than assuming this test covers it."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
