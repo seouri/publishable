@@ -313,3 +313,54 @@ rename or correction with **no behaviour changed**; suite unchanged at **2417**.
 reaches" clause is deleted rather than rewritten, the misleading test name now says what it asserts, and
 the report's disagreement count is **corrected from zero to two, both named** — which is the outcome that
 makes the pattern visible instead of buried.
+
+## Batch 5 — tasks 14, 16, 17 — the guards, the rows, the filings
+
+Commits `5fc26fa` (`validate` calls no probe, pinned by a probe that **writes a flag file and raises**,
+so the guard's failure is observable on disk rather than inferred), `80c2b2c` (one row per code — the
+five `E-APPARATUS-*`, `W-APPARATUS-UNANSWERED`, and `E-PROBE-UNKNOWN` restated **dual-surface** as one
+row), `e15c474` (two filings struck, one amended, `EXIT_EXTERNAL` filed against Part B), report
+`48bc9e2`. Suite 2417 → **2418**.
+
+**The batch found a genuine under-description the brief did not name**, and it is the misreading
+`CLAUDE.md` calls *scoping a diagnostic by the helper it calls*: the existing `E-PLUGIN-LOAD` and
+`E-PLUGIN-DECORATOR` rows described their reach as only *"a resolver source's dispatch"* — but
+`apparatus._probe_for` now dispatches through **the identical functions**. Both rows were extended with
+the probe case's asymmetry (dispatched at `run`, never at `validate`). **That is the same asymmetry this
+slice's Critical came from**, now written down where a reader will find it.
+
+**And it caught two of its own citation errors before committing** — mis-attributing the `EXIT_EXTERNAL`
+measurement to the design when it lives in the plan's § Corrections, and omitting Part B's task from the
+citation — **by re-reading the cited sections rather than trusting the first draft.** Disclosed rather
+than quietly fixed, which is the convention this slice has been held to throughout.
+
+## Independent whole-branch review: MERGE with items owed — no Critical, three Majors
+
+**I am holding the merge on Major 2 anyway**, because it is a credential in a published artifact.
+
+**Major 2 — a fact value *containing* a declared credential is published verbatim.** `check_facts`
+matches by **exact equality** while `secrets.redact`, over the **identical value set**, matches by
+**substring**. Verified by running: a probe returning `"endpoint": ".../?key=" + token` gives **exit 0,
+no diagnostic, and the raw token in both `run.yaml` and `probes.jsonl`** — the two artifacts the
+documents call *publishable as-is*. Core credential-checks **nothing else it records**, so this block is
+precisely where the stronger match belongs. **Fourth instance of this class here, and the first where the
+two mechanisms disagreed with each other rather than one being absent.**
+
+**Major 1 — a non-`str` `apparatus_probe` silently reads as "no apparatus", at BOTH surfaces.** A
+template declaring `apparatus_probe = ["wbr_probe"]` — plausible, since `apparatus_facts` beside it *is*
+a list — is skipped at `validate` **and** at `run`, with `validate` reporting nothing. **The fail-open
+predates this branch** (H7b Part A) **but had no observable consequence until task 11 gave
+`apparatus: null` a meaning** — so a latent fail-open became a silent wrong answer the moment the record
+key became real. It is line for line the reproduction in **a filing this slice struck**. Two guards, two
+files, two batches: **the seam class no per-batch review could reach**, which is the argument for the
+whole-branch gate existing at all.
+
+**What the gate confirmed sound, by running:** the call-count contract on its own fixture (C=2, E_c=4,
+E_none=2 → **10** lines, recomputed before the run, asserted as an ordered `(phase, condition)` list);
+the hash **not** a fourth hash (`hashes.py` absent from the whole diff, `HASHED_TREES` unchanged);
+**Part A provably cannot stop a run** — a mid-plan raise gives exit 1, never 5, no `run.yaml`, no
+`status:` byte, `latest` uncreated, the ledger's lines preserved; the null accounting and
+`W-APPARATUS-UNANSWERED` printed **exactly once**; the redaction path for a probe raising **at import**;
+**the guard pin byte-identical to its capture and still discriminating**; **zero deleted test lines
+branch-wide**; and E1 and C1 re-measured through `validate_config` with a can-fail control —
+**zero, six and three all unmoved.**
