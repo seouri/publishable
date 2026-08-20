@@ -13,6 +13,7 @@ from publishable.hashes import parameters_hash
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
+    StopSignal,
     _handed_keys,
     _units_failed_anywhere,
     attrition,
@@ -125,6 +126,8 @@ def harness(
     fold_members=None,
     arm_members=None,
     measurements=None,
+    observer=None,
+    stop=None,
 ):
     class P(BaseExperiment):
         pass
@@ -155,6 +158,8 @@ def harness(
         fold_members=fold_members,
         arm_members=arm_members,
         measurements=measurements,
+        observer=observer,
+        stop=stop,
     )
     return run_dir, results, repeats
 
@@ -2042,3 +2047,138 @@ def test_a_holdout_beside_cells_is_a_core_defect_not_a_silent_choice(tmp_path):
             fold_members=None,
             arm_members={0: frozenset({"u0"})},
         )
+
+
+# --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
+# precedent -------------------------------------------------------------------
+
+
+class _RaisingOnNthRoundObserver:
+    """A fake `Observer`: `execute_plan` only ever calls `.observe_round`, so
+    this duck-types that one method rather than building a real `Observer`,
+    which needs a registered probe and resolved conditions this test has no
+    use for. Raises on its `n`-th call, whichever `code` the test names."""
+
+    def __init__(self, n: int, code: str, message: str = "boom") -> None:
+        self._n = n
+        self._calls = 0
+        self._code = code
+        self._message = message
+
+    def observe_round(self, *, phase: str, condition_index: int | None) -> None:
+        self._calls += 1
+        if self._calls == self._n:
+            raise ContractError(self._message, code=self._code)
+
+
+def test_a_stop_signal_records_the_reason_and_the_contract_error_does_not_escape(
+    tmp_path: Path,
+):
+    """Task 5's first direct-call pin (Decision 3). A fake observer raises
+    `E-APPARATUS-RAISED` on its second `pre_execution` round — one call per
+    planned execution, so this is the round guarding the second of three —
+    and `execute_plan`'s loop catches it: `results` is short (one execution
+    ran, not three), `stop.reason` is `"apparatus_unreachable"`, `stop.code`
+    and `stop.message` carry the raw diagnostic, and the `ContractError`
+    itself does not escape to this test's own call."""
+    observer = _RaisingOnNthRoundObserver(
+        2, "E-APPARATUS-RAISED", "the instrument stopped responding"
+    )
+    stop = StopSignal()
+    _, results, _ = harness(
+        tmp_path,
+        [Analyze],
+        repeats=[
+            Repeat("seed", "seed1", 1),
+            Repeat("seed", "seed2", 2),
+            Repeat("seed", "seed3", 3),
+        ],
+        observer=observer,
+        stop=stop,
+    )
+    assert len(results) == 1
+    assert stop.reason == "apparatus_unreachable"
+    assert stop.code == "E-APPARATUS-RAISED"
+    assert "the instrument stopped responding" in (stop.message or "")
+
+
+def test_a_stop_signal_re_raises_a_contract_refusal_unchanged(tmp_path: Path):
+    """Task 5's second direct-call pin (Decision 9). `E-APPARATUS-FACT-MISSING`
+    is one of the four contract refusals kept OUT of `apparatus.STOP_CODES` —
+    the plugin and the template disagreeing about what the probe supplies, not
+    a stop. Even with a `StopSignal` given, this code still escapes
+    `execute_plan` exactly as it did before this slice, and `stop.reason` stays
+    unset."""
+    observer = _RaisingOnNthRoundObserver(
+        1, "E-APPARATUS-FACT-MISSING", "a declared fact never came back"
+    )
+    stop = StopSignal()
+    with pytest.raises(ContractError) as excinfo:
+        harness(
+            tmp_path,
+            [Analyze],
+            repeats=[Repeat("seed", "seed1", 1)],
+            observer=observer,
+            stop=stop,
+        )
+    assert excinfo.value.code == "E-APPARATUS-FACT-MISSING"
+    assert stop.reason is None
+
+
+# --- H7d Part B task 6: `run_status`'s contract — widened for the apparatus,
+# and NOT re-decided for the neighbour ----------------------------------------
+
+
+def test_run_status_maps_apparatus_unreachable_to_partial(tmp_path: Path):
+    """Decision 5, as narrowed by the controller's ruling: the two apparatus
+    reasons decide the status outright, regardless of what the results list
+    itself would otherwise fold to. Here every result is `completed` — the
+    fold alone would answer `"completed"` — and the `stop` reason overrides
+    it."""
+    _, results, _ = harness(tmp_path, [Load, Analyze])
+    assert run_status(results, stop="apparatus_unreachable") == "partial"
+
+
+def test_run_status_maps_apparatus_changed_to_failed(tmp_path: Path):
+    _, results, _ = harness(tmp_path, [Load, Analyze])
+    assert run_status(results, stop="apparatus_changed") == "failed"
+
+
+def test_run_status_max_failed_fraction_is_the_documented_no_op(tmp_path: Path):
+    """The third reason is threaded so the truncation assert
+    (`test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason`,
+    below) can be sound, and is deliberately NOT in `run_record.py`'s
+    `_STOP_REASON_TO_STATUS` mapping: passing it changes nothing about what
+    the fold would have answered anyway — the controller's ruling that this
+    guard's behaviour stays exactly as it was, narrowed to a mapping entry
+    that is absent rather than added."""
+    _, results, _ = harness(tmp_path, [Load, Analyze])
+    assert run_status(results, stop="max_failed_fraction") == run_status(results)
+
+
+def test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason(tmp_path: Path):
+    """`len(results) < planned` with `stop is None` is a core defect — nothing
+    core ships truncates a plan without recording why — so this is a bare
+    `assert` (§ Corrections, correction 2), not a coded `ContractError`: a
+    coded error would owe a § Errors row for a state no config can reach."""
+    _, results, _ = harness(tmp_path, [Load, Analyze])
+    truncated = results[:1]
+    with pytest.raises(AssertionError):
+        run_status(truncated, planned=len(results) + 5, stop=None)
+
+
+def test_run_status_max_failed_fraction_suppresses_the_truncation_assert(tmp_path: Path):
+    """The one reason threading buys: a `max_failed_fraction` stop is a
+    RECORDED reason, so the same short list that
+    `test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason`
+    raises on must instead fall through to today's fold rather than assert.
+    This is the pin named as a direct call, not an end-to-end one (§ the
+    design's own admission): with every stop now carrying a reason, no
+    reachable `run` trips this assert at all, so an end-to-end mutation of
+    it is blind."""
+    _, results, _ = harness(tmp_path, [Load, Analyze])
+    truncated = results[:1]
+    # No raise: falls through to the ordinary fold over `truncated` alone.
+    assert run_status(truncated, planned=len(results) + 5, stop="max_failed_fraction") == (
+        run_status(truncated)
+    )

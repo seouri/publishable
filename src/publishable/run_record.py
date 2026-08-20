@@ -11,8 +11,48 @@ from publishable.runner import ExecutionResult
 
 SCHEMA_VERSION = "1.0"
 
+# H7d Part B, Decision 5 (as narrowed by the controller's ruling): the two
+# apparatus stop reasons decide the status outright. `max_failed_fraction` is
+# deliberately absent — it is threaded through as a `stop` value so the
+# truncation assert below can tell "core truncated the plan for a recorded
+# reason" from "core truncated the plan for none", but it is NOT a member of
+# this mapping: falling through to today's fold is what keeps that guard's
+# behaviour unchanged by this slice.
+_STOP_REASON_TO_STATUS: dict[str, str] = {
+    "apparatus_unreachable": "partial",
+    "apparatus_changed": "failed",
+}
 
-def run_status(results: list[ExecutionResult]) -> str:
+
+def run_status(
+    results: list[ExecutionResult],
+    *,
+    planned: int | None = None,
+    stop: str | None = None,
+) -> str:
+    """`stop`, when given, is `StopSignal.reason` — a closed vocabulary of
+    three: the two apparatus reasons above, and `"max_failed_fraction"`,
+    which reads as "a recorded reason existed" without changing what is
+    reported for it (Decision 5's narrowing).
+
+    `planned`, when given, is `len(plan)` computed at the call site. A short
+    `results` list with NO recorded stop reason is a core defect — nothing
+    core ships truncates a plan silently — so that state is a bare `assert`,
+    not a coded `ContractError` (§ Corrections, correction 2): the closer
+    precedent is `execute_plan`'s own two bare asserts about its own callers,
+    not `E-RUN-CFG-MISSING`, and a coded error here would owe a § Errors row
+    for a state no config can reach. A stop carrying `"max_failed_fraction"`
+    suppresses this assert and falls through to the fold below unchanged —
+    the documented no-op that is why the reason is threaded at all.
+    """
+    if stop in _STOP_REASON_TO_STATUS:
+        return _STOP_REASON_TO_STATUS[stop]
+    if planned is not None and stop is None:
+        assert len(results) >= planned, (
+            f"execute_plan returned {len(results)} results against a plan of "
+            f"{planned}, with no stop reason recorded — core truncated its own "
+            "plan silently, which is a defect in core rather than a config"
+        )
     if not results:
         return "failed"
     if all(r.status == "completed" for r in results):

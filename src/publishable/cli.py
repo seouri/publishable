@@ -28,6 +28,7 @@ from publishable.contrasts import (
 )
 from publishable.correction import Member, UnpairedEvidence, corrected_fields
 from publishable.diagnostics import (
+    EXIT_EXTERNAL,
     EXIT_FAILED,
     EXIT_INVOCATION,
     EXIT_OK,
@@ -56,6 +57,7 @@ from publishable.replication import (
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
+    StopSignal,
     _arm_keys,
     attrition,
     execute_plan,
@@ -2441,6 +2443,12 @@ def command_run(config_path: Path) -> int:
             # failure already leaves — no `run.yaml`, everything before it.
             if observer is not None:
                 observer.observe_round(phase="run_start", condition_index=None)
+            # H7d Part B, Decision 3/Decision 5: one `StopSignal` per run,
+            # shared by `execute_plan`'s apparatus gate and its
+            # `max_failed_fraction` guard. `run_status` below reads
+            # `stop.reason` rather than re-deriving why the plan came up
+            # short.
+            stop = StopSignal()
             results = execute_plan(  # phase 7
                 plan=plan,
                 run_dir=run_dir,
@@ -2460,6 +2468,7 @@ def command_run(config_path: Path) -> int:
                 measurements=(units_decl or {}).get("measurements"),
                 credentials=credentials,
                 observer=observer,
+                stop=stop,
             )
         except ContractError as exc:
             # The one containment site for a probe CALL's raise (a dispatch
@@ -2467,13 +2476,32 @@ def command_run(config_path: Path) -> int:
             # own `try/except` just before `observer` is built — that site
             # never reaches this `try` at all): `main`'s own `PublishableError`
             # handler prints `{exc}` with no collector in scope, so anything
-            # reaching it is un-redacted. Filtered to exactly
-            # `apparatus.APPARATUS_CODES` —
-            # every other `ContractError` out of this block
-            # (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`) keeps escaping
-            # exactly as it does today; this slice does not change how core's
-            # own inconsistencies are reported.
-            if exc.code not in apparatus.APPARATUS_CODES:
+            # reaching it is un-redacted. Filtered to
+            # `apparatus.APPARATUS_CODES` UNION `apparatus.STOP_CODES` — every
+            # other `ContractError` out of this block (`E-RUN-CFG-MISSING`,
+            # `E-RUN-SEED-MISSING`) keeps escaping exactly as it does today;
+            # this slice does not change how core's own inconsistencies are
+            # reported.
+            #
+            # `E-APPARATUS-CHANGED` is deliberately not a member of
+            # `APPARATUS_CODES` itself (plan correction 4: that frozenset is
+            # `_probe_for`'s dispatch-time filter, and admitting an unpinned
+            # member there is the thing this project has already been burned
+            # by). `apparatus.STOP_CODES` is unioned in here too, but at HEAD
+            # no path reaches this `try` carrying either of its members: a
+            # mid-plan raise of either code now `break`s inside `execute_plan`
+            # (task 5/6) rather than escaping, and a run-start raise of
+            # `E-APPARATUS-CHANGED` is what Decision 11 rules out and task 13
+            # pins (one call per condition, no prior observation to disagree
+            # with) — `E-APPARATUS-RAISED` at run-start already reaches this
+            # branch through `APPARATUS_CODES` alone. Verified by running:
+            # narrowing this filter to `APPARATUS_CODES` leaves the full suite
+            # unchanged. Kept anyway as cheap insurance against a later stop
+            # routed back through this `try` — a branch nothing currently
+            # reaches is not the same claim as a branch that cannot ever be
+            # reached, and Decision 14's own fresh `Collector` on the stop
+            # path (task 7) is the mechanism, not this filter.
+            if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
             probe_c = Collector()
             # A FRESH collector: `c` was already rendered and printed above,
@@ -2484,9 +2512,64 @@ def command_run(config_path: Path) -> int:
             probe_c.credentials = credentials
             probe_c.error(exc.code, "experiment_type", str(exc))
             print(probe_c.render(), file=sys.stderr)
+            # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
+            # apparatus itself unreachable — is the one code in this
+            # containment's filter that earns exit 5. Everything else that
+            # actually reaches this branch is the four Decision 9 contract
+            # refusals from `APPARATUS_CODES` (`E-APPARATUS-FACT-TYPE`,
+            # `-FACT-MISSING`, `-FACT-CREDENTIAL`, `-RETURN`) — NOT
+            # `STOP_CODES`' members, which cannot reach here at all: a
+            # mid-plan stop `break`s inside `execute_plan` instead of
+            # raising, and a run-start `E-APPARATUS-CHANGED` is exactly what
+            # Decision 11 rules out (see the comment above this `try`).
+            # Those four keep `EXIT_WRONG`, unchanged by this slice.
+            if exc.code == "E-APPARATUS-RAISED":
+                return EXIT_EXTERNAL
             return EXIT_WRONG
 
-        status = run_status(results)
+        # H7d Part B task 7 (Decision 4, Decision 14): a stop is printed
+        # here, before the aggregate phase, so the reason a run stopped is
+        # on the operator's screen before any later phase that can itself
+        # fail. Gated on the two apparatus reasons only — a
+        # `max_failed_fraction` stop prints nothing, exactly as today
+        # (Fixture T's arms assert the absence).
+        #
+        # A FRESH `Collector`: `c` was already rendered and printed above,
+        # so appending to it would re-print every earlier finding and
+        # inflate the counts line — the same reason the probe-dispatch and
+        # run-start containment branches above each build their own.
+        # `credentials` reused, never recomputed.
+        if stop.reason in ("apparatus_unreachable", "apparatus_changed"):
+            # `stop.code`/`stop.message` are set together with `stop.reason`
+            # at the one call site that sets either (`execute_plan`'s
+            # apparatus gate) — the assert states that contract rather than
+            # silently narrowing `str | None` to `str`.
+            assert stop.code is not None and stop.message is not None, (
+                "a stop reason of one of the two apparatus kinds always sets "
+                "`code` and `message` alongside it"
+            )
+            stop_c = Collector()
+            stop_c.credentials = credentials
+            stop_c.error(stop.code, "experiment_type", stop.message)
+            print(stop_c.render(), file=sys.stderr)
+            # Decision 4: with NO results, nothing was paid for, and the
+            # command keeps Part A's shape — no `run.yaml`, `latest`
+            # untouched. This must be sited before `assemble_run_yaml` AND
+            # before `point_latest` (batch 4's Major 1): both, not one.
+            # Decision 4's table gives zero-results TWO different exit
+            # codes, not one: `moved` is `1` (the thing you asked about is
+            # wrong), `unreachable` is `5` (the class you retry) — the same
+            # split Decision 6 gives the `>= 1`-results rows. Branching on
+            # `stop.reason` here is what task 8's review found missing
+            # (Major 1): the run-start containment above and the final
+            # mapping below are both off this path, since a zero-results
+            # mid-plan stop returns right here.
+            if not results:
+                if stop.reason == "apparatus_unreachable":
+                    return EXIT_EXTERNAL
+                return EXIT_WRONG
+
+        status = run_status(results, planned=len(plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
         # that case, instead of every condition reporting a misleading empty
@@ -3595,6 +3678,17 @@ def command_run(config_path: Path) -> int:
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")
+    # H7d Part B task 8 (Decision 6): an unreachable apparatus wins over
+    # whatever status it wrote — `5` is the class you retry, so it takes
+    # precedence over `3`/`4` the same reason a dirty tree or a missing
+    # credential would (§ Exit codes and diagnostics's own stated
+    # precedence). Read from `stop.reason`, the reason the run stopped,
+    # rather than re-derived from `status` — a build deriving it from
+    # `status` cannot tell `partial` (a truncation guard) from `partial`
+    # (an unreachable apparatus) apart, which is exactly why Fixture U's
+    # exit and status assertions are pinned separately.
+    if stop.reason == "apparatus_unreachable":
+        return EXIT_EXTERNAL
     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
 
 

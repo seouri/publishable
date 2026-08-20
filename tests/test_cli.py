@@ -24,7 +24,15 @@ from publishable.cli import (
     main,
 )
 from publishable.correction import Member, corrected_fields
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
+from publishable.diagnostics import (
+    EXIT_EXTERNAL,
+    EXIT_FAILED,
+    EXIT_INVOCATION,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    EXIT_WRONG,
+    Collector,
+)
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
@@ -251,7 +259,28 @@ def run_a_project(
             "stdout": captured.out if captured is not None else None,
             "stderr": captured.err if captured is not None else None,
         }
-    run_dir = next(results_dir.glob("run_*"))
+    # H7d Part B, task 7 step 2 (§ Corrections against the code, correction
+    # 3): `run_dir` is not `None` exactly when there is a ledger to read.
+    # A run directory can exist with no `executions.jsonl` at all — a
+    # run-start probe raise or a zero-results apparatus stop leaves a run
+    # directory holding only `environment`/`manifest`/`sweep.yaml` — and
+    # this is no longer reachable through `expect_exit == EXIT_WRONG` alone
+    # once task 8 moves a run-start raise's exit code off of `EXIT_WRONG`.
+    # Return the same `run_dir: None`, `results: None` shape rather than
+    # crashing on a missing ledger; a caller that needs the run directory
+    # itself in that case globs `results_dir` on its own.
+    candidate = next(results_dir.glob("run_*"), None)
+    if candidate is None or not (candidate / "executions.jsonl").exists():
+        return {
+            "root": root,
+            "cfg": cfg,
+            "results_dir": results_dir,
+            "run_dir": None,
+            "results": None,
+            "stdout": captured.out if captured is not None else None,
+            "stderr": captured.err if captured is not None else None,
+        }
+    run_dir = candidate
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
     results = [Ran(e["condition"], e["repeat"]) for e in ledger]
@@ -13174,10 +13203,14 @@ def test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_
 def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
     installed, registries, tmp_path, capsys
 ):
-    """Fixture K2, and the pin for the containment mechanism as a whole: exit
-    non-zero, `E-APPARATUS-RAISED` present, `<redacted:PUBLISHABLE_TEST_TOKEN>`
-    present, and `lab7` absent from stdout, from stderr and from every file
-    under the results directory."""
+    """Fixture K2, and the pin for the containment mechanism as a whole
+    — UPDATED at task 8's commit (Decision 6): `E-APPARATUS-RAISED` at the
+    run-start containment now earns `EXIT_EXTERNAL` rather than
+    `EXIT_WRONG`, since the apparatus itself being unreachable is the class
+    you retry; only the specific code moves, from `1` to `5`. This is
+    Fixture Z arm 1 (a probe raising on call 1, the run-start round) — the
+    no-`run.yaml`, redaction, and no-credential-anywhere assertions below
+    are untouched by the move."""
     site = installed(
         "dist-k2-9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k2_probe_mod:probe"}}
     )
@@ -13191,7 +13224,7 @@ def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
         parameters={},
         _local_template=_APPARATUS_CRED_TEMPLATE,
         _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
-        expect_exit=EXIT_WRONG,
+        expect_exit=EXIT_EXTERNAL,
     )
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-APPARATUS-RAISED" in output
@@ -14171,3 +14204,1096 @@ def test_the_recorded_apparatus_block_carries_no_credential_value(
     assert block["facts"], "the block must be populated, not merely absent"
 
     assert _ORDINARY_CRED_VALUE not in run_yaml_text
+
+
+# --- Task 12: the guard pin, its literals captured at `814eadd` ------------
+
+_RECORDS_ONCE_THEN_RAISES_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_first = True
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        global _first
+        if _first:
+            _first = False
+            for unit in io.units:
+                io.record(unit.key, {{"value": 1.0}})
+            return {{"n": len(io.units)}}
+        raise RuntimeError("this execution fails on purpose")
+"""
+
+
+def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
+    """Fixture arm A — a clean run: `len(executions.jsonl)` equals
+    `len(sweep.yaml["execution_order"])`, which is Decision 5's
+    `len(plan) == len(results)` claim expressed as behaviour rather than as a
+    comment, and `run.yaml`'s top-level key list is asserted whole, as a
+    LIST rather than membership — a key added unconditionally by later record
+    work is exactly what a full-list assertion catches and a `status`-only
+    assertion would not. Captured by running at `814eadd`: 8 units, a `seed`
+    repeat of `n=4` (the default `n=5` is overridden so the count is
+    unambiguous against the other two arms), template `generic`, no probe
+    declared anywhere in this project.
+
+    **The key-list assertion's boundary**: this is the only one of the three
+    arms that asserts it, and it does so only on a CLEAN run. It therefore
+    catches a key added unconditionally to `assemble_run_yaml`'s document —
+    what its docstring claims and what the report's mutation proves — but it
+    is blind to a key written only on a STOP path, since arms B and C (both
+    truncations) assert no key list at all. A later batch adding a
+    stop-only key is invisible to this pin; read `run.yaml`'s shape for that
+    case directly rather than assuming this test covers it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=8,
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == len(sweep["execution_order"])
+    assert len(ledger) == 4
+
+    assert list(run.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+
+    results_entries = sorted(p.name for p in doc["results_dir"].iterdir())
+    assert results_entries == sorted(["latest", doc["run_dir"].name])
+
+
+def test_an_all_completed_truncation_stays_completed_at_exit_0(tmp_path, capsys):
+    """Fixture arm B — the all-completed truncation: the shipped
+    `max_failed_fraction` fixture's own shape
+    (`test_max_failed_fraction_is_measured_against_the_test_partition`),
+    re-run here as this slice's baseline rather than a second copy of it —
+    the brief's own instruction. Every execution that ran is `completed`, the
+    plan stopped short of `sweep.yaml`'s full length, and `run.yaml` still
+    reports `status: completed` at exit `0` — the untouched behaviour this
+    slice's neighbouring guard must keep, and the one Arms B and C together
+    exist to protect against a silent change."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_ALWAYS_FAILING_STEP,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == 2
+    assert len(sweep["execution_order"]) == 5
+    assert len(ledger) < len(sweep["execution_order"])
+    assert all(r["status"] == "completed" for r in ledger), ledger
+    assert run["status"] == "completed"
+    # Task 6 (Decision 5, controller's ruling): the truncation now travels
+    # through the same `StopSignal` an apparatus stop uses
+    # (`stop.reason = "max_failed_fraction"`), so this is the pin that would
+    # catch a build routing that reason into the apparatus branch by mistake
+    # — no apparatus diagnostic exists for this guard to print.
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" not in output
+    assert "E-APPARATUS-CHANGED" not in output
+
+
+def test_a_mixed_truncation_is_partial_at_exit_3(tmp_path, capsys):
+    """Fixture arm C — the mixed truncation, constructed rather than shipped
+    (§ Corrections against the code, correction 5: the design's claim that
+    this was "every shipped `EXIT_PARTIAL` truncation test's assertion" does
+    not survive — those tests are not truncations at all, since a step whose
+    every execution raises never records and so never trips
+    `max_failed_fraction`). `_RECORDS_ONCE_THEN_RAISES_STEP` records every
+    unit on its first execution, then raises on every later one:
+    `_units_failed_anywhere` unions failures across every recording
+    execution of the run, so after the raising execution every one of the 20
+    units is recorded under the first repeat label and not under the
+    second — 20 of 20 unresolved, past the declared `0.5` fraction. Measured
+    by running at `814eadd`: 2 of 5 executions recorded, statuses
+    `[completed, failed]`, `run.yaml status: partial`, exit `3`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_RECORDS_ONCE_THEN_RAISES_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == 2
+    assert len(sweep["execution_order"]) == 5
+    assert [r["status"] for r in ledger] == ["completed", "failed"]
+    assert run["status"] == "partial"
+    # Same pin as Arm B's addition above: this truncation's reason is
+    # `"max_failed_fraction"` too, so no apparatus diagnostic should print.
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" not in output
+    assert "E-APPARATUS-CHANGED" not in output
+
+
+# --- H7d Part B task 4: the ordering chain, and the two assertions only it
+# can make -------------------------------------------------------------------
+
+_APPARATUS_G1_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_g1_assay")
+class ApparatusG1Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_g1_probe"
+    apparatus_facts = ["pinned", "appears", "vanishes"]
+"""
+
+# Fixture G1's own by-call schedule (design § The discriminating fixtures):
+# one condition, four `seed` repeats (4 executions planned). Call 1 is the
+# run-start round; calls 2-4 are the per-execution `pre_execution` round,
+# one per planned execution, in order. `sometimes` is an undeclared fact,
+# answered only on call 1, to pin the fourth transition (absence is never a
+# change). `pinned` changes on call 4, before execution 3 runs.
+_G1_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = [
+    {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+]
+_calls = {"n": 0}
+
+
+@register_probe("h7d_g1_probe")
+def probe(cfg):
+    facts = dict(_schedule[_calls["n"]])
+    _calls["n"] += 1
+    return Apparatus(facts=facts)
+"""
+
+
+def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture G1's ledger, UPDATED at task 7's commit (Decision 4, Decision
+    14) — a second disagreement with this test's own prior docstring,
+    recorded rather than silently overwritten. Task 6 left the run falling
+    through unaided into `run_status`/`assemble_run_yaml`'s ordinary
+    completion path with nothing printed about the stop, which the prior
+    docstring version captured. Task 7 adds the branch that prints ONE
+    diagnostic through a fresh redacting `Collector` immediately after
+    `execute_plan` returns, naming `stop.code` (`E-APPARATUS-CHANGED`) and
+    `stop.message` (which itself names the fact `pinned` and `r1 → r2`,
+    `Observations.changed`'s own message format) — so this is the test
+    task 4's own text said would change here.
+
+    Every value below is computed from Fixture G1's own schedule, not
+    transcribed: 4 probe calls total (call 1 run-start, calls 2-4
+    `pre_execution` for executions 1-3), the gate stopping before execution
+    3 runs, so 2 executions complete (repeats 1-2) and `apparatus/probes.jsonl`
+    holds all 4 calls regardless (Part A's measured raise-path shape,
+    unaffected by raising vs. breaking). `unobserved`, recomputed from those
+    same 4 lines: `pinned` is answered every call (`null_probes: 0`),
+    `appears` is `null` on call 1 only (`null_probes: 1`), `vanishes` is
+    `null` on calls 2-4 (`null_probes: 3`) — each `total_probes: 4`. That
+    gives exactly two DECLARED (condition, fact) pairs with a null
+    observation — `appears` and `vanishes` — so exactly two
+    `W-APPARATUS-UNANSWERED` lines print, and only after `run.yaml` is
+    written (§ Warnings core reports: "printed to stdout through a
+    `Collector` at run end"), which is a second, independent witness that
+    the record phase was reached."""
+    site = installed(
+        "dist-t4g1", "1.0", {"publishable.probes": {"h7d_g1_probe": "t4g1_probe_mod:probe"}}
+    )
+    (site / "t4g1_probe_mod.py").write_text(_G1_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_g1_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_G1_TEMPLATE,
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+    # Task 12's own key-list pin, re-asserted whole on a STOP path this time
+    # (arm A only asserted it on a clean run — see that test's own docstring
+    # on the boundary this closes).
+    assert list(run.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+
+    # `provenance.apparatus.facts` is the FIRST ANSWERED value per
+    # (condition, fact), not the latest (`Observations.facts_document`'s own
+    # contract) — `pinned`'s first answer is `r1` (calls 1-3), so it stays
+    # `r1` in the record even though the stop fired on call 4's `r2`;
+    # `vanishes`'s first answer is `L1` (call 1, never repeated); `appears`'s
+    # first NON-null answer is `A1` (call 2, since call 1 answered `null`);
+    # `sometimes` is undeclared but still recorded, at its only answer `S1`.
+    apparatus_block = run["provenance"]["apparatus"]
+    assert apparatus_block["facts"]["00"] == {
+        "pinned": "r1",
+        "appears": "A1",
+        "vanishes": "L1",
+        "sometimes": "S1",
+    }
+    assert apparatus_block["unobserved"] == {
+        "pinned": {"null_probes": 0, "total_probes": 4},
+        "appears": {"null_probes": 1, "total_probes": 4},
+        "vanishes": {"null_probes": 3, "total_probes": 4},
+    }
+
+    executions = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
+
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 4
+    assert ledger[-1]["facts"]["pinned"] == "r2"
+
+    assert (doc["results_dir"] / "latest").exists() or (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+    assert "pinned" in output
+    assert "r1 → r2" in output
+
+    warn_lines = [line for line in output.splitlines() if "W-APPARATUS-UNANSWERED" in line]
+    assert len(warn_lines) == 2
+
+
+# --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
+# precedent — Fixture U, unreachable mid-plan ---------------------------------
+
+_APPARATUS_U_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_u_assay")
+class ApparatusUAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_unreachable_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Design's own Fixture U probe (§ The discriminating fixtures, plan's
+# "Computed expectations"): one condition, `{kind: seed, n: 4}` — 4 planned
+# executions. Call 1 is the run-start round; calls 2-4 are the per-execution
+# `pre_execution` round, one per planned execution. The probe raises on its
+# 4th call, which is the round guarding the 3rd execution — so 2 executions
+# run before the raise, and the raise happens inside `observe_once`, before
+# `check_facts` and before any append, so the probe ledger holds 3 lines
+# (calls 1-3), never 4.
+_GATE_UNREACHABLE_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_unreachable_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    if _n >= 4:
+        raise RuntimeError("the instrument stopped responding")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsys):
+    """Fixture U (task 5 step 4), UPDATED at task 8's commit (Decision 6):
+    `expect_exit` moves to `EXIT_EXTERNAL`, exactly as task 7's own text
+    predicted. `run_status` still maps `"apparatus_unreachable"` to
+    `"partial"` — that has not changed — but `command_run`'s final mapping
+    now reads `stop.reason` directly and returns `EXIT_EXTERNAL` for an
+    unreachable apparatus regardless of the status it wrote, which is why
+    the status byte (`"partial"`) is asserted as ITS OWN statement below,
+    separate from the exit code: a build deriving the exit from `status`
+    would return `EXIT_PARTIAL` here and pass a status-only check.
+
+    Task 7's diagnostic branch still prints unconditionally whenever
+    `stop.reason` is one of the two apparatus reasons — so with 2 results
+    already on disk this run falls through to the record phase exactly as
+    before, `E-APPARATUS-RAISED` printed to stderr through a fresh
+    `Collector` on the way, and only the exit code changes here.
+
+    The ledger is written on the raise path regardless — so
+    `executions.jsonl` holds the 2 executions that ran before the raise, and
+    `apparatus/probes.jsonl` holds the 3 calls that completed
+    (`observe_once` raises before `check_facts`/`append_observation` on the
+    4th, so nothing is appended for it)."""
+    site = installed(
+        "dist-tu5", "1.0", {"publishable.probes": {"h7d_unreachable_probe": "tu5_probe_mod:probe"}}
+    )
+    (site / "tu5_probe_mod.py").write_text(_GATE_UNREACHABLE_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_u_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_U_TEMPLATE,
+        expect_exit=EXIT_EXTERNAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "partial"
+
+    executions = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
+
+    probes = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 3
+
+    assert (doc["results_dir"] / "latest").exists() or (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
+
+
+# --- H7d Part B task 7: Fixture Z arm 2, the zero-results moved case -------
+
+_APPARATUS_Z2_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_z2_assay")
+class ApparatusZ2Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_z2_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Design's Fixture Z, arm 2 (§ The discriminating fixtures): one condition,
+# a probe moving on call 2 — the first `pre_execution` round, guarding the
+# first planned execution, which has therefore not yet run. Call 1 (the
+# run-start round) answers `r1`; call 2 answers `r2`, which disagrees with
+# the first-answered value and raises `E-APPARATUS-CHANGED` inside
+# `observe_round`, `break`ing `execute_plan`'s loop before that first
+# execution's step is even constructed. `check_facts`/`append_observation`/
+# `record` all run before the gate compares (the ordering chain), so both
+# calls are on the ledger regardless of the stop.
+_Z2_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_z2_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    return Apparatus(facts={"model_revision": "r1" if _n == 1 else "r2"})
+"""
+
+
+def test_fixture_z_arm_2_zero_results_moved_case(installed, registries, tmp_path, capsys):
+    """Fixture Z arm 2 (task 7 step 5, Decision 4): with the fact moving
+    before any execution runs, `execute_plan` returns an EMPTY results
+    list carrying `stop.reason == "apparatus_changed"`. Task 7's own branch
+    prints the redacted diagnostic and then, because `results` is empty,
+    returns `EXIT_WRONG` BEFORE `assemble_run_yaml` and BEFORE
+    `point_latest` — batch 4's Major 1, the corner that used to write a
+    record and repoint `latest` for zero results. Decision 4's table: Moved,
+    0 results → no record, exit 1.
+
+    `run_a_project`'s widened helper (task 7 step 2) returns `run_dir: None`
+    here — there is no `executions.jsonl` to read — so this test globs
+    `results_dir` for the run directory itself to check what it does and
+    does not hold: no `run.yaml`, no `executions.jsonl`, and the 2
+    `apparatus/probes.jsonl` lines (call 1 run-start, call 2 the disagreeing
+    `pre_execution`) written on the way in, before the gate ever compares."""
+    site = installed(
+        "dist-t7z2", "1.0", {"publishable.probes": {"h7d_z2_probe": "t7z2_probe_mod:probe"}}
+    )
+    (site / "t7z2_probe_mod.py").write_text(_Z2_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_z2_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_Z2_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+    assert doc["results"] is None
+
+    run_dirs = list(doc["results_dir"].glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+
+    probes = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 2
+
+    assert not (doc["results_dir"] / "latest").exists()
+    assert not (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+
+
+_APPARATUS_Z3_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_z3_assay")
+class ApparatusZ3Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_z3_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Fixture Z arm 3 — the fourth of Decision 4's four rows, and the one batch
+# 5's review found unfixtured: unreachable, mid-plan, ZERO results. Call 1
+# (run-start) answers `r1`; call 2 (the first `pre_execution` round, before
+# the first execution runs) RAISES rather than moving — the same by-call
+# position as Fixture Z arm 2, but a raise instead of a disagreement, so
+# `stop.reason == "apparatus_unreachable"` rather than `"apparatus_changed"`.
+_Z3_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_z3_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    if _n >= 2:
+        raise RuntimeError("the instrument stopped responding")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_fixture_z_arm_3_zero_results_unreachable_case(installed, registries, tmp_path, capsys):
+    """Fixture Z arm 3 (fix round 1, Major 1): Decision 4's table has four
+    rows — unreachable/moved crossed with zero/`>= 1` results — and batch 5
+    fixtured three (U: unreachable/`>= 1`; G1: moved/`>= 1`; Z arm 2:
+    moved/0). This is the fourth, and it is the one the review found wrong:
+    an unreachable apparatus with ZERO results must exit `EXIT_EXTERNAL`
+    (5), the same as `reference.md` § Exit codes' own unconditional
+    sentence — *"a probe unreachable before the first execution … still
+    exits `5`"* — not `EXIT_WRONG` (1), which is what Decision 4's `moved`
+    row alone earns.
+
+    Same shape as Fixture Z arm 2 otherwise, MODULO one asymmetry the ledger
+    itself draws: `observe_once` raises BEFORE `check_facts`/
+    `append_observation` for the call that raises (Fixture U's own
+    docstring states this), so the raising `pre_execution` call appends
+    NOTHING — `apparatus/probes.jsonl` holds exactly 1 line (the run-start
+    answer only), not 2. A moved fact, by contrast, answers first and is
+    appended before the gate compares, which is why Fixture Z arm 2 holds
+    2 lines for the same by-call position. No `run.yaml`, no
+    `executions.jsonl`, `latest` and `latest.txt` both absent."""
+    site = installed(
+        "dist-t7z3", "1.0", {"publishable.probes": {"h7d_z3_probe": "t7z3_probe_mod:probe"}}
+    )
+    (site / "t7z3_probe_mod.py").write_text(_Z3_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_z3_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_Z3_TEMPLATE,
+        expect_exit=EXIT_EXTERNAL,
+    )
+    assert doc["run_dir"] is None
+    assert doc["results"] is None
+
+    run_dirs = list(doc["results_dir"].glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+
+    probes = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 1
+    assert probes[0]["phase"] == "run_start"
+
+    assert not (doc["results_dir"] / "latest").exists()
+    assert not (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
+
+
+_APPARATUS_FRESH_COLLECTOR_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_fresh_collector_assay")
+class ApparatusFreshCollectorAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_fresh_collector_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Same by-call shape as Fixture Z arm 2 (call 1 run-start answers `r1`, call 2
+# — the first `pre_execution` round — disagrees with `r2`), reused here for a
+# different property: `replication`'s `batch` kind is declared so `validate`
+# itself warns `W-REPL-DETERMINISTIC` (no step here sets
+# `nondeterministic = True`) — a finding that lands in `command_run`'s own
+# `c` BEFORE `execute_plan` ever runs, which is exactly the pre-existing
+# finding a build that appends the stop diagnostic to `c` (rather than a
+# FRESH `Collector`) would inflate.
+_FRESH_COLLECTOR_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_fresh_collector_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    return Apparatus(facts={"model_revision": "r1" if _n == 1 else "r2"})
+"""
+
+
+def test_the_stop_diagnostic_prints_through_a_fresh_collector_not_c(
+    installed, registries, tmp_path, capsys
+):
+    """The discriminator step 7(c) needs and Fixture Z arm 2 cannot supply:
+    that fixture's config validates with zero findings, so `c` is empty
+    throughout and appending the stop diagnostic to it renders identically
+    to a fresh `Collector` — a blind fixture for that specific mutation.
+    Declaring a `batch` repeat here gives `validate` exactly one finding
+    (`W-REPL-DETERMINISTIC`), printed through `c` before the run starts, so
+    a build that appends the stop diagnostic to that same `c` re-renders
+    BOTH findings — `2 problems (1 error, 1 warning)` — on the stream the
+    stop diagnostic prints to, where the correct build's fresh `Collector`
+    renders only the one it was just given."""
+    site = installed(
+        "dist-t7fresh",
+        "1.0",
+        {"publishable.probes": {"h7d_fresh_collector_probe": "t7fresh_probe_mod:probe"}},
+    )
+    (site / "t7fresh_probe_mod.py").write_text(_FRESH_COLLECTOR_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_fresh_collector_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "batch", "n": 2}]},
+        _local_template=_APPARATUS_FRESH_COLLECTOR_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+
+    stderr = doc["stderr"] or ""
+    assert "E-APPARATUS-CHANGED" in stderr
+    stop_block_start = stderr.index("E-APPARATUS-CHANGED")
+    stop_block = stderr[max(0, stop_block_start - 40) :]
+    assert "1 problem (1 error, 0 warnings)" in stop_block
+    assert "W-REPL-DETERMINISTIC" not in stderr
+
+    stdout = doc["stdout"] or ""
+    assert "W-REPL-DETERMINISTIC" in stdout
+
+
+# --- H7d Part B batch 3 fix round 1, Major 1: a moved non-`str` credential
+# fact must not reach `main`'s un-redacted printer ---------------------------
+
+_APPARATUS_INT_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_int_cred_assay")
+class ApparatusIntCredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    apparatus_probe = "h7d_int_cred_probe"
+    apparatus_facts = ["serial"]
+"""
+
+# The reviewer's exact repro (Major 1): the declared credential's value is
+# `13579`, and the probe returns it as a Python `int` fact — never a `str` —
+# on its first two calls, then a different `int` on the third. `check_facts`'s
+# containment check skips any non-`str` value by its own carve-out, so this
+# fact is never refused there; the only thing standing between it and a bare
+# stderr print is whichever containment filter the gate's raise passes
+# through.
+_INT_CRED_MOVING_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_calls = {"n": 0}
+
+
+@register_probe("h7d_int_cred_probe")
+def probe(cfg):
+    n = _calls["n"]
+    _calls["n"] += 1
+    return Apparatus(facts={"serial": 13579 if n < 2 else 999})
+"""
+
+
+def test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 3 review, Major 1, closed — UPDATED at task 7's commit, a fourth
+    disagreement of the same shape recorded on Fixture G1's and Fixture U's
+    tests above. Task 6 left this run falling through unaided into
+    `command_run`'s ordinary completion with nothing printed about the stop
+    (`run_status` mapping `"apparatus_changed"` to `"failed"`, exit
+    `EXIT_FAILED`) — the prior docstring version captured exactly that.
+    **Task 7's own diagnostic branch now prints unconditionally** whenever
+    `stop.reason` is one of the two apparatus reasons, through a FRESH
+    redacting `Collector` carrying the same `credentials` mapping every
+    other branch in `command_run` already reuses — so this is the test that
+    proves the redaction survives the stop path too: `serial`'s moved
+    value reaches stderr as `E-APPARATUS-CHANGED ... changed:
+    <redacted:PUBLISHABLE_TEST_TOKEN> → 999`, never as the plaintext
+    `13579`.
+
+    **What this test still does NOT close, and must not be read as
+    closing**: the same run still writes `"serial": 13579` into
+    `apparatus/probes.jsonl` on disk, because `check_facts`'s non-`str`
+    carve-out lets it through the credential check entirely regardless of
+    the gate — filed, not fixed, in `spec-defects.md`, owned by whoever owns
+    that carve-out."""
+    site = installed(
+        "dist-t4major1",
+        "1.0",
+        {"publishable.probes": {"h7d_int_cred_probe": "t4major1_probe_mod:probe"}},
+    )
+    (site / "t4major1_probe_mod.py").write_text(_INT_CRED_MOVING_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_int_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_INT_CRED_TEMPLATE,
+        _env_file="PUBLISHABLE_TEST_TOKEN=13579\n",
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert "13579" not in output
+
+
+# --- H7d Part B task 13: the run-start round cannot trip the gate, and the
+# sentinel that proves the suite would notice --------------------------------
+
+_APPARATUS_G3_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_g3_assay")
+class ApparatusG3Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_g3_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+_G3_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_g3_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+
+def test_g3_run_start_round_never_trips_the_gate_across_conditions(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture G3, re-driven to completion (task 13 step 1, Decision 11).
+    Two conditions sweeping `instrument.model`, a probe returning the swept
+    value as `model_revision` — Part A's shipped swept-fact shape
+    (`_SWEPT_FACT_PROBE_MODULE`/`_APPARATUS_ASSAY_TEMPLATE`), rebuilt
+    under this task's own distribution and module names, since Fixture P
+    warns that two fixtures sharing one importable module name in one test
+    session get the first one's code. `Observations.changed` is scoped per
+    condition key (Decision 1), so the run-start round's two calls — one per
+    resolved condition, never twice for the same one — can never disagree
+    with each other; no `(condition, fact)` pair has a prior observation to
+    contradict until a SECOND round exists for that same condition, and the
+    run-start round is the only round that never repeats a condition.
+
+    The absence assertion (`E-APPARATUS-CHANGED` nowhere in stdout or
+    stderr) is paired with the two distinct recorded values and the
+    `completed` status, which must report: the absence alone would pass
+    identically if nothing ran at all."""
+    site = installed(
+        "dist-t13g3", "1.0", {"publishable.probes": {"h7d_g3_probe": "t13g3_probe_mod:probe"}}
+    )
+    (site / "t13g3_probe_mod.py").write_text(_G3_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_g3_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_G3_TEMPLATE,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    block = run["provenance"]["apparatus"]
+    values = {block["facts"][k]["model_revision"] for k in block["facts"]}
+    assert values == {"m1", "m2"}, "two conditions, two distinct recorded values"
+
+    combined = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" not in combined
+
+
+# --- H7d Part B task 9: no policy knob, arm (b) — Fixture K's most-permissive
+# arm still stops --------------------------------------------------------------
+
+_APPARATUS_K_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_k_assay")
+class ApparatusKAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_k_probe"
+    apparatus_facts = ["pinned", "appears", "vanishes"]
+"""
+
+# Fixture G1's own by-call schedule, under this task's own distribution and
+# module names (Fixture P's caching warning: two fixtures sharing one
+# importable module name in one session get the first one's code): one
+# condition, four `seed` repeats, `pinned` changing on call 4 before
+# execution 3 runs — the same transition. A fifth entry is appended beyond
+# G1's own four: this test's own prescribed mutation (task 9 step 5) skips
+# the gate, so the run needs a 5th probe call (the round guarding execution
+# 4) to exist rather than raising `IndexError` out of the schedule itself —
+# a different, uninteresting failure that would still fail the assertion but
+# for the wrong reason.
+_K_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = [
+    {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+]
+_calls = {"n": 0}
+
+
+@register_probe("h7d_k_probe")
+def probe(cfg):
+    facts = dict(_schedule[_calls["n"]])
+    _calls["n"] += 1
+    return Apparatus(facts=facts)
+"""
+
+
+def test_fixture_k_arm_b_the_most_permissive_limits_still_stops(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 7, arm (b): every EXISTING `limits` key set to its most
+    permissive value does not soften the gate. `max_failed_fraction: 1.0` is
+    load-bearing — that neighbouring guard fires on `>` (`runner.execute_plan`),
+    so it can never fire at `1.0` and its stop can never be confused with
+    `E-APPARATUS-CHANGED`'s. The other five keys are set the same way: large
+    enough or low enough that nothing in THIS fixture's simple, cluster-free,
+    contrast-free, cell-free design could trip them either — there is nothing
+    here for `min_units_per_cell`, `min_clusters`, `min_reported_n` or
+    `max_ineligible_fraction` to fire on regardless of value, so setting them
+    permissive is a control against a knob interacting with the gate, not a
+    fixture that could warn on its own.
+
+    Same schedule as Fixture G1 (task 4): `pinned` changes on call 4, before
+    execution 3 runs, so 2 of 4 planned executions complete and the run stops
+    with `status: failed` at `EXIT_FAILED` — G1's own computed counts,
+    reconciled here rather than re-derived, because arm (b)'s point is that
+    THESE counts are unmoved by the permissive `limits`, not that they exist."""
+    site = installed(
+        "dist-t9k", "1.0", {"publishable.probes": {"h7d_k_probe": "t9k_probe_mod:probe"}}
+    )
+    (site / "t9k_probe_mod.py").write_text(_K_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_k_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_K_TEMPLATE,
+        limits={
+            "max_executions": 1000,
+            "max_failed_fraction": 1.0,
+            "max_ineligible_fraction": 1.0,
+            "min_units_per_cell": 1,
+            "min_clusters": 1,
+            "min_reported_n": 1,
+        },
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+    executions = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+    assert "pinned" in output
+    assert "r1 → r2" in output
+    # The neighbouring guard's own reason never fires at `1.0` — reconciled
+    # rather than asserted as a total set, since `max_ineligible_fraction`'s
+    # warning code is a distinct, unrelated string this fixture does not earn
+    # either.
+    assert "max_failed_fraction" not in output
+
+
+# --- H7d Part B task 10: `batch` and the apparatus stay independent --------
+
+_APPARATUS_B_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("{template_name}")
+class ApparatusBAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "{probe_name}"
+    apparatus_facts = ["model_revision"]
+"""
+
+# One condition, `n: 4` (4 planned executions either way). The schedule is
+# Fixture G1's own shape (task 4), reused because it is what makes this
+# fixture DISCRIMINATING rather than merely quiet: a probe returning a
+# CONSTANT fact never changes, so the gate never fires regardless of how it
+# is keyed, and a mutation keying it on the repeat label too would be
+# invisible. `model_revision` answers `r1` on calls 1-3 (the run-start round
+# and the first two `pre_execution` rounds) and `r2` on call 4 — the round
+# guarding the third planned execution — so the gate fires before that
+# execution runs, in BOTH arms, at the same point, if `batch` and the
+# apparatus are genuinely independent (`apparatus.py` names `batch` nowhere,
+# § Corrections against the code). A fifth entry is appended beyond that
+# shape: this test's own prescribed mutation (task 10 step 4) keys the gate
+# on the repeat label too, under which the `seed` arm's four distinct labels
+# never contradict each other and the run needs a 5th probe call (the round
+# guarding the 4th planned execution) to exist rather than raising
+# `IndexError` out of the schedule itself — a different, uninteresting
+# failure that would still fail the assertion but for the wrong reason. Two
+# separately named probe modules, since the counter is module-level and
+# `sys.modules` caches across the session (Fixture P).
+_B_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = ["r1", "r1", "r1", "r2", "r2"]
+_calls = {{"n": 0}}
+
+
+@register_probe("{probe_name}")
+def probe(cfg):
+    value = _schedule[_calls["n"]]
+    _calls["n"] += 1
+    return Apparatus(facts={{"model_revision": value}})
+"""
+
+
+def test_fixture_b_batch_and_the_apparatus_stay_independent(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 8, pinned rather than left to the definition that invites the
+    mistake: `CLAUDE.md` defines `batch` as *"the state of the apparatus it
+    measures through"*, which reads as licence to wire the two together.
+    Measured at `814eadd` (§ Corrections against the code, item carried into
+    this task's brief): `apparatus.py` names `batch` nowhere and
+    `replication.py` names the apparatus nowhere — the only live wire between
+    a repeat kind and anything is `W-REPL-DETERMINISTIC`, which reads step
+    DECLARATIONS, not the apparatus. Part B is the first slice that can stop a
+    run over apparatus state, so it is the slice that owes this pin.
+
+    **Equal `n` in both arms, stated in this docstring because it is the
+    fixture's own load-bearing choice**: with unequal `n` the two arms have
+    different execution counts, so their ledgers would differ in length for a
+    reason that has nothing to do with the apparatus — a fixture whose two
+    arms differ for an uninteresting reason cannot see the interesting one.
+
+    The gate fires in BOTH arms, at the SAME point — 2 of 4 planned
+    executions complete, `status: failed`, `EXIT_FAILED` — which is "the stop
+    lands at the same execution index" the design's own computed expectation
+    names. Asserted on the ordered `(phase, condition)` sequence read off
+    `apparatus/probes.jsonl`, on `provenance.apparatus.facts` and `.hash`, and
+    on `len(executions.jsonl)` — never on whole stdout/stderr: the `batch` arm
+    earns `W-REPL-DETERMINISTIC` (no step here sets `nondeterministic = True`),
+    so its stdout differs from the `seed` arm's by that warning line alone,
+    for a reason that is not the apparatus. That difference is named here
+    rather than asserted away."""
+    seed_site = installed(
+        "dist-t10-seed", "1.0", {"publishable.probes": {"h7d_b_seed_probe": "t10b_seed_mod:probe"}}
+    )
+    (seed_site / "t10b_seed_mod.py").write_text(
+        _B_PROBE_MODULE.format(probe_name="h7d_b_seed_probe")
+    )
+    seed_doc = run_a_project(
+        tmp_path / "seed_arm",
+        capsys=capsys,
+        experiment_type="apparatus_b_seed_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_B_TEMPLATE.format(
+            template_name="apparatus_b_seed_assay", probe_name="h7d_b_seed_probe"
+        ),
+        expect_exit=EXIT_FAILED,
+    )
+
+    batch_site = installed(
+        "dist-t10-batch",
+        "1.0",
+        {"publishable.probes": {"h7d_b_batch_probe": "t10b_batch_mod:probe"}},
+    )
+    (batch_site / "t10b_batch_mod.py").write_text(
+        _B_PROBE_MODULE.format(probe_name="h7d_b_batch_probe")
+    )
+    batch_doc = run_a_project(
+        tmp_path / "batch_arm",
+        capsys=capsys,
+        experiment_type="apparatus_b_batch_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "batch", "n": 4}]},
+        _local_template=_APPARATUS_B_TEMPLATE.format(
+            template_name="apparatus_b_batch_assay", probe_name="h7d_b_batch_probe"
+        ),
+        expect_exit=EXIT_FAILED,
+    )
+
+    def _phase_condition_sequence(doc):
+        ledger = [
+            json.loads(line)
+            for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        return [(row["phase"], row["condition"]) for row in ledger]
+
+    seed_seq = _phase_condition_sequence(seed_doc)
+    batch_seq = _phase_condition_sequence(batch_doc)
+    assert seed_seq == batch_seq
+    assert seed_seq == [
+        ("run_start", "00"),
+        ("pre_execution", "00"),
+        ("pre_execution", "00"),
+        ("pre_execution", "00"),
+    ]
+
+    seed_run = yaml.safe_load((seed_doc["run_dir"] / "run.yaml").read_text())
+    batch_run = yaml.safe_load((batch_doc["run_dir"] / "run.yaml").read_text())
+    assert seed_run["status"] == "failed"
+    assert batch_run["status"] == "failed"
+    seed_apparatus = seed_run["provenance"]["apparatus"]
+    batch_apparatus = batch_run["provenance"]["apparatus"]
+    assert seed_apparatus["facts"] == batch_apparatus["facts"]
+    assert seed_apparatus["hash"] == batch_apparatus["hash"]
+
+    seed_exec = [
+        json.loads(line)
+        for line in (seed_doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    batch_exec = [
+        json.loads(line)
+        for line in (batch_doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(seed_exec) == 2
+    assert len(batch_exec) == 2
+
+    # The named, deliberately unasserted difference: the `batch` arm earns
+    # `W-REPL-DETERMINISTIC` on stdout and the `seed` arm does not, because no
+    # step here declares `nondeterministic = True`. Asserting whole output
+    # equal would make this fixture fragile against a warning that has
+    # nothing to do with the apparatus.
+    seed_output = (seed_doc["stdout"] or "") + (seed_doc["stderr"] or "")
+    batch_output = (batch_doc["stdout"] or "") + (batch_doc["stderr"] or "")
+    assert "W-REPL-DETERMINISTIC" not in seed_output
+    assert "W-REPL-DETERMINISTIC" in batch_output

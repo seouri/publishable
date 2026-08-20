@@ -164,6 +164,25 @@ declaration order. And **six fixtures across this slice failed their own constra
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
 
+**H7d Part B (the apparatus: gate and stop) merged on 2026-08-20 — the apparatus is complete.** A fact
+that moves from its **first *answered*** observation fails the run (`E-APPARATUS-CHANGED`), an
+unreachable apparatus stops it, `EXIT_EXTERNAL` gains its first reader with **5 winning over 3 and 4**,
+and the ledger keeps the moving observation so a stop is legible from the artifacts. **It unblocks zero
+configs** — six with no remaining core-side blocker and three executable stay where H4b-1 left them, and
+the only direction this slice could move a count was down. Four things worth carrying. **A neighbouring
+guard's semantics were deliberately NOT adopted**: `max_failed_fraction`'s truncation reports `completed`
+at exit 0, which `run_status` could have been widened to change — and that behaviour is **pinned with a
+written justification in a shipped test's docstring**, so editing the assertion *and* the argument for it
+in a slice about the apparatus is indistinguishable from weakening a pin to pass. It is **filed**, with
+its owner told to argue against that justification rather than discover it. From which: **a document may
+not be made self-consistent by widening a behaviour change** — § What status means **cannot** be made
+fully consistent without further code change, and saying so was the deliverable. **`reference.md`
+contradicted itself three ways about a truncated plan while the code answered a fourth**, and an
+all-completed truncation is described by **no row at all**. And **two defects were interactions between
+batches that no per-batch review could see** — a reflexivity guard added for `nan` made a later batch's
+prescribed ordering mutation unreachable, and one batch's wiring turned a containment arm added in the
+previous batch into dead code carrying a false safety claim.
+
 **H7c (credentials and secrets) merged on 2026-08-16**, out of charter order and for a measured reason: the
 feasibility analysis's own plugin declares `Param(requires_env=)`, and `Param` rejected that keyword, so the
 plugin H7b's registry would resolve **could not be written**. The spine design calls H7c order-independent;
@@ -376,6 +395,14 @@ made by the author of the rule forbidding it, while measuring for it.
   documents must **name** them, since `*.md` no longer means what it used to.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
+- **`ruff format` does not touch `*.md`** — it processes `.py`, `.pyi` and `.ipynb`, and this repo adds no
+  `extend-include`. **Two agents on two slices have blamed it for rewriting a document's fenced Python
+  block**, and both then reverted files on that reading; measured both times by copying the file, running
+  `uv run ruff format .`, and diffing — **byte-identical**. Neither lost work, which is the point: the
+  revert was performed on a diagnosis that was never checked. Whatever moved those bytes, it was
+  something else, so **find it rather than restoring on a story.** The general rule this sharpens: a
+  revert is verified by **behaviour**, never by `git status`, and least of all by an account of what
+  caused the change.
 
 ## Checking consistency after any `*.md` edit
 

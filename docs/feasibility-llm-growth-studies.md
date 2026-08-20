@@ -487,7 +487,7 @@ statistics:
 
 **Execution and cost.** 6 × 3 = **18 executions**, no compilations. **≤ $252, ≈ 3.2 h** at the most expensive deployment's rate.
 
-**Credentials follow the swept value.** The apparatus probe is permitted — and here required — to read a parameter the sweep varies, so each deployment is gated against its own first observation. The credentials reaching those deployments differ too, and a static `required_env` could not express that: it would demand an Azure key from a run that only touches Ollama, or stay silent about one a later condition needs. [`Param(requires_env=...)`](reference.md#a-credential-can-belong-to-a-parameter-value) on `llm.provider` puts the requirement on the value, so `validate` checks the union over the conditions this sweep resolves — which is what lets the source's local-Gemma cell join the same config as the Azure cells rather than needing a run of its own. Provider and model have to move together, so that cell enters as a `sweep.paired` entry coupling `llm.provider` with `llm.model` rather than as a fourth `grid` level — a cross of the two would emit conditions pointing an Azure deployment name at an Ollama endpoint.
+**Credentials follow the swept value.** The apparatus probe is permitted — and here required — to read a parameter the sweep varies, so each deployment is gated against its own first *answered* observation. The credentials reaching those deployments differ too, and a static `required_env` could not express that: it would demand an Azure key from a run that only touches Ollama, or stay silent about one a later condition needs. [`Param(requires_env=...)`](reference.md#a-credential-can-belong-to-a-parameter-value) on `llm.provider` puts the requirement on the value, so `validate` checks the union over the conditions this sweep resolves — which is what lets the source's local-Gemma cell join the same config as the Azure cells rather than needing a run of its own. Provider and model have to move together, so that cell enters as a `sweep.paired` entry coupling `llm.provider` with `llm.model` rather than as a fourth `grid` level — a cross of the two would emit conditions pointing an Azure deployment name at an Ollama endpoint.
 
 ---
 
@@ -1399,6 +1399,45 @@ substitution [§ The apparatus probe is the sharpest fit](#the-apparatus-probe-i
 already named as a gap this build cannot close.
 
 `uv run pytest` at this commit: 2423 passed, 1 skipped, 2 xfailed; `ruff check`, `ruff format
+--check` and `mypy` all clean.
+
+### Measured on 2026-08-20 against commit `600b207` — after H7d Part B
+
+H7d Part B is the half of the apparatus that can end a run: it compares each condition's facts
+against that condition's own first *answered* observation, stops the plan on a change
+(`E-APPARATUS-CHANGED`), distinguishes a moved apparatus from one that became unreachable, keeps
+the record of the period that was certified, and gives `EXIT_EXTERNAL` its first reader. **H7d Part
+B unblocks ZERO configs, and both counts stay exactly where H7d Part A left them: six with no
+remaining core-side blocker, three executable.** No config in this analysis declares an
+`apparatus_probe` a real plugin backs — the declaration is a **template** attribute defaulting to
+`None` on `BaseTemplate`, and `generic`, the template every config here substitutes, declares none —
+so `command_run` never constructs an `Observer`, and nothing built in Part B is reachable by any of
+the nine. Measured by the whole-branch review, transplanting each config's `data`/`statistics`
+blocks onto a scaffolded config over a 240-row synthetic roster through `validate_config`, the same
+method every entry above uses, re-cited here rather than re-run a third time on the identical
+fixture:
+
+| Config | Codes reported |
+|---|---|
+| E1 | `E-NAME-DIR`, `E-RESOLVER-UNKNOWN` (both harness artifacts of the reviewer's own scaffold: the config not living under `configs/<name>/`, and the plugin not installed) |
+| C1 | the same two |
+| E1 with `holdout.frac → 0` (**can-fail control**) | the same two **plus** `E-DATA-HOLDOUT-FRAC` |
+
+No `E-APPARATUS-*` code on either, and none is reachable for any of the nine — the same absence
+Part A's own entry above measured, unchanged by Part B's gate and stop mechanism because the
+precondition (a probe a real plugin backs) still does not hold. Also confirmed still absent:
+`E-DATA-RESOLVER-UNSUPPORTED` (retired by H7b Part B) and `E-DATA-WEIGHT-CONTRAST` (retired by
+H4b-1) — neither refusal has returned.
+
+**What did change, honestly stated rather than left as a count.** A run whose apparatus moves now
+stops instead of publishing a record measured through two different apparatus states, and a stopped
+run keeps the record of the period that was certified — `EXIT_EXTERNAL` reads that stop's
+precedence over an ordinary `partial`. None of that is exercised by the nine configs measured here,
+for the same reason Part A's entry gives: none declares a probe a real plugin backs, the same gap
+[§ The apparatus probe is the sharpest fit](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk)
+already names.
+
+`uv run pytest` at this commit: 2456 passed, 1 skipped, 2 xfailed; `ruff check`, `ruff format
 --check` and `mypy` all clean.
 
 ## Cost and execution summary

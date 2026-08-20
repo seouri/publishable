@@ -2,6 +2,8 @@
 § The apparatus core can only observe and § Creating a plugin.
 """
 
+import math
+
 import pytest
 
 
@@ -593,3 +595,345 @@ def test_observer_warn_unanswered_delegates_to_observations_with_declared_facts(
     # that `self.declared_facts`, not every observed fact, is what reached
     # `Observations.warn_unanswered` through this method.
     assert all("undeclared_fact" not in f.message for f in findings)
+
+
+def test_changed_value_to_different_value_fails():
+    """Reading 1 of Decision 1's five: a fact answered once and then answered
+    a DIFFERENT value fails, returning the (fact, first, incoming) triple.
+    `record` runs first so `_first_answered` is established before the
+    comparison, mirroring `_observe_one`'s own order (Decision 3)."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1"})
+    assert obs.changed("00", {"pinned": "r1"}) is None
+    obs.record("00", {"pinned": "r2"})
+    assert obs.changed("00", {"pinned": "r2"}) == ("pinned", "r1", "r2")
+
+
+def test_changed_null_to_value_passes_and_becomes_first_answered():
+    """Reading 2: a fact silent on its first call and answered on its second
+    does not fail, and the answered value becomes the pair's first answered —
+    read back through `facts_document`, never a second mapping."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"appears": None})
+    assert obs.changed("00", {"appears": None}) is None
+    obs.record("00", {"appears": "A1"})
+    assert obs.changed("00", {"appears": "A1"}) is None
+    assert obs.facts_document()["00"]["appears"] == "A1"
+
+
+def test_changed_value_to_null_passes_first_answered_stands():
+    """Reading 3: a fact that answered once and then goes quiet does not
+    fail, and the first answered value is unchanged by the null call."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"vanishes": "L1"})
+    assert obs.changed("00", {"vanishes": "L1"}) is None
+    obs.record("00", {"vanishes": None})
+    assert obs.changed("00", {"vanishes": None}) is None
+    assert obs.facts_document()["00"]["vanishes"] == "L1"
+
+
+def test_changed_an_absent_key_is_not_compared():
+    """Reading 4: a fact simply missing from a later call's mapping is never
+    iterated by `changed`, so it can never appear in the returned triple —
+    the only absence that reaches this method at all is an undeclared fact's,
+    since a declared fact's absence is already `E-APPARATUS-FACT-MISSING`
+    (Part A's, upstream of this method)."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1", "sometimes": "S1"})
+    assert obs.changed("00", {"pinned": "r1", "sometimes": "S1"}) is None
+    # `sometimes` is absent from this call entirely.
+    obs.record("00", {"pinned": "r1"})
+    assert obs.changed("00", {"pinned": "r1"}) is None
+
+
+def test_changed_value_null_different_value_fails_against_first_not_most_recent():
+    """Reading 5, and the one that makes 'first answered' a different rule
+    from 'most recent': a fact answers v1, goes quiet, then answers v2 — and
+    FAILS, against v1, not against the intervening null. A two-observation
+    fixture cannot separate this from reading 1 (design's own constraint), so
+    this test chains three record/changed pairs in the order `_observe_one`
+    uses. Under a most-recent comparison the middle call's null would make
+    the third call's `null -> v2` transition read as reading 2 and PASS —
+    which is exactly mutation (a)'s discriminator."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"flip": "v1"})
+    assert obs.changed("00", {"flip": "v1"}) is None
+    obs.record("00", {"flip": None})
+    assert obs.changed("00", {"flip": None}) is None
+    obs.record("00", {"flip": "v2"})
+    assert obs.changed("00", {"flip": "v2"}) == ("flip", "v1", "v2")
+
+
+def test_changed_is_scoped_per_condition_never_across():
+    """The per-condition reading: two conditions record different values for
+    the SAME fact name — a swept fact, Part A's own shipped shape — and each
+    condition's first observation of its own value passes. `changed` must
+    never compare condition A's incoming value against condition B's first
+    answered one."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00_a", {"model_revision": "rev-a"})
+    assert obs.changed("00_a", {"model_revision": "rev-a"}) is None
+    obs.record("01_b", {"model_revision": "rev-b"})
+    # The second condition's own FIRST observation — must not be compared
+    # against "00_a"'s "rev-a", even though it differs.
+    assert obs.changed("01_b", {"model_revision": "rev-b"}) is None
+
+
+def test_check_changed_raises_E_APPARATUS_CHANGED_naming_both_values_and_the_condition():
+    """Decision 2: the message names the condition key, the fact, and both
+    values, joined by `→` (never `->`), and never either value's own Python
+    variable name — the fact and condition and values are read from the
+    exception, not transcribed from the call site. Paired with the control
+    that must report: the same helper, called where nothing changed, returns
+    silently rather than merely not-raising-for-this-fact — a control
+    asserting only an absence would pass identically if `check_changed` did
+    nothing at all, so this asserts the return value too."""
+    from publishable.apparatus import Observations, check_changed
+    from publishable.errors import ContractError
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1"})
+    assert check_changed(obs, "00", {"pinned": "r1"}) is None
+
+    obs.record("00", {"pinned": "r2"})
+    with pytest.raises(ContractError) as excinfo:
+        check_changed(obs, "00", {"pinned": "r2"})
+    assert excinfo.value.code == "E-APPARATUS-CHANGED"
+    message = str(excinfo.value)
+    assert "r1 → r2" in message
+    assert "->" not in message
+    assert "pinned" in message
+    assert "00" in message
+
+
+def test_a_credential_carrying_value_cannot_reach_check_changed_because_check_facts_runs_first():
+    """The ordering the message's safety rests on, asserted rather than
+    assumed: `check_facts` runs before a value ever reaches
+    `Observations.record`/`changed`, so a credential-carrying fact value
+    never becomes a first-answered value or an incoming one. Calling the two
+    in the chain's own order and watching `check_facts` raise ITS OWN code —
+    never `E-APPARATUS-CHANGED` — is the control that must report: if the
+    ordering were reversed, this test would see `check_changed` run first
+    and either raise nothing (the credential became the first-answered
+    value) or raise `E-APPARATUS-CHANGED` naming it, and it would silently
+    pass through this test's `pytest.raises` if it named the wrong code."""
+    from publishable import Apparatus
+    from publishable.apparatus import Observations, check_changed, check_facts
+    from publishable.errors import ContractError
+
+    obs = Observations()
+    obs.record("00", {"calibration_id": "CAL-2026-07-19"})
+
+    returned = Apparatus(facts={"calibration_id": "lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        checked = check_facts(
+            returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"}
+        )
+        # check_changed is never reached if check_facts refuses first — this
+        # line only runs if the ordering under test has already broken.
+        check_changed(obs, "00", checked)
+    assert excinfo.value.code == "E-APPARATUS-FACT-CREDENTIAL"
+
+
+def test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on():
+    """Plan correction 4: `E-APPARATUS-CHANGED` must NOT join
+    `APPARATUS_CODES` — that frozenset is `command_run`'s containment filter
+    for a probe CALL, and a changed fact never crosses it. `STOP_CODES` is
+    the separate, both-members-pinned enumeration task 3 mints."""
+    from publishable.apparatus import APPARATUS_CODES, STOP_CODES
+
+    assert STOP_CODES == {"E-APPARATUS-RAISED", "E-APPARATUS-CHANGED"}
+    assert "E-APPARATUS-CHANGED" not in APPARATUS_CODES
+    assert "E-APPARATUS-RAISED" in APPARATUS_CODES
+
+
+def test_changed_is_reflexivity_safe_for_a_constant_nan_fact():
+    """Whole-branch review Major 1: `reference.md`'s `E-APPARATUS-FACT-TYPE`
+    row admits `float` unqualified, so `coerce_scalars` legally passes a
+    non-finite value through, and `float('nan') != float('nan')` is `True`
+    in plain Python — a fact whose value is a constant `nan` would report a
+    change against ITSELF on its own first observation once task 4 wires
+    this into a run, tripping Decision 11's run-start guarantee. `changed`
+    must treat a `nan`-vs-`nan` pair as unchanged; a `nan` compared against a
+    genuinely different value must still fail."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"drift": float("nan")})
+    # Same nan-valued fact, observed again — must NOT read as a change.
+    assert obs.changed("00", {"drift": float("nan")}) is None
+    obs.record("00", {"drift": 1.5})
+    triple = obs.changed("00", {"drift": 1.5})
+    assert triple is not None
+    fact, first, incoming = triple
+    assert fact == "drift"
+    assert isinstance(first, float) and math.isnan(first)
+    assert incoming == 1.5
+
+
+# --- H7d Part B task 4: the ordering chain, and the two assertions only it
+# can make ---------------------------------------------------------------
+
+
+def test_the_ordering_chain_counts_the_moving_call_before_the_gate_fires(tmp_path):
+    """Task 4 step 2. Fixture G1's own schedule, driven through `Observer`
+    across four rounds — the raise on round 4 (`pinned: r1 -> r2`) must have
+    already been counted in `unobserved.total_probes` for `pinned`, because
+    `Observations.record` runs before the gate compares (Decision 3,
+    `_observe_one`'s own order). Named in the plan's mutation table and in
+    task 4 step 2 (not in § Corrections against the code, which this
+    docstring previously mis-cited).
+
+    **Batch 3 review, Major 2: this is a census assertion, not a
+    discriminator, and this docstring previously overclaimed otherwise.**
+    `_first_answered` never overwrites an answered pair, so no *value*
+    assertion can tell record-before-gate from the reverse — true — but this
+    *count* cannot either, on any fixture: `Observations.changed`'s own
+    reflexivity-safety assert (`assert incoming is None` when `first is
+    None`) fires on the first answering observation of ANY fact under a
+    gate-before-record reordering, which is strictly earlier than any count
+    this test reads. Verified by running: moving the gate above `record`
+    makes this test fail with an `AssertionError` from `apparatus.py`, never
+    with `total_probes == 3`. The record-before-gate ordering is not
+    unguarded — that assert fires loudly the instant it is broken — but this
+    test does not witness it; see
+    `test_changed_asserts_when_called_without_record_first` for what that
+    assert actually pins, and its own docstring for what it does and does
+    not cover.
+
+    A direct call rather than end to end: at this commit the raise still
+    ends the command before `run.yaml` is written, so
+    `provenance.apparatus.unobserved` does not exist to read — task 7
+    re-asserts the same number end to end."""
+    from collections import namedtuple
+
+    from publishable.apparatus import Apparatus, Observer
+    from publishable.errors import ContractError
+
+    Condition = namedtuple("Condition", ["index", "label"])
+    conditions = [Condition(0, None)]
+
+    schedule = [
+        {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+        {"pinned": "r1", "appears": "A1", "vanishes": None},
+        {"pinned": "r1", "appears": "A1", "vanishes": None},
+        {"pinned": "r2", "appears": "A1", "vanishes": None},
+    ]
+    calls = {"n": 0}
+
+    def probe(cfg):
+        facts = dict(schedule[calls["n"]])
+        calls["n"] += 1
+        return Apparatus(facts=facts)
+
+    observer = Observer(
+        probe_name="p",
+        probe=probe,
+        declared_facts=["pinned", "appears", "vanishes"],
+        conditions=conditions,
+        cfgs={0: None},
+        run_dir=tmp_path,
+        credentials={},
+    )
+
+    phases = ["run_start", "pre_execution", "pre_execution", "pre_execution"]
+    raised: ContractError | None = None
+    for phase in phases:
+        try:
+            observer.observe_round(phase=phase, condition_index=None)
+        except ContractError as exc:
+            raised = exc
+            break
+    assert raised is not None
+    assert raised.code == "E-APPARATUS-CHANGED"
+    assert calls["n"] == 4, "the raise must not preempt the fourth call"
+    assert observer.observations.unobserved(["pinned"])["pinned"]["total_probes"] == 4
+
+
+def test_changed_asserts_when_called_without_record_first():
+    """Batch 3 review, Major 2, action 2. Pins the claim
+    `Observations.changed`'s own docstring makes and that nothing previously
+    asserted: calling `changed()` for a pair whose non-`None` value has never
+    gone through `record()` first trips the reflexivity-safety `assert`
+    (`assert incoming is None` when `first is None`), because that assert's
+    whole premise is that `record()` already ran for the same `facts` this
+    call carries.
+
+    **What this pins, and what it does not.** This witnesses that `changed`
+    *requires* record-first — grep confirmed no test in this file asserted
+    it before now. It does NOT witness that `Observer._observe_one`
+    *satisfies* that requirement: add this test after a real reorder of
+    `_observe_one` and it still passes unchanged, because it calls `changed`
+    directly rather than through `_observe_one`. `_observe_one`'s own order
+    is what `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`
+    (`tests/test_cli.py`) and
+    `test_the_ordering_chain_records_before_it_gates` (below) exercise."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    with pytest.raises(AssertionError):
+        obs.changed("00", {"pinned": "r1"})
+
+
+def test_the_ordering_chain_records_before_it_gates(tmp_path):
+    """Batch 3 review, Major 2, action 3: the only legible witness of
+    `_observe_one`'s actual call order, since every *value* assertion is
+    equal under either ordering and every *count* assertion sits behind the
+    reflexivity-safety assert that a reordering trips first (see the test
+    above and the one two above). Wraps `Observations.record` and
+    `check_changed` to log which ran first for the same call, rather than
+    inferring order from a downstream count or value — the direct claim
+    Decision 3 makes (`record` before the gate), witnessed directly."""
+    from collections import namedtuple
+
+    import publishable.apparatus as apparatus_mod
+    from publishable.apparatus import Apparatus, Observer
+
+    Condition = namedtuple("Condition", ["index", "label"])
+    conditions = [Condition(0, None)]
+
+    def probe(cfg):
+        return Apparatus(facts={"pinned": "r1"})
+
+    observer = Observer(
+        probe_name="p",
+        probe=probe,
+        declared_facts=["pinned"],
+        conditions=conditions,
+        cfgs={0: None},
+        run_dir=tmp_path,
+        credentials={},
+    )
+
+    order: list[str] = []
+    real_record = observer.observations.record
+    real_check_changed = apparatus_mod.check_changed
+
+    def spy_record(condition_key, facts):
+        order.append("record")
+        return real_record(condition_key, facts)
+
+    def spy_check_changed(observations, condition_key_value, facts):
+        order.append("check_changed")
+        return real_check_changed(observations, condition_key_value, facts)
+
+    observer.observations.record = spy_record  # type: ignore[method-assign]
+    apparatus_mod.check_changed = spy_check_changed
+    try:
+        observer.observe_round(phase="run_start", condition_index=None)
+    finally:
+        apparatus_mod.check_changed = real_check_changed
+
+    assert order == ["record", "check_changed"], order

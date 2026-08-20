@@ -9,6 +9,7 @@ is the one shape it may return.
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -204,6 +205,22 @@ def check_facts(
     return checked
 
 
+def _unchanged(incoming: Any, first: Any) -> bool:
+    """Reflexivity-safe equality for `Observations.changed` (whole-branch
+    review, Major 1). A bare `incoming != first` reports `float('nan')` as a
+    change against itself, because `nan != nan` is `True` in Python — and
+    `coerce_scalars` legally admits a non-finite float (`reference.md`'s
+    `E-APPARATUS-FACT-TYPE` row names `float` unqualified), so this is not a
+    hypothetical input. Only the nan-vs-nan case is special-cased; every
+    other pair, including a `nan` compared against a *different* `nan`-typed
+    value or a non-float, still falls through to ordinary `==`.
+    """
+    if isinstance(incoming, float) and isinstance(first, float):
+        if math.isnan(incoming) and math.isnan(first):
+            return True
+    return bool(incoming == first)
+
+
 class Observations:
     """Every observation this run made, and the two documents derived from them.
 
@@ -243,6 +260,57 @@ class Observations:
                 # answered `null` and whose second answered a value records the
                 # answer; a fact that never answers stays `null`.
                 self._first_answered[pair] = value
+
+    def changed(self, condition_key: str, facts: Mapping[str, Any]) -> tuple[str, Any, Any] | None:
+        """The first (fact, first_answered, incoming) triple that contradicts
+        this pair's first answered value, or None.
+
+        Compares each incoming fact against `_first_answered[(condition_key,
+        fact)]` — never the previous observation, never another condition's
+        (Decision 1). Called after `record` for the same `facts`, which is
+        what makes the assert below load-bearing rather than defensive:
+        `record` establishes `_first_answered[pair]` for every pair whose
+        incoming value is not `None`, so by the time this method runs, a
+        non-`None` incoming value's pair is *always* already keyed. A
+        `self._first_answered.get(pair)` returning `None` for such a pair
+        would be a dead branch reachable only if this method's caller broke
+        that ordering — reachable by a direct call that skips `record` first, not by any
+        fixture that keeps the ordering. Written as an `assert` on core's own
+        contract (`execute_plan`'s shipped asserts about its own callers are
+        the precedent), not as a silent `continue`.
+
+        A `None` incoming value with no first-answered entry is not that
+        case: it is the ordinary "never yet answered" state — `null → value`
+        passes precisely because a fact that never answered cannot yet
+        contradict itself — so that combination is skipped rather than
+        asserted about. A key `facts` does not carry is not iterated at all,
+        so an undeclared fact's absence from a later call is never compared.
+
+        **`!=` alone is not reflexivity-safe.** `reference.md`'s
+        `E-APPARATUS-FACT-TYPE` row admits `float` unqualified, so
+        `coerce_scalars` legally passes through a non-finite value, and
+        `float('nan') != float('nan')` is `True` in Python — a fact whose
+        value is a constant `nan` would report a change against ITSELF on
+        its very first observation, which is exactly the false-stop this
+        slice exists to prevent. `_unchanged` below is the reflexivity-safe
+        comparison this method uses instead of a bare `!=`.
+        """
+        for fact, incoming in facts.items():
+            pair = (condition_key, fact)
+            first = self._first_answered.get(pair)
+            if first is None:
+                assert incoming is None, (
+                    "record() runs before changed() for the same `facts`; a "
+                    "non-null incoming value already became this pair's first "
+                    "answered entry, so a missing entry here would mean the "
+                    "caller broke that ordering, not that the fact never answered"
+                )
+                continue
+            if incoming is None:
+                continue
+            if not _unchanged(incoming, first):
+                return (fact, first, incoming)
+        return None
 
     def facts_document(self) -> dict[str, dict[str, Any]]:
         """`provenance.apparatus.facts` — the first answered value per
@@ -297,6 +365,54 @@ class Observations:
                     f"condition `{condition}`'s fact `{fact}` came back `null` on "
                     f"{nulls} of {total} probes",
                 )
+
+
+def check_changed(
+    observations: Observations, condition_key_value: str, facts: Mapping[str, Any]
+) -> None:
+    """The gate's caller-facing helper (Decision 2): calls `Observations.changed`
+    and raises `E-APPARATUS-CHANGED` for the first contradicting triple, or
+    returns silently.
+
+    **What the message may name, and why it is safe for a `str` fact value.**
+    The message names the condition key, the fact name, and both values —
+    `condition `00`'s fact `pinned` changed: r1 → r2` — in the shape `diff`'s
+    own apparatus row prints. For a `str` fact value this is safe because
+    `check_facts` (Part A) refuses a value that equals or contains a declared
+    credential **before** anything is recorded, so by the time
+    `Observations.changed` sees a pair of `str` values, core has already
+    established that neither is a credential it read. That ordering is
+    reused here, not re-derived. **The containment check itself is skipped
+    by `check_facts` for any non-`str` value** (its own deliberate carve-out),
+    so a non-`str` fact equal to a declared credential's value is not caught
+    there. Batch 3 review, Major 1: task 4 gave this a live call site, and a
+    non-`str` credential that moved reached `main`'s bare, un-redacted
+    printer through that call site until the same batch's fix round widened
+    `cli.command_run`'s containment filter to admit `apparatus.STOP_CODES`
+    as an interim mitigation. That widened arm is superseded, not merely
+    replaced: task 5/6's `break` means a mid-plan stop of either code no
+    longer raises out of `execute_plan` at all, so nothing reaches this
+    filter to be mitigated — verified by running, narrowing the filter back
+    to `APPARATUS_CODES` alone leaves the full suite unchanged. Decision
+    14's own fresh redacting `Collector` on the stop path (task 7) is what
+    now carries this property.
+
+    Task 4 wires this into `Observer._observe_one`, after
+    `Observations.record`, on the order Decision 3 fixes — a raise here still
+    reaches `command_run`'s containment as an ordinary `ContractError` until
+    task 5 gives `execute_plan`'s loop a `break` to catch it on. This
+    function still has its own direct-call surface (`test_apparatus.py`), the
+    same way `check_facts` and `observe_once` are exercised directly as well
+    as through `Observer`.
+    """
+    result = observations.changed(condition_key_value, facts)
+    if result is None:
+        return
+    fact, first, incoming = result
+    raise ContractError(
+        f"condition `{condition_key_value}`'s fact `{fact}` changed: {first} → {incoming}",
+        code="E-APPARATUS-CHANGED",
+    )
 
 
 def condition_key(index: int, label: str | None) -> str:
@@ -388,6 +504,37 @@ wrapper's shape, redacting before `main` ever sees it), sited before this
 filter's `try` is even entered — not by admitting the two codes here."""
 
 
+STOP_CODES: frozenset[str] = frozenset(
+    {
+        "E-APPARATUS-RAISED",
+        "E-APPARATUS-CHANGED",
+    }
+)
+"""The two codes `execute_plan`'s loop breaks on (task 5). At this commit
+there is a shared set-equality assertion over both members (each member's
+absence is independently checked by deleting it and rerunning that one
+test), plus each member is now also pinned individually and end to end:
+`E-APPARATUS-RAISED` by Fixture K2
+(`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`, Part A) and
+`E-APPARATUS-CHANGED` by batch 3's fix round
+(`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`,
+`tests/test_cli.py`). Task 4 shipped Fixture G1
+(`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`, mid-plan,
+`E-APPARATUS-CHANGED`); task 5 added Fixture U, the unreachable-mid-plan
+sibling for `E-APPARATUS-RAISED` (`tests/test_cli.py`).
+
+**`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
+That frozenset is `command_run`'s containment filter for a probe CALL
+crossing the run-start round or the `execute_plan` boundary; after task 5 a
+changed fact never reaches that filter at all, because the loop this
+constant names breaks on it first. Admitting it to `APPARATUS_CODES` would
+add a member nothing exercises through that filter — an unpinned addition to
+an enumeration this project has already been burned by once. This is not a
+claim that a changed fact **cannot** reach a run-start call: task 13 is where
+that claim is made to happen, by fixture, and a comment asserting it here
+without that fixture is the shape that produced Part A's only Critical."""
+
+
 class Observer:
     """One object per `run`, holding everything `observe_round` needs to make
     a probe call phase-independent: which callable to call, under which cfg,
@@ -447,6 +594,17 @@ class Observer:
             self._observe_one(phase, condition)
 
     def _observe_one(self, phase: str, condition: Any) -> None:
+        """Task 4 (Decision 3): the order inside one probe round is fixed and
+        every step of it is load-bearing — `check_facts` (a credential-carrying
+        fact is refused before a byte reaches the ledger), then
+        `append_observation` (the moving observation is on disk before
+        anything can stop the run — the earlier-period-plus-ledger guarantee
+        § The apparatus files and § The apparatus core can only observe both
+        state), then `Observations.record` (the moving call is counted in
+        `unobserved.total_probes` like any other probe — a census of calls,
+        not of agreements), and only then the gate. Nothing else in this
+        method moves. The gate raises here; task 5 is what turns the raise
+        into a stop rather than letting it escape."""
         cfg = self.cfgs[condition.index]
         returned = observe_once(self.probe, cfg, probe_name=self.probe_name)
         facts = check_facts(
@@ -464,6 +622,7 @@ class Observer:
             facts=facts,
         )
         self.observations.record(key, facts)
+        check_changed(self.observations, key, facts)
 
     def warn_unanswered(self, c: Collector) -> None:
         """`W-APPARATUS-UNANSWERED`, delegated to `Observations` — this
