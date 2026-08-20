@@ -18,6 +18,7 @@ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
 
 if TYPE_CHECKING:
+    from publishable.lineage import UpstreamResolver
     from publishable.units import ArmPlan, HoldoutPlan, UnitList
 
 SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
@@ -371,11 +372,16 @@ class StepIO:
         condition_label: str | None = None,
         repeat_label: str | None = None,
         measurements: dict[str, Any] | None = None,
+        upstream: "UpstreamResolver | None" = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
         self.run_dir = run_dir
         self.resumed = False
+        # Private and read by no step: `output_dir` never reaches `io` at all
+        # (Decision 2, `docs/superpowers/specs/2026-08-20-lineage-design.md`)
+        # — a step gets exactly the one method, `reuse_from`, and no field.
+        self._upstream = upstream
         self._recorded_keys: set[str] = set()
         self._units = units
         self._rows: dict[str, dict[str, Any]] = {}
@@ -686,13 +692,13 @@ class StepIO:
             self.append("ineligible.jsonl", {"unit": key, "reason": reason})
 
     def _resolve(self, name: str) -> Path:
-        candidate = (self.step_dir / name).resolve()
-        base = self.step_dir.resolve()
-        if Path(name).is_absolute() or not str(candidate).startswith(str(base) + os.sep):
-            raise ArtifactError(
-                f"{name!r} resolves outside the step's directory", code="E-ARTIFACT-NAME"
-            )
-        return candidate
+        """This step's own write-side containment check — the same
+        predicate `_contained` enforces for a read against another step's
+        directory, unified here rather than duplicated (whole-branch review
+        Minor 2): a write's target is always this step's own `step_dir`, so
+        this is `_contained` called with that one fixed base and this
+        code's own name."""
+        return self._contained(self.step_dir, name, code="E-ARTIFACT-NAME")
 
     def path(self, name: str) -> Path:
         target = self._resolve(name)
@@ -793,7 +799,8 @@ class StepIO:
             if label is None
             else (self.run_dir / "conditions" / condition_dir_name(index, label))
         )
-        return self._read(self._nest_repeat(base, target, repeat) / step / name)
+        step_dir = self._nest_repeat(base, target, repeat) / step
+        return self._read(self._contained(step_dir, name, code="E-ARTIFACT-NAME"))
 
     def _nest_repeat(self, base: Path, target: str | None, repeat: str | None) -> Path:
         """The repeat-label segment a `repeat`-scoped target's directory carries.
@@ -857,7 +864,110 @@ class StepIO:
                     / condition_dir_name(self._condition_index, self._condition_label)
                 )
             base = self._nest_repeat(base, target, self._repeat_label)
-        return self._read(base / step / name)
+        step_dir = base / step
+        return self._read(self._contained(step_dir, name, code="E-ARTIFACT-NAME"))
+
+    def reuse_from(self, locator: str, step: str, name: str) -> Any:
+        """Read a named artifact from a completed upstream run.
+        `docs/reference.md` § Lineage between runs / § Steps and artifacts.
+
+        Resolves `locator` to an upstream run and its record (Decision 1,
+        `docs/superpowers/specs/2026-08-20-lineage-design.md`, `lineage.resolve_run`
+        by way of the injected resolver), locates `step`'s published directory
+        from that run's own `execution` block (Decision 4, `lineage.resolve_step`),
+        checks `name` for containment within it (Decision 5 — see `_contained`),
+        and reads through the same dispatch `write` inverts (`_read`): an
+        unregistered suffix comes back as bytes, and a writer-without-reader
+        suffix is the already-shipped `E-ARTIFACT-UNREADABLE` — H8a mints no
+        second code for that, it is inherited rather than rebuilt.
+
+        A missing step directory and a missing name within it are ONE code,
+        `E-UPSTREAM-ARTIFACT-MISSING`: the remedy is identical in both cases —
+        the upstream published no such name, under this step, at all.
+        """
+        # Core's own bug, not a config's or a step's: `runner.py` always
+        # threads an `UpstreamResolver` from `command_run` (Decision 2), so a
+        # missing one means core called `execute_plan` without it, which no
+        # config can cause and no step can trigger. A bare `assert` rather
+        # than a coded refusal — minting one here would also make task 3's
+        # wiring mutation (dropping the `upstream=` argument) blind, since
+        # the mutant would then raise an `E-UPSTREAM-*` error of its own.
+        assert self._upstream is not None, (
+            "`io.reuse_from` was called with no upstream resolver injected — "
+            "this is core's own bug; `runner.py` always threads one from "
+            "`command_run`"
+        )
+        run_dir, record = self._upstream.resolve(locator)
+        step_dir = self._upstream.locate_step(record, run_dir, step)
+        target = self._contained(step_dir, name, code="E-UPSTREAM-NAME")
+        if not target.exists():
+            raise ArtifactError(
+                f"upstream run {record['run_id']!r} published no {name!r} under "
+                f"`{step}` — it was not written under this name, at this location",
+                code="E-UPSTREAM-ARTIFACT-MISSING",
+            )
+        result = self._read(target)
+        # Recorded only now that the read has RETURNED (Decision 6, step 1) —
+        # a call that raised above this line, or that `_read` itself raises
+        # (an unregistered writer-without-reader suffix), never reaches this
+        # and the ledger stays untouched for it.
+        self._upstream.ledger.record(step=step, name=name, record=record)
+        return result
+
+    @staticmethod
+    def _contained(base: Path, name: str, *, code: str) -> Path:
+        """Refuse `..` traversal, an absolute `name`, and a symlink leading
+        outside `base` — a CONTAINMENT rule and nothing more (controller
+        ruling 1, `docs/superpowers/specs/2026-08-20-lineage-design.md`
+        Decision 5).
+
+        A forward separator stays legal, and that is not a concession — it is
+        the documented design: `docs/reference.md` § Steps and artifacts
+        states *"A `name` is a relative path, not only a filename"*, that
+        *"only the name's last component is examined"* for the suffix
+        dispatch, and gives `programs/gpt-4.1__seed29.json` as a worked legal
+        name. A rule refusing separators would break a documented example, so
+        this checks containment and never the shape of the path. `base` is a
+        parameter rather than always `self.step_dir` because the callers that
+        use this — a write against this step's own directory (`_resolve`,
+        which calls this with that one fixed base), and a read against
+        another step's or another run's (`read_condition`, `reuse_from`) —
+        each resolve against a different one; one predicate rather than a
+        copy per caller is what keeps them from drifting apart.
+
+        `code` is the caller's own: `reuse_from` raises `E-UPSTREAM-NAME`
+        rather than the shipped `E-ARTIFACT-NAME`, on the precedent
+        `E-RESOLVER-SWEPT-PARAM` already sets over `E-STEP-SWEPT-PARAM` — one
+        mechanism, two faults, because a reader holding `E-ARTIFACT-NAME` is
+        sent to a section about *this* step's own directory and this escape
+        is out of another run's.
+
+        **This is not a boundary, and must never be written up as one.** A
+        step can `open()` any file on the machine regardless: `name` comes
+        from the user's own step, and core never inspects the body of user
+        Python (`CLAUDE.md` § Invariants, § Greenfield only). What this rule
+        buys is that an artifact read resolves inside the run directory it
+        names, so a typo'd `..` fails loudly instead of silently returning
+        something unrelated — a wrong answer that looked like an artifact,
+        not an exfiltration.
+
+        An absolute *locator* naming a run is legal (Decision 1: a location
+        the config may state); an absolute *name* is refused here because it
+        addresses an artifact *within* a run, whose location is derived from
+        the step it belongs to and is not the caller's to choose. Both hold
+        at once, and neither contradicts the other.
+        """
+        candidate = (base / name).resolve()
+        resolved_base = base.resolve()
+        if Path(name).is_absolute() or not str(candidate).startswith(str(resolved_base) + os.sep):
+            raise ArtifactError(
+                f"{name!r} resolves outside {resolved_base} — checked for "
+                "containment only (a `..` escape, an absolute path, or a "
+                "symlink leading outside), never for its shape: a forward "
+                "separator is legal and documented",
+                code=code,
+            )
+        return candidate
 
     @staticmethod
     def _read(path: Path) -> Any:

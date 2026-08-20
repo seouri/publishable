@@ -43,6 +43,7 @@ from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
+from publishable.lineage import UpstreamLedger, UpstreamResolver
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
@@ -2314,6 +2315,22 @@ def command_run(config_path: Path) -> int:
         )
         print(warn_c.render())
 
+    # H8a Decision 2: one `UpstreamResolver` and one `UpstreamLedger` for the
+    # whole run, built from this config's own `output_dir` and the
+    # `repo_root` already walked up from the config path — never from
+    # `run_dir`, which is a proxy answering "where does *this* run sit", not
+    # "where do this experiment's runs live" (§ The mutations, the one
+    # dropped mutation). Built here, BEFORE `allocate_run_dir` below creates
+    # `output_dir`, because `__init__` does no I/O and cannot raise: a first
+    # run against a config whose `output_dir` holds no prior run, and does
+    # not exist yet at all, must not fail at construction. The ledger
+    # outlives every per-execution `StepIO` `execute_plan` constructs, so a
+    # read from an execution that later fails is not lost with it.
+    upstream_ledger = UpstreamLedger()
+    upstream_resolver = UpstreamResolver(
+        output_dir=output_dir, repo_root=repo_root, ledger=upstream_ledger
+    )
+
     run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
     with RunLock(run_dir):
         (run_dir / "manifest").mkdir()
@@ -2469,6 +2486,7 @@ def command_run(config_path: Path) -> int:
                 credentials=credentials,
                 observer=observer,
                 stop=stop,
+                upstream=upstream_resolver,
             )
         except ContractError as exc:
             # The one containment site for a probe CALL's raise (a dispatch
@@ -3644,6 +3662,13 @@ def command_run(config_path: Path) -> int:
             # `None`.
             "allocation": "allocation.json" if alloc_doc is not None else None,
             "allocation_hash": alloc_hash,
+            # Decision 7: always a list, `[]` when nothing was read — on
+            # `input_manifest_changed`'s precedent, not `apparatus: null`'s.
+            # `upstream` has no declaration anywhere for a `null` to mean
+            # "declared and did not apply", so there is no third state to
+            # write, and a `None` here would be a reader hazard for the
+            # ordinary `for u in provenance["upstream"]`.
+            "upstream": upstream_ledger.entries(),
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
             run_id=run_dir.name,

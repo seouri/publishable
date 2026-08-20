@@ -1550,3 +1550,50 @@ analysis' executability** — quote the table, or name the dependency.
 a slice retired one blocker, moved some configs out of the *refused* column, and **carried the summary
 phrase forward without re-deriving what it counted.** That is the *carried claim* failure this file
 records repeatedly in code, appearing twice in a number.
+
+### Measured on 2026-08-20 against commit `254aabe` — after H8a
+
+**`io.reuse_from` ships.** `grep -rn "reuse_from" src/publishable/` no longer returns nothing — the
+method resolves both locator forms (Decision 1), reads through the registered reader dispatch
+`io.write` already inverts, and writes `provenance.upstream` with the upstream's own `code_hash` and
+`parameters_hash` beside the names read, verified end to end by real `run`s consuming real upstream
+runs (`tests/test_cli.py` fixtures E, F, R, P). That is the whole change this entry may claim by
+probe. It may **not** claim that E3, E4 or E6 *executes*, and it mints no fifth number: the
+2026-08-20 correction to the correction ruled that a single figure answers no consistent question
+for this analysis, and H8a does not reopen that ruling — it moves exactly one row of the table that
+ruling produced, and repeats the other three unchanged.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**`io.reuse_from` and the `report_by`-under-`resample` gap are named as separate dependencies on
+purpose**, the same separation the correction-to-the-correction table draws: a config can clear one
+and still meet the other (E1, E2, E4, E6 all clear the first row and meet the third), so collapsing
+them back into one blocked/unblocked column is the exact move that produced "six" and then "three".
+No config's row in the table above moves for a second reason: E3, E4 and E6 were never blocked by
+`io.reuse_from` not existing in the sense `validate` could see — the dependency was, and remains, a
+step body core cannot inspect (§ Greenfield only). What changed is that the step body H8a's own
+tests exercise now runs for real; no config here contains that step body, because none of the three
+plugins (`growth_screen`, `growth_shortcut`) has been written.
+
+**Two standing qualifications survive H8a untouched, and neither is H8a's to retire.** The
+`growth_screen`/`growth_shortcut` plugin still needs to be written and installed before E3, E4 or E6
+executes, and a declared apparatus probe still needs a real plugin behind it (H7d's obligation, not
+this one's). Every claim in this entry about a *config* is invisible to `validate`: the locator is a
+parameter, the read is a step-level call, and the `provenance.upstream` record key is written at run
+end — none of the three is a state `validate` ever reaches.
+
+**E3 carries one more obligation, stated so a reader costing it does not discover it at the first
+read (this is the plugin's to write; it changes no core-side count).** Under Decision 4, an upstream
+step is only addressable at `run` or `summary` scope. `growth_screen`'s own shown pipeline compiles
+the program at **`condition`** scope (`step02_compile_program`), and its two summary steps compare
+rather than republish. E3, E4 and E6 read their frozen program from **E2**, so E2 needs a `summary`
+step that republishes the compiled programs under stable names — the same shape [§ `reuse_from`
+addresses an artifact, not the design that produced it](reference.md#reuse_from-addresses-an-artifact-not-the-design-that-produced-it)
+already shows in code. Without that step, E2's own `run.yaml` records the compile step under
+`execution.conditions`, and a downstream `io.reuse_from` naming it raises `E-UPSTREAM-STEP-SCOPED`
+rather than reading anything — a plugin defect, not a core one.

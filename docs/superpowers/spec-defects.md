@@ -3277,7 +3277,7 @@ Routed by feature:
 |---|---|
 | `provenance.environment.os`, `.hostname`, `.hardware` | **H6 Hashes and provenance** — environment capture is its subject |
 | `provenance.allocation`, `provenance.allocation_hash` | **H3 Units**, which lands `allocation` and `holdout`; both write the one `allocation.json` the hash covers |
-| `provenance.upstream` | **H8 Studies and reporting**, which owns lineage and upstream chains |
+| ~~`provenance.upstream`~~ | **CLOSED 2026-08-20 (H8a task 7).** `command_run` now writes it — see the 2026-08-20 amendment below, not the 2026-08-13 one directly beneath this table, whose own last sentence still says `upstream` is unwritten (dated; superseded in the same file, not contradicted) |
 
 **Also recorded, and deliberately not fixed:** the example's `provenance` key order differs from
 `cli.py`'s construction order. Cosmetic — YAML mappings are unordered and no reader depends on it —
@@ -3293,6 +3293,55 @@ use. `holdout` is not part of this: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses e
 it, so the file's `holdout` key stays unwritten until H3d lands it. The table's other two rows —
 `provenance.environment.os`/`.hostname`/`.hardware` and `provenance.upstream` — are unaffected and
 still unwritten.
+
+**AMENDED 2026-08-20 (H8a task 7): the `provenance.upstream` row is now written, and struck from
+the table above.** `command_run` sets `provenance["upstream"]` to `UpstreamLedger.entries()`,
+inserted after `allocation_hash` — its documented position relative to a sibling that already
+ships — and always a list: `[]` when no `io.reuse_from` call returned anything, never `None`, on
+`input_manifest_changed`'s precedent rather than `apparatus: null`'s (`upstream` has no declaration
+anywhere for a `null` to mean "declared and did not apply"). Each entry carries exactly the four
+keys § The two files' example shows — `run_id`, `code_hash`, `parameters_hash`, `used` — and no
+fifth; H8a hashes nothing new. The remaining row, `provenance.environment.os`/`.hostname`/
+`.hardware`, is unaffected and still unwritten, still owned by H6. The "Also recorded, and
+deliberately not fixed" key-order note (naming the divergence between `cli.py`'s construction
+order and § The two files' example) is unaffected by this amendment: `upstream` was inserted at
+`cli.py`'s own last position (after `allocation_hash`), which is a cosmetic divergence from § The
+two files' example in exactly the pre-existing way that note already covers, not a new one.
+
+## `UpstreamLedger.record` copies a missing hash as `None` rather than refusing it
+
+Filed 2026-08-20 (H8a batch 5 fix round, from the batch-5 review's Minor 2), not fixed here.
+`src/publishable/lineage.py`'s `UpstreamLedger.record` reads `record.get("code_hash")` and
+`record.get("parameters_hash")` — `.get`, not `[...]` — so an upstream `run.yaml` that parses,
+carries a `run_id` and declares this build's own `schema_version` (so `read_run_record` raises
+nothing) but is missing one of the two hashes publishes `code_hash: null` (or
+`parameters_hash: null`) into `provenance.upstream`, silently. **Verified by running**: a
+synthesized upstream record missing `code_hash` produced an entry
+`{'run_id': …, 'code_hash': None, 'parameters_hash': None, 'used': [...]}` with no refusal anywhere
+in `validate` or `run`. No fixture in this batch covers it — Fixture O's synthesized upstreams never
+assert the two hashes, and Fixture R, which does, reads them from a genuine `run.yaml` that always
+carries both.
+
+**Not fixed, deliberately.** Decision 8 (`docs/superpowers/specs/2026-08-20-lineage-design.md`)
+states H8a's obligation as "that the four keys are true," and a hand-edited or partially-written
+upstream record missing a hash is exactly the case `read_run_record`'s own
+`E-UPSTREAM-RECORD-UNREADABLE` ("edited or truncated") already names for a missing `run_id` — but
+that check does not extend to `code_hash`/`parameters_hash`, and widening it is a real design
+question this batch is not positioned to settle: is a hash-less upstream record a corrupt one
+(refuse it, the `E-UPSTREAM-RECORD-UNREADABLE` reading), or an honest one from a build that wrote
+fewer keys (`None` is the correct answer, the reading `apparatus`/`allocation` already establish
+for "this run declared no such feature")? The two readings disagree, and settling it belongs to
+whoever next reads these hashes for a purpose that depends on their truth.
+
+**Owner: H9** (`reproduce`, § Reproducing on another device), which walks a resolved `run_id` back
+through its own recorded ancestors — the design's own routing for "walking a chain deeper than one
+hop, and reporting an unreachable ancestor" — and secondarily **H8b** (`diff`), which reports "two
+runs differ only because their upstreams did" and so is the other consumer that would observe a
+silently-`None` hash as a false absence of drift. **The check to run before dispositioning it**:
+whether `read_run_record` should refuse a record missing either hash (widening
+`E-UPSTREAM-RECORD-UNREADABLE`'s existing "no `run_id`" check to the same two fields), or whether
+`UpstreamLedger.record` should carry the missing-hash case through as `None` on purpose and say so
+in `reference.md` § Lineage between runs, which currently states only the present case.
 
 ## `register_template` appears outside § The importable surface — checked, not a defect
 
@@ -5718,6 +5767,22 @@ correction family. **The code is unchanged**, which is what "limitation" means h
 fix and must not be read as one. `W-STATS-REPORTBY-THIN`'s whole-roster-versus-arm gap is a
 *different* half of this entry and is left as § What isn't a repeat already records it.
 
+**RE-SCOPED 2026-08-20 (H8a task 10): "live on C1–C3" was never the whole roster this limitation
+sits on.** `docs/superpowers/specs/2026-08-20-lineage-design.md` § The prose read H8a's design owes
+for E3, E4 and E6 measures the gap directly against
+[the feasibility analysis](../feasibility-llm-growth-studies.md)'s own configs, by running
+`summarize_step` over one 12-row table: `t_over_units` `[0.3209, 0.7791]` without
+`resample_columns`, `percentile_over_units` `[0.3583, 0.7500]` with it, moving both `prob` and
+`latency_ms` — a per-recorded-column fault, not one tied to a weight or a cluster. Every one of
+E1, E2, E4, E6, C1, C2 and C3 declares both `statistics.report_by` and a `resample`, and draws its
+per-unit rows from the identical numeric-columns-throughout request step, so all seven meet it; E5
+alone escapes (`resample: null`, `report_by: []`). This entry's history — every decline from H4a's
+own review through H4c naming only C1–C3 — carried the attribution H4b-1 happened to leave behind
+rather than re-deriving it, the same *carried claim* shape `docs/feasibility-llm-growth-studies.md`
+§ Executability on this build's own two corrections name. **Owner unchanged: H4 Statistics**, since
+H4d is already terminal for this family and H8a builds nothing in `statistics`; this amendment
+narrows who the limitation applies to, not who owns fixing it.
+
 ## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -6111,23 +6176,23 @@ the design. `field_convention` is now the **sole** remaining member of this entr
 unassigned; H7d Part A does not adopt it — folding it in here would make this slice the owner of a
 gap it did not find.
 
-## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
+## `io.reuse_from` is unbuilt and unowned by any H7 sub-slice — CLOSED by H8a
 
-`docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
+~~`docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
 `io.reuse_from` as "unbuilt and unowned by any H7 sub-slice, which is a gap this slice files rather
 than closes." Re-confirmed on 2026-08-16: `grep -n "reuse_from" docs/superpowers/spec-defects.md`
 returned nothing before this entry, so there was no prior filing to re-owner. `reference.md` §
 Steps that consume an earlier run's artifacts is where `reuse_from` is specified — a step that
 reads another run's output records it as an upstream with its own hashes — and nothing in `src/`
-implements it.
+implements it.~~
 
-**Owner:** unassigned. No H7 sub-slice (H7a, H7b, H7c, H7d) claims it in its charter.
+~~**Owner:** unassigned. No H7 sub-slice (H7a, H7b, H7c, H7d) claims it in its charter.~~
 
-**Found by:** H7c, Task 14. **Severity:** Minor. Specification of an unbuilt feature, not a
+~~**Found by:** H7c, Task 14. **Severity:** Minor. Specification of an unbuilt feature, not a
 contradiction between a built check and its documentation — filed so it is not silently assumed
-closed by a later slice's scoping.
+closed by a later slice's scoping.~~
 
-**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
+~~**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
 experiments, and an owner request rather than a second filing.** With `E-DATA-RESOLVER-UNSUPPORTED`
 retired, [the feasibility analysis](../feasibility-llm-growth-studies.md) § Executability on this
 build's 2026-08-17 entry finds E1, E2 and E5's `data`/`statistics` blocks validate with no core-side
@@ -6137,7 +6202,19 @@ returns nothing. Still no H7 sub-slice claims it. Amending this entry rather tha
 one, per `CLAUDE.md`'s own rule that a duplicate filing is the same failure as an unfiled gap in the
 other direction — this is the same gap, now with three concrete configs waiting on it. **Owner
 request:** the next slice to touch step-level artifact consumption should claim it, or the spine
-design should assign it explicitly rather than leaving it to be rediscovered a third time.
+design should assign it explicitly rather than leaving it to be rediscovered a third time.~~
+
+**STRUCK 2026-08-20 (H8a task 10): BUILT.** `io.reuse_from` resolves both locator forms (Decision 1
+of `docs/superpowers/specs/2026-08-20-lineage-design.md`), reads through the registered reader
+dispatch, and writes `provenance.upstream` with the upstream's own two hashes and the names read —
+verified end to end by real `run`s in `tests/test_cli.py` (Fixtures E, F, R, P) and pinned by the
+`E-UPSTREAM-*` refusal family in `src/publishable/lineage.py` and `artifacts.py`. **Also worth
+striking here rather than carrying forward:** this entry's own citation, "`reference.md` § Steps
+that consume an earlier run's artifacts," names a heading that is nowhere at all — that phrase
+appears only as a table cell in `experimental-designs.md`; `reference.md` has no section by that
+name and never did. The specification lives under `reference.md` § Lineage between runs, which is
+where H8a's own document task points. A filing's claims about the code go stale like any other
+comment, and this one's claim about *where the code was specified* was never even current.
 
 ## `python-dotenv` honoured an undocumented behavior-changing environment variable — CLOSED by H7c
 
@@ -7351,3 +7428,105 @@ materialized by `materialize.py` — from a slice about something else.
 § Ruling from the controller and § What did not survive the re-measurement, and H7d Part B batch 1's
 review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
 "filed" is not a filing.
+
+## ~~OPEN~~ CLOSED — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: H8a tasks 3 and 5**
+
+**CLOSED by H8a task 3.** Option (a): the relative branch now resolves its path
+(`(output_dir / locator).resolve()`, following symlinks) and runs
+`resolves_inside_repo` on the result before reading the record — exactly the
+check the absolute branch already ran, on the same predicate, so the two
+branches cannot drift apart again. Pinned by
+`tests/test_lineage.py::test_relative_form_containment_refuses_a_symlink_under_output_dir_into_the_repo`
+(the exact shape this filing verified by running — a symlink under
+`output_dir` addressing an in-repo run, now refused with
+`E-UPSTREAM-REPO-CONTAINED`) and its control,
+`test_relative_form_containment_control_reads_an_ordinary_subdirectory`
+(an ordinary, non-symlinked run directory must keep reading). Both mutations
+— dropping the fix, and re-checking the control — were run and confirmed to
+discriminate.
+
+**AMENDED, fix round 1 (`task-b3-review.md` Minor 2).** The claim above that
+this also closed "the second half of the same finding" — the relative form
+returning a resolved path — named a pin that did not exist: the two tests
+named above stay green under a mutation that keeps the containment check on
+a resolved *probe* while returning `output_dir / locator` **unresolved**,
+because neither test routes the run directory itself through a symlink. Now
+actually pinned by
+`tests/test_lineage.py::test_relative_form_returns_a_resolved_path_not_merely_a_contained_one`
+(`<output_dir>/<run_id>` is itself a symlink to a differently-named real
+directory; asserts the returned path equals the real directory's own
+`.resolve()`, not the unresolved `output_dir / locator`), confirmed by
+running the reviewer's exact mutation against it (fails) and against the
+full suite (only this one test fails).
+
+`src/publishable/lineage.py`'s `resolve_run` (H8a task 2) exempts the relative form
+(`reuse_from("run_id", ...)`) from `provenance.resolves_inside_repo` entirely, on Decision 1's
+grounds that the relative form "inherits the guarantee for free — `output_dir` was checked at
+`validate` and again by `run`." That is true for an ordinary subdirectory of `output_dir` and false
+for a **symlink** under it: core itself writes one (`run_identity.point_latest` symlinks
+`<output_dir>/latest` to a run directory's name), so a symlink under `output_dir` pointing at a
+directory inside the git repo is not an exotic construction.
+
+**Verified by running** (H8a task-b2 review, Major-adjacent finding, Minor 8): a git repo holding
+`in_repo_run/run.yaml` (`run_id: run_abc`), plus `<output_dir>/run_abc` symlinked to it. The relative
+form of `resolve_run("run_abc", output_dir=..., repo_root=...)` **reads it** — no containment check
+runs on that branch at all, and the returned path's `.resolve()` sits under `repo_root`. `CLAUDE.md`
+§ Invariants states `input_dir`/`output_dir` may never resolve inside the git repo, checked "by
+every command that executes" — this branch is not `validate` and is not `run` itself, but a resolver
+`run` invokes through a step, and it reads an artifact from inside the repo tree `code_hash` is
+computed over.
+
+**Second half of the same finding.** The absolute form returns `path.resolve()`; the relative form
+returns `output_dir / locator` **unresolved** — so a symlink component survives into the value tasks
+3 and 5 will pass to artifact resolution and task 7 will record into `provenance.upstream`. The two
+forms hand back different kinds of path today, and that is related to the containment gap rather
+than a separate one: resolving the relative form's path would make the symlink-escape visible to the
+same `resolves_inside_repo` check the absolute form already runs.
+
+**Not a batch-2 compliance failure.** The code matches Decision 1 exactly; the decision's own grounds
+are the incomplete part, and this batch's charter (tasks 2 and 4, direct-call surface, "NOT ONE CALL
+SITE") does not include widening the guard — doing so here would be a behaviour change made outside
+the batch that scoped it and against a decision on the books, which is what this filing exists to
+avoid.
+
+**Owner: H8a tasks 3 and 5**, which wire the resolver into `io.reuse_from` and its call site, and must
+either (a) resolve the relative branch's path and run `resolves_inside_repo` on both branches, or
+(b) record explicitly, with a check rather than an assertion, why the relative form's exemption is
+safe against a symlink under `output_dir` specifically (not merely against an ordinary
+subdirectory).
+
+**Found by:** H8a task-b2 review, Minor 8, verified by running.
+
+## OPEN — `provenance.resolves_inside_repo` fails open when its `repo_root` argument is not already resolved — **Owner: unassigned**
+
+`src/publishable/provenance.py`'s `resolves_inside_repo(resolved, repo_root)` is a pure path
+comparison — `resolved == repo_root or repo_root in resolved.parents` — and does not resolve
+`repo_root` itself. Every shipped caller (`validate._check_data`, `generators.experiment.
+generate_experiment`, and H8a's `lineage.resolve_run`) passes a `repo_root` that came from
+`find_repo_root`, which resolves before returning, so the gap has never fired in production.
+
+**Verified by running** (H8a task-b3 review, "Not checked, or checked only by reading"): with an
+unresolved `repo_root` under a path containing a symlinked component (`/tmp` on macOS, which is
+itself a symlink to `/private/tmp`) and a `resolved` candidate already computed under the
+*resolved* form (`/private/tmp/...`), `resolves_inside_repo` answers **`False`** even though the
+candidate is genuinely inside that repo — `repo_root in resolved.parents` never matches, because
+one side carries the symlink component and the other does not. The containment check this
+function backs (`CLAUDE.md` § Invariants: `input_dir`/`output_dir` may never resolve inside the
+git repo) would silently not fire for a caller that hands it an unresolved `repo_root`.
+
+**The check its owner must make.** Either (a) `resolves_inside_repo` resolves `repo_root` itself
+before comparing — `repo_root.resolve()`, done once inside the function rather than trusted from
+every caller — or (b) the function's docstring states the precondition explicitly (*"`repo_root`
+must already be resolved; the caller is responsible"*) and every call site is swept to confirm it
+passes one. (a) is cheaper and removes the precondition from every future caller's list of things
+to remember; a predicate that fails open on an ordinary-looking unresolved path is exactly the
+shape `CLAUDE.md` § Misreadings names as "the proxy is the bug, not the guard" one level down —
+here the proxy is *an unresolved path standing in for a resolved one*, not a different kind of
+mistake, but the fix is the same: answer the direct question (does the resolved candidate sit
+under the resolved repo root) rather than one that is only usually equivalent to it.
+
+**Not a batch defect.** Every H8a test hands `resolve_run` a `repo_root` built from `tmp_path`,
+which is already canonical under pytest, so no shipped test is affected either way; this is filed
+against the function itself, for the next caller that does not route through `find_repo_root`.
+
+**Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
