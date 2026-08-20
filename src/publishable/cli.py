@@ -56,6 +56,7 @@ from publishable.replication import (
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
+    StopSignal,
     _arm_keys,
     attrition,
     execute_plan,
@@ -2441,6 +2442,12 @@ def command_run(config_path: Path) -> int:
             # failure already leaves — no `run.yaml`, everything before it.
             if observer is not None:
                 observer.observe_round(phase="run_start", condition_index=None)
+            # H7d Part B, Decision 3/Decision 5: one `StopSignal` per run,
+            # shared by `execute_plan`'s apparatus gate and its
+            # `max_failed_fraction` guard. `run_status` below reads
+            # `stop.reason` rather than re-deriving why the plan came up
+            # short.
+            stop = StopSignal()
             results = execute_plan(  # phase 7
                 plan=plan,
                 run_dir=run_dir,
@@ -2460,6 +2467,7 @@ def command_run(config_path: Path) -> int:
                 measurements=(units_decl or {}).get("measurements"),
                 credentials=credentials,
                 observer=observer,
+                stop=stop,
             )
         except ContractError as exc:
             # The one containment site for a probe CALL's raise (a dispatch
@@ -2502,7 +2510,7 @@ def command_run(config_path: Path) -> int:
             print(probe_c.render(), file=sys.stderr)
             return EXIT_WRONG
 
-        status = run_status(results)
+        status = run_status(results, planned=len(plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
         # that case, instead of every condition reporting a misleading empty
