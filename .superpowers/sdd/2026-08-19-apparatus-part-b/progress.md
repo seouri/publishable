@@ -241,3 +241,46 @@ it.**
 
 Decision 11's wrong cost-if-wrong sentence was corrected in the design **by dated append**, which is the
 right form — a spec records what was decided when it was written.
+
+## Batch 4 — tasks 5, 6 — the stop mechanism and the status contract
+
+Commits `e056ef7` (`StopSignal` and the `break`), `f1b2a7a` (`run_status` widened for the apparatus
+only), report `8aa2cfd`. Suite 2442 → **2450**. Both verdicts PASS; nothing blocks the batch.
+
+**No credential can reach any stream on the stop path** — the item I put first, because task 6's wiring
+means an apparatus stop **no longer escapes to `command_run`'s containment at all**, and three shipped
+end-to-end tests were updated as a result **including batch 3's credential-leak regression test.** The
+reviewer built its own fixtures for **both** codes with the credential held as an `int` **and** as a
+substring, and got nothing on stdout, stderr, or disk — **with a positive control proving the fixtures
+could see a leak.** Its judgement on the updated test: **honest, necessary, and stronger** — the
+assertion moved from *"a redacted render is present"* to *"the credential is absent"*, and mutation (b)
+confirms it fails when the credential leaks. **Updating a leak pin because the mechanism moved is
+legitimate; what makes it legitimate is that the new assertion is harder to satisfy.**
+
+**The controller's ruling held under inspection.** `max_failed_fraction` keeps `completed`; arms B and C
+of the batch-1 pin verified **append-only** by extracting and diffing function bodies (zero removals) and
+still discriminating; the protected test untouched; and the arithmetic 2442 + 3 + 5 = 2450 rules out
+silent deletions. **The third stop reason is more load-bearing than the design predicted** — dropping
+`and stop is None` fails the direct pin **and both end-to-end arms**, where the design expected it to be
+blind end to end. So the compromise that avoided a new unread enum member turned out to be genuinely
+read.
+
+**Major 1 is carried to task 7 with its siting settled rather than left to be rediscovered:** a
+zero-results stop currently **writes `run.yaml` and repoints `latest`**, which Decision 4 refuses — and
+before this batch the corner was **accidentally** compliant. Task 7's guard must sit **before
+`assemble_run_yaml` and before the `latest` repoint.** It does not crash, which settles one of the plan's
+own *could not measure* items.
+
+**And Major 3 traces to my own instruction, which is worth recording as such.** I had batch 3 widen the
+containment filter to admit `STOP_CODES` because the leak was live at HEAD. **Task 6's wiring then made
+that arm unreachable** — narrowing it back leaves the full suite unchanged — so it is dead code carrying
+the claim that it *"keeps a live leak from shipping"*. **Ruling: keep the arm, delete the claim.** The arm
+is cheap insurance if a later task routes a stop back through `command_run`; **a comment asserting it
+prevents a leak, unreachable by any test, is the exact shape that produced this slice's Critical.** Two
+stale consequences follow it, including a `spec-defects.md` entry whose *"Verified by running"* sentence
+describes an assertion the test no longer makes — **a filing whose evidence has gone stale is worse than
+one that never had any.**
+
+A fourth consecutive batch shipped a docstring naming a fixture or state wrongly. The narrow form here is
+the most avoidable yet: **when your own change makes a sentence false, that sentence is in the diff you
+are already reading.**
