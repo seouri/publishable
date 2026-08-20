@@ -110,3 +110,42 @@ arm.
 an editor — so task 7 must edit **a shipped H7d assertion too**, with the same one-key diff, and show
 both. Minor rather than Major only because the unnamed pin **hard-fails** rather than weakening quietly.
 **Carried to task 9:** `reference.md` still reads `lineage.py … — not yet built` while the module ships.
+
+## Batch 2 — tasks 2, 4 — the resolution mechanism, and not one call site
+
+Commits `3002508` (`resolve_run`), `f33e0b8` (`resolve_step`), `559167e` (report). Suite 2470 → **2482**.
+**Both verdicts PASS; one Major, eight Minors.** Nothing wired, confirmed by diffstat **and** grep.
+
+**The property designed to die silently does not.** Decision 1's `latest` asymmetry survives only if the
+relative form compares **the locator as given** — `point_latest` symlinks `latest` to the run directory's
+name, which *is* the `run_id`, so a resolved-basename comparison makes the relative form **silently
+accept `latest` with every arm green.** The mutation was run in its strong form and failed one named test
+on an assertion; the reviewer then **checked the converse in the same run** — the absolute form still
+accepts `latest` — because *a rule refusing both forms would pass the same mutation.* That converse check
+is the part worth copying.
+
+**The Major is the proxy row again, and the reviewer closed it by building rather than naming.** The repo
+guard is **correct** but its only available fixture **crashes** (`E-GIT-NO-REPO`) rather than
+misclassifying, so the prescribed mutation was caught by accident rather than by the property. The
+reviewer built what the property needs — **the upstream inside its own `git init`'d sibling repo** — where
+the correct code reads and the mutant **refuses with `E-UPSTREAM-REPO-CONTAINED`, an assertion failure.**
+**A guard whose only fixture crashes is a guard tested by accident**, and both H7a fail-opens came from
+exactly this move.
+
+**Batch 1's fall-through trap is structurally impossible here**, and the reviewer established that rather
+than assuming it: **each of the six new codes has exactly one raise site**, all six guard deletions were
+caught on assertions, and the wrong-code cases are distinguishable. That is the right answer to *two
+faults reaching one assertion* — make it unreachable by construction, then verify the construction.
+
+**One Minor touches an invariant and is filed rather than fixed.** The relative form **skips
+containment**, so a symlink under `output_dir` can read an in-repo run — against `CLAUDE.md`'s
+*`input_dir`/`output_dir` may never resolve inside the git repo*. **The code matches Decision 1; the
+decision's grounds are incomplete**, which makes it a filing owned by tasks 3/5 rather than a
+behaviour change to smuggle in here. The related fact travels with it: the relative form returns an
+**unresolved** path where the absolute form returns a resolved one.
+
+**And a narrowing done the right way, recorded as precedent.** The reviewer ran five of six guard
+deletions against one test file rather than the full suite, having **first measured** that a `lineage.py`
+mutation produces failures only there and that no other importer exists. **Measure that nothing else can
+be affected, then say you narrowed and why** — that is different in kind from narrowing on an assumption,
+which is what *never filter the output of a sweep* exists to prevent.
