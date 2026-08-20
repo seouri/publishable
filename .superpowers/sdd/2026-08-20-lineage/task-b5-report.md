@@ -181,3 +181,59 @@ correct for what it does.
 None outstanding. Arm C stayed green throughout (Decision 4's foundation; no finding to report).
 `.superpowers/sdd/2026-08-20-lineage/task-b4-review.md` is untracked in the working tree at the
 time of this batch — not created or touched by this batch's work, left as found.
+
+## Fix round 1 — the review's three Minors
+
+Reviewed in `task-b5-review.md` (spec compliance PASS, task quality PASS — all nine prescribed
+mutations re-run and failed by the reviewer independently, including a scratch-clone re-run of
+`ea8174e` reproducing 2506 exactly). Three Minors, all prose/docstring, no behaviour finding.
+Closed all three:
+
+- **Minor 1 — `UpstreamLedger.record`'s docstring claimed a guarantee the code does not provide.**
+  *"which is what makes N reads from one upstream do one record read"* was false: the reviewer
+  instrumented `read_run_record` and measured **2 reads** for two locators naming one run. The
+  ledger performs no I/O at all; the object that collapses reads is `UpstreamResolver._records`,
+  keyed by locator. Deleted the false half rather than rewriting it (`CLAUDE.md`: *prefer deleting
+  a claim to rewriting it*) — the docstring now says only what `record` itself does (the first-
+  sight copy, real and unchanged) and attributes the read-collapsing to `UpstreamResolver._records`
+  by name, without claiming a count relationship this method cannot see.
+- **Minor 2 — `record.get("code_hash")`/`.get("parameters_hash")` fail open for a corrupt-but-
+  parseable upstream record. Filed, not fixed** — the reviewer's own disposition, and correct: it
+  is a real open question (refuse a hash-less record as `E-UPSTREAM-RECORD-UNREADABLE`, or accept
+  `None` as this build's own honest "not carried" reading) that this batch is not positioned to
+  settle, since settling it means deciding whether `read_run_record`'s validation should widen.
+  Filed in `docs/superpowers/spec-defects.md` as *"`UpstreamLedger.record` copies a missing hash as
+  `None` rather than refusing it"*, **owner named: H9** (`reproduce`, which walks a resolved
+  `run_id` back through its recorded ancestors — the design's own routing for "walking a chain
+  deeper than one hop, and reporting an unreachable ancestor") **and secondarily H8b** (`diff`,
+  the other consumer that would read a silently-`None` hash as a false absence of drift), with the
+  check to run before dispositioning it stated in the entry (widen `read_run_record`'s existing
+  `run_id`/`schema_version` validation to the two hashes, or document the missing-hash case as
+  intentional in `reference.md` § Lineage between runs).
+- **Minor 3 — two positional locators in the new `spec-defects.md` amendment, one of them
+  ambiguous to the point of contradiction.** The struck row's *"see the amendment below"* resolved
+  first to the pre-existing 2026-08-13 amendment, whose own last sentence still reads
+  `provenance.upstream` as *"unaffected and still unwritten"* — landing a reader on text that
+  appears to contradict the strike, rather than on the entry that actually closes it. Fixed by
+  naming the target explicitly: *"see the 2026-08-20 amendment below, not the 2026-08-13 one
+  directly beneath this table, whose own last sentence still says `upstream` is unwritten (dated;
+  superseded in the same file, not contradicted)"*. The second locator, *"the key-order note two
+  paragraphs above"*, named what the note does but stayed positional; replaced with *"the 'Also
+  recorded, and deliberately not fixed' key-order note (naming the divergence between `cli.py`'s
+  construction order and § The two files' example)"* — no position, so a later insertion cannot
+  make it stale the way `CLAUDE.md` names (seven prior instances of exactly this).
+
+**Not changed.** The 2026-08-13 amendment's now-stale sentence itself is not edited — the reviewer
+is explicit that it is not a finding: it is dated, and the new 2026-08-20 amendment supersedes it
+in the same file without needing the older paragraph rewritten. Consistent with `spec-defects.md`'s
+own convention of appending a correction and saying what it replaces, rather than editing history.
+
+**Verified.** `src/publishable/lineage.py`'s docstring edit is a comment-only change (no code
+line moved) — re-ran `tests/test_lineage.py`, `tests/test_artifacts.py`, `tests/test_cli.py`
+(517 passed, 1 skipped) and then the full, unfiltered suite: **2510 passed, 1 skipped, 2 xfailed**,
+unchanged from before this fix round, as expected for a prose-only round. `ruff check .`,
+`ruff format --check .` (84 files) and `mypy` (47 files) all clean. `git diff --stat` before
+committing touches exactly `src/publishable/lineage.py`, `docs/superpowers/spec-defects.md`,
+`tests/test_artifacts.py`, and both `task-b4-report.md`/`task-b5-report.md` — no behaviour file
+(`cli.py`, `artifacts.py`, `runner.py`) in the diff, matching "all prose and record hygiene, no
+behaviour findings."

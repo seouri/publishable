@@ -282,11 +282,13 @@ class UpstreamLedger:
         own read has returned — never on a raise (Decision 6, step 1).
 
         `code_hash` and `parameters_hash` are copied from `record` the first
-        time this `run_id` is seen and never re-read afterward, which is
-        what makes N reads from one upstream do one record read (Decision 6,
-        step 4's caching, which `UpstreamResolver.resolve` already provides —
-        this method only needs the two figures once per `run_id`, not once
-        per call).
+        time this `run_id` is seen and never re-read afterward — this method
+        only needs the two figures once per `run_id`, not once per call. The
+        read itself is not this method's concern: whatever collapses N reads
+        of one upstream into one `read_run_record` call is
+        `UpstreamResolver._records`, keyed by locator (Decision 6, step 4's
+        caching) — this ledger performs no I/O and two distinct locators
+        naming the same run still reach `resolve()` twice, once each.
         """
         run_id = record["run_id"]
         entry = self._entries.setdefault(

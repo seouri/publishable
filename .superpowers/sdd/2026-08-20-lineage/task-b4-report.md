@@ -78,13 +78,13 @@ one.
 
 ## The § Errors row this task names for task 9
 
-`docs/reference.md` § Errors core raises (line 1026), the row at line 1040 beginning *"A `name`
-that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension no
-writer claims handed an object that isn't `bytes` or `str`"* → `E-ARTIFACT-NAME`, `E-ARTIFACT-
-APPEND`, `E-ARTIFACT-UNWRITABLE`. This row's own wording does not restrict `E-ARTIFACT-NAME` to
-the write direction, but it was written when `write`/`path`/`exists`/`append` were its only emit
-sites; `read_upstream` and `read_condition` are now two more, and § Errors carries one row per
-code rather than per site (`CLAUDE.md`'s own naming of this exact shape). Task 9 owns updating it.
+`docs/reference.md` § Errors core raises, the row beginning *"A `name` that escapes the step's
+directory, an `io.append` onto anything but `.jsonl`, or an extension no writer claims handed an
+object that isn't `bytes` or `str`"* → `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`,
+`E-ARTIFACT-UNWRITABLE`. This row's own wording does not restrict `E-ARTIFACT-NAME` to the write
+direction, but it was written when `write`/`path`/`exists`/`append` were its only emit sites;
+`read_upstream` and `read_condition` are now two more, and § Errors carries one row per code
+rather than per site (`CLAUDE.md`'s own naming of this exact shape). Task 9 owns updating it.
 
 ## Docstrings and comments re-read (Step 2) — nothing false found
 
@@ -99,17 +99,26 @@ the new call sites without edit. No claim needed deleting or rewriting.
 
 ## Disagreements between the brief/design/plan and the code, checked by grepping what each asserts
 
-- **Design doc's task table (line 659) attributes this wiring to "Task 5"**, and its filings table
-  (line 702) says *"The `..`/absolute escape in `read_upstream` and `read_condition` | Closed by
-  task 5, not filed."* Grepped the actual code and `progress.md`'s batch-3 entry: task 5 (batch 3,
-  commit `e21d795`) built `_contained` and wired it into `reuse_from` **only** — confirmed by
-  reading `artifacts.py` before this task's edit, where `read_upstream`/`read_condition` still
-  ended in a bare `self._read(... / name)`. The plan's own task 12 (`docs/superpowers/plans/
-  2026-08-20-lineage.md` lines 887–946) is the corrected version — it explicitly re-measures "the
-  two that ship enforce neither" and assigns the wiring to task 12 — so the plan already carries
-  the correction; only the design doc's task-5 row and its filings-table entry are now stale
-  against the shipped code and belong to whichever task does the design/filings-table sweep (task
-  9's consistency pass, per its own remit).
+- **The design doc attributes this wiring to "Task 5" in several places, and that attribution is
+  stale against shipped code.** Grepped the actual code and `progress.md`'s batch-3 entry: task 5
+  (batch 3, commit `e21d795`) built `_contained` and wired it into `reuse_from` **only** —
+  confirmed by reading `artifacts.py` before this task's edit, where `read_upstream`/
+  `read_condition` still ended in a bare `self._read(... / name)`. The plan's own task 12 is the
+  corrected version — it explicitly re-measures "the two that ship enforce neither" and assigns
+  the wiring to task 12 — so the plan already carries the correction; only the design doc is
+  stale. **`grep -n "task 5" docs/superpowers/specs/2026-08-20-lineage-design.md` returns seven
+  lines carrying or deriving from the attribution, not the two I first read** — a sweep that stops
+  at the sites its own brief happened to notice is the exact habit `CLAUDE.md` names. Of those
+  seven, the correction splits by what each site claims: the one that is a § Errors row's own
+  scope (a normative document `reference.md` maintains) is task 9's; the one that is a
+  `spec-defects.md` filings-table entry (a live list) is task 10's, per the design's own task
+  table. **Neither disposition is "edit the design doc."** The design is development record:
+  `CLAUDE.md` states neither consistency pass governs it and that it is not retro-edited — a spec
+  "records what was decided when it was written," and correcting one is done by appending and
+  saying what it replaces, never by rewriting the row in place. So the seven `task 5`-attributing
+  lines in the design stay exactly as written, stale and uncorrected in the design file itself;
+  task 9 and task 10 each correct their own document (`reference.md` and `spec-defects.md`
+  respectively) and simply do not trust the design's task-5 attribution when doing so.
 - No other disagreement found. Grepped the brief's own claims (probe outputs, § Errors row
   ownership, the three-refusal table, the CLAUDE.md batch note "2499 passed… before your tests")
   against the measured suite and code; all held.
@@ -124,3 +133,44 @@ the new call sites without edit. No claim needed deleting or rewriting.
 
 None outstanding. The change is exactly the isolated, narrow wiring the brief scoped: no other
 behaviour moved, the overshoot mutation is caught, and the full suite shows a clean +4 delta.
+
+## Fix round 1 — the review's four Minors
+
+Reviewed in `task-b4-review.md` (spec compliance PASS, task quality PASS with four Minors — all
+prose/record hygiene, no behaviour finding). Closed all four:
+
+- **Minor 1 — ambiguous count.** `tests/test_artifacts.py`'s three docstrings each said *"Fixture
+  N's **three** ... refusal arms"* against four `pytest.raises` blocks per function (three for the
+  three *grounds* — `..`, absolute, escaping symlink — but four *arms*, since absolute gets two
+  after batch 3's fix round added the inside-step-absolute one). Per instruction 6 (no counts): the
+  number is dropped rather than corrected, in all three places —
+  `test_read_upstream_name_containment_refuses_traversal_absolute_path_and_symlink_escape`,
+  `test_read_condition_name_containment_refuses_traversal_absolute_path_and_symlink_escape`, and
+  the batch-3 `test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink_escape`.
+- **Minor 2 — positional locator.** The block comment above this task's two tests said
+  *"`reuse_from`'s own arms are in the Task 5 block above"*. Replaced with a reference to what that
+  test is (`reuse_from`'s own containment test) plus a grep hint (`reuse_from_name_containment`),
+  naming no position.
+- **Minor 3 — line-number citation in this report.** *"`docs/reference.md` § Errors core raises
+  (line 1026), the row at line 1040..."* is now cited by section only: *"`docs/reference.md`
+  § Errors core raises, the row beginning..."*. The quoted row text (unchanged) is what task 9
+  needs to find it after the row moves.
+- **Minor 4 — the stale design claim, correctly confirmed, incompletely swept, and misrouted.**
+  Re-swept `docs/superpowers/specs/2026-08-20-lineage-design.md` for `"task 5"`: **seven** lines
+  carry or derive from the false attribution (verified by `grep -n`, reading each hit rather than
+  trusting a count — one of the eight raw hits, the Ruling 1 discussion of how task 5 was *sized*
+  from ambiguous wording, is a different claim and correctly excluded). The report's disagreements
+  section named only two. Rewritten to: name all seven by what each says rather than by line
+  number (Minor 3's own fix applied consistently); split ownership as the review requires — the
+  § Errors-row half is task 9's, the `spec-defects.md` filings-table half is task 10's; and state
+  the decisive point the original report missed entirely — **the design document is itself
+  development record, which `CLAUDE.md` says neither consistency pass governs and which is not
+  retro-edited.** So the seven lines are not scheduled for a fix at all; they stay exactly as
+  written, and task 9/task 10 each correct their own downstream document without trusting the
+  design's task-5 claim. This is a disposition, not a deferred edit.
+
+**Verified.** Gates re-run clean (`ruff check .`, `ruff format --check .` at 84 files, `mypy` at 47
+files) and the full targeted suite (`tests/test_lineage.py`, `tests/test_artifacts.py`,
+`tests/test_cli.py`) green — none of the four Minors touched behaviour, so no mutation is owed for
+this round; each was checked by reading the corrected text against the finding it closes and, for
+Minor 4, by re-running the `grep -n "task 5"` sweep myself rather than trusting the review's count.

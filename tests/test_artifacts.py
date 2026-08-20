@@ -1259,10 +1259,11 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
 
 # ---------------------------------------------------------------------------
 # Task 12 — the shared `_contained` helper wired into `read_upstream` and
-# `read_condition`. Fixture N's other two readers (`reuse_from`'s own arms
-# are in the Task 5 block above) — same construction, same code
-# (`E-ARTIFACT-NAME`, the code `_resolve` already raises for these two
-# readers, and not `E-UPSTREAM-NAME`, which is `reuse_from`'s own).
+# `read_condition`. Fixture N's other two readers: `reuse_from` has its own
+# containment test (grep `reuse_from_name_containment` in this file) — same
+# construction, same code (`E-ARTIFACT-NAME`, the code `_resolve` already
+# raises for these two readers, and not `E-UPSTREAM-NAME`, which is
+# `reuse_from`'s own).
 # `docs/superpowers/plans/2026-08-20-lineage.md` task 12.
 # ---------------------------------------------------------------------------
 
@@ -1270,7 +1271,7 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
 def test_read_upstream_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
     tmp_path: Path,
 ):
-    """Fixture N's three `read_upstream` refusal arms, each targeting a file
+    """Fixture N's `read_upstream` refusal arms, each targeting a file
     that EXISTS and holds distinguishable content — so an unenforced check
     would return it rather than fail for an unrelated reason (the live probe
     at `28e311d` did exactly that for the `..` and absolute-outside arms)."""
@@ -1337,7 +1338,7 @@ def test_read_upstream_positive_control_a_forward_separator_and_an_interior_dot_
 def test_read_condition_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
     tmp_path: Path,
 ):
-    """Fixture N's three `read_condition` refusal arms — `read_condition` is
+    """Fixture N's `read_condition` refusal arms — `read_condition` is
     `summary`-scope only, so the fixture needs a `StepIO` with `conditions`
     and `step_scopes` set, the shape
     `test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat`
@@ -1897,7 +1898,7 @@ def test_reuse_from_inherits_the_shipped_unreadable_suffix_refusal(tmp_path, reg
 def test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
     tmp_path,
 ):
-    """Fixture N's three `reuse_from` refusal arms, each targeting a file that
+    """Fixture N's `reuse_from` refusal arms, each targeting a file that
     EXISTS and holds distinguishable content — so an unenforced check would
     return it rather than fail for an unrelated reason (the live probe's own
     shape, `docs/superpowers/specs/2026-08-20-lineage-design.md` Fixture N).

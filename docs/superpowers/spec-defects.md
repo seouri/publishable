@@ -3277,7 +3277,7 @@ Routed by feature:
 |---|---|
 | `provenance.environment.os`, `.hostname`, `.hardware` | **H6 Hashes and provenance** — environment capture is its subject |
 | `provenance.allocation`, `provenance.allocation_hash` | **H3 Units**, which lands `allocation` and `holdout`; both write the one `allocation.json` the hash covers |
-| ~~`provenance.upstream`~~ | **CLOSED 2026-08-20 (H8a task 7).** `command_run` now writes it — see the amendment below |
+| ~~`provenance.upstream`~~ | **CLOSED 2026-08-20 (H8a task 7).** `command_run` now writes it — see the 2026-08-20 amendment below, not the 2026-08-13 one directly beneath this table, whose own last sentence still says `upstream` is unwritten (dated; superseded in the same file, not contradicted) |
 
 **Also recorded, and deliberately not fixed:** the example's `provenance` key order differs from
 `cli.py`'s construction order. Cosmetic — YAML mappings are unordered and no reader depends on it —
@@ -3302,10 +3302,46 @@ ships — and always a list: `[]` when no `io.reuse_from` call returned anything
 anywhere for a `null` to mean "declared and did not apply"). Each entry carries exactly the four
 keys § The two files' example shows — `run_id`, `code_hash`, `parameters_hash`, `used` — and no
 fifth; H8a hashes nothing new. The remaining row, `provenance.environment.os`/`.hostname`/
-`.hardware`, is unaffected and still unwritten, still owned by H6. The "deliberately not fixed"
-key-order note two paragraphs above is unaffected by this amendment: `upstream` was inserted at
+`.hardware`, is unaffected and still unwritten, still owned by H6. The "Also recorded, and
+deliberately not fixed" key-order note (naming the divergence between `cli.py`'s construction
+order and § The two files' example) is unaffected by this amendment: `upstream` was inserted at
 `cli.py`'s own last position (after `allocation_hash`), which is a cosmetic divergence from § The
 two files' example in exactly the pre-existing way that note already covers, not a new one.
+
+## `UpstreamLedger.record` copies a missing hash as `None` rather than refusing it
+
+Filed 2026-08-20 (H8a batch 5 fix round, from the batch-5 review's Minor 2), not fixed here.
+`src/publishable/lineage.py`'s `UpstreamLedger.record` reads `record.get("code_hash")` and
+`record.get("parameters_hash")` — `.get`, not `[...]` — so an upstream `run.yaml` that parses,
+carries a `run_id` and declares this build's own `schema_version` (so `read_run_record` raises
+nothing) but is missing one of the two hashes publishes `code_hash: null` (or
+`parameters_hash: null`) into `provenance.upstream`, silently. **Verified by running**: a
+synthesized upstream record missing `code_hash` produced an entry
+`{'run_id': …, 'code_hash': None, 'parameters_hash': None, 'used': [...]}` with no refusal anywhere
+in `validate` or `run`. No fixture in this batch covers it — Fixture O's synthesized upstreams never
+assert the two hashes, and Fixture R, which does, reads them from a genuine `run.yaml` that always
+carries both.
+
+**Not fixed, deliberately.** Decision 8 (`docs/superpowers/specs/2026-08-20-lineage-design.md`)
+states H8a's obligation as "that the four keys are true," and a hand-edited or partially-written
+upstream record missing a hash is exactly the case `read_run_record`'s own
+`E-UPSTREAM-RECORD-UNREADABLE` ("edited or truncated") already names for a missing `run_id` — but
+that check does not extend to `code_hash`/`parameters_hash`, and widening it is a real design
+question this batch is not positioned to settle: is a hash-less upstream record a corrupt one
+(refuse it, the `E-UPSTREAM-RECORD-UNREADABLE` reading), or an honest one from a build that wrote
+fewer keys (`None` is the correct answer, the reading `apparatus`/`allocation` already establish
+for "this run declared no such feature")? The two readings disagree, and settling it belongs to
+whoever next reads these hashes for a purpose that depends on their truth.
+
+**Owner: H9** (`reproduce`, § Reproducing on another device), which walks a resolved `run_id` back
+through its own recorded ancestors — the design's own routing for "walking a chain deeper than one
+hop, and reporting an unreachable ancestor" — and secondarily **H8b** (`diff`), which reports "two
+runs differ only because their upstreams did" and so is the other consumer that would observe a
+silently-`None` hash as a false absence of drift. **The check to run before dispositioning it**:
+whether `read_run_record` should refuse a record missing either hash (widening
+`E-UPSTREAM-RECORD-UNREADABLE`'s existing "no `run_id`" check to the same two fields), or whether
+`UpstreamLedger.record` should carry the missing-hash case through as `None` on purpose and say so
+in `reference.md` § Lineage between runs, which currently states only the present case.
 
 ## `register_template` appears outside § The importable surface — checked, not a defect
 
