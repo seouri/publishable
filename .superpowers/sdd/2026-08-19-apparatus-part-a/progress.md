@@ -452,3 +452,22 @@ carve-out, three `APPARATUS_CODES` members, and now this — **every one found b
 reported closed, and none by reading.** `CLAUDE.md` already counts five such across three prior slices.
 The rule earns its place: **verify by probe, then pin by mutation**, and a report saying "closed" is the
 beginning of that sentence rather than the end.
+
+**Both surfaces are now pinned** (`45d59a7`, `b7f67c3`), and I re-applied my own mutation to confirm it:
+`if False:` at that guard now fails **two named tests on assertions** — one at `validate` (asserting
+**alongside** a second finding, never on a total code set) and one driven through a real
+`main(["run", ...])`. Reverted byte-identical; suite **2423**, four gates clean.
+
+**`run` does refuse a non-`str` probe** — verified end to end, exit 1 with no run directory created — so
+the `CLAUDE.md` sentence's claim is true, and it is now **asserted rather than argued.**
+
+**The root cause is a fixture trap worth adding to the collection.** `_check_probe`'s
+registration-check fallback **also emits `E-PROBE-UNKNOWN`**, with a different message, when the type
+guard is dead — and **that fallback's `repr` of the declared value still contains the probe-name
+substring**, so both prior tests' assertions passed **regardless of which branch fired.** Two branches,
+one code, and an assertion that could not tell them apart: this is *a fixture whose numbers agree with
+the bug*, in the form *an assertion whose substring agrees with either branch*. The fix was to assert the
+phrase **unique to the type-check branch**.
+
+Major 2's containment pin was **re-confirmed sound rather than re-fixed** — narrowing the match back to
+exact equality fails exactly three named tests, all on assertions.
