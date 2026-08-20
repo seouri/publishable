@@ -190,3 +190,10 @@ weight.
 **A closed filing asserting a pin that does not exist** is also being fixed: keeping containment on a
 resolved probe while returning the **unresolved** path leaves 142 tests green, so the containment half is
 pinned and the *returns-a-resolved-path* half is not.
+
+**Fix round 1 — all four findings closed** (`292c236`, `d3d143d`). Suite **2499**. The cache is keyed by
+locator, closing the Major and the warm-cache Minor together; Fixture N gained the arm that actually
+discriminates (an absolute name pointing **inside** the step dir); the closed filing's unpinned half is
+addressed; and the `resolves_inside_repo` fail-open is **filed rather than fixed**, correctly — it is not
+this batch's code, and a guard that fails open for an unresolved argument is worth a named owner rather
+than a drive-by change.
