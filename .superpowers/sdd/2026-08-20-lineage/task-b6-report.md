@@ -148,3 +148,64 @@ the filed entry even though two of those six are now closed (allocation since 20
 since task 7) — left untouched since it is an index/label for the entry, not a live claim, and no
 brief in this batch named it. Worth a controller decision on whether that census table itself should
 be re-tallied, but it is outside all three of this batch's briefs.
+
+## Whole-branch fix round (post-MERGE-verdict)
+
+Reviewer's own review is at `.superpowers/sdd/2026-08-20-lineage/whole-branch-review.md`. Verdict
+MERGE; one Major already found and fixed by the reviewer (documents only, `E-UPSTREAM-REPO-CONTAINED`
+scoped to both emit sites) — nothing owed. Minor 3 (`CLAUDE.md`) is the coordinator's, not touched.
+Addressed here: Minors 1, 2, 4.
+
+**Minor 1 — pinned.** Added
+`tests/test_artifacts.py::test_reuse_from_a_read_that_raises_inside_read_leaves_the_ledger_untouched`.
+It reuses the shipped writer-without-reader fixture (`.fastq` registered in `WRITERS`, absent from
+`READERS`) so the artifact genuinely exists on disk (`target.exists()` is `True`) and `_read` itself
+is what raises `E-ARTIFACT-UNREADABLE` — the boundary the code comment beside `ledger.record` claims
+survives raising, and the boundary batch 5's own fixture (Fixture F's second half, which raises
+earlier, at `target.exists()` being `False`) never reaches. Asserts
+`io._upstream.ledger.entries() == []` after the raise.
+
+Verified both ways, against the full unfiltered suite: applying the exact mutation named — moving
+`self._upstream.ledger.record(...)` to run immediately before `self._read(target)` instead of after
+it returns — leaves Fixture F (`tests/test_cli.py::test_fixture_f_a_read_that_raises_contributes_no_entry`)
+**green** (2 passed) but fails the new test (`AssertionError: assert [{...}] == []`), confirming the
+two branches produce different results and that the new test is what catches the mutation Fixture F
+missed. Reverted by copying the file back from a pre-mutation snapshot and re-running; both tests
+green again, and the full suite re-run clean at **2513 passed** (2512 baseline + this one new test).
+
+**Minor 2 — ruling: unify, not "state why two copies are right."** `_resolve` (the write-side
+containment check, always against `self.step_dir`) and `_contained` (the shared read-side check,
+taking `base` as an argument) were the identical predicate written twice. No test pins `_resolve`'s
+old exact message text (`grep` confirmed: every test on this path asserts `.code == "E-ARTIFACT-NAME"`
+only), so `_resolve` now delegates: `return self._contained(self.step_dir, name, code="E-ARTIFACT-NAME")`.
+Also repaired `_contained`'s own docstring, which described itself as "the same symlink-aware
+technique `_resolve` already uses ... generalized" — backwards once `_resolve` calls `_contained`
+rather than the reverse; restated as `_contained` being the one predicate both a write (via
+`_resolve`) and the readers (`read_condition`, `reuse_from`) go through. Verified by running
+`tests/test_artifacts.py` in full: **120 passed**, including every existing `E-ARTIFACT-NAME` arm on
+both the write side and the read side, plus `mypy` (47 files, clean) and the full suite (unaffected,
+still 2513).
+
+**Minor 4 — deleted the stale/temporal claims rather than rewriting them.**
+- `lineage.py`'s module docstring: dropped "(from later tasks in this slice)" — the module is
+  finished; the sentence now just names what it holds (`resolve_run`, `resolve_step`,
+  `UpstreamLedger`, `UpstreamResolver`) rather than describing itself in terms of a schedule that no
+  longer exists.
+- `read_run_record`'s docstring: "the named step's own recorded status is a later task's check, not
+  this one's" → names the actual check, `resolve_step`'s, rather than a temporal placeholder.
+- `UpstreamResolver.__init__`'s cache comment: the phrase 'skipping the "must sit under `output_dir`"
+  check' named a check that does not exist as its own gate — the relative form's containment check
+  is `resolves_inside_repo`, a real one, but there is no separate named check for "sits under
+  `output_dir`" (that's a structural consequence of how the relative form is resolved, not a check
+  of its own). Rewrote the comment to say what actually goes unrun when the cache-key bug was live:
+  `resolve_run` never ran at all for the relative call, so its real containment check never ran
+  either, and the relative call was silently answered from whatever directory an earlier absolute
+  call happened to resolve to — which need not sit under this config's own `output_dir`.
+
+All three files reformatted with `ruff format` (only the new test's own lines moved — confirmed by
+`git diff --stat`, 34 lines added to `tests/test_artifacts.py`, nothing else touched). Gates: `ruff
+check .` clean, `ruff format --check .` clean, `mypy` 47 files clean, full suite **2513 passed, 1
+skipped, 2 xfailed**. Guard pin re-verified explicitly (`-k h8a_arm`): all three arms still pass,
+confirming this round is not what would trip them if it were wrong.
+
+No finding left open.

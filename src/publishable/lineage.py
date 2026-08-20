@@ -1,15 +1,15 @@
 """Upstream run recording and chain verification (`reference.md` § Package layout).
 
 This module holds `read_run_record`, the reader over a `run.yaml` this build wrote, and
-(from later tasks in this slice) the locator resolution and containment machinery
-`io.reuse_from` delegates to. It **may** import `run_record` — the assembler that writes
-`run.yaml` — because a chain-verification reader is exactly what reads what an assembler
-wrote. `artifacts.py` **may not** import this module: measured, `run_record` imports
-`runner`, which imports `artifacts`, so `artifacts` importing `lineage` (which imports
-`run_record`) would close a cycle: `artifacts → lineage → run_record → runner →
-artifacts`. `run_record.py` itself is refused as the reader's home on its own
-docstring's grounds — its own first line is "Assemble run.yaml. Assembles only —
-computes nothing."
+the locator resolution and containment machinery `io.reuse_from` delegates to
+(`resolve_run`, `resolve_step`, `UpstreamLedger`, `UpstreamResolver`). It **may** import
+`run_record` — the assembler that writes `run.yaml` — because a chain-verification
+reader is exactly what reads what an assembler wrote. `artifacts.py` **may not** import
+this module: measured, `run_record` imports `runner`, which imports `artifacts`, so
+`artifacts` importing `lineage` (which imports `run_record`) would close a cycle:
+`artifacts → lineage → run_record → runner → artifacts`. `run_record.py` itself is
+refused as the reader's home on its own docstring's grounds — its own first line is
+"Assemble run.yaml. Assembles only — computes nothing."
 """
 
 from pathlib import Path
@@ -43,8 +43,8 @@ def read_run_record(path: Path) -> dict[str, Any]:
     A record whose `status` is `partial` or `failed` is **not** refused here. A partial
     run's completed step wrote a real artifact, and refusing the whole record on a
     sibling condition's failure would make that artifact unreadable for a reason that has
-    nothing to do with it — the named step's own recorded status is a later task's check,
-    not this one's.
+    nothing to do with it — the named step's own recorded status is `resolve_step`'s
+    check, not this one's.
     """
     run_yaml = path / "run.yaml"
     if not run_yaml.exists():
@@ -357,12 +357,14 @@ class UpstreamResolver:
         # the upstream could make two identical absolute calls disagree);
         # and once ANY call populated the run_id key, a later RELATIVE call
         # naming that run_id hit the cache without ever running `resolve_run`
-        # — skipping the "must sit under output_dir" check and the
-        # containment check for a run the config addressed only by run_id
-        # (Minor 3). Keying by the literal locator fixes both: the same
-        # locator asked twice is one read and one answer, and two different
-        # locators naming the same run are two independent queries, each
-        # checked on its own terms.
+        # at all for it — so its own containment check (`resolves_inside_repo`)
+        # never ran, and a run_id addressed only relatively was silently
+        # answered from a directory an earlier ABSOLUTE call had resolved to,
+        # which need not sit under this config's own `output_dir` (Minor 3).
+        # Keying by the literal locator fixes both: the same locator asked
+        # twice is one read and one answer, and two different locators naming
+        # the same run are two independent queries, each checked on its own
+        # terms.
         self._records: dict[str, tuple[Path, dict[str, Any]]] = {}
 
     def resolve(self, locator: str) -> tuple[Path, dict[str, Any]]:

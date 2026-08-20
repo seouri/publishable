@@ -1895,6 +1895,40 @@ def test_reuse_from_inherits_the_shipped_unreadable_suffix_refusal(tmp_path, reg
     assert e.value.code == "E-ARTIFACT-UNREADABLE"
 
 
+def test_reuse_from_a_read_that_raises_inside_read_leaves_the_ledger_untouched(
+    tmp_path, registries
+):
+    """Whole-branch review Minor 1. The comment beside `ledger.record` in
+    `reuse_from` claims a `_read` raise leaves the ledger untouched, but batch
+    5's own mutation (Fixture F's second half, in `test_cli.py`) only tested
+    the boundary one line UP from there: `target.exists()` being `False`,
+    which raises `E-UPSTREAM-ARTIFACT-MISSING` before `_read` is ever
+    reached. Moving `ledger.record` to run BEFORE `_read` rather than after
+    it returns leaves that fixture green, because it never gets far enough
+    to see the difference.
+
+    This test targets the boundary the comment is actually about: the
+    artifact IS there (`target.exists()` is `True`) and `_read` itself
+    raises, on the shipped writer-without-reader refusal
+    (`E-ARTIFACT-UNREADABLE`) the fixture immediately above already
+    reaches. The ledger must hold nothing afterward."""
+    from publishable import artifacts
+
+    artifacts.WRITERS[".fastq"] = lambda rows: b"x"
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_vvvvvvv"
+    run_dir = output_dir / run_id
+    _write_upstream_run(run_dir, run_id)
+    (run_dir / "shared" / "step01").mkdir(parents=True)
+    (run_dir / "shared" / "step01" / "a.fastq").write_bytes(b"x")
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", "a.fastq")
+    assert e.value.code == "E-ARTIFACT-UNREADABLE"
+    assert io._upstream is not None
+    assert io._upstream.ledger.entries() == []
+
+
 def test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
     tmp_path,
 ):

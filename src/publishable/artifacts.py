@@ -692,13 +692,13 @@ class StepIO:
             self.append("ineligible.jsonl", {"unit": key, "reason": reason})
 
     def _resolve(self, name: str) -> Path:
-        candidate = (self.step_dir / name).resolve()
-        base = self.step_dir.resolve()
-        if Path(name).is_absolute() or not str(candidate).startswith(str(base) + os.sep):
-            raise ArtifactError(
-                f"{name!r} resolves outside the step's directory", code="E-ARTIFACT-NAME"
-            )
-        return candidate
+        """This step's own write-side containment check — the same
+        predicate `_contained` enforces for a read against another step's
+        directory, unified here rather than duplicated (whole-branch review
+        Minor 2): a write's target is always this step's own `step_dir`, so
+        this is `_contained` called with that one fixed base and this
+        code's own name."""
+        return self._contained(self.step_dir, name, code="E-ARTIFACT-NAME")
 
     def path(self, name: str) -> Path:
         target = self._resolve(name)
@@ -927,10 +927,13 @@ class StepIO:
         *"only the name's last component is examined"* for the suffix
         dispatch, and gives `programs/gpt-4.1__seed29.json` as a worked legal
         name. A rule refusing separators would break a documented example, so
-        this checks containment and never the shape of the path — the same
-        symlink-aware technique `_resolve` already uses for `self.step_dir`,
-        generalized to take its base as an argument because the readers that
-        use it each resolve against a different one.
+        this checks containment and never the shape of the path. `base` is a
+        parameter rather than always `self.step_dir` because the callers that
+        use this — a write against this step's own directory (`_resolve`,
+        which calls this with that one fixed base), and a read against
+        another step's or another run's (`read_condition`, `reuse_from`) —
+        each resolve against a different one; one predicate rather than a
+        copy per caller is what keeps them from drifting apart.
 
         `code` is the caller's own: `reuse_from` raises `E-UPSTREAM-NAME`
         rather than the shipped `E-ARTIFACT-NAME`, on the precedent
