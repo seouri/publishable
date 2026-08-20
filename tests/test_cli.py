@@ -15831,7 +15831,13 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     Task 3 appends `'config.yaml'` to this list, keeping it sorted, and
     nothing else changes. The post-edit list is:
     `['conditions', 'config.yaml', 'environment', 'executions.jsonl',
-    'manifest', 'run.yaml', 'sweep.yaml']`.
+    'manifest', 'run.yaml', 'sweep.yaml']`. Task 3's report must show the
+    diff is exactly one entry per arm with nothing reordered.
+
+    The `lock` assertion below is implied by the list equality above it —
+    if `lock` existed, `iterdir()` would list it and the equality would fail
+    first, so this line can never fail on its own. Kept because the brief
+    prescribed it verbatim; the list assertion is what actually delivers it.
     """
     doc = run_a_project(
         tmp_path,
@@ -15862,7 +15868,8 @@ def test_h8b_arm_b_environments_contents(tmp_path):
     list — so this is new coverage.
 
     Task 3 appends `'repo_root.txt'`, keeping it sorted. The post-edit list
-    is: `['pyproject.toml', 'repo_root.txt']`.
+    is: `['pyproject.toml', 'repo_root.txt']`. Task 3's report must show the
+    diff is exactly one entry per arm with nothing reordered.
     """
     doc = run_a_project(
         tmp_path,
@@ -15958,10 +15965,16 @@ def test_h8b_arm_e_sweep_yamls_recorded_plan_shape(tmp_path):
     """Arm E — `sweep.yaml`'s recorded plan, which `freeze` will cross-check.
     NEVER MOVES IN THIS SLICE.
 
-    No existing test asserts `sweep.yaml`'s top-level key list or that no
-    condition entry carries `selectors` — this is new coverage, and it is
-    the fact Decision 8 (H8b design) grounds its "re-expand rather than
-    rebuild from `sweep.yaml`" ruling on.
+    The top-level key list half is new coverage: no existing test reads
+    `sweep.yaml` as a file for its shape at all. The `selectors`-absence
+    half is NOT new: `tests/test_sweep.py`'s
+    `test_the_sweep_document_records_the_resolved_plan` already asserts
+    `doc["conditions"] == [...]` by full dict equality, which pins the
+    entry key set — including the absence of `selectors` — exactly. Kept
+    here anyway because it is the fact Decision 8 (H8b design) grounds its
+    "re-expand rather than rebuild from `sweep.yaml`" ruling on, and this
+    arm is where a reader of *this* pin should find it restated, even
+    though the shipped test is what actually guards it.
     """
     doc = run_a_project(
         tmp_path,
@@ -15992,10 +16005,17 @@ def test_h8b_arm_f_the_embedded_config_is_the_file(tmp_path):
     Distinct from Fixture C (task 3's, once `<run_dir>/config.yaml` exists):
     this compares `run.yaml`'s embedded `config` against the config file
     `run_a_project` generated and edited, which exists today with no code
-    change. No existing test asserts this equality directly — the nearest is
-    each pin's own read of `run_doc["config"]` for a sub-field, never a
-    whole-mapping comparison against the file on disk — so this is new
-    coverage.
+    change. `tests/test_acceptance.py`'s
+    `test_scaffold_then_run_produces_a_real_record` already makes exactly
+    this whole-mapping comparison for the UNSWEPT case, so this arm is NOT
+    new coverage in general. What it adds is narrower: driven WITH a sweep,
+    it is the only place in the suite that would catch a *swept* run's
+    embedded config diverging from the file — confirmed by narrowing a
+    `{**config, "sweep": None}` mutation in `run_record.py` to fire only
+    under a declared `sweep.grid`, which then failed only this arm and
+    `test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config`
+    across the full suite (2 failed, 2520 passed), where the unnarrowed
+    mutation had failed both this arm and the acceptance test above.
     """
     doc = run_a_project(
         tmp_path,

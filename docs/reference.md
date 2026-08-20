@@ -624,7 +624,7 @@ likewise apart from those same two envelope rows, none of the others.
 
 `reproduce` accepts either — a config to run fresh, or a `run.yaml` to re-run exactly what that run did.
 
-A run directory also holds a **byte copy** of the config it was started from, written at run start and never modified since — see [The other files a run writes](#the-other-files-a-run-writes), which is the section that enumerates everything a run directory holds. Its purpose is to let a mid-run command (`freeze`, and `resume` when it lands) reach the config a run is executing under *before* `run.yaml` exists; naming it here would make this "the two files" plus an asterisk, and it isn't a third thing to edit — editing it does not change the run. "The two files" counts *roles* — what you edit, what you report — not every file inside a run directory.
+A run directory also holds a **byte copy** of the config it was started from, written at run start and never modified — see [The other files a run writes](#the-other-files-a-run-writes), which is the section that enumerates everything a run directory holds. Its purpose is to let a mid-run command (`freeze`, and `resume` when it lands) reach the config a run is executing under *before* `run.yaml` exists. It is not a third thing to edit — editing it does not change the run — and this section is not renamed on its account: "the two files" counts *roles*, what you edit and what you report, not every file inside a run directory.
 
 ```yaml
 # <output_dir>/run_2026-08-06T14-02-11Z_8e21ab3/run.yaml

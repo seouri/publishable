@@ -347,11 +347,13 @@ def test_the_seed_exclusion_never_raises_on_a_shape_it_did_not_expect():
 
 
 def test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config(tmp_path: Path):
-    """The first sub-arm needs a real run, so it drives one — the two below
-    are pure-function checks and need none. No existing test in this file
-    compares `parameters_hash` against a real `run.yaml`'s own recorded
-    value; every existing test here calls the function directly on a
-    hand-built dict. This is new coverage."""
+    """The first sub-arm needs a real run, so it drives one —
+    `test_h8b_arm_g_metadata_only_change_is_identical` and
+    `test_h8b_arm_g_max_failed_fraction_change_differs` are pure-function
+    checks and need none. No existing test in this file compares
+    `parameters_hash` against a real `run.yaml`'s own recorded value; every
+    existing test here calls the function directly on a hand-built dict.
+    This is new coverage."""
     import yaml
     from tests.test_cli import run_a_project
 

@@ -51,3 +51,126 @@ None. Every literal captured for task 13's seven arms matched the brief's stated
 ## Concerns
 
 None outstanding. Both authorized-edit clauses are in place for task 3 to consume; task 14's document changes are additive-only and match the controller's ruling; gates are clean at the expected deltas (2522 tests, 47 mypy source files, 84 formatted files).
+
+---
+
+## Fix round 1
+
+Reviewed at `5223383`; review at `.superpowers/sdd/2026-08-20-diff-freeze/task-b1-review.md`.
+Both verdicts were PASS (one Major, seven Minors). Per this repo's convention of appending a
+correction rather than retro-editing a record, the section above is left as originally written;
+this section says what changed and what replaces it.
+
+**MAJOR 1(a) — Arm F's coverage claim was false.** `tests/test_cli.py`'s
+`test_h8b_arm_f_the_embedded_config_is_the_file` claimed *"No existing test asserts this equality
+directly … never a whole-mapping comparison against the file on disk."* False:
+`tests/test_acceptance.py::test_scaffold_then_run_produces_a_real_record` makes exactly that
+comparison for the unswept case. **Changed:** the docstring now names that test as the real
+neighbour and narrows the claim to what the arm actually adds — the *swept* case. **Verified by
+running:** the unnarrowed `{**config, "sweep": None}` mutation in `run_record.py` fails both arm F
+and the acceptance test; narrowed to fire only when `config["sweep"]["grid"]` is truthy, it fails
+**only** arm F and `test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config` across
+the full suite — `2 failed, 2520 passed, 1 skipped, 2 xfailed`, reproduced myself before writing
+the correction. Reverted; `diff` against a pre-mutation copy of `run_record.py` byte-identical.
+**What the arm genuinely adds:** the only place in the suite that would catch a *swept* run's
+embedded config diverging from the file on disk — the unswept case is already covered by
+`test_scaffold_then_run_produces_a_real_record`.
+
+**MAJOR 1(b) — Arm E's coverage claim was half false.** The same test's docstring claimed *"No
+existing test asserts `sweep.yaml`'s top-level key list or that no condition entry carries
+`selectors`."* The second half is false: `tests/test_sweep.py`'s
+`test_the_sweep_document_records_the_resolved_plan` asserts `doc["conditions"] == [...]` by full
+dict equality, which already pins the entry key set — including `selectors`'s absence — exactly.
+**Changed:** the docstring now separates the two halves, marks the `selectors` half as already
+covered by that shipped test (named), and keeps only the top-level-key-list half as the arm's own
+new-coverage claim. **Verified by running:** adding `"selectors": {}` to each condition entry in
+`sweep.py`'s `sweep_document` fails arm E **and**
+`test_sweep.py::test_the_sweep_document_records_the_resolved_plan` — `2 failed, 2520 passed, 1
+skipped, 2 xfailed`, reproduced myself. Reverted; `diff` against a pre-mutation copy of `sweep.py`
+byte-identical. **What the arm genuinely adds:** the top-level key list only — no shipped test
+reads `sweep.yaml` as a file for its shape at all.
+
+**The consequence, and the lesson.** Both false claims falsified the § Brief/design/plan vs. code
+and § Concerns sections above ("None" / "None outstanding" were both wrong), which is now the
+sixth consecutive report on this project to make that claim and be wrong. **The mechanical check
+that would have caught it: before writing "no existing test asserts X," grep for X** — a
+one-command check, run against the actual suite, not against memory of what the suite probably
+covers. Doing that now for every "new coverage" / "not new coverage" claim in the original report
+(arms A, B, D, G-1, G-3 as new; arm C, G-2 as not-new) reproduces the review's own attack-1 table:
+all five "new" claims and both "not new" claims hold. Arms E and F did not, because their
+docstrings named "the nearest neighbour" from reasoning about what a pin like this would probably
+need, rather than from a grep run before the sentence was written.
+
+**MINOR 1 — Arm A's `lock`-absence line is implied by the line above it.** If `lock` existed,
+`iterdir()` would list it and the sorted-list equality would fail first, so the `lock` assertion
+can never fail on its own — `CLAUDE.md`'s own "assertion implied by another in the same test"
+shape. **Changed:** Arm A's docstring now says so explicitly, and says the list assertion is what
+actually delivers it. Kept the line itself, since the brief prescribed it verbatim. **Verified by
+construction** (as the review did): no reachable state fails the `lock` line while the list
+assertion passes, so no mutation was run for this one — there is no branch for a mutation to
+isolate.
+
+**MINOR 2 — the authorized-editor clause was missing its auditable half.** The brief's step 3
+required both docstrings to state *"task 3's report must show the diff is exactly one entry per
+arm with nothing reordered."* **Changed:** added that sentence to both Arm A's and Arm B's
+docstrings, immediately after each post-edit list. **Verified by reading:** `grep -n "task 3's
+report"` now hits both docstrings; nothing else in the clause needed changing (sole-editor naming
+and post-edit lists were already correct per the review's own read).
+
+**MINOR 3 — the cross-document sweep was run for three spellings, not for the claim.** The
+original sweep grepped `environment/{uv.lock,pyproject.toml}`, `sweep.yaml` and
+`manifest/input.json` — none of which can match `README.md`'s own abbreviated run-directory tree
+(`~/results/cohort-pilot/` → `run.yaml`, `conditions/`, `summary/`), so the sweep never looked at
+the one place the claim ("no other document enumerates run-directory contents") was actually at
+risk. **Changed:** re-ran the sweep over the four documents named individually plus `CLAUDE.md`
+and `docs/feasibility-llm-growth-studies.md`, using `run.yaml` as a proven-to-fire positive
+control and `environment/` as the actual claim. **Verified:** `run.yaml` hits — README 8,
+design-principles 5, experimental-designs 1, reference 75, CLAUDE.md 4, feasibility 3 (control
+fires everywhere, so the sweep can see); `environment/` hits — zero outside `reference.md`. Read
+README's tree directly: it already omits `environment/`, `manifest/`, `sweep.yaml` and
+`executions.jsonl`, by deliberate abbreviation, so it owes nothing and the conclusion is unchanged
+— but this time the method looked. The report's earlier sweep description (above, unedited per
+this repo's append-don't-retro-edit convention) is superseded by this paragraph.
+
+**MINOR 4 — recorded, no action.** `E-FREEZE-NO-CONFIG` sits in `reference.md` prose with no
+§ Errors row and no emit site. Task 12 owns § Errors rows; the reviewer measured six codes already
+prose-only in `reference.md` with no table row anywhere (`E-EXPERIMENT-EXISTS`, `E-IO-FAILED`,
+`E-PROJECT-EXISTS`, `E-STEP-EXISTS`, `E-TEMPLATE-EXISTS`, `E-TEMPLATE-INSTALLED-UNSUPPORTED`), so
+this is precedented and not a rule breach. No document or code change made.
+
+**MINOR 5 — a positional locator in new text.** `tests/test_hashes.py`'s
+`test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config` said "the two below."
+**Changed:** names the two tests (`test_h8b_arm_g_metadata_only_change_is_identical`,
+`test_h8b_arm_g_max_failed_fraction_change_differs`) instead of locating them by position.
+**Verified by reading** — the two named tests are exactly the two that followed positionally.
+
+**MINOR 6 — three citations to a git-ignored brief, in a tracked report.** The plan
+(`docs/superpowers/plans/2026-08-20-diff-freeze.md`, tracked) holds the identical content to the
+brief at its own § Task 13 and § Task 14. This section replaces the earlier § Brief/design/plan
+vs. code and § Concerns wording rather than editing it in place (see the note at the top of this
+Fix round): where this Fix round cites source material, it cites the plan's task sections, not
+"the brief."
+
+**MINOR 7 — two wording slips in § The two files' new paragraph.** `docs/reference.md` read
+"never modified since" (no referent for "since") and argued "naming it here would…" while the
+sentence itself names the file. **Changed:** "since" removed (now "written at run start and never
+modified"); the sentence restructured so it states the two true properties directly — not a third
+thing to edit, and the section is not renamed on the file's account — without the
+self-contradicting "naming it here would" framing. **Verified by reading** the corrected sentence
+against Minor 7's own diagnosis; no other instance of either phrasing exists elsewhere in the diff
+(grepped).
+
+**Corrected § Brief/design/plan vs. code — disagreements found, restated for this round.** Two:
+Arm F's and Arm E's own coverage claims, both above. Both are claims about the shipped test suite
+that the task made without grepping for the string in the claim first, which is exactly the
+category that section exists to hold, and both were closed in this round rather than carried
+forward.
+
+**Corrected § Concerns, restated for this round.** None outstanding after this round's fixes.
+Minor 4 is recorded, not fixed, by design (task 12's). Minor 1 has no code action available — it
+documents an assertion that cannot fail on its own rather than removing it, per the brief's
+verbatim prescription.
+
+**Gates after all fixes, on the reverted tree:** `ruff format .` run before committing;
+`ruff check .` clean; `ruff format --check .` → 84 files unchanged; `mypy` → 47 source files, no
+issues; `pytest` → full suite, unfiltered.
