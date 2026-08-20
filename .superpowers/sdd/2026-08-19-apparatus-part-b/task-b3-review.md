@@ -50,6 +50,19 @@ so the raise passes `command_run`'s redacting containment site (`cli.py:2476`) a
 bare `print(f"  error   {exc.code:<20} {exc}")`. **Before task 4 this path had no call site**, so the
 residual was inert; the wiring is what made it live.
 
+**The value is already on disk regardless, and that half is pre-existing — verified by running.**
+The same run writes `{"serial": 13579}` into `apparatus/probes.jsonl` on two lines, because
+`check_facts`'s non-`str` carve-out lets it through the credential check entirely. So what task 4
+newly created is the **terminal** exposure, not the disk exposure; the disk half belongs to whoever
+owns that carve-out. Checked against `docs/superpowers/spec-defects.md`: the closed entry there
+covers a `str` fact value reaching `probes.jsonl` (closed by Part A task 9, Fixture K), and the open
+entry covers a credential-valued fact **key** — **the non-`str` value carve-out is filed nowhere**,
+and should be, owned by the fact-contract carve-out rather than by this batch. That same open entry
+already predicts this batch's half in as many words: *"a future code added outside that set (or a
+future call site printing the raw exception rather than a `Collector`) would reopen the leak."*
+`E-APPARATUS-CHANGED` is exactly a code outside that set, so this is the predicted reopening rather
+than a new class.
+
 `check_changed`'s own docstring names this residual and names Decision 14's redacting `Collector` as
 the mitigation — **which is task 5/7's and is not in the tree**. Reading `secrets.redact`'s
 containment behaviour, that `Collector` should indeed redact `13579` from the rendered message, so
@@ -78,14 +91,23 @@ caught by a crash is not a pin* — so **the record-before-gate ordering has no 
 while the test's docstring asserts the count "is the only assertion that can see this ordering" and
 the report repeats it. That is the *a test whose name claims the guarantee* shape.
 
-**What would create a real pin** (and the reviewer recommends it as task 5's first step, since it is
-three lines): a direct call to `Observations.changed()` **without** `record()` first, asserting the
-`AssertionError`. That is the assertion that actually witnesses the ordering, and it simultaneously
-pins the claim `Observations.changed`'s own docstring currently makes unpinned — *"reachable by a
-direct call that skips `record` first (verified by review; no shipped test calls it that way)"* —
-verified by grep: no test in `tests/test_apparatus.py` asserts that `AssertionError`. The count
-assertion should then be described for what it is: a census assertion, true under the surviving
-ordering, not a discriminator.
+**First, what is NOT claimed: the ordering is not unguarded.** The assert fires loudly, at every
+apparatus fixture, the instant `_observe_one`'s order is reversed — a reorder cannot ship silently.
+What is missing is a *test-level* witness, and the overclaiming docstring is the actual defect.
+
+**Three actions, in ascending cost; the first is the minimum and closes the finding.**
+
+1. **Delete the count test's "the only assertion that can see this ordering" clause** (and the
+   report's repetition of it). Prefer deleting the claim to rewriting it; describe the count for what
+   it is — a census assertion, true under the surviving ordering, not a discriminator.
+2. **Pin the claim `Observations.changed`'s docstring makes and nothing asserts**: a direct call to
+   `changed()` **without** `record()` first, asserting the `AssertionError`. Verified by grep that no
+   test in `tests/test_apparatus.py` asserts it. **Note precisely what this does and does not pin**:
+   it witnesses that `changed` *requires* record-first, **not** that `_observe_one` *satisfies* it —
+   add it after a reorder and it still passes.
+3. **The only legible witness of `_observe_one`'s order** is an observation of the call sequence —
+   spy or wrap `Observations.record` and `check_changed` and assert record-then-gate — because every
+   value assertion is equal under both orderings and every count assertion sits behind the assert.
 
 **The append discriminator, by contrast, is real — verified by running.** The brief's mutation (a) is
 realizable in an assert-safe form the report did not try: move `append_observation` **below**
@@ -132,7 +154,23 @@ one. Keep the docstring; record the substitution so task 5's implementer knows t
 
 `tests/test_cli.py:14444`: "(`_SWEPT_FACT_PROBE_MODULE`/`_APPARATUS_ASSAY_TEMPLATE` **above**)". The
 constants are named, so "above" is deletable; `CLAUDE.md` forbids positional locators and has been
-burned by them seven times.
+burned by them seven times. **The weakest finding here** — the rule targets positional *table row*
+references and the constants are named, so "above" is redundant rather than wrong.
+
+### Minor 6 — Decision 11's cost-if-wrong sentence names a test that would not fail, and its own mutation table has the right answer
+
+`docs/superpowers/specs/2026-08-19-apparatus-part-b-design.md` § Decision 11: *"If a future round ever
+probes one condition twice before the first execution, the gate would fire during setup and **the test
+above is what would fail**."* It would not. Determined from the fixture: G3's probe returns the swept
+value, constant within a condition, so a duplicated run-start round observes the same value twice and
+nothing is compared as changed — the test passes. The design's own mutation table has the correct
+guard for that case (*"Probe once at run start instead of once per condition | Part A's shipped
+call-count contract"*), so the decision contradicts its own table. This disturbs neither verdict —
+the pin task 13 was asked for exists and discriminates against the reading it was built for — but per
+`CLAUDE.md` the correction is appended to the design rather than retro-edited into Decision 11, and
+task 11 is the natural place to record it. Not mutated in this review: Part A's
+`test_a_declared_probe_is_called_once_per_condition_at_run_start`, which is the guard that would
+actually have to fail.
 
 ---
 
@@ -219,10 +257,6 @@ only by task 4's new section.
 - **Whether Decision 14's `Collector` actually redacts Major 1's message.** `secrets.redact` matches
   by containment over the same value set, and the rendered message contains the value, so it should —
   but that is **read**, not run, and only becomes runnable once task 5/7 land the collector.
-- **A future round probing one condition twice at run start.** G3 cannot see it: its per-condition
-  value is constant, so a duplicated run-start round changes nothing observable there. Part A's
-  `test_a_declared_probe_is_called_once_per_condition_at_run_start` is the only guard and was not
-  mutated in this review.
 - **Fixture G1's final-state expectations** — `run.yaml`, `status: failed`, exit 4, three `unobserved`
   entries, `W-APPARATUS-UNANSWERED` exactly twice — are tasks 5–7's and are unassessed here.
 - **Whether a smaller fixture than G1 separates its readings** (the design's own unmeasured item 6)
