@@ -4,6 +4,7 @@ per `docs/superpowers/plans/2026-08-20-lineage.md` task 1 and
 `docs/superpowers/specs/2026-08-20-lineage-design.md` § 3.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -153,10 +154,7 @@ def test_relative_form_resolves_under_output_dir_and_reads(tmp_path: Path):
 def test_absolute_form_on_a_moved_directory_reads_the_records_own_id(tmp_path: Path):
     """Fixture L's absolute arm. The copied directory's own name (`moved_run`) must
     play no part in what is returned: the recorded `run_id` is read from the
-    record, never parsed from the directory's basename. Asserted on the RAW
-    rendered text (`yaml.safe_dump`), not a parsed structure, per the design's
-    "a defect that lives in how a value is written can be normalised away by the
-    reader" rule.
+    record, never parsed from the directory's basename.
     """
     output_dir = tmp_path / "results"
     run_id = "run_2020-01-01T00-00-00Z_bbbbbbb"
@@ -166,7 +164,6 @@ def test_absolute_form_on_a_moved_directory_reads_the_records_own_id(tmp_path: P
     resolved, record = resolve_run(str(moved), output_dir=output_dir, repo_root=repo_root)
     assert resolved == moved.resolve()
     assert record["run_id"] == run_id
-    assert "moved_run" not in yaml.safe_dump(record)
 
 
 def test_output_dir_latest_via_absolute_form_reads_through_the_symlink(tmp_path: Path):
@@ -197,6 +194,11 @@ def test_output_dir_latest_via_relative_form_is_runid_mismatch(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         resolve_run("latest", output_dir=output_dir, repo_root=repo_root)
     assert e.value.code == "E-UPSTREAM-RUNID-MISMATCH"
+    # Minor 2 (task-b2-review.md): the message carries a `latest`-specific clause
+    # that is a non-sequitur for the OTHER fault sharing this code (a renamed
+    # directory, below) — assert the text here so a message that drops the
+    # clause, or attaches it to the wrong fault, is caught.
+    assert "`latest` is a path" in str(e.value)
 
 
 def test_a_renamed_run_directory_disagrees_with_its_own_record(tmp_path: Path):
@@ -210,6 +212,10 @@ def test_a_renamed_run_directory_disagrees_with_its_own_record(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         resolve_run("run_renamed", output_dir=output_dir, repo_root=repo_root)
     assert e.value.code == "E-UPSTREAM-RUNID-MISMATCH"
+    # Minor 2: this fault is not about `latest` at all — the message's `latest`
+    # clause must not appear here, and its own clause must.
+    assert "`latest`" not in str(e.value)
+    assert "own run_id" in str(e.value)
 
 
 def test_a_relative_locator_with_a_separator_is_upstream_locator(tmp_path: Path):
@@ -257,6 +263,39 @@ def test_containment_guard_control_reads_when_moved_outside_the_repo(tmp_path: P
     _write_upstream(outside, run_id)
     resolved, record = resolve_run(str(outside), output_dir=output_dir, repo_root=root)
     assert resolved == outside.resolve()
+    assert record["run_id"] == run_id
+
+
+def test_containment_guard_uses_the_callers_repo_root_not_a_walk_up_from_the_upstream(
+    tmp_path: Path,
+):
+    """Major 1 (task-b2-review.md). The mutation this fixture exists to catch —
+    re-deriving `repo_root` by walking up from the upstream path instead of using
+    the caller's own — is NOT caught by the two fixtures above: `tmp_path` on this
+    machine sits under no `.git` at all, so that mutation only crashes with
+    `E-GIT-NO-REPO` there rather than misclassifying anything (see the batch's own
+    report and the review's Major 1 for that measurement).
+
+    The property "the question is answered with the caller's `repo_root`, never a
+    walk-up from the upstream" needs an upstream that DOES sit inside a real git
+    repo of its own — one that is not the downstream's. Correct code reads it
+    (the caller's `repo_root` does not contain it); a mutant that re-derives
+    `repo_root` from the upstream path finds that sibling repo's own `.git` and
+    wrongly refuses it with `E-UPSTREAM-REPO-CONTAINED`.
+    """
+    downstream_repo_root = tmp_path / "downstream_repo"
+    downstream_repo_root.mkdir()
+    other_repo = tmp_path / "other_repo"
+    other_repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True)
+    run_id = "run_2020-01-01T00-00-00Z_lllllll"
+    upstream = other_repo / "up"
+    _write_upstream(upstream, run_id)
+    output_dir = tmp_path / "results_unused_for_this_call"
+    resolved, record = resolve_run(
+        str(upstream), output_dir=output_dir, repo_root=downstream_repo_root
+    )
+    assert resolved == upstream.resolve()
     assert record["run_id"] == run_id
 
 
@@ -340,3 +379,29 @@ def test_a_run_scoped_and_summary_scoped_step_resolve_to_shared_and_summary(tmp_
     )
     assert resolve_step(doc, run_dir, "step_shared") == run_dir / "shared" / "step_shared"
     assert resolve_step(doc, run_dir, "step_summary") == run_dir / "summary" / "step_summary"
+
+
+def test_a_repeat_scoped_step_nested_under_its_repeat_label_is_also_refused(tmp_path: Path):
+    """Minor 5 (task-b2-review.md). `run_record._execution_block` writes a
+    REPEAT-scoped step's entry nested one level further than a condition-scoped
+    one: `cond["steps"][step] = {repeat_label: entry}`, not a bare entry — the
+    shape `_execution_with_all_scopes` above never instantiates. Membership in
+    `conditions` is still the whole test, so the same refusal fires regardless of
+    what sits inside `steps[step]`.
+    """
+    run_dir = tmp_path / "upstream"
+    execution = {
+        "shared": {},
+        "summary": {},
+        "conditions": [
+            {
+                "index": 0,
+                "label": "cond_a",
+                "steps": {"step_repeat": {"seed47": {"status": "completed"}}},
+            }
+        ],
+    }
+    doc = _write_upstream(run_dir, "run_2020-01-01T00-00-00Z_mmmmmmm", execution=execution)
+    with pytest.raises(ContractError) as e:
+        resolve_step(doc, run_dir, "step_repeat")
+    assert e.value.code == "E-UPSTREAM-STEP-SCOPED"

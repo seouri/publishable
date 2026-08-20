@@ -83,7 +83,8 @@ def read_run_record(path: Path) -> dict[str, Any]:
 def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Path, dict[str, Any]]:
     """Resolve a `reuse_from` locator to a run directory and its record.
 
-    § Lineage between runs gives a locator two readings, told apart by
+    § Lineage between runs gives a locator two readings; Decision 1
+    (`docs/superpowers/specs/2026-08-20-lineage-design.md`) tells them apart by
     `Path(locator).is_absolute()` and by nothing else — not a separator test, not
     whether the directory exists:
 
@@ -132,10 +133,15 @@ def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Pat
     resolved = output_dir / locator
     record = read_run_record(resolved)
     if record.get("run_id") != locator:
+        detail = (
+            "`latest` is a path, not a run_id, and only the absolute form may follow a path"
+            if locator == "latest"
+            else "the relative form addresses a run by its own run_id, never by "
+            "another name it happens to sit under"
+        )
         raise ContractError(
             f"{locator!r} does not name a run_id — the run directory at {resolved} "
-            f"records run_id {record.get('run_id')!r}. `latest` is a path, not a "
-            "run_id, and only the absolute form may follow a path",
+            f"records run_id {record.get('run_id')!r}. {detail}",
             code="E-UPSTREAM-RUNID-MISMATCH",
         )
     return resolved, record
@@ -158,8 +164,9 @@ def resolve_step(record: dict[str, Any], run_dir: Path, step: str) -> Path:
     A step recorded under `execution.conditions` — a `condition`- or
     `repeat`-scoped step — is refused, `E-UPSTREAM-STEP-SCOPED`, even in the one
     case where the ambiguity does not actually exist: an *unswept* run's
-    condition- or repeat-scoped step writes directly into the run directory
-    (`<run_dir>/<repeat>/<step>/`, never under `conditions/`) and so has an
+    condition- or repeat-scoped step writes directly under the run directory,
+    never under `conditions/` (with a `<repeat>/` segment only when the run
+    resolved more than one repeat — a single repeat collapses it), and so has an
     unambiguous location the blanket refusal deliberately declines to use. An
     upstream that is unswept today and gains a level tomorrow would relocate that
     artifact while every hash still matches, and a downstream read that worked
@@ -199,6 +206,13 @@ def resolve_step(record: dict[str, Any], run_dir: Path, step: str) -> Path:
             code="E-UPSTREAM-STEP-UNKNOWN",
         )
 
+    # Minor 6 (task-b2-review.md): a hand-edited record whose `shared`/`summary`
+    # entry is not a mapping reaches `.get` here and raises `AttributeError`
+    # rather than a diagnostic — this is a read, not a run: there is no call
+    # site yet, and once one exists `execute_plan`'s bare `except Exception`
+    # records it as a failed execution rather than surfacing a traceback.
+    # Whether this earns its own coded refusal is task 5's decision, not
+    # this task's.
     if entry.get("status") != "completed":
         raise ContractError(
             f"`{step}` in the upstream run did not complete (status: "

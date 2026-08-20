@@ -7351,3 +7351,43 @@ materialized by `materialize.py` — from a slice about something else.
 § Ruling from the controller and § What did not survive the re-measurement, and H7d Part B batch 1's
 review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
 "filed" is not a filing.
+
+## OPEN — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: whoever wires `io.reuse_from` (tasks 3/5)**
+
+`src/publishable/lineage.py`'s `resolve_run` (H8a task 2) exempts the relative form
+(`reuse_from("run_id", ...)`) from `provenance.resolves_inside_repo` entirely, on Decision 1's
+grounds that the relative form "inherits the guarantee for free — `output_dir` was checked at
+`validate` and again by `run`." That is true for an ordinary subdirectory of `output_dir` and false
+for a **symlink** under it: core itself writes one (`run_identity.point_latest` symlinks
+`<output_dir>/latest` to a run directory's name), so a symlink under `output_dir` pointing at a
+directory inside the git repo is not an exotic construction.
+
+**Verified by running** (H8a task-b2 review, Major-adjacent finding, Minor 8): a git repo holding
+`in_repo_run/run.yaml` (`run_id: run_abc`), plus `<output_dir>/run_abc` symlinked to it. The relative
+form of `resolve_run("run_abc", output_dir=..., repo_root=...)` **reads it** — no containment check
+runs on that branch at all, and the returned path's `.resolve()` sits under `repo_root`. `CLAUDE.md`
+§ Invariants states `input_dir`/`output_dir` may never resolve inside the git repo, checked "by
+every command that executes" — this branch is not `validate` and is not `run` itself, but a resolver
+`run` invokes through a step, and it reads an artifact from inside the repo tree `code_hash` is
+computed over.
+
+**Second half of the same finding.** The absolute form returns `path.resolve()`; the relative form
+returns `output_dir / locator` **unresolved** — so a symlink component survives into the value tasks
+3 and 5 will pass to artifact resolution and task 7 will record into `provenance.upstream`. The two
+forms hand back different kinds of path today, and that is related to the containment gap rather
+than a separate one: resolving the relative form's path would make the symlink-escape visible to the
+same `resolves_inside_repo` check the absolute form already runs.
+
+**Not a batch-2 compliance failure.** The code matches Decision 1 exactly; the decision's own grounds
+are the incomplete part, and this batch's charter (tasks 2 and 4, direct-call surface, "NOT ONE CALL
+SITE") does not include widening the guard — doing so here would be a behaviour change made outside
+the batch that scoped it and against a decision on the books, which is what this filing exists to
+avoid.
+
+**Owner:** whoever wires the resolver into `io.reuse_from` and its call site (tasks 3/5), who must
+either (a) resolve the relative branch's path and run `resolves_inside_repo` on both branches, or
+(b) record explicitly, with a check rather than an assertion, why the relative form's exemption is
+safe against a symlink under `output_dir` specifically (not merely against an ordinary
+subdirectory).
+
+**Found by:** H8a task-b2 review, Minor 8, verified by running.
