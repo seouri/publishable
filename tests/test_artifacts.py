@@ -1257,6 +1257,146 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
     assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
 
 
+# ---------------------------------------------------------------------------
+# Task 12 — the shared `_contained` helper wired into `read_upstream` and
+# `read_condition`. Fixture N's other two readers (`reuse_from`'s own arms
+# are in the Task 5 block above) — same construction, same code
+# (`E-ARTIFACT-NAME`, the code `_resolve` already raises for these two
+# readers, and not `E-UPSTREAM-NAME`, which is `reuse_from`'s own).
+# `docs/superpowers/plans/2026-08-20-lineage.md` task 12.
+# ---------------------------------------------------------------------------
+
+
+def test_read_upstream_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
+    tmp_path: Path,
+):
+    """Fixture N's three `read_upstream` refusal arms, each targeting a file
+    that EXISTS and holds distinguishable content — so an unenforced check
+    would return it rather than fail for an unrelated reason (the live probe
+    at `28e311d` did exactly that for the `..` and absolute-outside arms)."""
+    io = make_io(tmp_path, scope="repeat", step_scopes={"step01": "run"})
+    step_dir = io.run_dir / "shared" / "step01"
+    step_dir.mkdir(parents=True)
+
+    # `..` traversal: a file that exists OUTSIDE the run entirely, reached by
+    # a relative path with exactly enough `..` segments to escape `step_dir`.
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"who": "SECRET_DOTDOT"}')
+    escape_name = os.path.relpath(secret, step_dir)
+    assert ".." in escape_name  # the fixture's own claim: this really escapes
+    with pytest.raises(ArtifactError) as e:
+        io.read_upstream("step01", escape_name)
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    # An absolute path, naming the same existing, distinguishable file.
+    with pytest.raises(ArtifactError) as e:
+        io.read_upstream("step01", str(secret))
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    # An absolute path pointing INSIDE the step directory itself — the two
+    # arms above are each already refused by the `startswith` half of
+    # `_contained`'s check (their target sits outside the resolved base), so
+    # this is the arm refused ONLY by the absolute-path clause (batch 3's
+    # "a refusal that fires for the wrong reason is not a pin").
+    inside_absolute = step_dir / "ok.json"
+    inside_absolute.write_text('{"who": "INSIDE_BUT_ABSOLUTE"}')
+    with pytest.raises(ArtifactError) as e:
+        io.read_upstream("step01", str(inside_absolute))
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    # A symlink inside the step directory leading outside it.
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "leak.json").write_text('{"who": "SECRET_SYMLINK"}')
+    link = step_dir / "escape_dir"
+    link.symlink_to(outside_dir, target_is_directory=True)
+    with pytest.raises(ArtifactError) as e:
+        io.read_upstream("step01", "escape_dir/leak.json")
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+
+def test_read_upstream_positive_control_a_forward_separator_and_an_interior_dot_still_read(
+    tmp_path: Path,
+):
+    """Fixture N's positive control, not optional per controller ruling 1: a
+    helper that refused every separator would pass the refusal arms above
+    and still be the over-refusal the ruling forbids. `programs/a.json` — a
+    forward separator, § Steps and artifacts' own worked shape — and
+    `programs/gpt-4.1__seed29.json`, whose interior dot must still dispatch
+    as `.json`, not as some suffix ending in `.1`.
+    """
+    io = make_io(tmp_path, scope="repeat", step_scopes={"step01": "run"})
+    programs = io.run_dir / "shared" / "step01" / "programs"
+    programs.mkdir(parents=True)
+    (programs / "a.json").write_text('{"a": 1}')
+    (programs / "gpt-4.1__seed29.json").write_text('{"b": 2}')
+    assert io.read_upstream("step01", "programs/a.json") == {"a": 1}
+    assert io.read_upstream("step01", "programs/gpt-4.1__seed29.json") == {"b": 2}
+
+
+def test_read_condition_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
+    tmp_path: Path,
+):
+    """Fixture N's three `read_condition` refusal arms — `read_condition` is
+    `summary`-scope only, so the fixture needs a `StepIO` with `conditions`
+    and `step_scopes` set, the shape
+    `test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat`
+    already uses."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline")],
+        step_scopes={"fit": "condition"},
+    )
+    step_dir = io.run_dir / "conditions" / "00_baseline" / "fit"
+    step_dir.mkdir(parents=True)
+
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"who": "SECRET_DOTDOT"}')
+    escape_name = os.path.relpath(secret, step_dir)
+    assert ".." in escape_name
+    with pytest.raises(ArtifactError) as e:
+        io.read_condition(0, "fit", escape_name)
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    with pytest.raises(ArtifactError) as e:
+        io.read_condition(0, "fit", str(secret))
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    inside_absolute = step_dir / "ok.json"
+    inside_absolute.write_text('{"who": "INSIDE_BUT_ABSOLUTE"}')
+    with pytest.raises(ArtifactError) as e:
+        io.read_condition(0, "fit", str(inside_absolute))
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "leak.json").write_text('{"who": "SECRET_SYMLINK"}')
+    link = step_dir / "escape_dir"
+    link.symlink_to(outside_dir, target_is_directory=True)
+    with pytest.raises(ArtifactError) as e:
+        io.read_condition(0, "fit", "escape_dir/leak.json")
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+
+def test_read_condition_positive_control_a_forward_separator_and_an_interior_dot_still_read(
+    tmp_path: Path,
+):
+    """Fixture N's positive control for `read_condition`."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline")],
+        step_scopes={"fit": "condition"},
+    )
+    programs = io.run_dir / "conditions" / "00_baseline" / "fit" / "programs"
+    programs.mkdir(parents=True)
+    (programs / "a.json").write_text('{"a": 1}')
+    (programs / "gpt-4.1__seed29.json").write_text('{"b": 2}')
+    assert io.read_condition(0, "fit", "programs/a.json") == {"a": 1}
+    assert io.read_condition(0, "fit", "programs/gpt-4.1__seed29.json") == {"b": 2}
+
+
 def _mixed_arm_roster():
     """4 `control` and 9 `treatment`, 13 total — every number in play (4, 9, 13)
     is distinct from the others and from every arm fixture already in the

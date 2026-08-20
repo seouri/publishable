@@ -799,7 +799,8 @@ class StepIO:
             if label is None
             else (self.run_dir / "conditions" / condition_dir_name(index, label))
         )
-        return self._read(self._nest_repeat(base, target, repeat) / step / name)
+        step_dir = self._nest_repeat(base, target, repeat) / step
+        return self._read(self._contained(step_dir, name, code="E-ARTIFACT-NAME"))
 
     def _nest_repeat(self, base: Path, target: str | None, repeat: str | None) -> Path:
         """The repeat-label segment a `repeat`-scoped target's directory carries.
@@ -863,7 +864,8 @@ class StepIO:
                     / condition_dir_name(self._condition_index, self._condition_label)
                 )
             base = self._nest_repeat(base, target, self._repeat_label)
-        return self._read(base / step / name)
+        step_dir = base / step
+        return self._read(self._contained(step_dir, name, code="E-ARTIFACT-NAME"))
 
     def reuse_from(self, locator: str, step: str, name: str) -> Any:
         """Read a named artifact from a completed upstream run.
