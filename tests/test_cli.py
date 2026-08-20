@@ -15297,3 +15297,136 @@ def test_fixture_b_batch_and_the_apparatus_stay_independent(
     batch_output = (batch_doc["stdout"] or "") + (batch_doc["stderr"] or "")
     assert "W-REPL-DETERMINISTIC" not in seed_output
     assert "W-REPL-DETERMINISTIC" in batch_output
+
+
+# --- H8a task 11: the guard pin, captured by running at 28e311d --------------
+#
+# Four arms pin what H8a must not move while it builds `io.reuse_from`. Every
+# literal below was produced by driving `run_a_project` and reading the
+# artifacts back — none is transcribed from `run_record.py`. See
+# `docs/superpowers/plans/2026-08-20-lineage.md` task 11 and
+# `docs/superpowers/specs/2026-08-20-lineage-design.md` § Corrections 8, 9, 10.
+
+
+def test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit(tmp_path):
+    """Arm A. A clean run's `run.yaml` top-level key list, in order — a key
+    added by accident anywhere in this slice is exactly what a full-list
+    assertion catches and a `status`-only assertion would not — plus
+    `status == "completed"`, `expect_exit == EXIT_OK` (asserted inside
+    `run_a_project` itself), and `len(executions.jsonl) == len(execution_order)`.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=8)
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert list(run_doc.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+    assert run_doc["status"] == "completed"
+    sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
+    executions = (run_dir / "executions.jsonl").read_text().splitlines()
+    assert len(executions) == len(sweep_doc["execution_order"])
+
+
+def test_h8a_arm_b_the_provenance_key_list_and_no_upstream_key(tmp_path):
+    """Arm B — THE ONE ARM AN AUTHORIZED TASK MAY EDIT.
+
+    Task 7, and only task 7, may edit this assertion, to the same list with
+    `"upstream"` appended after `"allocation_hash"` and nothing reordered.
+    Task 7's report must show the diff is exactly that one key. Any other
+    task that finds this arm failing has found a finding to report, not an
+    assertion to edit — see `docs/superpowers/plans/2026-08-20-lineage.md`
+    task 11 step 3 and `CLAUDE.md`'s note on editing a pin to accommodate
+    new work.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=8)
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    provenance = run_doc["provenance"]
+    assert list(provenance.keys()) == [
+        "git",
+        "environment",
+        "apparatus",
+        "input_manifest",
+        "input_manifest_hash",
+        "input_manifest_changed",
+        "publishable_version",
+        "plugin_versions",
+        "units",
+        "units_hash",
+        "allocation",
+        "allocation_hash",
+    ]
+    assert "upstream" not in provenance
+
+
+def test_h8a_arm_c_the_execution_blocks_scope_routing_run_and_summary(tmp_path):
+    """Arm C — Decision 4's entire foundation, measured against a real run
+    rather than trusted from the assembler. A `run`-scoped step's entry lands
+    in `execution.shared`, with its artifact at `shared/<step>/cohort.json`; a
+    `summary`-scoped step's entry lands in `execution.summary`, with artifacts
+    at `summary/<step>/programs/a.json` and
+    `summary/<step>/programs/gpt-4.1__seed29.json`. The generated step's name
+    is read back from the run's own `execution` block, never assumed to be
+    `step09_publish` — `run_a_project` prefixes it (§ Corrections, correction
+    8).
+    """
+    run_step_source = (
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "run"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        io.write("cohort.json", {{"n": 3}})\n'
+    )
+    run_doc_a = run_a_project(
+        tmp_path / "run_scoped",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=8,
+        extra_steps=["step09_publish"],
+        extra_step_source=run_step_source,
+    )
+    run_dir_a = run_doc_a["run_dir"]
+    record_a = yaml.safe_load((run_dir_a / "run.yaml").read_text())
+    shared_names = list(record_a["execution"]["shared"].keys())
+    assert len(shared_names) == 1
+    generated_name = shared_names[0]
+    assert generated_name != "step09_publish", (
+        "run_a_project prefixes a generated step's name; a fixture that hard-codes "
+        "the unprefixed literal fails for a reason that has nothing to do with "
+        "lineage (§ Corrections, correction 8)"
+    )
+    assert (run_dir_a / "shared" / generated_name / "cohort.json").exists()
+
+    summary_step_source = (
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "summary"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        io.write("programs/a.json", {{"x": 1}})\n'
+        '        io.write("programs/gpt-4.1__seed29.json", {{"y": 2}})\n'
+    )
+    run_doc_b = run_a_project(
+        tmp_path / "summary_scoped",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=8,
+        extra_steps=["step09_publish"],
+        extra_step_source=summary_step_source,
+    )
+    run_dir_b = run_doc_b["run_dir"]
+    record_b = yaml.safe_load((run_dir_b / "run.yaml").read_text())
+    summary_names = list(record_b["execution"]["summary"].keys())
+    assert len(summary_names) == 1
+    generated_summary_name = summary_names[0]
+    assert (run_dir_b / "summary" / generated_summary_name / "programs" / "a.json").exists()
+    assert (
+        run_dir_b / "summary" / generated_summary_name / "programs" / "gpt-4.1__seed29.json"
+    ).exists()

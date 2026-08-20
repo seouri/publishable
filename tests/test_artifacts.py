@@ -945,6 +945,20 @@ def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
     assert io.read_upstream("load", "a.json") == {"x": 1}
 
 
+def test_h8a_arm_d_the_shipped_positive_read_upstream_read(tmp_path: Path):
+    """Task 11 arm D — the shipped positive `read_upstream` read, pinned
+    before H8a builds `io.reuse_from` beside it. `step01` writes `ok.json`
+    under `shared/`, and a narrower step reads it back through the ordinary
+    `run`-scoped path `test_a_narrower_step_reads_a_wider_one_normally`
+    already exercises. See `docs/superpowers/plans/2026-08-20-lineage.md`
+    task 11 and `.superpowers/sdd/2026-08-20-lineage/task-11-brief.md`.
+    """
+    io = make_io(tmp_path, scope="repeat", step_scopes={"step01": "run"})
+    (io.run_dir / "shared" / "step01").mkdir(parents=True)
+    (io.run_dir / "shared" / "step01" / "ok.json").write_text('{"ok": true}\n')
+    assert io.read_upstream("step01", "ok.json") == {"ok": True}
+
+
 def test_a_repeat_step_reads_a_condition_scoped_step(tmp_path: Path):
     """The case that fails today: `shared/` is where run-scoped steps write, and a
     condition-scoped step writes under its own condition directory."""
