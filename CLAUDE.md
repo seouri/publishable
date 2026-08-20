@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H8, H9, and H3c-3's remaining 14 — the H4 and H7 families are
-complete.** Amended twice on 2026-08-14
+**Order of the slices that remain: H8b, H8c, H9, and H3c-3's remaining 14 — the H4 and H7 families
+are complete, and H8a is.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -181,6 +181,34 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H8a (lineage and `io.reuse_from`) merged on 2026-08-20 — the first of H8's three.** `io.reuse_from`
+exists: a step reads a named artifact out of a **prior run**, addressed either as `<output_dir>/<run_id>/`
+or by absolute path, and every read is accumulated into `provenance.upstream`. `lineage.py` ships the
+`run.yaml` reader **nothing in `src/` had**, eleven `E-UPSTREAM-*` refusals, and a containment rule now
+enforced on **three** readers — `reuse_from`, `read_upstream` and `read_condition`, the last two having
+enforced **no name rule at all**. **It moves exactly one row of the feasibility analysis' table, 6 → 0**,
+and mints no new number; the `report_by`-under-`resample` gap still meets **seven** configs and is H4's.
+**H8 was scoped at 30 tasks against a one-row charter**, split 10/8/12 — H8b is `diff`/`freeze`, H8c is
+`report`/`study`, and **`BaseReport` is H8c's** (§ Package layout makes `report.py` *be* `BaseReport`).
+
+Four things worth carrying. **Two config figures were wrong and both were carried, not derived.** "Six
+with no remaining core-side blocker" answered no consistent question — one table cell read *"blocked on
+`io.reuse_from` (no remaining core-side blocker either)"* beside another reading *"blocked on
+`io.reuse_from`"* and **excluded** from the six — and "three" then fell the same way, since E1 and E2 sat
+inside it carrying the `report_by` gap E3/E4/E6 were excluded for. **The analysis now carries a table
+rather than a number**, and the shape is the finding: a slice retires one blocker, moves configs out of
+the *refused* column, and **carries the summary phrase forward without re-deriving what it counted.**
+**A guard's rule may be narrower than the gap it closes**: `read_upstream` would resolve
+`../../secret/x.json`, but a `name` is documented as a **relative path** with
+`programs/gpt-4.1__seed29.json` as a worked legal example, and a step can `open()` anything regardless —
+so the rule is **containment only**, forward separators stay legal, and **a mutation widening it must fail
+a positive control.** **A pin that must move can be moved once, by a named task**: arm B of the guard pin
+was captured with task 7 named as its sole editor and the post-edit state specified in advance, the
+review then found the same list pinned **twice**, and task 7 edited both with one appended key and
+nothing reordered — **the answer to five earlier slices weakening a pin quietly.** And **a mutation placed
+one line off tests a different property** — a claim that a failed read leaves the ledger untouched
+survived its own batch's mutation, which stopped above the existence check rather than above the read.
 
 **H7d Part B (the apparatus: gate and stop) merged on 2026-08-20 — the apparatus is complete.** A fact
 that moves from its **first *answered*** observation fails the run (`E-APPARATUS-CHANGED`), an

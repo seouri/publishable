@@ -250,3 +250,42 @@ session's work, established `+4` from `git show --numstat` instead of a suite di
 concurrent delta sat entirely **after** `_contained` returns so its mutation matrix was unaffected. **The
 mutation matrix being immune was luck, not design.** Reviews and implementations do not share a worktree;
 either serialize them or give one its own.
+
+## Batch 6 — tasks 8, 9, 10 — scopes, the documents, and the one row that moves
+
+Commits `d2fcfa4`, `254aabe`, `c2fd70e`, `2065682`. Suite 2510 → **2512**. The table's
+`io.reuse_from` row moves **6 → 0**; the other three do not, and **no fifth number was minted.**
+
+## Independent whole-branch review: MERGE — one Major (fixed in review), four Minors
+
+**The Major was a cross-batch interaction, and the gate exists for exactly this.** Both `reference.md`
+rows scoped `E-UPSTREAM-REPO-CONTAINED` to the **absolute** locator form while the code raises it from
+**two** sites — **batch 3 widened the check when it closed the containment filing, batch 6 wrote both rows
+from Decision 1's *"the relative form inherits the guarantee for free"*, and nobody re-read.** It is the
+same *a row narrower than its code* shape **the same task had just repaired for `E-ARTIFACT-NAME` three
+rows above**, which is the part worth carrying: repairing an instance of a shape does not immunize the
+next one.
+
+**A mutation placed one line off tests a different property.** A comment claiming a `_read` raise leaves
+the ledger untouched **survived its own batch's mutation**, because that mutation moved the ledger write
+above `exists()` — which a fixture catches — rather than above `_read`. Moving it above `_read` left the
+**full suite green at 2512**. Correct code, unpinned claim, and the boundary was off by one line.
+
+**And a carry-forward fell out of the chain between a review and the brief written from it:** batch 3's
+review assigned unifying `_resolve`'s duplicate of `_contained`'s predicate to task 12, and **task 12's
+brief, report and review never mention it.** A finding routed to a task does not reach it unless the
+brief carries it.
+
+**Verified sound by running, and this is the sub-slice's substance:** `io.reuse_from` end to end on a
+hand-built two-run project **through the real console script**; **all eleven `E-UPSTREAM-*` codes reached
+through the real CLI** with the exception classes plan correction 5 ruled; and on **every** refusal
+`run.yaml` exists, `status: partial`, exit 3, the plan continues, `latest` repointed, `upstream: []` — so
+**every execution paid for, the record lost did not happen.** The `latest` asymmetry's four arms **plus
+the converse**; a full clause-by-arm containment matrix across all three readers; Decision 2 by
+introspection against `main` (**+1 public method, +1 private init keyword, zero readable fields**); cache
+by locator against ledger by `run_id` probed with a **mid-run record edit** (2 reads, 1 entry, first
+hashes kept); all four pin arms green with **both** key-list pins failing on a spurious key; **zero
+deleted test lines across all twelve tasks**; and the "7" re-measured from the analysis' own YAML with
+**E5 as the can-fail control**.
+
+**Fix round: all three remaining Minors closed** (`afee9dc`), suite **2513**.
