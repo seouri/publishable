@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from publishable.errors import ContractError
+from publishable.provenance import resolves_inside_repo
 from publishable.run_record import SCHEMA_VERSION
 
 
@@ -77,3 +78,64 @@ def read_run_record(path: Path) -> dict[str, Any]:
             code="E-UPSTREAM-RECORD-VERSION",
         )
     return doc
+
+
+def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Path, dict[str, Any]]:
+    """Resolve a `reuse_from` locator to a run directory and its record.
+
+    § Lineage between runs gives a locator two readings, told apart by
+    `Path(locator).is_absolute()` and by nothing else — not a separator test, not
+    whether the directory exists:
+
+    - **A bare `run_id`** resolves under `output_dir`, this config's own. The
+      locator is compared **as given** against the record's `run_id` — never a
+      resolved basename — because `<output_dir>/latest` is a symlink to the real
+      run directory's *name*, which happens to equal that directory's `run_id`; a
+      resolved-basename comparison would agree on both sides and the relative form
+      would quietly start accepting `latest`, which is not a `run_id`. A relative
+      locator containing more than one path component is neither form — it would
+      otherwise resolve under `output_dir` as if it were a `run_id`, and
+      `provenance.upstream` would then record a value that is not one —
+      `E-UPSTREAM-LOCATOR`. A resolved run whose record's `run_id` disagrees with
+      the locator as given is `E-UPSTREAM-RUNID-MISMATCH`.
+    - **An absolute path** names a run directory anywhere. Symlinks are resolved
+      first, so `<output_dir>/latest` lands on the real directory; its `run_id` is
+      then read back from the record there, never parsed from the path. Checked
+      for repo containment against `repo_root` — the one `command_run` already
+      computed by walking up from the config path it was given, never re-derived
+      from the upstream path itself, which would answer a different question (does
+      the upstream sit in *its own* repo) — `E-UPSTREAM-REPO-CONTAINED`.
+
+    The two forms differ in exactly the way their arguments differ, one being an
+    identity and the other a location: an absolute locator may name `latest`
+    because a location can point at anything; a relative one may not, because
+    `latest` is not a `run_id` and the record there says so. That asymmetry is a
+    property, not an oversight.
+    """
+    path = Path(locator)
+    if path.is_absolute():
+        resolved = path.resolve()
+        if resolves_inside_repo(resolved, repo_root):
+            raise ContractError(
+                f"upstream run {locator!r} resolves inside this repo ({repo_root}) — "
+                "copy it outside the repo, or address it by run_id under output_dir",
+                code="E-UPSTREAM-REPO-CONTAINED",
+            )
+        return resolved, read_run_record(resolved)
+    if len(path.parts) > 1:
+        raise ContractError(
+            f"{locator!r} is neither a bare run_id nor an absolute path — a relative "
+            "path with a separator would otherwise resolve under output_dir as if it "
+            "were a run_id, and provenance.upstream would record a value that is not one",
+            code="E-UPSTREAM-LOCATOR",
+        )
+    resolved = output_dir / locator
+    record = read_run_record(resolved)
+    if record.get("run_id") != locator:
+        raise ContractError(
+            f"{locator!r} does not name a run_id — the run directory at {resolved} "
+            f"records run_id {record.get('run_id')!r}. `latest` is a path, not a "
+            "run_id, and only the absolute form may follow a path",
+            code="E-UPSTREAM-RUNID-MISMATCH",
+        )
+    return resolved, record
