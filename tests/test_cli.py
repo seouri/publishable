@@ -15646,3 +15646,156 @@ def test_fixture_r_an_entrys_hashes_are_the_upstreams_own_read_back_not_literals
     assert entry["code_hash"] == upstream_record["code_hash"]
     assert entry["parameters_hash"] == upstream_record["parameters_hash"]
     assert entry["used"] == [f"{upstream_step}/cohort.json"]
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — Fixture P: `reuse_from` legal at all four scopes in one run, with
+# the control that makes it non-vacuous (Decision 9). `run_a_project`'s
+# `extra_step_source` applies ONE source to every entry in `extra_steps` (its
+# own docstring), so it cannot give four different scopes to four different
+# generated steps in the same run. Fixture P needs exactly that, so this
+# scaffolds directly with `generate_experiment`/`generate_step` — the same
+# primitives `run_a_project` calls internally — rather than inventing a new
+# helper. No `src/` change is expected: Decision 9 says there is nothing to
+# check. `docs/superpowers/plans/2026-08-20-lineage.md` task 8; design
+# § Decision 9, § Fixture P — the scopes.
+# ---------------------------------------------------------------------------
+
+_UPSTREAM_STEP_FOR_FIXTURE_P = (
+    "from publishable import BaseStep\n\n\n"
+    "class Step(BaseStep):\n"
+    '    scope = "run"\n\n'
+    "    def run(self, cfg, io):\n"
+    '        io.write("out1.json", {{"n": 1}})\n'
+    '        io.write("out2.json", {{"n": 2}})\n'
+    '        io.write("out3.json", {{"n": 3}})\n'
+    '        io.write("out4.json", {{"n": 4}})\n'
+    "        return {{}}\n"
+)
+
+
+def _build_fixture_p_upstream(tmp_path: Path) -> tuple[Path, str]:
+    """A `run`-scoped upstream step publishing FOUR names, so four downstream
+    calls at four different scopes produce four distinguishable `used`
+    entries rather than one deduplicated by identical `step/name`."""
+    upstream_doc = run_a_project(
+        tmp_path / "upstream_p",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=8,
+        extra_steps=["publish"],
+        extra_step_source=_UPSTREAM_STEP_FOR_FIXTURE_P,
+    )
+    upstream_run_dir = upstream_doc["run_dir"]
+    upstream_record = yaml.safe_load((upstream_run_dir / "run.yaml").read_text())
+    shared_names = list(upstream_record["execution"]["shared"].keys())
+    assert len(shared_names) == 1
+    return upstream_run_dir, shared_names[0]
+
+
+def test_fixture_p_reuse_from_legal_at_all_four_scopes_with_direction_control(
+    tmp_path: Path,
+):
+    """Decision 9: `reuse_from` has no direction check and is available at
+    `run`, `condition`, `repeat` and `summary` scope alike — one entry in
+    `provenance.upstream`, its `used` list holding all four `step/name`
+    pairs, sorted.
+
+    The control that makes this non-vacuous (CLAUDE.md § Writing checks that
+    can fail — "a control asserting only absences passes identically if
+    nothing ran"): a fifth step, `run`-scoped, calls `io.read_upstream` on a
+    `condition`-scoped step in the SAME run. Ordinary same-run direction
+    checking is still very much alive; only `reuse_from` is exempt from it.
+    The fixture reads the code straight out of that execution's own ledger
+    line, not an absence.
+    """
+    upstream_run_dir, upstream_step = _build_fixture_p_upstream(tmp_path)
+
+    root = tmp_path / "downstream_p"
+    data = tmp_path / "data_p"
+    results_dir = tmp_path / "results_p"
+    data.mkdir()
+    units = 8
+    patients = "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1))
+    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{patients}\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results_dir),
+    )
+
+    def _write_step(step_name: str, scope: str, body: str) -> str:
+        path = generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
+        path.write_text(
+            "from publishable import BaseStep\n\n\n"
+            "class Step(BaseStep):\n"
+            f'    scope = "{scope}"\n\n'
+            "    def run(self, cfg, io):\n"
+            f"{body}\n"
+        )
+        return path.stem
+
+    def _reuse(name: str) -> str:
+        return (
+            f"        io.reuse_from({str(upstream_run_dir)!r}, {upstream_step!r}, {name!r})\n"
+            "        return {}"
+        )
+
+    run_name = _write_step("run_reuser", "run", _reuse("out1.json"))
+    condition_name = _write_step("condition_reuser", "condition", _reuse("out2.json"))
+    repeat_name = _write_step("repeat_reuser", "repeat", _reuse("out3.json"))
+    summary_name = _write_step("summary_reuser", "summary", _reuse("out4.json"))
+    control_body = f'        io.read_upstream({condition_name!r}, "out2.json")\n        return {{}}'
+    control_name = _write_step("direction_control", "run", control_body)
+
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "Fixture P: all four scopes, plus the direction control"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["replication"] = {"repeats": [{"kind": "seed", "n": 1}]}
+    cfg.write_text(yaml.safe_dump(doc))
+
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "fixture P"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+    assert main(["run", str(cfg)]) == EXIT_PARTIAL
+
+    run_dir = next(results_dir.glob("run_*"))
+    lines = [json.loads(line) for line in (run_dir / "executions.jsonl").read_text().splitlines()]
+    by_step = {line["step"]: line for line in lines}
+
+    for name in (run_name, condition_name, repeat_name, summary_name):
+        assert by_step[name]["status"] == "completed", by_step[name]
+
+    # the control: same-run direction checking still fires for
+    # `read_upstream`, reported from the execution's own ledger line rather
+    # than inferred from an absence
+    assert by_step[control_name]["status"] == "failed"
+    assert "E-STEP-READ-DIRECTION" in by_step[control_name]["error"]
+
+    record = yaml.safe_load((run_dir / "run.yaml").read_text())
+    upstream_record = yaml.safe_load((upstream_run_dir / "run.yaml").read_text())
+    entries = record["provenance"]["upstream"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["run_id"] == upstream_record["run_id"]
+    assert entry["used"] == sorted(f"{upstream_step}/out{n}.json" for n in (1, 2, 3, 4))
+
+
+def test_resolver_io_has_no_reuse_from_and_step_io_does(tmp_path: Path):
+    """Decision 9's other half: a resolver's `io` stays `read_input` and
+    nothing else. `ResolverIO` never gets `reuse_from` — a roster is one
+    run's own resolution, and a roster depending on another run's artifact
+    would put the inference base behind a lineage read `validate` cannot see
+    (`docs/reference.md` § Where units come from). Paired with the positive
+    assertion on `StepIO` so this arm cannot pass on a typo'd attribute
+    name."""
+    from publishable.artifacts import ResolverIO, StepIO
+
+    assert not hasattr(ResolverIO, "reuse_from")
+    assert hasattr(StepIO, "reuse_from")
