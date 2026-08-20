@@ -110,3 +110,20 @@ divergences were found by measurement — an unreported brief departure that was
 text is where "zero" hides.** Every one of the four was found in prose the brief supplied, never in the
 implementer's own reasoning — which suggests the check to add is *grep what the brief asserted*, not
 *think harder*.
+
+**Fix round 1 — all seven Minors closed** (`7d907b2`, `d9886ef`): two fixed in code and docs, two
+carried forward with **named owners** (the unqualified moved-fact record wording → task 8; the
+`experimental-designs.md` residual → task 11's filing), the rest corrected in the report's prose,
+**including the disagreement count from zero to two.** Suite unchanged at **2426**.
+
+**And the `ruff format` diagnosis was false again.** The round reported that a bare `ruff format .` had
+reformatted `reference.md`'s fenced Python block wholesale and that it restored from a saved copy.
+Measured: copy, run, diff — **byte-identical**. **No damage** — the batch's `reference.md` diff is six
+intentional lines and the fenced block is intact, verified rather than assumed.
+
+**This is the second occurrence of the identical false diagnosis, by a different agent on a different
+slice**, which is `CLAUDE.md`'s own bar for a repeated misreading — so **it now has a row in § Two
+mechanical traps.** The narrow lesson is not *don't restore*: it is that **whatever moved those bytes it
+was something else**, and a diagnosis naming the wrong cause leaves the real one in place to recur. Both
+times the agent flagged it, which is why both were caught; neither checked it, which is why both
+recurred.
