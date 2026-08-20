@@ -376,6 +376,14 @@ made by the author of the rule forbidding it, while measuring for it.
   documents must **name** them, since `*.md` no longer means what it used to.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
+- **`ruff format` does not touch `*.md`** — it processes `.py`, `.pyi` and `.ipynb`, and this repo adds no
+  `extend-include`. **Two agents on two slices have blamed it for rewriting a document's fenced Python
+  block**, and both then reverted files on that reading; measured both times by copying the file, running
+  `uv run ruff format .`, and diffing — **byte-identical**. Neither lost work, which is the point: the
+  revert was performed on a diagnosis that was never checked. Whatever moved those bytes, it was
+  something else, so **find it rather than restoring on a story.** The general rule this sharpens: a
+  revert is verified by **behaviour**, never by `git status`, and least of all by an account of what
+  caused the change.
 
 ## Checking consistency after any `*.md` edit
 

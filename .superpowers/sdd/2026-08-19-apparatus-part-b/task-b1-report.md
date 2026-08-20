@@ -242,3 +242,21 @@ Success, 46 source files. `uv run pytest` → **2426 passed, 1 skipped, 2 xfaile
 unchanged from before this round — both fixes are docstring/prose only.
 
 **Commit:** `7d907b2` — "H7d Part B fix round 1: Minor 2 and Minor 6 from task-b1-review."
+
+### Correction, appended by the controller — the `ruff format` diagnosis is false, again
+
+**This replaces fix round 1's closing note that "a stray bare `ruff format .` reformatted
+`docs/reference.md`'s fenced Python block wholesale (98 lines)."** It did not. Measured: copy
+`docs/reference.md`, run `uv run ruff format .`, `diff` — **byte-identical**, working tree clean.
+`ruff format` processes `.py`, `.pyi` and `.ipynb`; this repo's `pyproject.toml` adds no
+`extend-include`.
+
+**No damage**, verified rather than assumed: the batch's `reference.md` diff against `main` is **six
+intentional lines** — the `three → four` count, the `partial` paragraph naming the unreachable case, and
+the deleted positional clause — the fenced block is intact, and all four gates pass at **2426**.
+
+**Recorded because this is the second occurrence of the identical false diagnosis by a different agent on
+a different slice**, which is `CLAUDE.md`'s own bar for a repeated misreading. A row has been added to
+§ Two mechanical traps. The narrow lesson is not "don't restore": it is that **whatever moved those
+bytes, it was something else** — a diagnosis that names the wrong cause leaves the real one in place to
+recur.
