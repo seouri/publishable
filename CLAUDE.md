@@ -92,9 +92,16 @@ C1 reads *"blocked on `io.reuse_from` (no remaining core-side blocker either)"* 
 too and the answer is **nine**. Six is really the count of configs that **validate clean while still
 needing `io.reuse_from`** — E3, E4, E6, C1, C2, C3 — a useful number wearing the wrong name, which
 followed C1–C3 out of the *refused* column when H4b-1 retired `E-DATA-WEIGHT-CONTRAST` without anyone
-re-asking what it meant. **Read every "six with no remaining core-side blocker" below as three, and say
-`io.reuse_from` by name for the other six.** The correction, with its measurement, is the last entry of
-[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build.
+re-asking what it meant. **And "three" did not survive either** — H8a's design measured the
+`report_by`-under-`resample` gap live on **seven of nine** configs (E1, E2, E4, E6, C1, C2, C3) while the
+record charges it to C1–C3 alone, so **E1 and E2 sit inside the three carrying the gap E3/E4/E6 are
+excluded for.** One dependency, two treatments, again. **So quote no single number for this analysis'
+executability: quote the table** in the last two entries of
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, **or
+name the dependency** — `io.reuse_from` for six, the `report_by` gap for seven, and **8 of 8 validating
+clean, which is the only figure `validate` can see.** Both wrong figures were made the same way: a slice
+retired one blocker, moved configs out of the *refused* column, and **carried the summary phrase forward
+without re-deriving what it counted.**
 Three things worth carrying. The refusal's own message, its § Errors row and the charter all named
 `paired_t_over_units` as the estimator needing weights, and **all three C configs declare `resample`**,
 so the payoff actually runs through `paired_percentile_of_derived` — a slice built from that charter

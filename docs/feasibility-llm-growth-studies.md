@@ -1510,3 +1510,43 @@ disambiguated every time it is quoted.
 dated entries and roughly a hundred repetitions because each entry copied the phrase forward rather than
 re-deriving it — which is the same *carried claim* failure the entries above record in code, appearing
 here in a number.
+
+### Correction to the correction, appended 2026-08-20 against commit `30842cb` — "three" is suspect for the same reason "six" was
+
+**The entry above corrected "six" and left "three" standing. H8a's design then measured that three is
+wrong the same way.** Recorded immediately rather than at the end of the slice, because a figure left
+standing gets built on.
+
+**The `report_by`-under-`resample` gap is live on seven of nine configs — E1, E2, E4, E6, C1, C2, C3 —
+while this analysis, `CLAUDE.md` and `H8-SCOPING.md` all charge it to C1–C3 alone.** Measured twice by
+computing, not by reading: `summarize_step` over one 12-row table returns `t_over_units`
+`[0.3209, 0.7791]` without `resample_columns` and `percentile_over_units` `[0.3583, 0.7500]` with it,
+and it moves **both** `prob` and `latency_ms` — so the gap is **per recorded column**, not per headline
+metric. All nine configs record through **one** request step whose `io.record` payload is numeric
+throughout, which is why it reaches so many. E5 escapes alone (`resample: null`, `report_by: []`).
+
+**So E1 and E2 sit inside today's "three" carrying the identical gap E3, E4 and E6 are excluded for** —
+one dependency, two treatments, in one table, which is precisely the fault the entry above named. The
+phrase changed; the habit that produced it did not.
+
+**The gap is H4 Statistics', it is live, and it is re-attributed here on measurement** rather than on the
+record's own attribution.
+
+**What this analysis can honestly say at this commit**, and it is four measured figures rather than a
+phrase:
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Need `io.reuse_from` (unbuilt) | **6** | no — a step-level call |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step` |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**Every figure except the first is invisible to `validate`**, which is the standing reason a clean
+`validate` has never been the same claim as *executes*. **Do not quote a single number for this
+analysis' executability** — quote the table, or name the dependency.
+
+**And the lesson is about the shape, not the arithmetic.** Both wrong figures were produced the same way:
+a slice retired one blocker, moved some configs out of the *refused* column, and **carried the summary
+phrase forward without re-deriving what it counted.** That is the *carried claim* failure this file
+records repeatedly in code, appearing twice in a number.
