@@ -1359,6 +1359,48 @@ deferred a fifth time.
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2359 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.
 
+### Measured on 2026-08-19 against commit `06bc38d` — after H7d Part A
+
+H7d Part A opens the apparatus: a template declaring an `apparatus_probe` no longer writes a false
+`apparatus: null`. Core resolves the declared probe through the same three-step dispatch a resolver
+already uses, calls it at run start and before every execution, projects its returned facts onto a
+declared `apparatus_facts` set, refuses a fact that is a credential core read (by exact value **or**
+substring containment, closed by this same slice's whole-branch fix round) or a value core cannot
+encode, records every observation in an append-only ledger (`apparatus/probes.jsonl`), and
+assembles `provenance.apparatus`'s five sub-keys from what it observed. **H7d Part A unblocks ZERO
+configs, and both counts stay unmoved: six with no remaining core-side blocker, three executable.**
+Confirmed by the whole-branch review's own re-measurement through `validate_config` on E1 and
+C1's `data`/`statistics` blocks — the same method every entry above uses, re-cited here rather than
+re-run a third time on the identical fixture:
+
+| Config | Codes reported |
+|---|---|
+| E1 | `W-DATA-CLUSTER-UNDECLARED`, `W-TEMPLATE-VERSION` (plus two harness artifacts of the reviewer's own scaffold, not of the design: `E-NAME-DIR`, from the config not living under `configs/<name>/`, and a stand-in `template_version`) |
+| C1 | the same three codes |
+| E1 with `holdout.frac → 0` (**can-fail control**) | the same **plus** `E-DATA-HOLDOUT-FRAC` |
+
+No `E-APPARATUS-*` and no `E-PROBE-UNKNOWN` on either, and none is reachable for any of the nine
+configs in this analysis: `generic` — the template every config here validates against, since
+`publishable-llm`'s `llm_screen`/`llm_deployment` are a design rather than code — declares no
+`apparatus_probe`, so `command_run` never constructs an `Observer` regardless of what this slice
+built. **The only direction this slice, or any slice retiring no refusal, can move a config-level
+count is down**: once a projection exists, a probe that fails to yield a declared key is a **new**
+error a run can hit, not a narrower one.
+
+**What did change, honestly stated rather than left to the pointer at § 3 of this entry's own
+predecessor.** A run of `llm_screen` as designed — `apparatus_probe = "llm_deployment"`,
+`apparatus_facts` naming five keys including `deployment_revision` — would, if the plugin existed,
+now record the five real sub-keys this section documents instead of the unconditional `null` every
+prior measurement in this analysis found; and it would newly earn one of five error codes
+(`E-APPARATUS-RAISED`, `-RETURN`, `-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`) or one warning
+(`W-APPARATUS-UNANSWERED`) it could not have earned before this slice. None of that is exercised by
+the nine configs measured here, because none declares a probe a real plugin backs — the same
+substitution [§ The apparatus probe is the sharpest fit](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk)
+already named as a gap this build cannot close.
+
+`uv run pytest` at this commit: 2423 passed, 1 skipped, 2 xfailed; `ruff check`, `ruff format
+--check` and `mypy` all clean.
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
