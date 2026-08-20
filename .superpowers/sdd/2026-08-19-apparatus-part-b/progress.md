@@ -288,3 +288,50 @@ are already reading.**
 **Fix round 1 — all findings closed except Major 1, which is carried by design** (`6d5d3f0`). Suite
 unchanged at **2450**; every fix was prose or comment. Major 1 travels to task 7 **with its siting
 requirement attached** rather than as a description of a defect.
+
+## Batch 5 — tasks 7, 8 — the record on a stop, and `EXIT_EXTERNAL`'s first reader
+
+Commits `bf66cf4` (the record), `11ab231` (the codes), report `2b88cd4`. Suite 2450 → **2452**.
+**Spec compliance FAILS on one row; task quality PASS.**
+
+**The credential pin was strengthened, strictly additively** — the reviewer built **four** fixtures (an
+int credential moved, an int credential unreachable with digits in the raise message, a substring
+credential, and a clean-run control) and found **nothing on stdout or stderr on either stop path**, with
+a **positive control** that leaked the plaintext when `stop_c.credentials` was unwired and failed both
+its own fixture and the shipped test. `"13579" not in output` survives, two assertions were added, and
+**the only assertions deleted anywhere in the batch are three now-false negatives.** Second batch running
+to update that test, and second time the update made it harder to satisfy.
+
+Also verified by running: the record holds **first-answered** while the ledger holds **the mover** — the
+asymmetry Decision 1's grounds rest on; the replacement for a genuinely blind Fixture Z arm
+discriminates **and** asserts positives; and the zero-results guard precedes both sinks, proven by a
+**third** mutation the batch did not run — moving the guard *between* the `run.yaml` write and the
+`latest` repoint, which is what establishes the two sinks are **independently** pinned rather than jointly.
+
+### The spec failure is mine, and recording it that way is the point
+
+**An unreachable apparatus with zero results exits `1` where Decision 4 requires `5`.** Five sources
+contradict the code, including **`reference.md` § Exit codes as written by this branch's own task 1**.
+
+Batch 4's finding was that a zero-results stop must not write `run.yaml` or repoint `latest`, and **I
+relayed it as "task 7's `if not results: return EXIT_WRONG` must be sited before both".** Decision 4's
+table has **four rows**, and `exit 1` belongs to the **moved** + zero-results row only; **unreachable +
+zero results is `exit 5`.** I passed one row's remedy along as though it governed both, and the
+implementer built exactly what I said.
+
+**The transferable form: a carried finding loses its scope unless the scope travels with it.** Batch 4's
+review stated the siting requirement precisely and said nothing about which row it belonged to, because
+in that context there was only one. Relaying it into a task that owns **four** rows is where the
+qualification had to be re-added, and I did not add it.
+
+**And the defect sat in the one row of four the batch left unfixtured** — three were fixtured, the fourth
+was wrong. An unfixtured row in a small table is where the defect is, not a coincidence.
+
+**Fifth consecutive batch to ship a false comment**, this one promising that task 8 would fix the very
+line it sits on — task 8 is committed and did not.
+
+**One cost measured rather than argued, and worth keeping:** the reviewer made task 7's new
+`assert stop.code is not None` fire and recorded what it costs — an uncaught traceback with **two
+paid-for executions on disk, no `run.yaml`, no `latest`.** Not a finding (plan correction 2 blesses the
+bare assert, and it is unreachable), but *every execution paid for, the record lost* is this repo's named
+habit, and now that assert's price is a measurement instead of a claim.
