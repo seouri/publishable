@@ -28,6 +28,7 @@ from publishable.contrasts import (
 )
 from publishable.correction import Member, UnpairedEvidence, corrected_fields
 from publishable.diagnostics import (
+    EXIT_EXTERNAL,
     EXIT_FAILED,
     EXIT_INVOCATION,
     EXIT_OK,
@@ -2511,6 +2512,15 @@ def command_run(config_path: Path) -> int:
             probe_c.credentials = credentials
             probe_c.error(exc.code, "experiment_type", str(exc))
             print(probe_c.render(), file=sys.stderr)
+            # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
+            # apparatus itself unreachable — is the one code in this
+            # containment's filter that earns exit 5; everything else this
+            # `try` contains (a dispatch-time `E-PLUGIN-LOAD`/
+            # `E-PLUGIN-DECORATOR` is resolved before `observer` exists and
+            # never reaches here, so in practice this is `STOP_CODES`' own
+            # members) keeps `EXIT_WRONG`.
+            if exc.code == "E-APPARATUS-RAISED":
+                return EXIT_EXTERNAL
             return EXIT_WRONG
 
         # H7d Part B task 7 (Decision 4, Decision 14): a stop is printed
@@ -3654,6 +3664,17 @@ def command_run(config_path: Path) -> int:
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")
+    # H7d Part B task 8 (Decision 6): an unreachable apparatus wins over
+    # whatever status it wrote — `5` is the class you retry, so it takes
+    # precedence over `3`/`4` the same reason a dirty tree or a missing
+    # credential would (§ Exit codes and diagnostics's own stated
+    # precedence). Read from `stop.reason`, the reason the run stopped,
+    # rather than re-derived from `status` — a build deriving it from
+    # `status` cannot tell `partial` (a truncation guard) from `partial`
+    # (an unreachable apparatus) apart, which is exactly why Fixture U's
+    # exit and status assertions are pinned separately.
+    if stop.reason == "apparatus_unreachable":
+        return EXIT_EXTERNAL
     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
 
 

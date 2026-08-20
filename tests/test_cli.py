@@ -25,6 +25,7 @@ from publishable.cli import (
 )
 from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import (
+    EXIT_EXTERNAL,
     EXIT_FAILED,
     EXIT_INVOCATION,
     EXIT_OK,
@@ -13202,10 +13203,14 @@ def test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_
 def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
     installed, registries, tmp_path, capsys
 ):
-    """Fixture K2, and the pin for the containment mechanism as a whole: exit
-    non-zero, `E-APPARATUS-RAISED` present, `<redacted:PUBLISHABLE_TEST_TOKEN>`
-    present, and `lab7` absent from stdout, from stderr and from every file
-    under the results directory."""
+    """Fixture K2, and the pin for the containment mechanism as a whole
+    — UPDATED at task 8's commit (Decision 6): `E-APPARATUS-RAISED` at the
+    run-start containment now earns `EXIT_EXTERNAL` rather than
+    `EXIT_WRONG`, since the apparatus itself being unreachable is the class
+    you retry. Its docstring's "exit non-zero" claim stays true either way;
+    only the specific code moves. This is Fixture Z arm 1 (a probe raising
+    on call 1, the run-start round) — the no-`run.yaml`, redaction, and
+    no-credential-anywhere assertions below are untouched by the move."""
     site = installed(
         "dist-k2-9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k2_probe_mod:probe"}}
     )
@@ -13219,7 +13224,7 @@ def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
         parameters={},
         _local_template=_APPARATUS_CRED_TEMPLATE,
         _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
-        expect_exit=EXIT_WRONG,
+        expect_exit=EXIT_EXTERNAL,
     )
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-APPARATUS-RAISED" in output
@@ -14548,24 +14553,21 @@ def probe(cfg):
 
 
 def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsys):
-    """Fixture U (task 5 step 4), UPDATED at task 7's commit — a third
-    disagreement of the same shape recorded on
-    `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`'s test.
-    `expect_exit` does NOT change here: task 8's own text is what moves it
-    to `EXIT_EXTERNAL` (Decision 6); at this commit `run_status` still maps
-    `"apparatus_unreachable"` to `"partial"` and the pre-existing exit tail
-    (`{"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status,
-    EXIT_FAILED)`) still gives `EXIT_PARTIAL` — `command_run` gains no new
-    return path for this reason until task 8 lands.
+    """Fixture U (task 5 step 4), UPDATED at task 8's commit (Decision 6):
+    `expect_exit` moves to `EXIT_EXTERNAL`, exactly as task 7's own text
+    predicted. `run_status` still maps `"apparatus_unreachable"` to
+    `"partial"` — that has not changed — but `command_run`'s final mapping
+    now reads `stop.reason` directly and returns `EXIT_EXTERNAL` for an
+    unreachable apparatus regardless of the status it wrote, which is why
+    the status byte (`"partial"`) is asserted as ITS OWN statement below,
+    separate from the exit code: a build deriving the exit from `status`
+    would return `EXIT_PARTIAL` here and pass a status-only check.
 
-    What DOES change here: task 7's own diagnostic branch prints
-    unconditionally whenever `stop.reason` is one of the two apparatus
-    reasons — gated on the reason, not on whether any result exists — so
-    with 2 results already on disk this run falls through to the ordinary
-    record phase exactly as before, but now with `E-APPARATUS-RAISED`
-    printed to stderr through a fresh `Collector` on the way. The prior
-    docstring's "no diagnostic prints yet" claim is exactly the sentence
-    this commit makes false, so it is deleted rather than carried forward.
+    Task 7's diagnostic branch still prints unconditionally whenever
+    `stop.reason` is one of the two apparatus reasons — so with 2 results
+    already on disk this run falls through to the record phase exactly as
+    before, `E-APPARATUS-RAISED` printed to stderr through a fresh
+    `Collector` on the way, and only the exit code changes here.
 
     The ledger is written on the raise path regardless — so
     `executions.jsonl` holds the 2 executions that ran before the raise, and
@@ -14584,7 +14586,7 @@ def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsy
         parameters={},
         replication={"repeats": [{"kind": "seed", "n": 4}]},
         _local_template=_APPARATUS_U_TEMPLATE,
-        expect_exit=EXIT_PARTIAL,
+        expect_exit=EXIT_EXTERNAL,
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     assert run["status"] == "partial"
