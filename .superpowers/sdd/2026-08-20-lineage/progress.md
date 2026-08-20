@@ -149,3 +149,44 @@ deletions against one test file rather than the full suite, having **first measu
 mutation produces failures only there and that no other importer exists. **Measure that nothing else can
 be affected, then say you narrowed and why** — that is different in kind from narrowing on an assumption,
 which is what *never filter the output of a sweep* exists to prevent.
+
+## Batch 3 — tasks 3, 5 — the resolver wired, and `io.reuse_from` exists
+
+Commits `569113f` (`UpstreamResolver` injected into `StepIO`, containment filing closed), `e21d795`
+(`io.reuse_from`, `_contained`, `-NAME`, `-ARTIFACT-MISSING`), `db41b5a` (report). Suite 2484 → **2494**.
+**Spec compliance PASS with one Major; quality PASS.**
+
+**`io.reuse_from` now exists** — the method that had zero occurrences in `src/` before this branch and is
+the sole named remaining core-side blocker for six of nine configs. **The table row does not move until
+task 10**, deliberately.
+
+**The risk I flagged first held, and the reviewer checked it the right way.** Closing the containment
+filing meant resolving in the relative form — which batch 2 had proved is exactly what kills Decision 1's
+`latest` asymmetry. **It survives, because only the *path* is resolved while the comparison stays
+locator-as-given.** Four arms plus batch 2's converse verified in one process, and — the part worth
+copying — the reviewer **separately checked that the reorder does not mask the loss** rather than
+inferring it from the arms passing.
+
+**The Major is a cache that misses one branch, and the reproduction is exact.** The cache is consulted
+only on the non-absolute branch, so Decision 6's *one answer per run* fails for the absolute form: three
+identical absolute locators produce **three** record reads where relative produces one, and with **one**
+resolver, editing the upstream's `run.yaml` between two identical absolute calls returned `code_hash`
+**`AAAA` then `BBBB`** — the two-answers-in-one-record state the cache exists to prevent. **The brief
+prescribed a per-`run_id` cache and that is what shipped, so the behaviour is the plan's; the docstring
+claiming the guarantee is the batch's.** **Ruling: key the cache by locator**, which closes the Major and
+a Minor together — a **warm** cache also let a relative locator resolve a run *outside* `output_dir`.
+
+**The batch's own concern was right and its diagnosis was wrong**, which is worth separating: it flagged
+the cache as *built to spec but unpinned*, when it was **unpinned and also wrong**. A concern that smells
+something and mis-names it still earns its place — it is what pointed the review at the branch.
+
+**And an arm that cannot fail, for a reason worth remembering.** Fixture N's absolute-`name` arm survives
+deleting `Path(name).is_absolute()` entirely, because the arm's target sits **outside the base** and
+`startswith` already refuses it. The distinguishing config — **an absolute name pointing *inside* the
+step dir** — is refused by shipped code and instantiated by nothing. **A refusal that fires for the wrong
+reason is not a pin**, and the `..` and symlink arms each discriminate alone, so only this arm carried no
+weight.
+
+**A closed filing asserting a pin that does not exist** is also being fixed: keeping containment on a
+resolved probe while returning the **unresolved** path leaves 142 tests green, so the containment half is
+pinned and the *returns-a-resolved-path* half is not.
