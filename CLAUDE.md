@@ -67,7 +67,8 @@ through `validate_config` rather than re-derived from emit sites, in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. Both
 qualifications stay attached to that number: the plugin must exist and be installed, and a declared
 apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
-regardless of what a template declares — filed, owned by H7d). Six stayed blocked on two causes neither
+regardless of what a template declares — filed, owned by H7d, **which H7d Part A has since built** —
+see the entry below, where the executable count stays unmoved all the same). Six stayed blocked on two causes neither
 of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
 for C1–C3, **which H4b-1 has since retired** — see the entry below, where C1–C3 stay non-executable on
 `io.reuse_from` alone. Also closed: `hash_index` was broken for every source, table and glob included,
@@ -184,6 +185,31 @@ retrofitting the holdout to cells and retiring `E-DATA-HOLDOUT-CELLS` and `E-REP
 already named on H3d's branch, once drawing within a cell is built** — acceptable only because no
 experiment in that analysis declares a group axis. The reasoning lives in the spine design's *Order,
 amended against outside evidence*, which is now tracked — cite it rather than restating it.
+
+**H7d Part A (the apparatus: observe and record) merged on 2026-08-19.** A template declaring an
+`apparatus_probe` no longer writes a false `apparatus: null` — core resolves the declared probe
+through the same three-step dispatch a resolver already uses, calls it at run start and before
+every execution, projects its facts onto a declared `apparatus_facts` set, refuses a fact that is a
+credential core read or a value core cannot encode, records every observation in an append-only
+ledger, and assembles `provenance.apparatus`'s five sub-keys from what it observed. **It retires no
+refusal and unblocks ZERO configs; six with no remaining core-side blocker and three executable both
+stay exactly where H4b-1 left them** — the nine configs in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) declare no `apparatus_probe` at
+all, since `generic` is the template they validate against. Five error codes are minted
+(`E-APPARATUS-RAISED`, `-RETURN`, `-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`) plus one
+warning (`W-APPARATUS-UNANSWERED`), and this closes the filing named above —
+*"`cli.py` writes `apparatus: null` unconditionally regardless of what a template declares"* — which
+is now stale and struck in `docs/superpowers/spec-defects.md` rather than left to mislead. A
+whole-branch review held the merge on two Majors, both closed the same day: a fact value
+*containing* a declared credential (not merely equal to one) was published verbatim in
+`provenance.apparatus.facts` and the ledger, because the credential check matched by exact equality
+while `secrets.redact`, over the identical value set, matches by substring — fixed by matching the
+way `redact` already matches; and a non-`str` `apparatus_probe` (`["a_probe"]` being the plausible
+mistake, since `apparatus_facts` sits on the very next line and *is* a list) silently read as "no
+probe declared" at both `validate` and `run`, reproducing the just-closed filing's defect through a
+different route — fixed at the one place both surfaces share, `validate._check_probe`, which is
+also what closes `run`'s copy of the same guard without touching it, since `command_run` validates
+first.
 
 ## The documents
 
