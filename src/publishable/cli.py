@@ -2513,6 +2513,38 @@ def command_run(config_path: Path) -> int:
             print(probe_c.render(), file=sys.stderr)
             return EXIT_WRONG
 
+        # H7d Part B task 7 (Decision 4, Decision 14): a stop is printed
+        # here, before the aggregate phase, so the reason a run stopped is
+        # on the operator's screen before any later phase that can itself
+        # fail. Gated on the two apparatus reasons only — a
+        # `max_failed_fraction` stop prints nothing, exactly as today
+        # (Fixture T's arms assert the absence).
+        #
+        # A FRESH `Collector`: `c` was already rendered and printed above,
+        # so appending to it would re-print every earlier finding and
+        # inflate the counts line — the same reason the probe-dispatch and
+        # run-start containment branches above each build their own.
+        # `credentials` reused, never recomputed.
+        if stop.reason in ("apparatus_unreachable", "apparatus_changed"):
+            # `stop.code`/`stop.message` are set together with `stop.reason`
+            # at the one call site that sets either (`execute_plan`'s
+            # apparatus gate) — the assert states that contract rather than
+            # silently narrowing `str | None` to `str`.
+            assert stop.code is not None and stop.message is not None, (
+                "a stop reason of one of the two apparatus kinds always sets "
+                "`code` and `message` alongside it"
+            )
+            stop_c = Collector()
+            stop_c.credentials = credentials
+            stop_c.error(stop.code, "experiment_type", stop.message)
+            print(stop_c.render(), file=sys.stderr)
+            # Decision 4: with NO results, nothing was paid for, and the
+            # command keeps Part A's shape — no `run.yaml`, `latest`
+            # untouched. This must be sited before `assemble_run_yaml` AND
+            # before `point_latest` (batch 4's Major 1): both, not one.
+            if not results:
+                return EXIT_WRONG  # task 8 turns the unreachable arm into EXIT_EXTERNAL
+
         status = run_status(results, planned=len(plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in

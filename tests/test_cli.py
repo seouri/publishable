@@ -258,7 +258,28 @@ def run_a_project(
             "stdout": captured.out if captured is not None else None,
             "stderr": captured.err if captured is not None else None,
         }
-    run_dir = next(results_dir.glob("run_*"))
+    # H7d Part B, task 7 step 2 (§ Corrections against the code, correction
+    # 3): `run_dir` is not `None` exactly when there is a ledger to read.
+    # A run directory can exist with no `executions.jsonl` at all — a
+    # run-start probe raise or a zero-results apparatus stop leaves a run
+    # directory holding only `environment`/`manifest`/`sweep.yaml` — and
+    # this is no longer reachable through `expect_exit == EXIT_WRONG` alone
+    # once task 8 moves a run-start raise's exit code off of `EXIT_WRONG`.
+    # Return the same `run_dir: None`, `results: None` shape rather than
+    # crashing on a missing ledger; a caller that needs the run directory
+    # itself in that case globs `results_dir` on its own.
+    candidate = next(results_dir.glob("run_*"), None)
+    if candidate is None or not (candidate / "executions.jsonl").exists():
+        return {
+            "root": root,
+            "cfg": cfg,
+            "results_dir": results_dir,
+            "run_dir": None,
+            "results": None,
+            "stdout": captured.out if captured is not None else None,
+            "stderr": captured.err if captured is not None else None,
+        }
+    run_dir = candidate
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
     results = [Ran(e["condition"], e["repeat"]) for e in ledger]
@@ -14383,32 +14404,32 @@ def probe(cfg):
 def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     installed, registries, tmp_path, capsys
 ):
-    """Fixture G1's ledger (task 4 step 3), UPDATED at task 6's commit — a
-    disagreement with this test's own prior docstring, recorded rather than
-    silently overwritten. The prior version (still true through task 5,
-    where `stop` defaults to `None` at every call site `cli.py` has) argued
-    that "the exit code and the presence of `run.yaml` are task 7's ... since
-    `break`ing the loop (task 5) does not by itself give the stop a record."
-    That argument does not survive task 6 unchanged: task 6's own step 3 is
-    what constructs a `StopSignal` and passes `stop=stop` into
-    `execute_plan`, and once THAT lands, `E-APPARATUS-CHANGED` no longer
-    escapes `execute_plan` at all — it `break`s inside the loop (task 5's
-    mechanism) and `command_run` falls through, unaided, into its ordinary
-    completion path: `run_status(results, planned=len(plan), stop=stop.reason)`
-    maps `"apparatus_changed"` to `"failed"`, and the run finishes normally
-    from there, run.yaml written, exit computed by the pre-existing
-    `{"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)`
-    tail — `EXIT_FAILED` for `"failed"`. **No code in task 6 prints anything
-    about the stop** — that Collector-rendered diagnostic (Decision 14) is
-    task 7's own addition — so nothing about `pinned` or `r1 → r2` reaches
-    stderr at this commit; this is the honest, unavoidable, mechanical
-    consequence of wiring `stop` through, not a widening of what this task
-    is scoped to review.
+    """Fixture G1's ledger, UPDATED at task 7's commit (Decision 4, Decision
+    14) — a second disagreement with this test's own prior docstring,
+    recorded rather than silently overwritten. Task 6 left the run falling
+    through unaided into `run_status`/`assemble_run_yaml`'s ordinary
+    completion path with nothing printed about the stop, which the prior
+    docstring version captured. Task 7 adds the branch that prints ONE
+    diagnostic through a fresh redacting `Collector` immediately after
+    `execute_plan` returns, naming `stop.code` (`E-APPARATUS-CHANGED`) and
+    `stop.message` (which itself names the fact `pinned` and `r1 → r2`,
+    `Observations.changed`'s own message format) — so this is the test
+    task 4's own text said would change here.
 
-    The ledger is written on the raise path regardless — Part A's measured
-    shape, a mid-plan refusal preserves every line already appended — so all
-    4 probe calls are on disk, and the fourth line is the one that ended
-    it, unaffected by whether the loop stops by raising or by breaking."""
+    Every value below is computed from Fixture G1's own schedule, not
+    transcribed: 4 probe calls total (call 1 run-start, calls 2-4
+    `pre_execution` for executions 1-3), the gate stopping before execution
+    3 runs, so 2 executions complete (repeats 1-2) and `apparatus/probes.jsonl`
+    holds all 4 calls regardless (Part A's measured raise-path shape,
+    unaffected by raising vs. breaking). `unobserved`, recomputed from those
+    same 4 lines: `pinned` is answered every call (`null_probes: 0`),
+    `appears` is `null` on call 1 only (`null_probes: 1`), `vanishes` is
+    `null` on calls 2-4 (`null_probes: 3`) — each `total_probes: 4`. That
+    gives exactly two DECLARED (condition, fact) pairs with a null
+    observation — `appears` and `vanishes` — so exactly two
+    `W-APPARATUS-UNANSWERED` lines print, and only after `run.yaml` is
+    written (§ The apparatus files), which is a second, independent witness
+    that the record phase was reached."""
     site = installed(
         "dist-t4g1", "1.0", {"publishable.probes": {"h7d_g1_probe": "t4g1_probe_mod:probe"}}
     )
@@ -14425,6 +14446,50 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     assert run["status"] == "failed"
+    # Task 12's own key-list pin, re-asserted whole on a STOP path this time
+    # (arm A only asserted it on a clean run — see that test's own docstring
+    # on the boundary this closes).
+    assert list(run.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+
+    # `provenance.apparatus.facts` is the FIRST ANSWERED value per
+    # (condition, fact), not the latest (`Observations.facts_document`'s own
+    # contract) — `pinned`'s first answer is `r1` (calls 1-3), so it stays
+    # `r1` in the record even though the stop fired on call 4's `r2`;
+    # `vanishes`'s first answer is `L1` (call 1, never repeated); `appears`'s
+    # first NON-null answer is `A1` (call 2, since call 1 answered `null`);
+    # `sometimes` is undeclared but still recorded, at its only answer `S1`.
+    apparatus_block = run["provenance"]["apparatus"]
+    assert apparatus_block["facts"]["00"] == {
+        "pinned": "r1",
+        "appears": "A1",
+        "vanishes": "L1",
+        "sometimes": "S1",
+    }
+    assert apparatus_block["unobserved"] == {
+        "pinned": {"null_probes": 0, "total_probes": 4},
+        "appears": {"null_probes": 1, "total_probes": 4},
+        "vanishes": {"null_probes": 3, "total_probes": 4},
+    }
+
+    executions = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
 
     ledger = [
         json.loads(line)
@@ -14433,12 +14498,15 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     assert len(ledger) == 4
     assert ledger[-1]["facts"]["pinned"] == "r2"
 
-    # Nothing prints the stop yet (task 7's own addition), so this is the
-    # negative space that pin protects — a later diagnostic-printing task
-    # landing without updating this assertion is what would catch a
-    # double-print or a leaked message here.
+    assert (doc["results_dir"] / "latest").exists() or (doc["results_dir"] / "latest.txt").exists()
+
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-APPARATUS-CHANGED" not in output
+    assert "E-APPARATUS-CHANGED" in output
+    assert "pinned" in output
+    assert "r1 → r2" in output
+
+    warn_lines = [line for line in output.splitlines() if "W-APPARATUS-UNANSWERED" in line]
+    assert len(warn_lines) == 2
 
 
 # --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
@@ -14480,21 +14548,24 @@ def probe(cfg):
 
 
 def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsys):
-    """Fixture U (task 5 step 4), UPDATED at task 6's commit — the same
-    disagreement recorded on
-    `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`'s test,
-    found here too rather than assumed away: task 6's own step 3 constructs a `StopSignal` and
-    passes `stop=stop` into `execute_plan`, so `E-APPARATUS-RAISED` no longer
-    escapes to `command_run`'s containment `try` — it `break`s inside
-    `execute_plan`'s loop and the command falls through to its ordinary
-    completion path. `run_status(results, planned=len(plan), stop=stop.reason)`
-    maps `"apparatus_unreachable"` to `"partial"`, and the pre-existing exit
-    tail (`{"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status,
-    EXIT_FAILED)`) gives `EXIT_PARTIAL`. **This is the honest mechanical
-    consequence of task 6's wiring, not task 7's or task 8's work** — no
-    diagnostic prints yet (Decision 14's Collector is task 7's), and no
-    `EXIT_EXTERNAL` yet (Decision 6 is task 8's): both remain to land on top
-    of this.
+    """Fixture U (task 5 step 4), UPDATED at task 7's commit — a third
+    disagreement of the same shape recorded on
+    `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`'s test.
+    `expect_exit` does NOT change here: task 8's own text is what moves it
+    to `EXIT_EXTERNAL` (Decision 6); at this commit `run_status` still maps
+    `"apparatus_unreachable"` to `"partial"` and the pre-existing exit tail
+    (`{"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status,
+    EXIT_FAILED)`) still gives `EXIT_PARTIAL` — `command_run` gains no new
+    return path for this reason until task 8 lands.
+
+    What DOES change here: task 7's own diagnostic branch prints
+    unconditionally whenever `stop.reason` is one of the two apparatus
+    reasons — gated on the reason, not on whether any result exists — so
+    with 2 results already on disk this run falls through to the ordinary
+    record phase exactly as before, but now with `E-APPARATUS-RAISED`
+    printed to stderr through a fresh `Collector` on the way. The prior
+    docstring's "no diagnostic prints yet" claim is exactly the sentence
+    this commit makes false, so it is deleted rather than carried forward.
 
     The ledger is written on the raise path regardless — so
     `executions.jsonl` holds the 2 executions that ran before the raise, and
@@ -14533,8 +14604,174 @@ def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsy
     ]
     assert len(probes) == 3
 
+    assert (doc["results_dir"] / "latest").exists() or (doc["results_dir"] / "latest.txt").exists()
+
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-APPARATUS-RAISED" not in output
+    assert "E-APPARATUS-RAISED" in output
+
+
+# --- H7d Part B task 7: Fixture Z arm 2, the zero-results moved case -------
+
+_APPARATUS_Z2_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_z2_assay")
+class ApparatusZ2Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_z2_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Design's Fixture Z, arm 2 (§ The discriminating fixtures): one condition,
+# a probe moving on call 2 — the first `pre_execution` round, guarding the
+# first planned execution, which has therefore not yet run. Call 1 (the
+# run-start round) answers `r1`; call 2 answers `r2`, which disagrees with
+# the first-answered value and raises `E-APPARATUS-CHANGED` inside
+# `observe_round`, `break`ing `execute_plan`'s loop before that first
+# execution's step is even constructed. `check_facts`/`append_observation`/
+# `record` all run before the gate compares (the ordering chain), so both
+# calls are on the ledger regardless of the stop.
+_Z2_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_z2_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    return Apparatus(facts={"model_revision": "r1" if _n == 1 else "r2"})
+"""
+
+
+def test_fixture_z_arm_2_zero_results_moved_case(installed, registries, tmp_path, capsys):
+    """Fixture Z arm 2 (task 7 step 5, Decision 4): with the fact moving
+    before any execution runs, `execute_plan` returns an EMPTY results
+    list carrying `stop.reason == "apparatus_changed"`. Task 7's own branch
+    prints the redacted diagnostic and then, because `results` is empty,
+    returns `EXIT_WRONG` BEFORE `assemble_run_yaml` and BEFORE
+    `point_latest` — batch 4's Major 1, the corner that used to write a
+    record and repoint `latest` for zero results. Decision 4's table: Moved,
+    0 results → no record, exit 1.
+
+    `run_a_project`'s widened helper (task 7 step 2) returns `run_dir: None`
+    here — there is no `executions.jsonl` to read — so this test globs
+    `results_dir` for the run directory itself to check what it does and
+    does not hold: no `run.yaml`, no `executions.jsonl`, and the 2
+    `apparatus/probes.jsonl` lines (call 1 run-start, call 2 the disagreeing
+    `pre_execution`) written on the way in, before the gate ever compares."""
+    site = installed(
+        "dist-t7z2", "1.0", {"publishable.probes": {"h7d_z2_probe": "t7z2_probe_mod:probe"}}
+    )
+    (site / "t7z2_probe_mod.py").write_text(_Z2_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_z2_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_Z2_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+    assert doc["results"] is None
+
+    run_dirs = list(doc["results_dir"].glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+
+    probes = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 2
+
+    assert not (doc["results_dir"] / "latest").exists()
+    assert not (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+
+
+_APPARATUS_FRESH_COLLECTOR_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_fresh_collector_assay")
+class ApparatusFreshCollectorAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_fresh_collector_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Same by-call shape as Fixture Z arm 2 (call 1 run-start answers `r1`, call 2
+# — the first `pre_execution` round — disagrees with `r2`), reused here for a
+# different property: `replication`'s `batch` kind is declared so `validate`
+# itself warns `W-REPL-DETERMINISTIC` (no step here sets
+# `nondeterministic = True`) — a finding that lands in `command_run`'s own
+# `c` BEFORE `execute_plan` ever runs, which is exactly the pre-existing
+# finding a build that appends the stop diagnostic to `c` (rather than a
+# FRESH `Collector`) would inflate.
+_FRESH_COLLECTOR_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_fresh_collector_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    return Apparatus(facts={"model_revision": "r1" if _n == 1 else "r2"})
+"""
+
+
+def test_the_stop_diagnostic_prints_through_a_fresh_collector_not_c(
+    installed, registries, tmp_path, capsys
+):
+    """The discriminator step 7(c) needs and Fixture Z arm 2 cannot supply:
+    that fixture's config validates with zero findings, so `c` is empty
+    throughout and appending the stop diagnostic to it renders identically
+    to a fresh `Collector` — a blind fixture for that specific mutation.
+    Declaring a `batch` repeat here gives `validate` exactly one finding
+    (`W-REPL-DETERMINISTIC`), printed through `c` before the run starts, so
+    a build that appends the stop diagnostic to that same `c` re-renders
+    BOTH findings — `2 problems (1 error, 1 warning)` — on the stream the
+    stop diagnostic prints to, where the correct build's fresh `Collector`
+    renders only the one it was just given."""
+    site = installed(
+        "dist-t7fresh",
+        "1.0",
+        {"publishable.probes": {"h7d_fresh_collector_probe": "t7fresh_probe_mod:probe"}},
+    )
+    (site / "t7fresh_probe_mod.py").write_text(_FRESH_COLLECTOR_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_fresh_collector_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "batch", "n": 2}]},
+        _local_template=_APPARATUS_FRESH_COLLECTOR_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+
+    stderr = doc["stderr"] or ""
+    assert "E-APPARATUS-CHANGED" in stderr
+    stop_block_start = stderr.index("E-APPARATUS-CHANGED")
+    stop_block = stderr[max(0, stop_block_start - 40) :]
+    assert "1 problem (1 error, 0 warnings)" in stop_block
+    assert "W-REPL-DETERMINISTIC" not in stderr
+
+    stdout = doc["stdout"] or ""
+    assert "W-REPL-DETERMINISTIC" in stdout
 
 
 # --- H7d Part B batch 3 fix round 1, Major 1: a moved non-`str` credential
@@ -14576,28 +14813,27 @@ def probe(cfg):
 def test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper(
     installed, registries, tmp_path, capsys
 ):
-    """Batch 3 review, Major 1, closed — UPDATED at task 6's commit, a third
+    """Batch 3 review, Major 1, closed — UPDATED at task 7's commit, a fourth
     disagreement of the same shape recorded on Fixture G1's and Fixture U's
-    tests above. The interim fix this docstring described (`command_run`'s
-    filter admitting `apparatus.STOP_CODES` so a raise rendered through a
-    redacting `Collector`) is exactly the branch task 6's own step 3
-    bypasses: once `stop=stop` reaches `execute_plan`, `E-APPARATUS-CHANGED`
-    no longer raises out of it at all — it `break`s inside the loop, and
-    `command_run` falls through to its ordinary completion, `run_status`
-    mapping `"apparatus_changed"` to `"failed"`, exit `EXIT_FAILED`. **Nothing
-    prints a diagnostic at this commit** (Decision 14's own fresh `Collector`
-    on the stop path is task 7's addition), so
-    `_assert_went_through_the_containment_wrapper`'s specific format check no
-    longer applies — there is no rendered output for it to find a shape in.
+    tests above. Task 6 left this run falling through unaided into
+    `command_run`'s ordinary completion with nothing printed about the stop
+    (`run_status` mapping `"apparatus_changed"` to `"failed"`, exit
+    `EXIT_FAILED`) — the prior docstring version captured exactly that.
+    **Task 7's own diagnostic branch now prints unconditionally** whenever
+    `stop.reason` is one of the two apparatus reasons, through a FRESH
+    redacting `Collector` carrying the same `credentials` mapping every
+    other branch in `command_run` already reuses — so this is the test that
+    proves the redaction survives the stop path too: `serial`'s moved
+    value reaches stderr as `E-APPARATUS-CHANGED ... changed:
+    <redacted:PUBLISHABLE_TEST_TOKEN> → 999`, never as the plaintext
+    `13579`.
 
-    The credential-safety property this test exists to guard survives
-    regardless, and MORE robustly than before: with no diagnostic printed at
-    all, `"13579"` cannot leak through stdout/stderr either. **What this test
-    still does NOT close, and must not be read as closing**: the same run
-    still writes `"serial": 13579` into `apparatus/probes.jsonl` on disk,
-    because `check_facts`'s non-`str` carve-out lets it through the
-    credential check entirely regardless of the gate — filed, not fixed, in
-    `spec-defects.md`, owned by whoever owns that carve-out."""
+    **What this test still does NOT close, and must not be read as
+    closing**: the same run still writes `"serial": 13579` into
+    `apparatus/probes.jsonl` on disk, because `check_facts`'s non-`str`
+    carve-out lets it through the credential check entirely regardless of
+    the gate — filed, not fixed, in `spec-defects.md`, owned by whoever owns
+    that carve-out."""
     site = installed(
         "dist-t4major1",
         "1.0",
@@ -14619,7 +14855,8 @@ def test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper(
     assert run["status"] == "failed"
 
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-APPARATUS-CHANGED" not in output
+    assert "E-APPARATUS-CHANGED" in output
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
     assert "13579" not in output
 
 
