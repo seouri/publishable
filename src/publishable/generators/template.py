@@ -10,8 +10,10 @@ from publishable.errors import ContractError
 # check trivially and would still teach its reader to set a field this generated
 # file has no other use for. `version` is omitted for a sharper reason: a
 # project-local template is never version-checked at all, so a version in this
-# file would be a string nothing reads. `field_convention` and `apparatus_facts`
-# are declared on the base class and read by nothing in this build;
+# file would be a string nothing reads. `field_convention` is
+# declared on the base class and read by nothing in this build; `apparatus_facts`
+# is read (H7d Part A projects a probe's facts onto it) but is meaningless
+# without a probe this stub does not declare;
 # `apparatus_probe` is read (`validate` checks it against the installed probes)
 # but a stub declaring `None` would only ever satisfy that check trivially.
 # `docs/reference.md` § Templates: where parameters are defined

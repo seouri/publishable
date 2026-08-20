@@ -2567,7 +2567,22 @@ Pinned by `test_an_estimate_is_refused_at_every_other_scope` and
 `test_an_estimate_with_an_n_does_not_warn`, and `test_an_estimate_with_no_interval_does_not_warn`
 (`-N`, `tests/test_cli.py`, all three through `main(["run", ...])`).
 
-## The importable surface names five things `publishable/__init__.py` does not export
+## ~~The importable surface names five things `publishable/__init__.py` does not export~~ — MOSTLY CLOSED; only `BaseReport` remains
+
+**Corrected 2026-08-20, measured at `993aeec`.** Five of the six names this entry lists are now
+exported from `publishable/__init__.py`: `Unit`, `Apparatus`, `register_template`,
+`register_resolver`, `register_probe` and `register_writer` — checked by grepping `__all__` for each
+name individually rather than reading the list as a block. **Only `BaseReport` is still unexported**,
+and it is unexported for the reason the body below gives: core ships no report class for it to name.
+The entry's count and its central claim that those names are not defined anywhere are both stale; what
+survives is the `BaseReport` case and the reasoning about why a normative table may list an unbuilt
+name without that being a defect.
+
+**Owner: unassigned, stated as a fact.** `BaseReport` belongs to whichever slice builds the report
+surface, which no remaining charter names — H8 covers `freeze`/`diff`/`report`'s command shape rather
+than a subclassable report class. Its closer must check: whether § The importable surface still lists
+`BaseReport` at that point; whether `register_writer` already covers the need it was minted for; and
+whether exporting a name with no class behind it is worse than leaving the table's row unbuilt.
 
 **AMENDED 2026-08-11 (S5 checkpoint audit):** **Miscounted, and one claim is false.** `__all__`
 holds nine names; the § The importable surface table names **seven** that are absent — `Unit`,

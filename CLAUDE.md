@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H7d → the rest — the H4 family is complete.** Amended twice
-on 2026-08-14
+**Order of the slices that remain: H8, H9, and H3c-3's remaining 14 — the H4 and H7 families are
+complete.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -304,7 +304,7 @@ every session.
 | Reading a subprocess probe as a pin | A probe proves the moment; a test proves tomorrow. H7b Part B's credential-leak fix was verified through the real console script for every shape at both commands — and the reviewer's combined mutation then left the suite **unchanged**, because the fix commit added one test. **Five times in three slices a correct fix shipped unpinned.** Verify by probe, then pin by mutation |
 | Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
-| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody. `EXIT_EXTERNAL` is the same fault outside `BaseTemplate`: defined in `diagnostics.py`, read by nothing) |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody — `EXIT_EXTERNAL` was the same fault outside `BaseTemplate` until H7d Part B task 8 gave it its reader) |
 
 ### Writing checks that can fail
 
