@@ -218,3 +218,26 @@ half is real** — the assert-safe form fails the end-to-end test on its own `le
 ordering is **guarded but not pinned as claimed**, and the defect is the overclaiming docstring. Worth
 noting the shape: **batch 2's fix made batch 4's prescribed mutation unreachable**, which no per-task
 brief could have anticipated.
+
+**Fix round 1 — both Majors and all six Minors closed** (`3b62c82`, `6b66b5f`). Suite **2442**.
+
+The containment filter now admits `STOP_CODES` beside `APPARATUS_CODES`, reusing the existing redacting
+`Collector` as an **interim** fix ahead of Decision 14's own — and **I verified the pin myself rather
+than the behaviour alone**: dropping `STOP_CODES` from the filter fails
+`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper` and nothing else, so the
+containment is pinned by a named end-to-end test rather than by the fix's presence. Reverted
+byte-identical; 2442 restored.
+
+**The disk half was deliberately left open and filed** — the plaintext value still reaches
+`apparatus/probes.jsonl`, which is pre-existing and orthogonal to the stream leak. Splitting it that way
+is right: the stream leak was created by this batch and the disk one was not, and a single fix covering
+both would have made the new filing indistinguishable from the old defect.
+
+Major 2 closed by **deleting** the false "only assertion that can see this ordering" claim and replacing
+it with two honest pins — a direct test of what the reflexivity assert actually guarantees, and **a
+call-order spy witnessing the real sequence.** The spy is the better answer to a discriminator no
+mutation can reach: when the guard is louder than the mutation, **observe the order rather than perturb
+it.**
+
+Decision 11's wrong cost-if-wrong sentence was corrected in the design **by dated append**, which is the
+right form — a spec records what was decided when it was written.
