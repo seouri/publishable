@@ -906,7 +906,13 @@ class StepIO:
                 f"`{step}` — it was not written under this name, at this location",
                 code="E-UPSTREAM-ARTIFACT-MISSING",
             )
-        return self._read(target)
+        result = self._read(target)
+        # Recorded only now that the read has RETURNED (Decision 6, step 1) —
+        # a call that raised above this line, or that `_read` itself raises
+        # (an unregistered writer-without-reader suffix), never reaches this
+        # and the ledger stays untouched for it.
+        self._upstream.ledger.record(step=step, name=name, record=record)
+        return result
 
     @staticmethod
     def _contained(base: Path, name: str, *, code: str) -> Path:

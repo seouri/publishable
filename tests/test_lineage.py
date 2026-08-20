@@ -12,9 +12,16 @@ import pytest
 import yaml
 from tests.test_cli import run_a_project
 
+from publishable.artifacts import StepIO
 from publishable.diagnostics import EXIT_PARTIAL
 from publishable.errors import ContractError
-from publishable.lineage import read_run_record, resolve_run, resolve_step
+from publishable.lineage import (
+    UpstreamLedger,
+    UpstreamResolver,
+    read_run_record,
+    resolve_run,
+    resolve_step,
+)
 from publishable.run_record import SCHEMA_VERSION
 from publishable.sweep import condition_dir_name
 
@@ -678,3 +685,96 @@ def test_relative_form_returns_a_resolved_path_not_merely_a_contained_one(tmp_pa
     assert resolved == real_target.resolve()
     assert resolved != output_dir / run_id  # the unresolved form the old code returned
     assert record["run_id"] == run_id
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — accumulation: an entry on a read that RETURNS, kept across a
+# failing execution, `used` and entries SORTED rather than by insertion
+# order. Fixture O (direct calls, sized for three candidate orderings) —
+# Fixture F (needs a real `run`) is in `tests/test_cli.py`.
+# `docs/superpowers/plans/2026-08-20-lineage.md` task 6; design § Decision 6,
+# § The discriminating fixtures / Fixture O.
+# ---------------------------------------------------------------------------
+
+
+def _reuse_io_for(tmp_path: Path, *, output_dir: Path) -> StepIO:
+    resolver = UpstreamResolver(
+        output_dir=output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=UpstreamLedger(),
+    )
+    return StepIO(
+        step_dir=tmp_path / "downstream_step",
+        input_dir=tmp_path / "downstream_input",
+        run_dir=tmp_path / "downstream_run",
+        upstream=resolver,
+    )
+
+
+def _write_upstream_with_artifacts(run_dir: Path, run_id: str, step: str, names: list[str]) -> None:
+    """A synthesized upstream whose `shared/<step>/` holds one file per name
+    in `names`, each with distinguishable content — enough for `reuse_from`
+    to genuinely read each one rather than merely resolve a path."""
+    execution = {"shared": {step: {"status": "completed"}}, "summary": {}, "conditions": []}
+    _write_upstream(run_dir, run_id, execution)
+    step_dir = run_dir / "shared" / step
+    step_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (step_dir / name).write_text(json.dumps({"name": name}))
+
+
+def test_fixture_o_used_is_sorted_not_insertion_or_reverse_insertion(tmp_path: Path):
+    """Three artifacts read in the order `c.json`, `a.json`, `b.json` —
+    sorted (`a, b, c`), insertion (`c, a, b`) and reverse-insertion
+    (`b, a, c`) all differ, so the exact-list assertion discriminates all
+    three (`CLAUDE.md`: two elements only ever distinguish two answers)."""
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_oooooo1"
+    _write_upstream_with_artifacts(
+        output_dir / run_id, run_id, "step01", ["c.json", "a.json", "b.json"]
+    )
+    io = _reuse_io_for(tmp_path, output_dir=output_dir)
+    io.reuse_from(run_id, "step01", "c.json")
+    io.reuse_from(run_id, "step01", "a.json")
+    io.reuse_from(run_id, "step01", "b.json")
+    entries = io._upstream.ledger.entries()
+    assert len(entries) == 1
+    assert entries[0]["used"] == ["step01/a.json", "step01/b.json", "step01/c.json"]
+
+
+def test_fixture_o_entries_are_sorted_by_run_id_not_read_order(tmp_path: Path):
+    """Three upstream run directories read in an order that is neither
+    their sorted `run_id` order nor its reverse — `bbb`, then `aaa`, then
+    `ccc` — sorted is `aaa, bbb, ccc`; that read order is neither it nor
+    `ccc, bbb, aaa`."""
+    output_dir = tmp_path / "output_dir"
+    run_id_a = "run_2020-01-01T00-00-00Z_aaaaaa9"
+    run_id_b = "run_2020-01-01T00-00-00Z_bbbbbb9"
+    run_id_c = "run_2020-01-01T00-00-00Z_ccccccc"
+    for rid in (run_id_a, run_id_b, run_id_c):
+        _write_upstream_with_artifacts(output_dir / rid, rid, "step01", ["x.json"])
+    io = _reuse_io_for(tmp_path, output_dir=output_dir)
+    # read order: b, a, c — neither sorted (a, b, c) nor reverse (c, b, a)
+    io.reuse_from(run_id_b, "step01", "x.json")
+    io.reuse_from(run_id_a, "step01", "x.json")
+    io.reuse_from(run_id_c, "step01", "x.json")
+    entries = io._upstream.ledger.entries()
+    assert [e["run_id"] for e in entries] == [run_id_a, run_id_b, run_id_c]
+
+
+def test_fixture_o_both_locator_forms_for_one_upstream_merge_into_one_entry(tmp_path: Path):
+    """Step 4: an upstream read once by `run_id` and once by an absolute
+    path is ONE entry, with both artifact names in `used` — the ledger is
+    keyed by the resolved `run_id`, never by the locator string, so the two
+    calls do not become two entries."""
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_ooooo10"
+    run_dir = output_dir / run_id
+    _write_upstream_with_artifacts(run_dir, run_id, "step01", ["x.json", "y.json"])
+    io = _reuse_io_for(tmp_path, output_dir=output_dir)
+    io.reuse_from(run_id, "step01", "x.json")
+    io.reuse_from(str(run_dir), "step01", "y.json")
+    entries = io._upstream.ledger.entries()
+    assert len(entries) == 1
+    assert entries[0]["run_id"] == run_id
+    assert entries[0]["used"] == ["step01/x.json", "step01/y.json"]

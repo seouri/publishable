@@ -256,18 +256,76 @@ class UpstreamLedger:
     later fails, rather than resetting between executions the way a
     `StepIO`-owned collection would.
 
-    This class is deliberately a bare container at this point in the slice:
-    task 6 owns the accumulation rule itself (an entry is added only when a
-    `reuse_from` call *returns*, kept across a failing execution, `used`
-    deduplicated and sorted, entries sorted by `run_id` rather than by
-    insertion order). Tasks 3 and 5 build the plumbing this rests on —
-    construction, injection, and the read path itself — without yet writing
-    to it, on the plan's own ordering constraint: "nothing accumulates until
-    something reads."
+    Task 6 owns the accumulation rule itself: `record` is called from
+    `reuse_from` exactly once per call that *returns* — never from an
+    `except` branch, and never for a call that raises before reaching it
+    (Decision 6, step 1) — so a `reuse_from` that raises leaves the ledger
+    untouched. The ledger is a run-level object built once in `command_run`
+    and outlives every per-execution `StepIO`, so an entry survives an
+    execution that later fails (Decision 6, step 2): nothing here is ever
+    removed once added.
+
+    Keyed by the RESOLVED `run_id`, never by the locator a step named — a
+    read of the same upstream once by `run_id` and once by an absolute path
+    is one entry with both names in `used` (Decision 6, step 4; see
+    `UpstreamResolver`'s own cache, which is keyed by locator for a
+    different reason and must not be confused with this one).
     """
 
     def __init__(self) -> None:
-        self.entries: dict[str, dict[str, Any]] = {}
+        self._entries: dict[str, dict[str, Any]] = {}
+
+    def record(self, *, step: str, name: str, record: dict[str, Any]) -> None:
+        """Record that `step`'s `reuse_from` call read `name` from the
+        upstream `record` (as returned by `resolve_run`/
+        `UpstreamResolver.resolve`). Called from `reuse_from` only after its
+        own read has returned — never on a raise (Decision 6, step 1).
+
+        `code_hash` and `parameters_hash` are copied from `record` the first
+        time this `run_id` is seen and never re-read afterward, which is
+        what makes N reads from one upstream do one record read (Decision 6,
+        step 4's caching, which `UpstreamResolver.resolve` already provides —
+        this method only needs the two figures once per `run_id`, not once
+        per call).
+        """
+        run_id = record["run_id"]
+        entry = self._entries.setdefault(
+            run_id,
+            {
+                "run_id": run_id,
+                "code_hash": record.get("code_hash"),
+                "parameters_hash": record.get("parameters_hash"),
+                # A LIST, not a set: `entries()` sorts it before returning it
+                # regardless, but a set's iteration order is Python's hash
+                # order — randomized per process for `str` — which would
+                # make the "delete the `sorted()`" mutation pass or fail by
+                # chance rather than by construction. Deduplicated here, on
+                # insertion, so insertion order stays a genuine fact about
+                # this run's execution order for `entries()`'s docstring
+                # (and Fixture O's test) to reason about.
+                "used": [],
+            },
+        )
+        used_key = f"{step}/{name}"
+        if used_key not in entry["used"]:
+            entry["used"].append(used_key)
+
+    def entries(self) -> list[dict[str, Any]]:
+        """The sorted list `command_run` reads into `provenance.upstream`
+        (Decision 6, step 3; Decision 7). Entries are sorted by `run_id` and
+        each entry's `used` is deduplicated and sorted lexicographically —
+        never insertion order, which is *execution* order and which
+        `order: randomized` moves between two runs of the same design, so a
+        record stable across two identical runs cannot be built from it."""
+        return [
+            {
+                "run_id": entry["run_id"],
+                "code_hash": entry["code_hash"],
+                "parameters_hash": entry["parameters_hash"],
+                "used": sorted(entry["used"]),
+            }
+            for entry in sorted(self._entries.values(), key=lambda e: e["run_id"])
+        ]
 
 
 class UpstreamResolver:
