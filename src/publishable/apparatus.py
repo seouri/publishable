@@ -386,10 +386,13 @@ def check_changed(
     reused here, not re-derived. **The containment check itself is skipped
     by `check_facts` for any non-`str` value** (its own deliberate carve-out),
     so a non-`str` fact equal to a declared credential's value is not caught
-    there; there is no call site yet, and the wired diagnostic's redacting
-    `Collector` (Decision 14) is the mitigation for that residual — worth
-    naming for whoever wires the diagnostic, not a claim this function makes
-    good on itself.
+    there. Batch 3 review, Major 1: task 4 gave this a live call site, and a
+    non-`str` credential that moved reached `main`'s bare, un-redacted
+    printer through that call site until the same batch's fix round widened
+    `cli.command_run`'s containment filter to admit `apparatus.STOP_CODES`,
+    reusing that site's own redacting `Collector` as an interim mitigation.
+    Decision 14's own fresh redacting `Collector` on the stop path (task 5/7)
+    is the permanent one.
 
     Task 4 wires this into `Observer._observe_one`, after
     `Observations.record`, on the order Decision 3 fixes — a raise here still
@@ -504,12 +507,20 @@ STOP_CODES: frozenset[str] = frozenset(
         "E-APPARATUS-CHANGED",
     }
 )
-"""The two codes `execute_plan`'s loop breaks on (task 5). At this commit the
-only pin is one shared set-equality assertion over both members (each
-member's absence is independently checked by deleting it and rerunning that
-one test), because Fixture U and Fixture G1 — the run-level pins each code
-eventually earns on its own — are owed by tasks 5 and 7 and do not exist
-here.
+"""The two codes `execute_plan`'s loop breaks on (task 5). At this commit
+there is a shared set-equality assertion over both members (each member's
+absence is independently checked by deleting it and rerunning that one
+test), plus each member is now also pinned individually and end to end:
+`E-APPARATUS-RAISED` by Fixture K2
+(`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`, Part A) and
+`E-APPARATUS-CHANGED` by batch 3's fix round
+(`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`,
+`tests/test_cli.py`) — both going through
+`_assert_went_through_the_containment_wrapper`, the same discriminator
+`APPARATUS_CODES`' own members use. Task 4 shipped Fixture G1
+(`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`); Fixture
+U (task 5's own truncation pin, `status: partial`, exit 5) remains owed by
+task 5, since `execute_plan`'s `break` does not exist yet.
 
 **`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
 That frozenset is `command_run`'s containment filter for a probe CALL

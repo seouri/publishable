@@ -2467,13 +2467,29 @@ def command_run(config_path: Path) -> int:
             # own `try/except` just before `observer` is built — that site
             # never reaches this `try` at all): `main`'s own `PublishableError`
             # handler prints `{exc}` with no collector in scope, so anything
-            # reaching it is un-redacted. Filtered to exactly
-            # `apparatus.APPARATUS_CODES` —
-            # every other `ContractError` out of this block
-            # (`E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`) keeps escaping
-            # exactly as it does today; this slice does not change how core's
-            # own inconsistencies are reported.
-            if exc.code not in apparatus.APPARATUS_CODES:
+            # reaching it is un-redacted. Filtered to
+            # `apparatus.APPARATUS_CODES` UNION `apparatus.STOP_CODES` — every
+            # other `ContractError` out of this block (`E-RUN-CFG-MISSING`,
+            # `E-RUN-SEED-MISSING`) keeps escaping exactly as it does today;
+            # this slice does not change how core's own inconsistencies are
+            # reported.
+            #
+            # `E-APPARATUS-CHANGED` is deliberately not a member of
+            # `APPARATUS_CODES` itself (plan correction 4: that frozenset is
+            # `_probe_for`'s dispatch-time filter, and admitting an unpinned
+            # member there is the thing this project has already been burned
+            # by) — but task 4 gave it a live call site
+            # (`Observer._observe_one`, through this very `try`, both at
+            # `run_start` and mid-plan), and `check_facts` deliberately skips
+            # its containment check for a non-`str` fact value, so a moved
+            # fact whose value is a numeric credential would otherwise reach
+            # `main`'s un-redacted bare printer. Task 5/7 replaces this branch
+            # with Decision 14's fresh redacting `Collector` on the stop path;
+            # until then, this widened filter is what keeps a live leak from
+            # shipping in the meantime — reusing this site's own `credentials`
+            # and `Collector`, the identical redaction the `APPARATUS_CODES`
+            # branch already gives every other probe-call raise.
+            if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
             probe_c = Collector()
             # A FRESH collector: `c` was already rendered and printed above,

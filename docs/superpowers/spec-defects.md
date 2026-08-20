@@ -7101,6 +7101,44 @@ stays open on that question rather than being struck.
 and `coercion._refuse`'s message format together. **Corrected by:** H7d Part A batch 3, fix round 1,
 verified by running.
 
+**The predicted reopening happened, and was closed.** H7d Part B task 4 gave `E-APPARATUS-CHANGED` —
+"a code added outside [`APPARATUS_CODES`]," exactly the sentence above — a live call site
+(`Observer._observe_one`), and the batch 3 review verified by running that a declared credential
+held as a **non-`str`** fact (`check_facts`'s containment check skips any non-`str` value by its own
+carve-out, so a numeric credential is never refused there at all) that then moves prints
+`E-APPARATUS-CHANGED ... changed: 13579 → 999` to stderr through `main`'s bare, un-redacted printer.
+Closed in the same batch's fix round: `cli.command_run`'s containment filter now also admits
+`apparatus.STOP_CODES`, so `E-APPARATUS-CHANGED` renders through the same redacting `Collector`
+`APPARATUS_CODES` members already use — `redact` is a textual substring replacement, so it catches
+the credential's string form even though the fact value that carried it was an `int`. Verified by
+running: `test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper` (added task 4's
+batch 3 fix round) shows `<redacted:PUBLISHABLE_TEST_TOKEN>` in place of `13579` in both stdout and
+stderr. This is an interim fix — task 5/7 replaces this branch with Decision 14's own fresh
+redacting `Collector` on the stop path — not a claim that the containment-filter widening is
+permanent.
+
+## OPEN — `check_facts`'s credential containment check skips every non-`str` fact value, so a numeric or otherwise non-`str` credential reaches `apparatus/probes.jsonl` unredacted — **Owner: unassigned**
+
+`apparatus.check_facts`'s credential check (Decision 6) walks only `str`-valued facts; a fact whose
+value is an `int`, `float`, or `bool` never passes through the containment comparison at all, by a
+carve-out the function states deliberately (a structural or numeric value cannot be compared for
+*containment* the way a substring can). Found while closing the entry above: the same fixture that
+makes `E-APPARATUS-CHANGED` print a credential unredacted to the **terminal** (an `int`-valued
+declared credential that moves) also writes that same value into
+`apparatus/probes.jsonl` **on disk**, on every call, whether or not the fact ever changes — verified
+by running, two ledger lines each carrying `"serial": 13579` before the moving call. This half is
+**pre-existing** (not created by task 4's wiring — `append_observation` writes whatever `check_facts`
+lets through, regardless of the gate) and is unrelated to the terminal leak's fix: widening
+`command_run`'s containment filter redacts what is *printed*, not what is *written to the ledger
+file itself*, and nothing in this codebase redacts a run's own artifacts after the fact.
+
+**Owner:** unassigned. **Found by:** H7d Part B batch 3 review, verified by running. **Route, stated
+rather than built:** either extend `check_facts`'s containment check to a stringified comparison for
+non-`str` scalars (comparing `str(value)` against each declared credential's value), or accept that
+a credential declared through `required_env` must not be handed to a probe as a non-`str` fact at
+all and refuse that shape at `validate` — a design decision `reference.md` does not currently make
+either way, so this entry does not adjudicate it.
+
 ## OPEN — `EXIT_EXTERNAL = 5` ships and is read by nothing — **Owner: Part B**
 
 `src/publishable/diagnostics.py` defines `EXIT_EXTERNAL = 5` alongside `EXIT_OK`, `EXIT_WRONG`,

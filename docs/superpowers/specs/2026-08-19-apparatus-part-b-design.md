@@ -971,3 +971,35 @@ matches its assertion.
 **The order this establishes, worth carrying past this slice:** a document may not be made
 self-consistent by widening a behaviour change. Settle the part your slice owns, say plainly what is
 left, and file the remainder with the check its owner must make.
+
+---
+
+## Correction, appended 2026-08-20 against batch 3's review — Decision 11's cost-if-wrong sentence names the wrong test
+
+Decision 11's grounds paragraph reads: *"If a future round ever probes one condition twice before
+the first execution, the gate would fire during setup and the test above is what would fail — which
+is the outcome wanted, rather than a comment nobody re-reads."* **The test above (Fixture G3's own
+pin) would not fail under that mutation.** Determined from the fixture itself: G3's probe returns
+the swept parameter's own value, which is constant *within* a condition, so a round that probed the
+same condition twice would observe the identical value twice and the gate would compare it against
+itself — unchanged, no raise. Fixture G3's test would still pass.
+
+The design's own mutation table has the right answer a few sections earlier: *"Probe once at run
+start instead of once per condition | Part A's shipped call-count contract, unchanged and re-run"* —
+Part A's `test_a_declared_probe_is_called_once_per_condition_at_run_start` is the guard that would
+actually fail if a future round probed one condition twice, because that test pins the **call
+count**, not a value comparison. Decision 11's own sentence contradicts its neighbour in the same
+document.
+
+This does not change either verdict: the pin Decision 11 asked for (Fixture G3, a test rather than a
+comment) exists and discriminates against the reading it was built for — a genuine cross-condition
+comparison, which does fail it, per the design's own mutation table entry two rows below the
+contradicted sentence. What was wrong is only the *cost-if-wrong* sentence's claim about which test
+would catch a **different**, hypothetical future mutation (one round probing a condition twice), not
+about the mutation this task's own fixture targets.
+
+Found by: H7d Part B batch 3 review, determined by reading the fixture rather than by running (the
+mutation named — a round probing one condition twice — is not one this batch's own prescribed
+mutations construct). Per `CLAUDE.md`, this is appended rather than retro-edited into Decision 11
+above; task 11 (the document-consistency task, already merged) is the natural place a later pass
+folds this correction into `reference.md` if that section is ever touched again for another reason.

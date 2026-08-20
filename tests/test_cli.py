@@ -14365,12 +14365,20 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
 ):
     """Fixture G1's ledger (task 4 step 3): the run-level pin for
     append-before-gate. At THIS commit — before task 5 wires `execute_plan`'s
-    `break` — the raise escapes `execute_plan` uncaught: `E-APPARATUS-CHANGED`
-    is deliberately not a member of `apparatus.APPARATUS_CODES` (§ Corrections
-    against the code, correction 4), so it re-raises past `command_run`'s
-    containment filter to `main`'s own bare `PublishableError` handler —
-    `EXIT_WRONG`, unredacted, with no `run.yaml`. **This expectation is task
-    5's to change; changing it there is expected, not a regression.**
+    `break` — the raise escapes `execute_plan` uncaught, reaching
+    `command_run`'s containment `try` around that call. `E-APPARATUS-CHANGED`
+    is deliberately not a member of `apparatus.APPARATUS_CODES` itself
+    (§ Corrections against the code, correction 4), but batch 3's fix round
+    (Major 1) widened that `try`'s filter to also admit `apparatus.STOP_CODES`,
+    so the raise now renders through the same redacting `Collector` every
+    `APPARATUS_CODES` member already uses, rather than reaching `main`'s bare
+    `PublishableError` handler — `EXIT_WRONG` either way, with no `run.yaml`.
+    **The redacted-vs-bare rendering path is task 5's fix to complete (Decision
+    14's own fresh `Collector` on the stop path); the exit code and the
+    presence of `run.yaml` are task 7's (Decision 4: `status: failed`, exit 4,
+    a written record) rather than task 5's alone, since `break`ing the loop
+    (task 5) does not by itself give the stop a record — neither changing
+    there is a regression.**
 
     The ledger is written on the raise path regardless — Part A's measured
     shape, a mid-plan refusal preserves every line already appended — so all
@@ -14408,6 +14416,91 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     assert "r1 → r2" in stderr
 
 
+# --- H7d Part B batch 3 fix round 1, Major 1: a moved non-`str` credential
+# fact must not reach `main`'s un-redacted printer ---------------------------
+
+_APPARATUS_INT_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_int_cred_assay")
+class ApparatusIntCredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    apparatus_probe = "h7d_int_cred_probe"
+    apparatus_facts = ["serial"]
+"""
+
+# The reviewer's exact repro (Major 1): the declared credential's value is
+# `13579`, and the probe returns it as a Python `int` fact — never a `str` —
+# on its first two calls, then a different `int` on the third. `check_facts`'s
+# containment check skips any non-`str` value by its own carve-out, so this
+# fact is never refused there; the only thing standing between it and a bare
+# stderr print is whichever containment filter the gate's raise passes
+# through.
+_INT_CRED_MOVING_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_calls = {"n": 0}
+
+
+@register_probe("h7d_int_cred_probe")
+def probe(cfg):
+    n = _calls["n"]
+    _calls["n"] += 1
+    return Apparatus(facts={"serial": 13579 if n < 2 else 999})
+"""
+
+
+def test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 3 review, Major 1, closed. A declared credential
+    (`PUBLISHABLE_TEST_TOKEN=13579`) held as an `int` fact that moves used to
+    print `E-APPARATUS-CHANGED ... changed: 13579 -> 999` to stderr verbatim:
+    `check_facts` skips containment for non-`str` values, and
+    `E-APPARATUS-CHANGED` was deliberately excluded from `APPARATUS_CODES`
+    (plan correction 4), so the raise passed `command_run`'s containment
+    filter untouched and reached `main`'s bare `PublishableError` handler,
+    which prints with no `Collector` in scope.
+
+    `cli.command_run`'s filter now also admits `apparatus.STOP_CODES`, so this
+    code renders through the same redacting `Collector` every
+    `APPARATUS_CODES` member already uses — `secrets.redact` is a plain
+    substring replacement over `self.credentials`' values, so it catches the
+    credential's string form (`"13579"`) inside the message even though the
+    fact value that carried it was a Python `int`, not a `str`. This is an
+    interim fix: task 5/7 replaces this branch with Decision 14's own fresh
+    redacting `Collector` on the stop path.
+
+    **What this test does NOT close, and must not be read as closing**: the
+    same run still writes `"serial": 13579` into `apparatus/probes.jsonl` on
+    disk, because `check_facts`'s non-`str` carve-out lets it through the
+    credential check entirely regardless of the gate — filed, not fixed,
+    in `spec-defects.md`, owned by whoever owns that carve-out."""
+    site = installed(
+        "dist-t4major1",
+        "1.0",
+        {"publishable.probes": {"h7d_int_cred_probe": "t4major1_probe_mod:probe"}},
+    )
+    (site / "t4major1_probe_mod.py").write_text(_INT_CRED_MOVING_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_int_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_INT_CRED_TEMPLATE,
+        _env_file="PUBLISHABLE_TEST_TOKEN=13579\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-CHANGED")
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in output
+    assert "13579" not in output
+
+
 # --- H7d Part B task 13: the run-start round cannot trip the gate, and the
 # sentinel that proves the suite would notice --------------------------------
 
@@ -14441,7 +14534,7 @@ def test_g3_run_start_round_never_trips_the_gate_across_conditions(
     """Fixture G3, re-driven to completion (task 13 step 1, Decision 11).
     Two conditions sweeping `instrument.model`, a probe returning the swept
     value as `model_revision` — Part A's shipped swept-fact shape
-    (`_SWEPT_FACT_PROBE_MODULE`/`_APPARATUS_ASSAY_TEMPLATE` above), rebuilt
+    (`_SWEPT_FACT_PROBE_MODULE`/`_APPARATUS_ASSAY_TEMPLATE`), rebuilt
     under this task's own distribution and module names, since Fixture P
     warns that two fixtures sharing one importable module name in one test
     session get the first one's code. `Observations.changed` is scoped per

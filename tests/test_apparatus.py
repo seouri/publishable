@@ -788,15 +788,30 @@ def test_changed_is_reflexivity_safe_for_a_constant_nan_fact():
 
 
 def test_the_ordering_chain_counts_the_moving_call_before_the_gate_fires(tmp_path):
-    """Task 4 step 2: the direct-call pin for record-before-gate. Fixture G1's
-    own schedule, driven through `Observer` across four rounds — the raise on
-    round 4 (`pinned: r1 -> r2`) must have already been counted in
-    `unobserved.total_probes` for `pinned`, because `Observations.record` runs
-    before the gate compares (Decision 3, `_observe_one`'s own order).
+    """Task 4 step 2. Fixture G1's own schedule, driven through `Observer`
+    across four rounds — the raise on round 4 (`pinned: r1 -> r2`) must have
+    already been counted in `unobserved.total_probes` for `pinned`, because
+    `Observations.record` runs before the gate compares (Decision 3,
+    `_observe_one`'s own order). Named in the plan's mutation table and in
+    task 4 step 2 (not in § Corrections against the code, which this
+    docstring previously mis-cited).
+
+    **Batch 3 review, Major 2: this is a census assertion, not a
+    discriminator, and this docstring previously overclaimed otherwise.**
     `_first_answered` never overwrites an answered pair, so no *value*
-    assertion can tell this ordering from the reverse — only a count can,
-    which is why the plan's own correction and Fixture G1 both name this as
-    the discriminator for this clause.
+    assertion can tell record-before-gate from the reverse — true — but this
+    *count* cannot either, on any fixture: `Observations.changed`'s own
+    reflexivity-safety assert (`assert incoming is None` when `first is
+    None`) fires on the first answering observation of ANY fact under a
+    gate-before-record reordering, which is strictly earlier than any count
+    this test reads. Verified by running: moving the gate above `record`
+    makes this test fail with an `AssertionError` from `apparatus.py`, never
+    with `total_probes == 3`. The record-before-gate ordering is not
+    unguarded — that assert fires loudly the instant it is broken — but this
+    test does not witness it; see
+    `test_changed_asserts_when_called_without_record_first` for what that
+    assert actually pins, and its own docstring for what it does and does
+    not cover.
 
     A direct call rather than end to end: at this commit the raise still
     ends the command before `run.yaml` is written, so
@@ -845,3 +860,80 @@ def test_the_ordering_chain_counts_the_moving_call_before_the_gate_fires(tmp_pat
     assert raised.code == "E-APPARATUS-CHANGED"
     assert calls["n"] == 4, "the raise must not preempt the fourth call"
     assert observer.observations.unobserved(["pinned"])["pinned"]["total_probes"] == 4
+
+
+def test_changed_asserts_when_called_without_record_first():
+    """Batch 3 review, Major 2, action 2. Pins the claim
+    `Observations.changed`'s own docstring makes and that nothing previously
+    asserted: calling `changed()` for a pair whose non-`None` value has never
+    gone through `record()` first trips the reflexivity-safety `assert`
+    (`assert incoming is None` when `first is None`), because that assert's
+    whole premise is that `record()` already ran for the same `facts` this
+    call carries.
+
+    **What this pins, and what it does not.** This witnesses that `changed`
+    *requires* record-first — grep confirmed no test in this file asserted
+    it before now. It does NOT witness that `Observer._observe_one`
+    *satisfies* that requirement: add this test after a real reorder of
+    `_observe_one` and it still passes unchanged, because it calls `changed`
+    directly rather than through `_observe_one`. `_observe_one`'s own order
+    is what `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`
+    (`tests/test_cli.py`) and
+    `test_the_ordering_chain_records_before_it_gates` (below) exercise."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    with pytest.raises(AssertionError):
+        obs.changed("00", {"pinned": "r1"})
+
+
+def test_the_ordering_chain_records_before_it_gates(tmp_path):
+    """Batch 3 review, Major 2, action 3: the only legible witness of
+    `_observe_one`'s actual call order, since every *value* assertion is
+    equal under either ordering and every *count* assertion sits behind the
+    reflexivity-safety assert that a reordering trips first (see the test
+    above and the one two above). Wraps `Observations.record` and
+    `check_changed` to log which ran first for the same call, rather than
+    inferring order from a downstream count or value — the direct claim
+    Decision 3 makes (`record` before the gate), witnessed directly."""
+    from collections import namedtuple
+
+    import publishable.apparatus as apparatus_mod
+    from publishable.apparatus import Apparatus, Observer
+
+    Condition = namedtuple("Condition", ["index", "label"])
+    conditions = [Condition(0, None)]
+
+    def probe(cfg):
+        return Apparatus(facts={"pinned": "r1"})
+
+    observer = Observer(
+        probe_name="p",
+        probe=probe,
+        declared_facts=["pinned"],
+        conditions=conditions,
+        cfgs={0: None},
+        run_dir=tmp_path,
+        credentials={},
+    )
+
+    order: list[str] = []
+    real_record = observer.observations.record
+    real_check_changed = apparatus_mod.check_changed
+
+    def spy_record(condition_key, facts):
+        order.append("record")
+        return real_record(condition_key, facts)
+
+    def spy_check_changed(observations, condition_key_value, facts):
+        order.append("check_changed")
+        return real_check_changed(observations, condition_key_value, facts)
+
+    observer.observations.record = spy_record  # type: ignore[method-assign]
+    apparatus_mod.check_changed = spy_check_changed
+    try:
+        observer.observe_round(phase="run_start", condition_index=None)
+    finally:
+        apparatus_mod.check_changed = real_check_changed
+
+    assert order == ["record", "check_changed"], order
