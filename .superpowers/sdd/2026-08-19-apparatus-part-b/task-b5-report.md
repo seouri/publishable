@@ -102,3 +102,73 @@ None outstanding. Both tasks are scoped exactly as ruled (Decision 4/14 for task
 task 8); no new refusal codes, no schema fields, no importable surface changes. The one open item
 this slice does not own — the disk-side plaintext credential in `apparatus/probes.jsonl` for a
 non-`str` fact — is pre-existing, filed, and untouched by either task.
+
+## Fix round 1 (2026-08-20), against `.superpowers/sdd/2026-08-19-apparatus-part-b/task-b5-review.md`
+
+Commit `57a0734`. Suite 2452 → **2453** (one new fixture). Gates re-clean: `ruff check`, `ruff format
+--check`, `mypy` (46 files), `uv run pytest` 2453 passed / 1 skipped / 2 xfailed.
+
+**Major 1 — closed.** The credit for finding it belongs entirely to the review, and the review's own
+attribution of the cause (an instruction relayed one row's remedy as though it governed both) is
+accepted as stated. Fixed at `cli.py`'s zero-results guard: it now branches on `stop.reason` —
+`apparatus_unreachable` → `EXIT_EXTERNAL` (5), `apparatus_changed` → `EXIT_WRONG` (1) — still sited
+before both `assemble_run_yaml` and `point_latest`. **New Fixture Z arm 3**
+(`test_fixture_z_arm_3_zero_results_unreachable_case`) pins Decision 4's fourth row end to end: a
+probe answering at run-start then raising on the first `pre_execution` call, zero executions, no
+`run.yaml`, no `executions.jsonl`, `latest`/`latest.txt` both absent, `E-APPARATUS-RAISED` on stderr,
+exit **5**. One thing the fixture itself taught me while writing it: the raising call appends
+*nothing* to `apparatus/probes.jsonl` (`observe_once` raises before `check_facts`/
+`append_observation`), so the ledger holds **1** line, not 2 — asymmetric with Fixture Z arm 2's
+2-line ledger for the same by-call position, because a moved fact answers (and is appended) before
+the gate compares, where a raise never reaches the append at all. Caught by two mutations against
+the full suite, reverted by editing back: dropping the reason branch (the original bug) fails arm 3
+on exit 1 vs 5; widening the branch to both reasons fails arm 2 on exit 5 vs 1.
+
+**Major 2 — closed.** The stale `# task 8 turns the unreachable arm into EXIT_EXTERNAL` comment is
+deleted, not rewritten into a new promise.
+
+**Minors closed:**
+- **Minor 1**: the run-start containment comment now names the four Decision 9 contract refusals
+  (`E-APPARATUS-FACT-TYPE`/`-FACT-MISSING`/`-FACT-CREDENTIAL`/`-RETURN`) as what actually reaches
+  `EXIT_WRONG` there, and states that `STOP_CODES`' members cannot reach that branch at all (a
+  mid-plan stop breaks; a run-start `E-APPARATUS-CHANGED` is what Decision 11 rules out) — matching
+  the review's own substring-credential measurement.
+- **Minor 2**: `spec-defects.md`'s "no longer asserts a redacted render" paragraph gets a dated
+  append (2026-08-20) noting task 7 restored exactly that assertion, additively, rather than
+  rewriting the original paragraph — it stays the record of what was true between task 6 and task 7.
+- **Minor 3**: the non-`str` carve-out entry gets a dated append naming `run.yaml` (via
+  `provenance.apparatus.facts`, the first-answered value) as a second surface the plaintext
+  credential reaches, alongside the ledger — same carve-out, same write path, one more artifact.
+- **Minor 4**: the `§ The apparatus files` citation in Fixture G1's docstring is corrected to
+  `§ Warnings core reports`, which is where the ordering claim ("printed to stdout through a
+  `Collector` at run end") actually lives.
+- **Minor 6**: the Fixture K2 docstring's dangling reference to a claim its own edit had deleted is
+  corrected to state directly what changed (`1` → `5`) rather than pointing at text no longer in the
+  file.
+
+**Minor 5 — carried, not fixed, as the review directed.** `reference.md`'s unconditional "its record
+is kept" sentence and the `1` row's undescribed corner are `docs/` changes that belong to task 11
+(batch 6), which writes rows against emitted behaviour; fixing them here would be exactly the
+premature-documentation risk the review flagged. Left open, owned by task 11, now that Major 1 no
+longer contradicts the `5` row the document already states.
+
+**Minor 7 — the report's two overclaims, corrected here rather than by editing the original
+sentences** (the original report is left as the record of what was believed at the time; this
+section is the correction, per `CLAUDE.md`'s append-don't-retro-edit rule for the development
+record). § Disagreements item 5's *"No disagreement found in Decision 6's or Decision 4's own
+text"* was false: Decision 4's text was correct throughout, and the code did not match it (Major 1).
+§ Concerns' *"Both tasks are scoped exactly as ruled"* was likewise false for the same reason — the
+marker comment left on the line (now deleted) is itself evidence the gap was known-pending rather
+than overlooked, which the review is right to read as the weaker of the two claims.
+
+**The reviewer's assert-cost measurement is recorded, not treated as a finding.** Deleting
+`stop.code, stop.message = exc.code, str(exc)` from `runner.py`'s gate makes the new
+`assert stop.code is not None and stop.message is not None` fire as an uncaught `AssertionError`,
+leaving 2 paid-for executions on disk with no `run.yaml` and no `latest`. No config can reach this —
+plan correction 2 blesses the bare assert on `execute_plan`'s own-caller precedent — but the cost is
+now measured rather than argued, and worth carrying forward if a future slice adds a second
+reason-setting call site.
+
+**What I did not additionally verify beyond the review's own list**: the review's two "could not
+check" items (the isolated task-7-step-2 measurement, and `5` winning over `4` having no reachable
+fixture) are accepted as stated; nothing in this fix round bears on either.
