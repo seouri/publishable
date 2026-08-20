@@ -7352,7 +7352,7 @@ materialized by `materialize.py` — from a slice about something else.
 review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
 "filed" is not a filing.
 
-## OPEN — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: whoever wires `io.reuse_from` (tasks 3/5)**
+## OPEN — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: H8a tasks 3 and 5**
 
 `src/publishable/lineage.py`'s `resolve_run` (H8a task 2) exempts the relative form
 (`reuse_from("run_id", ...)`) from `provenance.resolves_inside_repo` entirely, on Decision 1's
@@ -7384,7 +7384,7 @@ SITE") does not include widening the guard — doing so here would be a behaviou
 the batch that scoped it and against a decision on the books, which is what this filing exists to
 avoid.
 
-**Owner:** whoever wires the resolver into `io.reuse_from` and its call site (tasks 3/5), who must
+**Owner: H8a tasks 3 and 5**, which wire the resolver into `io.reuse_from` and its call site, and must
 either (a) resolve the relative branch's path and run `resolves_inside_repo` on both branches, or
 (b) record explicitly, with a check rather than an assertion, why the relative form's exemption is
 safe against a symlink under `output_dir` specifically (not merely against an ordinary
