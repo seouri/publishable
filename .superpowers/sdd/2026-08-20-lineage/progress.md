@@ -74,3 +74,39 @@ routing measured from a real run (**Decision 4's entire foundation**), and the s
 append `upstream`, reorder nothing. That converts a change detector the slice would otherwise have to
 weaken quietly into **a bounded, reviewed edit**, which is the thing five previous slices got wrong by
 editing a pin to accommodate new work.
+
+## Batch 1 — tasks 11, 1 — the guard pin and the `run.yaml` reader
+
+Commits `1f55711` (pin), `00bf45f` (`lineage.py`, `read_run_record`), `3ddf13a` (report), `5d54e94`
+(fix round), `c068ea2`. Suite 2456 → **2470**; mypy 46 → **47**, formatter 82 → **84**, both predicted by
+the plan. **Both verdicts PASS; six Minors, no Major.**
+
+**The named-authorized-editor mechanism was judged sound rather than a loophole**, on four checkable
+properties: the post-edit state is specified in advance, the editor is **one named task**, a post-hoc
+verification obligation is stated, and the clause sits on **arm B alone** so it cannot spread. Its only
+enforcement is prose — but that is strictly better than a change detector weakened silently, which is
+what five earlier slices did. **Ruling: keep it, and use the same shape whenever a pin must move.**
+
+**Two results were better than the batch reported, and correcting upward matters as much as down.** The
+`SCHEMA_VERSION` mutation was reported blind; the reviewer's point is that **a value-preserving edit is
+not drift by definition.** Built properly — writer bumped with the import intact (correctly passes), then
+writer bumped **plus** a stale literal — it fails four tests including the batch's own Fixture R raising
+`E-UPSTREAM-RECORD-VERSION`. **Fixture R is the drift pin**, so Decision 3's whole reason for importing
+`SCHEMA_VERSION` is pinned, and the batch had filed a hole that does not exist.
+
+**The blind fault is H4d's lesson one level down.** Decomposing a code into three was not enough: the
+not-a-mapping fixture parses to a **list**, falls through to the `"run_id" not in doc` check where list
+membership is `True`, and **raises the same code from a different site** — while the test asserted only
+`e.value.code`. Three *codes* pinned, one *fault* pinned by nothing. **Two faults reaching one assertion
+is the same defect as one code covering two faults**, and only a message assertion separates them.
+
+**And a four-arm pin whose value lives in one arm now says so.** Arm A duplicates a shipped pin, arm B is
+duplicated by a shipped H7d test, and **no mutation isolates arm D** — it falls with eleven other tests.
+**Arm C alone carries new discriminating power**, and it *can* be broken (routing `summary` into `shared`
+fails it), which matters because it is Decision 4's foundation. Recorded so later batches watch the right
+arm.
+
+**Carried to task 7 by name:** the twelve-key `provenance` list is pinned **twice**, and only arm B names
+an editor — so task 7 must edit **a shipped H7d assertion too**, with the same one-key diff, and show
+both. Minor rather than Major only because the unnamed pin **hard-fails** rather than weakening quietly.
+**Carried to task 9:** `reference.md` still reads `lineage.py … — not yet built` while the module ships.
