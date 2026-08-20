@@ -19,8 +19,10 @@ shows it dates to the initial docs commit `b0e4070`, not to `af87572`.
 **Task quality: PASS with one Major.** Both mutations the report claims are reproducible, and
 each isolates exactly the arm the report says it does. The Major is a coverage-honesty defect of
 exactly the class H8a's equivalent batch was made to fix: **two arms assert something false about
-the shipped suite**, and the report repeats one of them. Neither is a behaviour defect and
-neither blocks merge; both are one-sentence corrections.
+the shipped suite**, and the report repeats one of them. Neither is a behaviour defect, and
+neither **blocks task 3** — arms E and F never move in this slice, so nothing downstream consumes
+the false sentences. Both **must be closed before the branch merges**, because both ship: one in
+`tests/test_cli.py`, one in the tracked `task-b1-report.md`. Each is a one-sentence correction.
 
 **Gates, all run here on the reverted tree:** `ruff check .` clean · `ruff format --check .` → 84
 files unchanged · `mypy` → 47 source files, no issues · `pytest` → **2522 passed, 1 skipped, 2
@@ -61,12 +63,32 @@ failed arm E **and** `tests/test_sweep.py::test_the_sweep_document_records_the_r
 failed, 2520 passed). The top-level key list half of the claim is correct and new — no shipped
 test asserts it, and no shipped test reads `sweep.yaml` as a file for its shape.
 
+The report's § Concerns — *"None outstanding"* — is falsified alongside § disagreements.
+
 **Remedy for both:** name the real neighbour and narrow the claim — arm F to *the swept case*,
 arm E to *the top-level key list*. **This also falsifies the report's § Brief/design/plan vs.
 code — disagreements found: "None."** Both false claims are claims about existing code that the
 task made and did not check, which is the category that section exists to hold.
 
-### Minor 1 — The authorized-editor clause is missing its auditable half
+### Minor 1 — Arm A's second assertion cannot fail while its first passes
+
+`tests/test_cli.py:15852`: `assert (run_dir / "lock").exists() is False`, immediately after the
+full sorted root-list equality at `:15843-15850`. If `lock` existed, `iterdir()` would list it
+and the **equality fails first** — the list assertion never even reaches the lock line. So the
+second assertion is implied by the first and can never fail on its own, which is `CLAUDE.md`'s own
+named shape: *"An assertion implied by another in the same test — arm sizes summing to the roster
+is arithmetic, not a check, once the sizes are pinned."* It stays implied after task 3's
+authorized edit, since appending `'config.yaml'` does not admit `lock`.
+
+**Verified by construction rather than by mutation:** no state can fail the lock line while the
+list passes, which is why none of my mutations isolated it — mutation 2 failed the list assertion,
+and no reachable state fails the lock line alone. Harmless as shipped; worth knowing, per this
+batch's own rule that an arm no mutation isolates is worth knowing about rather than a defect by
+itself. It is also a **third** item the report's *"disagreements found: None"* should have caught,
+since the brief prescribed this sub-assertion verbatim — the honest note is that the list
+assertion already delivers it.
+
+### Minor 2 — The authorized-editor clause is missing its auditable half
 
 Step 3 of task 13 required: *"Both clauses add: **task 3's report must show the diff is exactly
 one entry per arm with nothing reordered.**"* Neither docstring carries it. `grep -n "task 3"
@@ -74,14 +96,14 @@ tests/test_cli.py` returns the module comment (`:15813`, sole-editor naming), Ar
 `:15820`/`:15832` (editor + post-edit list) and Arm B's `:15856`/`:15864` (same) — and nothing
 about task 3's report obligation.
 
-Everything else the clause needed **is** present and correct, verified by reading: task 3 is
+Everything else that clause needed **is** present and correct, verified by reading: task 3 is
 named as sole authorized editor of arms A and B in three places; each post-edit list is stated in
 advance and is the shipped list plus exactly one sorted insertion; and the module comment at
 `:15814` carries *"Every other task that finds any arm here failing has found a finding to report,
 not an assertion to edit."* The missing sentence is the one that makes the edit checkable after
 the fact rather than at the moment it is made.
 
-### Minor 2 — The cross-document sweep was run for three spellings, not for the claim
+### Minor 3 — The cross-document sweep was run for three spellings, not for the claim
 
 `task-b1-report.md:61` concludes no other document enumerates run-directory contents, having
 grepped `environment/{uv.lock,pyproject.toml}`, `sweep.yaml` and `manifest/input.json`. None of
@@ -93,11 +115,11 @@ and `docs/feasibility-llm-growth-studies.md`, with `run.yaml` as the positive co
 all six: 8/5/1/75/4/3 hits) and `environment/` as the claim (**zero hits outside
 `reference.md`**). The conclusion holds — README's tree is deliberately abbreviated and already
 omits `environment/`, `manifest/`, `sweep.yaml` and `executions.jsonl`, so it owes nothing — but
-it holds by luck of the abbreviation rather than by the sweep having looked. `CLAUDE.md`'s rule
+**the conclusion holds and the method did not look.** `CLAUDE.md`'s rule
 is *sweep for the claim, not for the file the claim was first noticed in*; the claim here is "a
 run-directory listing", and README has one.
 
-### Minor 3 — `E-FREEZE-NO-CONFIG` is named before it has a row or an emit site
+### Minor 4 — `E-FREEZE-NO-CONFIG` is named before it has a row or an emit site
 
 `docs/reference.md:846` names `E-FREEZE-NO-CONFIG`. There is no § Errors row for it and no emit
 site; `freeze` is still `NOT BUILT`. Task 12 owns the § Errors rows, so this closes on its own —
@@ -111,7 +133,7 @@ every `E-` token against every table line. And no test cross-checks § Errors ag
 registry, so nothing was silently relaxed. Recorded so task 12 does not have to rediscover which
 code it owes a row.
 
-### Minor 4 — A positional locator, in new text
+### Minor 5 — A positional locator, in new text
 
 `tests/test_hashes.py:350` — *"the two below"* — locates
 `test_h8b_arm_g_metadata_only_change_is_identical` and
@@ -119,7 +141,7 @@ code it owes a row.
 moves them. Arm C's *"…and `test_h8a_arm_b_…` above"* (`tests/test_cli.py:15882`) is fine by
 contrast: it names both tests and uses position only as a hint.
 
-### Minor 5 — Three citations to a git-ignored artifact, in a tracked file
+### Minor 6 — Three citations to a git-ignored artifact, in a tracked file
 
 `task-b1-report.md` cites "the brief" as its source three times (the arms matching *"the brief's
 stated values"*; *"per the brief's own instruction"*; *"the brief doesn't ask for a strike
@@ -129,7 +151,7 @@ three. Weak finding — the plan holds the identical content and **is** tracked 
 14), and ~20 shipped test docstrings already cite briefs — but the fix is free: cite the plan's
 section.
 
-### Minor 6 — Two wording slips in the new § The two files paragraph
+### Minor 7 — Two wording slips in the new § The two files paragraph
 
 `docs/reference.md:627`: *"written at run start and never modified since"* — "since" has no
 referent; the shipped parallel sentence for `run.yaml` reads "never modified". And the same
@@ -164,8 +186,7 @@ passed — so arm A is the only reader of the run-directory root anywhere in the
 is redundant against the other. Reverted by editing the line out; `diff` against a pre-mutation
 copy of `cli.py` byte-identical, and the arms re-run green.
 
-**3. The authorized-editor clause** — present, correct, and incomplete by one sentence. See Minor
-1.
+**3. The authorized-editor clause** — present, correct, and incomplete by one sentence. See Minor 2.
 
 **4. The document ruling** — § The two files now says what a run-start config copy is, in the
 role-vs-file terms the brief demanded (`reference.md:627`); § The other files a run writes gained
@@ -192,7 +213,7 @@ outside `reference.md`. `repo_root`: only `reference.md`, and the pre-existing
 two unrelated uses. Mechanical pass re-run over all six, fenced blocks skipped, each check proven
 able to fail with an injected control: no trailing whitespace, no tab, no invisible unicode, no
 duplicate heading anchor in `reference.md`, and every `](#…)` in `reference.md` resolves (an
-injected `#no-such-anchor-zzz` was the only hit when I seeded one). Method gap at Minor 2.
+injected `#no-such-anchor-zzz` was the only hit when I seeded one). Method gap at Minor 3.
 
 **6. The "no disagreements" claim** — falsified; see Major 1. Three brief/plan claims about
 existing code that I verified myself: *nothing in `tests/` enumerates the run-directory root or
@@ -211,8 +232,8 @@ correction is rightly overruled.
 `2 conditions × 2 seed repeats` with no bare `x` anywhere in the new text, **no config-count
 claim appears** (`grep` for "executable", "no remaining core-side", "8 of 8" in the report: no
 hits; `docs/feasibility-llm-growth-studies.md` untouched by both commits, so the table stays
-8 of 8 / 0 / 7 / 1). Two prose findings stand: Minor 4 (positional locator) and Minor 5 (brief
-citations), plus Minor 6's wording.
+8 of 8 / 0 / 7 / 1). Two prose findings stand: Minor 5 (positional locator) and Minor 6 (brief
+citations), plus Minor 7's wording.
 
 ---
 
