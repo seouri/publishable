@@ -14,7 +14,7 @@ class ContractError(PublishableError):
 
 
 class ArtifactError(PublishableError):
-    """Core will not write this."""
+    """An artifact-shaped fault — on a write, or on a read."""
 
 
 class ArtifactExistsError(ArtifactError):
