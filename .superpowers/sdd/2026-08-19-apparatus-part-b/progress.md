@@ -178,3 +178,43 @@ reflexivity guard invites: `nan` against `nan` now returns `None`, while **`nan 
 all five of Decision 1's readings are intact — including `1.0 → null → 2.0` firing against `1.0` rather
 than against the `null`. A guard that had silently exempted every `nan` comparison would have passed the
 prescribed fixture just as well.
+
+## Batch 3 — tasks 4, 13 — the gate wired; the first batch where a run can stop
+
+Commits `033c09a` (the ordering chain), `935902f` (the run-start round and the sentinel measurement),
+report `5e29991`, review `f526b46`. Suite 2436 → **2439**.
+
+**The batch's whole risk was firing when it should not, and it does not.** The reviewer built **six**
+end-to-end runs of its own — a constant fact over six executions, `null → value`, `value → null`, an
+absent undeclared key, a constant **`nan`** (its first trip through the ledger's JSON write, the
+fingerprint and `run.yaml`, so **batch 2's fix survived the wiring**), and **three conditions holding
+three values of one fact** — and got **zero false stops.**
+
+**The sentinel measurement was made rather than assumed, and it came back real.** Mutating `changed` to
+fail on `null → value` failed Part A's Fixture N test plus four others. The plan had said plainly that
+nobody had run it and prescribed the measurement **without assuming its outcome**; had it come back
+imaginary, a fixture was owed. **This is the first time on either part that a prescribed measurement of
+an existing test's sentinel value was actually performed** — and the reviewer reproduced it with an
+independently built mutation it first confirmed non-degenerate.
+
+**Major: a live credential leak, the fifth of this class here, and a filing had already predicted it.** A
+declared credential held as an **`int`** fact that then moves prints `changed: 13579 → 999` to stderr.
+Two causes compose: `check_facts` **skips containment for non-`str`** values, and `E-APPARATUS-CHANGED`
+sits **outside `APPARATUS_CODES`**, so it reaches `main`'s **bare printer**.
+
+**The second cause is plan correction 4's own consequence** — the exclusion was right that admitting an
+unpinned member was wrong, and wrong about the containment that exclusion silently removed. **Ruling:
+`STOP_CODES` gets containment with both members pinned individually, in this batch, because the leak is
+live at HEAD** and Decision 14's redacting Collector is a batch away. And `spec-defects.md`'s open
+fact-key entry **literally predicted it**: *"a future code added outside that set … would reopen the
+leak."* **A filing anticipated the defect and the batch walked into it** — so the entry is updated to
+record that the predicted reopening happened, and the non-`str` carve-out, which is the disk half and
+**filed nowhere**, gets its own entry.
+
+**Second Major: the count discriminator task 4 exists to establish cannot be reached by any ordering
+mutation.** Gate-before-`record` **crashes** at the reflexivity assert batch 2 added, and that assert
+fires on the first answering observation of **any** fact, so no fixture routes around it. **The append
+half is real** — the assert-safe form fails the end-to-end test on its own `len(ledger) == 4`. So the
+ordering is **guarded but not pinned as claimed**, and the defect is the overclaiming docstring. Worth
+noting the shape: **batch 2's fix made batch 4's prescribed mutation unreachable**, which no per-task
+brief could have anticipated.
