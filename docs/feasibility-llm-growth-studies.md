@@ -1469,3 +1469,44 @@ Every run is far below `limits.max_executions: 500`, so the binding constraint i
 - **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
 
 **As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and where every artifact will land, and it runs the apparatus probe — so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build, in which `dry-run` is not a command at all ([§ Executability on this build](#executability-on-this-build)); every figure in this table was therefore computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
+
+### Correction, appended 2026-08-20 against commit `8d5c046` — "six with no remaining core-side blocker" answers no consistent question
+
+**This corrects a figure carried by the six dated entries above and by `CLAUDE.md`. It does not
+retro-edit them:** each recorded what was measured on its date, and the measurements were sound. What was
+wrong is the **phrase**, and it was wrong from the moment H4b-1 minted it.
+
+**The contradiction is verbatim in one table cell.** The entry after H4b-1 writes, for each C config,
+*"No — blocked on `io.reuse_from` (no remaining core-side blocker either, per H4b-1)"* — while the
+E3/E4/E6 rows in the same table read *"No — blocked on `io.reuse_from`"* and are **excluded** from the
+six. One dependency, two treatments, one table.
+
+**So the phrase has two readings and six is neither.** If `io.reuse_from` counts as a core-side blocker,
+the answer is **three** — E1, E2, E5. If it does not count, because it is a step-level call
+`validate` cannot see, then E3, E4 and E6 qualify too and the answer is **nine**. Six is the
+count of configs that **validate clean while still needing `io.reuse_from`** (E3, E4, E6, C1, C2, C3),
+which is a real and useful number wearing the wrong name — H4b-1 retired `E-DATA-WEIGHT-CONTRAST`, moved
+C1–C3 out of the *refused* column, and the phrase followed them without anyone re-asking what it meant.
+
+**The honest figures, measured on 2026-08-20 against `8d5c046`** by transplanting each config's
+`data`/`statistics` blocks onto a scaffolded config over a 240-row synthetic roster through
+`validate_config` — the method every entry above uses — with `holdout.frac: 0` as a can-fail control
+firing `E-DATA-HOLDOUT-FRAC`:
+
+| Figure | Count | What it means |
+|---|---|---|
+| Transplantable configs | 8 of 9 | E3's section carries no `data`/`statistics` YAML to transplant |
+| Validate with zero errors | **8 of 8** | every transplantable config, at this commit |
+| No remaining core-side blocker | **3** | E1, E2, E5 — nothing further this analysis can name |
+| Need `io.reuse_from` | **6** | E3, E4, E6, C1, C2, C3 — unbuilt, and invisible to `validate` |
+| Executable | **3** | E1, E2, E5, and only with the plugin written and installed |
+
+**"No remaining core-side blocker" and "executable" are therefore the same number, 3**, and were always
+meant to be — the gap between them was the phrase, not the build. **Use three, and say
+`io.reuse_from` by name for the other six** rather than reaching for a figure that has to be
+disambiguated every time it is quoted.
+
+**A build fact that needs a footnote to be true is a build fact stated wrongly.** This one survived six
+dated entries and roughly a hundred repetitions because each entry copied the phrase forward rather than
+re-deriving it — which is the same *carried claim* failure the entries above record in code, appearing
+here in a number.

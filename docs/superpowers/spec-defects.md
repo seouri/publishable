@@ -2578,11 +2578,16 @@ The entry's count and its central claim that those names are not defined anywher
 survives is the `BaseReport` case and the reasoning about why a normative table may list an unbuilt
 name without that being a defect.
 
-**Owner: unassigned, stated as a fact.** `BaseReport` belongs to whichever slice builds the report
-surface, which no remaining charter names — H8 covers `freeze`/`diff`/`report`'s command shape rather
-than a subclassable report class. Its closer must check: whether § The importable surface still lists
-`BaseReport` at that point; whether `register_writer` already covers the need it was minted for; and
-whether exporting a name with no class behind it is worse than leaving the table's row unbuilt.
+**Owner: H8 — corrected 2026-08-20, the same day this paragraph first claimed otherwise.** It said
+*"H8 covers `freeze`/`diff`/`report`'s command shape rather than a subclassable report class"*, and
+**H8's scoping measured that false within the hour**: § Package layout gives `report.py` the description
+*"`BaseReport`: standard sections, html/markdown, override discovery"*, and § The importable surface's
+own table lists `BaseReport.sections` as *"the standard sections `super().sections` yields"*. **The
+standard sections ARE `BaseReport`'s**, so a `report` command without it is not a narrower `report` — it
+is a different design. Its closer must check: whether `register_writer` already covers the need
+`BaseReport` was minted for; and whether § A report override's `yield from super().sections` shape
+survives whatever `report` actually builds. **Recorded rather than silently swapped, because the wrong
+owner was written here by the controller and caught by measurement rather than by review.**
 
 **AMENDED 2026-08-11 (S5 checkpoint audit):** **Miscounted, and one claim is false.** `__all__`
 holds nine names; the § The importable surface table names **seven** that are absent — `Unit`,

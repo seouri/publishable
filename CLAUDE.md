@@ -80,10 +80,21 @@ Ctrl-C still stops the command.
 **H4b-1 (weights through contrasts) merged on 2026-08-17.** `E-DATA-WEIGHT-CONTRAST` is retired. A
 `data.units.weight_by` declared beside a comparison now computes a weighted contrast over the paired
 intersection, its interval is its own construction there, and the record carries `weighted_by` and
-`n_paired_effective`. **No-remaining-core-side-blocker goes three → six** — C1, C2 and C3 join E1, E2
-and E5 — measured the same way, by running each config's blocks through `validate_config`. **The
-executable count stays at three**, because C1–C3 also need `io.reuse_from`, still unbuilt and unowned;
-that gap is why "no remaining core-side blocker" is the honest phrase here and "executes" is not.
+`n_paired_effective`. **No-remaining-core-side-blocker was said to go three → six** here — C1, C2 and C3
+joining E1, E2 and E5 — measured the same way, by running each config's blocks through `validate_config`. **The
+executable count stays at three**, because C1–C3 also need `io.reuse_from`, still unbuilt and unowned.
+
+**CORRECTED 2026-08-20 by H8's scoping: that phrase answers no consistent question, and every later
+entry below repeats it.** The contradiction is verbatim in one table cell of the feasibility analysis —
+C1 reads *"blocked on `io.reuse_from` (no remaining core-side blocker either)"* while E3/E4/E6 read
+*"blocked on `io.reuse_from`"* and are excluded from the six. **One dependency, two treatments.** If
+`io.reuse_from` counts as a core-side blocker the answer is **three**; if it does not, E3/E4/E6 qualify
+too and the answer is **nine**. Six is really the count of configs that **validate clean while still
+needing `io.reuse_from`** — E3, E4, E6, C1, C2, C3 — a useful number wearing the wrong name, which
+followed C1–C3 out of the *refused* column when H4b-1 retired `E-DATA-WEIGHT-CONTRAST` without anyone
+re-asking what it meant. **Read every "six with no remaining core-side blocker" below as three, and say
+`io.reuse_from` by name for the other six.** The correction, with its measurement, is the last entry of
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build.
 Three things worth carrying. The refusal's own message, its § Errors row and the charter all named
 `paired_t_over_units` as the estimator needing weights, and **all three C configs declare `resample`**,
 so the payoff actually runs through `paired_percentile_of_derived` — a slice built from that charter
