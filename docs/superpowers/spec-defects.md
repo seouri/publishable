@@ -7121,6 +7121,15 @@ stderr entirely, which nothing prints at all being the stronger form of the same
 behaviour — it describes what happened between the batch 3 fix round and H7d Part B task 6, not
 what the code does today.
 
+**Correction, appended 2026-08-20 (H7d Part B batch 5 review, Minor 2): the "no longer asserts a
+redacted render" sentence above is itself now stale.** Task 7 gave a mid-plan apparatus stop its own
+printed diagnostic again (Decision 14, a fresh redacting `Collector`), so
+`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper` once more asserts
+`<redacted:PUBLISHABLE_TEST_TOKEN>` present on stderr — the assertion this paragraph said was stale
+is current again, additively: `"13579" not in output` is still asserted alongside it. Per
+`CLAUDE.md`, this is appended rather than rewritten into the paragraph above, which stays as the
+record of what was true between task 6 and task 7.
+
 ## OPEN — `check_facts`'s credential containment check skips every non-`str` fact value, so a numeric or otherwise non-`str` credential reaches `apparatus/probes.jsonl` unredacted — **Owner: unassigned**
 
 `apparatus.check_facts`'s credential check (Decision 6) walks only `str`-valued facts; a fact whose
@@ -7135,6 +7144,14 @@ by running, two ledger lines each carrying `"serial": 13579` before the moving c
 lets through, regardless of the gate) and is unrelated to the terminal leak's fix: widening
 `command_run`'s containment filter redacts what is *printed*, not what is *written to the ledger
 file itself*, and nothing in this codebase redacts a run's own artifacts after the fact.
+
+**The surface is wider than the ledger alone (H7d Part B batch 5 review, Minor 3, appended
+2026-08-20).** `provenance.apparatus.facts` holds the FIRST-answered value per fact
+(`Observations.facts_document`), and that value is written into `run.yaml` too whenever a record is
+written at all — verified by running a clean, non-stopping run with the same `int`-valued declared
+credential: the plaintext lands in both `apparatus/probes.jsonl` and `run.yaml`, and nothing prints.
+`run.yaml` is not a second, separate gap; it is the same carve-out reaching a second artifact through
+the same unredacted write path.
 
 **Owner:** unassigned. **Found by:** H7d Part B batch 3 review, verified by running. **Route, stated
 rather than built:** either extend `check_facts`'s containment check to a stringified comparison for

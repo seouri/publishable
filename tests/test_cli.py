@@ -13207,10 +13207,10 @@ def test_a_probe_that_raises_is_a_redacted_diagnostic_at_run(
     — UPDATED at task 8's commit (Decision 6): `E-APPARATUS-RAISED` at the
     run-start containment now earns `EXIT_EXTERNAL` rather than
     `EXIT_WRONG`, since the apparatus itself being unreachable is the class
-    you retry. Its docstring's "exit non-zero" claim stays true either way;
-    only the specific code moves. This is Fixture Z arm 1 (a probe raising
-    on call 1, the run-start round) — the no-`run.yaml`, redaction, and
-    no-credential-anywhere assertions below are untouched by the move."""
+    you retry; only the specific code moves, from `1` to `5`. This is
+    Fixture Z arm 1 (a probe raising on call 1, the run-start round) — the
+    no-`run.yaml`, redaction, and no-credential-anywhere assertions below
+    are untouched by the move."""
     site = installed(
         "dist-k2-9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k2_probe_mod:probe"}}
     )
@@ -14433,8 +14433,9 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     gives exactly two DECLARED (condition, fact) pairs with a null
     observation — `appears` and `vanishes` — so exactly two
     `W-APPARATUS-UNANSWERED` lines print, and only after `run.yaml` is
-    written (§ The apparatus files), which is a second, independent witness
-    that the record phase was reached."""
+    written (§ Warnings core reports: "printed to stdout through a
+    `Collector` at run end"), which is a second, independent witness that
+    the record phase was reached."""
     site = installed(
         "dist-t4g1", "1.0", {"publishable.probes": {"h7d_g1_probe": "t4g1_probe_mod:probe"}}
     )
@@ -14699,6 +14700,97 @@ def test_fixture_z_arm_2_zero_results_moved_case(installed, registries, tmp_path
 
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-APPARATUS-CHANGED" in output
+
+
+_APPARATUS_Z3_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_z3_assay")
+class ApparatusZ3Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_z3_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# Fixture Z arm 3 — the fourth of Decision 4's four rows, and the one batch
+# 5's review found unfixtured: unreachable, mid-plan, ZERO results. Call 1
+# (run-start) answers `r1`; call 2 (the first `pre_execution` round, before
+# the first execution runs) RAISES rather than moving — the same by-call
+# position as Fixture Z arm 2, but a raise instead of a disagreement, so
+# `stop.reason == "apparatus_unreachable"` rather than `"apparatus_changed"`.
+_Z3_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_n = 0
+
+
+@register_probe("h7d_z3_probe")
+def probe(cfg):
+    global _n
+    _n += 1
+    if _n >= 2:
+        raise RuntimeError("the instrument stopped responding")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_fixture_z_arm_3_zero_results_unreachable_case(installed, registries, tmp_path, capsys):
+    """Fixture Z arm 3 (fix round 1, Major 1): Decision 4's table has four
+    rows — unreachable/moved crossed with zero/`>= 1` results — and batch 5
+    fixtured three (U: unreachable/`>= 1`; G1: moved/`>= 1`; Z arm 2:
+    moved/0). This is the fourth, and it is the one the review found wrong:
+    an unreachable apparatus with ZERO results must exit `EXIT_EXTERNAL`
+    (5), the same as `reference.md` § Exit codes' own unconditional
+    sentence — *"a probe unreachable before the first execution … still
+    exits `5`"* — not `EXIT_WRONG` (1), which is what Decision 4's `moved`
+    row alone earns.
+
+    Same shape as Fixture Z arm 2 otherwise, MODULO one asymmetry the ledger
+    itself draws: `observe_once` raises BEFORE `check_facts`/
+    `append_observation` for the call that raises (Fixture U's own
+    docstring states this), so the raising `pre_execution` call appends
+    NOTHING — `apparatus/probes.jsonl` holds exactly 1 line (the run-start
+    answer only), not 2. A moved fact, by contrast, answers first and is
+    appended before the gate compares, which is why Fixture Z arm 2 holds
+    2 lines for the same by-call position. No `run.yaml`, no
+    `executions.jsonl`, `latest` and `latest.txt` both absent."""
+    site = installed(
+        "dist-t7z3", "1.0", {"publishable.probes": {"h7d_z3_probe": "t7z3_probe_mod:probe"}}
+    )
+    (site / "t7z3_probe_mod.py").write_text(_Z3_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_z3_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_Z3_TEMPLATE,
+        expect_exit=EXIT_EXTERNAL,
+    )
+    assert doc["run_dir"] is None
+    assert doc["results"] is None
+
+    run_dirs = list(doc["results_dir"].glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+
+    probes = [
+        json.loads(line)
+        for line in (run_dir / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(probes) == 1
+    assert probes[0]["phase"] == "run_start"
+
+    assert not (doc["results_dir"] / "latest").exists()
+    assert not (doc["results_dir"] / "latest.txt").exists()
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-RAISED" in output
 
 
 _APPARATUS_FRESH_COLLECTOR_TEMPLATE = """\

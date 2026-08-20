@@ -2514,11 +2514,15 @@ def command_run(config_path: Path) -> int:
             print(probe_c.render(), file=sys.stderr)
             # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
             # apparatus itself unreachable — is the one code in this
-            # containment's filter that earns exit 5; everything else this
-            # `try` contains (a dispatch-time `E-PLUGIN-LOAD`/
-            # `E-PLUGIN-DECORATOR` is resolved before `observer` exists and
-            # never reaches here, so in practice this is `STOP_CODES`' own
-            # members) keeps `EXIT_WRONG`.
+            # containment's filter that earns exit 5. Everything else that
+            # actually reaches this branch is the four Decision 9 contract
+            # refusals from `APPARATUS_CODES` (`E-APPARATUS-FACT-TYPE`,
+            # `-FACT-MISSING`, `-FACT-CREDENTIAL`, `-RETURN`) — NOT
+            # `STOP_CODES`' members, which cannot reach here at all: a
+            # mid-plan stop `break`s inside `execute_plan` instead of
+            # raising, and a run-start `E-APPARATUS-CHANGED` is exactly what
+            # Decision 11 rules out (see the comment above this `try`).
+            # Those four keep `EXIT_WRONG`, unchanged by this slice.
             if exc.code == "E-APPARATUS-RAISED":
                 return EXIT_EXTERNAL
             return EXIT_WRONG
@@ -2552,8 +2556,18 @@ def command_run(config_path: Path) -> int:
             # command keeps Part A's shape — no `run.yaml`, `latest`
             # untouched. This must be sited before `assemble_run_yaml` AND
             # before `point_latest` (batch 4's Major 1): both, not one.
+            # Decision 4's table gives zero-results TWO different exit
+            # codes, not one: `moved` is `1` (the thing you asked about is
+            # wrong), `unreachable` is `5` (the class you retry) — the same
+            # split Decision 6 gives the `>= 1`-results rows. Branching on
+            # `stop.reason` here is what task 8's review found missing
+            # (Major 1): the run-start containment above and the final
+            # mapping below are both off this path, since a zero-results
+            # mid-plan stop returns right here.
             if not results:
-                return EXIT_WRONG  # task 8 turns the unreachable arm into EXIT_EXTERNAL
+                if stop.reason == "apparatus_unreachable":
+                    return EXIT_EXTERNAL
+                return EXIT_WRONG
 
         status = run_status(results, planned=len(plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
