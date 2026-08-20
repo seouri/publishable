@@ -2145,11 +2145,13 @@ def test_run_status_maps_apparatus_changed_to_failed(tmp_path: Path):
 
 
 def test_run_status_max_failed_fraction_is_the_documented_no_op(tmp_path: Path):
-    """The third reason is threaded so the truncation assert below can be
-    sound, and is deliberately NOT in the two-entry mapping above: passing it
-    changes nothing about what the fold would have answered anyway — the
-    controller's ruling that this guard's behaviour stays exactly as it was,
-    narrowed to a mapping entry that is absent rather than added."""
+    """The third reason is threaded so the truncation assert
+    (`test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason`,
+    below) can be sound, and is deliberately NOT in `run_record.py`'s
+    `_STOP_REASON_TO_STATUS` mapping: passing it changes nothing about what
+    the fold would have answered anyway — the controller's ruling that this
+    guard's behaviour stays exactly as it was, narrowed to a mapping entry
+    that is absent rather than added."""
     _, results, _ = harness(tmp_path, [Load, Analyze])
     assert run_status(results, stop="max_failed_fraction") == run_status(results)
 
@@ -2167,11 +2169,13 @@ def test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason(tmp_path:
 
 def test_run_status_max_failed_fraction_suppresses_the_truncation_assert(tmp_path: Path):
     """The one reason threading buys: a `max_failed_fraction` stop is a
-    RECORDED reason, so the same short list that raises above must instead
-    fall through to today's fold rather than assert. This is the pin named as
-    a direct call, not an end-to-end one (§ the design's own admission): with
-    every stop now carrying a reason, no reachable `run` trips this assert at
-    all, so an end-to-end mutation of it is blind."""
+    RECORDED reason, so the same short list that
+    `test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason`
+    raises on must instead fall through to today's fold rather than assert.
+    This is the pin named as a direct call, not an end-to-end one (§ the
+    design's own admission): with every stop now carrying a reason, no
+    reachable `run` trips this assert at all, so an end-to-end mutation of
+    it is blind."""
     _, results, _ = harness(tmp_path, [Load, Analyze])
     truncated = results[:1]
     # No raise: falls through to the ordinary fold over `truncated` alone.

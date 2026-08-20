@@ -389,10 +389,14 @@ def check_changed(
     there. Batch 3 review, Major 1: task 4 gave this a live call site, and a
     non-`str` credential that moved reached `main`'s bare, un-redacted
     printer through that call site until the same batch's fix round widened
-    `cli.command_run`'s containment filter to admit `apparatus.STOP_CODES`,
-    reusing that site's own redacting `Collector` as an interim mitigation.
-    Decision 14's own fresh redacting `Collector` on the stop path (task 5/7)
-    is the permanent one.
+    `cli.command_run`'s containment filter to admit `apparatus.STOP_CODES`
+    as an interim mitigation. That widened arm is superseded, not merely
+    replaced: task 5/6's `break` means a mid-plan stop of either code no
+    longer raises out of `execute_plan` at all, so nothing reaches this
+    filter to be mitigated — verified by running, narrowing the filter back
+    to `APPARATUS_CODES` alone leaves the full suite unchanged. Decision
+    14's own fresh redacting `Collector` on the stop path (task 7) is what
+    now carries this property.
 
     Task 4 wires this into `Observer._observe_one`, after
     `Observations.record`, on the order Decision 3 fixes — a raise here still
@@ -515,12 +519,11 @@ test), plus each member is now also pinned individually and end to end:
 (`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`, Part A) and
 `E-APPARATUS-CHANGED` by batch 3's fix round
 (`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`,
-`tests/test_cli.py`) — both going through
-`_assert_went_through_the_containment_wrapper`, the same discriminator
-`APPARATUS_CODES`' own members use. Task 4 shipped Fixture G1
-(`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`); Fixture
-U (task 5's own truncation pin, `status: partial`, exit 5) remains owed by
-task 5, since `execute_plan`'s `break` does not exist yet.
+`tests/test_cli.py`). Task 4 shipped Fixture G1
+(`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`, mid-plan,
+`E-APPARATUS-CHANGED`); task 5 added Fixture U, the unreachable-mid-plan
+sibling for `E-APPARATUS-RAISED` (`tests/test_cli.py`, `status: partial`,
+`EXIT_PARTIAL`).
 
 **`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
 That frozenset is `command_run`'s containment filter for a probe CALL

@@ -158,3 +158,100 @@ task 7 code snippet's own `if not results: return EXIT_WRONG` guard does not pro
 
 No changes were made to `run.yaml`'s record shape, to any diagnostic-printing code, or to
 `EXIT_EXTERNAL`. Task 7 and task 8's own work is untouched.
+
+## Fix round 1
+
+Both verdicts from the review at `.superpowers/sdd/2026-08-19-apparatus-part-b/task-b4-review.md`
+were PASS; nothing blocked the batch. This round closes the two Majors that had a fix owned here,
+carries forward the one that doesn't, and closes both Minors.
+
+**Item 1 (credential reachability) and both negative-result adjudications** required no code
+change — the review's own verification stands and is not re-litigated here.
+
+### Major 1 — carried forward, not fixed here
+
+**Confirmed, not touched.** A zero-results apparatus stop (a probe raising on its *first*
+`pre_execution` round) writes `run.yaml` (`status: partial`, empty `execution` blocks) and repoints
+`latest`, which Decision 4's table refuses for the zero-results case. This is task 7's territory
+under this batch's own "no record work" boundary, and the reviewer's siting requirement is carried
+forward verbatim so task 7's author meets it rather than rediscovers it:
+
+> Task 7 step 1's `if not results: return EXIT_WRONG` closes this only if it is sited **before**
+> `assemble_run_yaml` **and** before the `latest` repoint. "Immediately after `execute_plan` returns
+> and before the aggregate phase" is not by itself sufficient guidance, because `latest` is
+> repointed on that same path.
+
+The useful half stands as reported by the reviewer: it does not crash, which settles the plan's
+§ What could not be measured item 1 empirically, in the safe direction.
+
+### Major 2 — the `STOP_CODES` docstring's false clauses deleted, not rewritten
+
+`src/publishable/apparatus.py`, the `STOP_CODES` docstring (lines ~514-522): deleted "— both going
+through `_assert_went_through_the_containment_wrapper`, the same discriminator `APPARATUS_CODES`'
+own members use" (false — the int-cred test no longer calls that helper, by this batch's own edit)
+and "Fixture U (task 5's own truncation pin, `status: partial`, exit 5) remains owed by task 5,
+since `execute_plan`'s `break` does not exist yet" (false at HEAD — the `break` exists and Fixture U
+asserts `EXIT_PARTIAL`, never exit 5). Replaced with a statement of what each fixture actually is and
+where, naming no future-tense claim. **Verified by:** re-reading the paragraph against the current
+test bodies (`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`,
+`test_g_fixture_u_unreachable_mid_plan`, `test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`)
+and the full suite staying at 2450 passed after the edit (a docstring change, so no test-count
+change is possible or expected — this confirms nothing else broke).
+
+### Major 3 — the dead `STOP_CODES` arm kept, its false claim deleted
+
+**`src/publishable/cli.py`**, the `except ContractError` filter's comment: deleted "until then, this
+widened filter is what keeps a live leak from shipping in the meantime" and every clause building
+up to it, replaced with a statement that at HEAD no path reaches this `try` carrying either
+`STOP_CODES` member (a mid-plan raise now `break`s inside `execute_plan`; a run-start raise of
+`E-APPARATUS-CHANGED` is what Decision 11/task 13 rule out; `E-APPARATUS-RAISED` at run-start already
+reaches this branch through `APPARATUS_CODES` alone) — kept as cheap insurance against a later stop
+routed back through this `try`, not as a claim that it currently prevents anything. **The arm itself
+was kept, per the ruling** ("keep the arm, delete the claim").
+
+**Verified by running**, re-measured myself: narrowing the filter to `apparatus.APPARATUS_CODES`
+alone (dropping the `STOP_CODES` union) leaves the full suite at **2450 passed, 1 skipped, 2
+xfailed** — byte-identical to HEAD. Reverted by editing back, diff-confirmed identical to the
+pre-mutation file.
+
+**Two stale prose consequences, both fixed:**
+- `src/publishable/apparatus.py`, `check_changed`'s docstring: the sentence calling the widened
+  filter an ongoing "interim mitigation" is corrected to state it is superseded (task 5/6's `break`
+  means nothing reaches that filter to mitigate), with the same by-running verification cited.
+- `docs/superpowers/spec-defects.md` (the "predicted reopening happened, and was closed" entry): the
+  sentence claiming `test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`
+  "shows `<redacted:PUBLISHABLE_TEST_TOKEN>` in place of `13579`" is followed by a correction stating
+  that test no longer asserts a redacted render — it asserts the credential's absence — and that the
+  redacted-render claim describes only the window between the batch 3 fix round and H7d Part B task
+  6, not current behaviour. The original sentence is kept (this file is a live, append-corrected
+  list per `CLAUDE.md`, not retro-edited) with the correction appended immediately after it.
+
+### Minor 1 — positional locators closed
+
+`tests/test_runner.py`: "the truncation assert below" → names
+`test_run_status_asserts_on_a_silent_truncation_with_no_stop_reason` directly; "the two-entry mapping
+above" → names `run_record.py`'s `_STOP_REASON_TO_STATUS`; "the same short list that raises above" →
+names the same test function it refers to. `tests/test_cli.py`: "Fixture G1's test above" → names
+`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end` directly.
+
+### Minor 2 — the self-dating test name renamed
+
+`test_g_fixture_u_unreachable_mid_plan_at_this_commit` → `test_g_fixture_u_unreachable_mid_plan` in
+`tests/test_cli.py`. No other test or source file referenced the old name (checked by grep across
+`.py` and `.md`); the review and the pre-fix-round report keep the old name as a historical record
+of what was reviewed, which is correct — those files are dated records, not live code.
+
+### Verification for this round
+
+`uv run ruff check .` all checks passed; `uv run ruff format --check .` 82 files already formatted;
+`uv run mypy` success, 46 source files; `uv run pytest -q` → **2450 passed, 1 skipped, 2 xfailed**
+(154 s) — unchanged from before this round, as expected: every fix here is prose or a comment, no
+test added or removed. Fixture T's arms B/C and the protected `max_failed_fraction` test are
+untouched (confirmed by `git diff tests/test_cli.py`, which touches only Fixture U's function name
+and docstring).
+
+### Findings not closed, and why
+
+None. Major 1 is carried forward by design (task 7's territory, per this batch's "no record work"
+boundary) with its exact siting requirement recorded above; nothing else from the review remains
+open.

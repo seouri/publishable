@@ -2486,17 +2486,20 @@ def command_run(config_path: Path) -> int:
             # `APPARATUS_CODES` itself (plan correction 4: that frozenset is
             # `_probe_for`'s dispatch-time filter, and admitting an unpinned
             # member there is the thing this project has already been burned
-            # by) — but task 4 gave it a live call site
-            # (`Observer._observe_one`, through this very `try`, both at
-            # `run_start` and mid-plan), and `check_facts` deliberately skips
-            # its containment check for a non-`str` fact value, so a moved
-            # fact whose value is a numeric credential would otherwise reach
-            # `main`'s un-redacted bare printer. Task 5/7 replaces this branch
-            # with Decision 14's fresh redacting `Collector` on the stop path;
-            # until then, this widened filter is what keeps a live leak from
-            # shipping in the meantime — reusing this site's own `credentials`
-            # and `Collector`, the identical redaction the `APPARATUS_CODES`
-            # branch already gives every other probe-call raise.
+            # by). `apparatus.STOP_CODES` is unioned in here too, but at HEAD
+            # no path reaches this `try` carrying either of its members: a
+            # mid-plan raise of either code now `break`s inside `execute_plan`
+            # (task 5/6) rather than escaping, and a run-start raise of
+            # `E-APPARATUS-CHANGED` is what Decision 11 rules out and task 13
+            # pins (one call per condition, no prior observation to disagree
+            # with) — `E-APPARATUS-RAISED` at run-start already reaches this
+            # branch through `APPARATUS_CODES` alone. Verified by running:
+            # narrowing this filter to `APPARATUS_CODES` leaves the full suite
+            # unchanged. Kept anyway as cheap insurance against a later stop
+            # routed back through this `try` — a branch nothing currently
+            # reaches is not the same claim as a branch that cannot ever be
+            # reached, and Decision 14's own fresh `Collector` on the stop
+            # path (task 7) is the mechanism, not this filter.
             if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
             probe_c = Collector()

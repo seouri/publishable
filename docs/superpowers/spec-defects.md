@@ -7110,12 +7110,16 @@ carve-out, so a numeric credential is never refused there at all) that then move
 Closed in the same batch's fix round: `cli.command_run`'s containment filter now also admits
 `apparatus.STOP_CODES`, so `E-APPARATUS-CHANGED` renders through the same redacting `Collector`
 `APPARATUS_CODES` members already use — `redact` is a textual substring replacement, so it catches
-the credential's string form even though the fact value that carried it was an `int`. Verified by
-running: `test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper` (added task 4's
-batch 3 fix round) shows `<redacted:PUBLISHABLE_TEST_TOKEN>` in place of `13579` in both stdout and
-stderr. This is an interim fix — task 5/7 replaces this branch with Decision 14's own fresh
-redacting `Collector` on the stop path — not a claim that the containment-filter widening is
-permanent.
+the credential's string form even though the fact value that carried it was an `int`. This was an interim fix, and it has since been superseded rather than merely
+replaced: H7d Part B task 6 wired a `StopSignal` through `execute_plan`, so a mid-plan
+`E-APPARATUS-CHANGED` no longer raises out of it at all and never reaches the widened filter this
+paragraph describes — verified by running, narrowing `cli.command_run`'s filter back to
+`apparatus.APPARATUS_CODES` alone leaves the full suite unchanged. `test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`
+no longer asserts a redacted render; it now asserts the credential is absent from stdout and
+stderr entirely, which nothing prints at all being the stronger form of the same property. The
+`<redacted:PUBLISHABLE_TEST_TOKEN>` claim above is stale and should not be re-cited as current
+behaviour — it describes what happened between the batch 3 fix round and H7d Part B task 6, not
+what the code does today.
 
 ## OPEN — `check_facts`'s credential containment check skips every non-`str` fact value, so a numeric or otherwise non-`str` credential reaches `apparatus/probes.jsonl` unredacted — **Owner: unassigned**
 

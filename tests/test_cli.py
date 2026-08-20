@@ -14479,10 +14479,11 @@ def probe(cfg):
 """
 
 
-def test_g_fixture_u_unreachable_mid_plan_at_this_commit(installed, registries, tmp_path, capsys):
+def test_g_fixture_u_unreachable_mid_plan(installed, registries, tmp_path, capsys):
     """Fixture U (task 5 step 4), UPDATED at task 6's commit — the same
-    disagreement recorded on Fixture G1's test above, found here too rather
-    than assumed away: task 6's own step 3 constructs a `StopSignal` and
+    disagreement recorded on
+    `test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`'s test,
+    found here too rather than assumed away: task 6's own step 3 constructs a `StopSignal` and
     passes `stop=stop` into `execute_plan`, so `E-APPARATUS-RAISED` no longer
     escapes to `command_run`'s containment `try` — it `break`s inside
     `execute_plan`'s loop and the command falls through to its ordinary
