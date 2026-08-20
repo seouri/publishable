@@ -137,3 +137,100 @@ outcome" claim stays true after this batch).
   read count directly, and neither task 3's nor task 5's brief prescribes one, so this was
   built to the letter of "a per-run_id record cache" without a dedicated pinning test. Task
   6 (accumulation) or a later reviewer may want one if this behavior turns out to matter.
+
+## Fix round 1
+
+Review: `.superpowers/sdd/2026-08-20-lineage/task-b3-review.md`, reviewed at `db41b5a`.
+Verdicts: spec compliance PASS with one Major that did not block; task quality PASS. Fix
+commit: `292c236`.
+
+### Major 1 — cache did not hold "one answer per run" for the absolute form
+
+**Changed:** `UpstreamResolver._records` is now keyed by the **locator exactly as given**,
+never by the `run_id` it resolves to. `resolve()` checks this cache for *both* forms before
+calling `resolve_run` at all (previously only the relative branch consulted it, and only
+after resolution). `lineage.py`'s docstrings for the field and the method were rewritten to
+state the actual guarantee and why keying by locator delivers it.
+
+**Verified by:** three new tests in `test_lineage.py`.
+`test_resolver_cache_reads_a_repeated_absolute_locator_only_once` monkeypatches
+`lineage.read_run_record` with a counting wrapper and asserts three identical absolute
+`resolve()` calls produce exactly one real read.
+`test_resolver_cache_reads_a_repeated_relative_locator_only_once` is the same check for the
+relative form. `test_resolver_cache_a_mid_run_edit_between_two_identical_absolute_calls_cannot_leak_through`
+reproduces the review's own `code_hash` `AAAA`→`BBBB` scenario directly and asserts the
+second identical absolute call still returns `AAAA`. All three were run against the
+pre-fix code (`lineage.py.pre_fixround1`, restored temporarily) and failed exactly as the
+review predicted (3 reads, not 1; `BBBB` leaking through); reverted to the fix and
+re-confirmed green.
+
+### Minor 3 — warm cache let a relative locator resolve a run outside `output_dir`
+
+Closed by the same change as Major 1, per the review's own suggestion (locator-keyed cache
+closes both). **Verified by:** `test_resolver_cache_does_not_let_a_warm_absolute_call_shortcut_a_later_relative_one`
+— cold `resolve(run_id)` against an `output_dir` that does not contain that run fails with
+`E-UPSTREAM-RECORD-MISSING`; the same run is then resolved via its absolute path (a
+*different* locator string, warming the cache under that string, not under `run_id`); the
+relative call is repeated and must still fail the same way. Run against the pre-fix code:
+the second relative call incorrectly succeeded (`DID NOT RAISE ContractError`); against the
+fix, both cold and warm refuse. Reverted/confirmed the same way as Major 1's tests.
+
+### Minor 1 — Fixture N's absolute-`name` arm carried no weight
+
+**Changed:** added a fourth arm to
+`test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink_escape` in
+`test_artifacts.py` — an absolute path pointing to a file that exists *inside* the step
+directory (`step_dir / "ok.json"`), refused only by `_contained`'s `Path(name).is_absolute()`
+clause, since the `startswith` half would happily accept it.
+
+**Verified by:** applying the review's exact mutation (drop `Path(name).is_absolute() or`
+from `_contained`, leave `_resolve` untouched) — the new arm is the *only* one of the seven
+`reuse_from` tests that fails (`DID NOT RAISE ArtifactError`); the other six, including the
+`..` and symlink arms in the same test function, stay green. Reverted, `diff -q` confirmed
+byte-identical, full `test_artifacts.py` + `test_lineage.py` re-run green (147 passed).
+
+### Minor 2 — the closed filing claimed a pin two named tests did not provide
+
+**Changed:** added `test_relative_form_returns_a_resolved_path_not_merely_a_contained_one`
+to `test_lineage.py` — `<output_dir>/<run_id>` is itself a symlink to a differently-named
+real directory outside `output_dir` (not inside a repo, so containment is not what this
+test isolates); asserts `resolve_run`'s returned path equals the real target's own
+`.resolve()`, not the unresolved `output_dir / locator`. `spec-defects.md`'s CLOSED entry
+was amended (appended, not rewritten) to strike the "also closes the second half" overclaim
+and name this test as the actual pin, per the rule that a closed filing's claims are checked
+like any other comment.
+
+**Verified by:** the review's exact mutation (keep containment on a resolved `probe`, return
+the unresolved `output_dir / locator`) — the two originally-named tests both stay green
+(confirmed: only the new test fails, `DID NOT RAISE` becomes a value mismatch — resolved
+path expected, unresolved path returned); the other 143 tests in both files stay green,
+matching the review's own "142 passed" count structurally (one more test now exists to catch
+what those 142 could not). Reverted, re-confirmed identical to the fixed file, full suite
+green.
+
+### The fail-open filing (not a finding against this batch; filed as instructed)
+
+Added a new `spec-defects.md` entry: `provenance.resolves_inside_repo` compares paths
+without resolving `repo_root` itself, so a caller that hands it an unresolved `repo_root`
+gets a **false negative** on a genuinely-contained path (reproduced with a `/tmp` vs
+`/private/tmp`-style symlink split, matching what the reviewer hit in their own probe).
+Every shipped caller resolves via `find_repo_root` first, so nothing in this repo is
+affected; filed with the concrete fix its owner should make (resolve `repo_root` inside the
+function, cheaper than sweeping every caller for the precondition) rather than left as a
+vague note. Owner: unassigned, since no slice currently owns `provenance.py`'s containment
+predicate.
+
+### Gates and full suite after the fix round
+
+`uv run ruff check .` — all checks passed. `uv run ruff format --check .` — 84 files
+unchanged. `uv run mypy` — 47 source files, no issues. `uv run pytest` (full, unfiltered,
+foreground, `__pycache__`/`pytest-of-*` cleared first) — **2494 → 2499 passed**, 1 skipped,
+2 xfailed (130.7s). `git diff --stat` against the pre-fix-round tree confirms
+`tests/test_cli.py` untouched (arm B stays task 7's) and arm D
+(`test_h8a_arm_d_the_shipped_positive_read_upstream_read`) still passes on its own.
+
+### Findings not closed, and why
+
+None. All four findings (Major 1, Minor 1, Minor 2, Minor 3) were fixed and pinned; the
+fifth item (the `resolves_inside_repo` fail-open) was explicitly not a finding against this
+batch and was filed rather than fixed, per the coordinator's instruction.
