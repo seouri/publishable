@@ -441,6 +441,47 @@ def condition_key(index: int, label: str | None) -> str:
     return condition_dir_name(index, label)
 
 
+PHASE_RUN_START = "run_start"
+PHASE_PRE_EXECUTION = "pre_execution"
+PHASE_DRY_RUN = "dry_run"
+PHASE_FREEZE = "freeze"
+
+PHASES: frozenset[str] = frozenset(
+    {PHASE_RUN_START, PHASE_PRE_EXECUTION, PHASE_DRY_RUN, PHASE_FREEZE}
+)
+"""The closed vocabulary `append_observation`'s `phase` argument accepts
+(Decision 13). **The named constants carry this property, not the assert
+below**: a core call site written against `PHASE_RUN_START` and friends
+cannot misspell a phase, where the assert only converts an already-
+committed typo into a crash — and under `python -O` the assert is stripped
+entirely, so an optimized build loses even that. Say it once: the
+constants are the guarantee, the assert only backs them up.
+
+`PHASE_DRY_RUN` is named here and called by NOTHING at this commit — no
+build appends a `dry_run` line. Where one should is filed to H9 rather
+than answered here: `reference.md` § Operation commands says `dry-run`
+"creates nothing," while § The apparatus files lists `dry_run` as one of
+the four phases, and both cannot hold until that gap is closed.
+
+**Measured cost when `append_observation`'s assert fires**, 2026-08-20, by
+patching it to raise and driving a real `run` through `main(["run", …])`
+twice: on the run-start round (before any execution), the `AssertionError`
+traceback is UNCAUGHT — `main` catches only `PublishableError` and
+`OSError` — the run directory holds `apparatus/`, `environment/`,
+`manifest/`, `sweep.yaml`, `lock` is REMOVED (`RunLock.__exit__` runs as
+the exception propagates), and `run.yaml`/`executions.jsonl` are both
+ABSENT. On a LATER `pre_execution` round the same uncaught traceback fires
+with one execution ALREADY PAID FOR: `executions.jsonl` holds that one
+line and `run.yaml` is still absent. The reason is that `execute_plan`'s
+per-execution round is wrapped in `except ContractError`, and
+`AssertionError` deliberately is not one — a core-call-site fault is not a
+fault in what the caller asked for — so `CLAUDE.md`'s own phrase applies
+exactly as measured: every execution paid for, the record lost. At
+`freeze` the cost is smaller: nothing is caught there either, but the
+assert is that function's first statement, so nothing has been appended
+yet."""
+
+
 def append_observation(
     run_dir: Path, *, phase: str, condition: str, probe: str, facts: Mapping[str, Any]
 ) -> None:
@@ -460,14 +501,22 @@ def append_observation(
     exists for. `condition` is the `<nn>_<label>` key from `condition_key`,
     never the bare label.
 
-    `phase` is one of a closed vocabulary of four: `run_start`, `pre_execution`,
-    `dry_run`, `freeze`. Part A only ever calls this with the first two; the
-    other two are named here so H8's and H9's callers do not mint a fifth
-    spelling of a phase this module already has a name for.
+    `phase` is one of `PHASES`, the closed vocabulary of four named above:
+    `PHASE_RUN_START`, `PHASE_PRE_EXECUTION`, `PHASE_DRY_RUN`, `PHASE_FREEZE`.
+    Part A only ever calls this with the first two; the other two are named
+    so H8's and H9's callers do not mint a fifth spelling of a phase this
+    module already has a name for. **The assert below is the FIRST
+    statement, deliberately** — above the `mkdir`, above the line dict,
+    above the open — so a bogus phase never gets a byte onto disk; placed
+    after the write, it would still raise but leave that bogus line behind.
 
     This function writes `facts` verbatim, with no check of its own —
     `Observer._observe_one` is what rules the order against `check_facts`.
     """
+    assert phase in PHASES, (
+        f"append_observation got phase {phase!r}, which is not one of the "
+        f"four named phases: {', '.join(sorted(PHASES))}"
+    )
     ledger_dir = run_dir / "apparatus"
     ledger_dir.mkdir(parents=True, exist_ok=True)
     line = {
@@ -486,7 +535,8 @@ def replay_ledger(run_dir: Path) -> Observations:
     `<run_dir>/apparatus/probes.jsonl`, replayed through the SHIPPED
     `Observations.record` — never reimplemented, and no keyword added to it.
 
-    **Filtered to `phase` in `"run_start"`/`"pre_execution"`, in file order.**
+    **Filtered to `phase` in `PHASE_RUN_START`/`PHASE_PRE_EXECUTION`, in file
+    order.**
     Those are exactly the calls the run's own in-memory `Observations` held
     while it executed. A `freeze` line is not one of them: including it
     would let a fact FIRST answered to a `freeze` become a pin the run's own
@@ -539,7 +589,7 @@ def replay_ledger(run_dir: Path) -> Observations:
                 f"apparatus/probes.jsonl line {line_no} is missing {', '.join(missing)}",
                 code="E-FREEZE-LEDGER-UNREADABLE",
             )
-        if doc["phase"] not in ("run_start", "pre_execution"):
+        if doc["phase"] not in (PHASE_RUN_START, PHASE_PRE_EXECUTION):
             continue
         observations.record(doc["condition"], doc["facts"])
     return observations

@@ -2459,7 +2459,7 @@ def command_run(config_path: Path) -> int:
             # probe failure here leaves the same shape any other pre-`run.yaml`
             # failure already leaves — no `run.yaml`, everything before it.
             if observer is not None:
-                observer.observe_round(phase="run_start", condition_index=None)
+                observer.observe_round(phase=apparatus.PHASE_RUN_START, condition_index=None)
             # H7d Part B, Decision 3/Decision 5: one `StopSignal` per run,
             # shared by `execute_plan`'s apparatus gate and its
             # `max_failed_fraction` guard. `run_status` below reads

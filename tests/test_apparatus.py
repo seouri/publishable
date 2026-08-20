@@ -1270,3 +1270,87 @@ def test_m9_fixture_the_baseline_is_first_answered_not_most_recent(tmp_path):
     observations = replay_ledger(tmp_path)
     observations.record("00_x", {"pinned": "r1"})
     assert observations.changed("00_x", {"pinned": "r1"}) is None
+
+
+# --- H8b task 2: `PHASES`, the four constants, and the assert ------------
+
+
+def test_phases_is_exactly_the_four_named_constants():
+    from publishable.apparatus import (
+        PHASE_DRY_RUN,
+        PHASE_FREEZE,
+        PHASE_PRE_EXECUTION,
+        PHASE_RUN_START,
+        PHASES,
+    )
+
+    assert PHASES == {PHASE_RUN_START, PHASE_PRE_EXECUTION, PHASE_DRY_RUN, PHASE_FREEZE}
+    assert PHASES == {"run_start", "pre_execution", "dry_run", "freeze"}
+
+
+def test_append_observation_accepts_each_of_the_four_named_phases(tmp_path):
+    """Mutation M7's non-mutated arm: one call per name, each landing its own
+    line carrying its own `phase`. Removing any one name from `PHASES`
+    turns this into an `AssertionError` fired at that name — run once per
+    name removed, exercised by hand and reported in the task report rather
+    than shipped as a mutated permanent test."""
+    import json
+
+    from publishable.apparatus import PHASES, append_observation
+
+    for phase in sorted(PHASES):
+        append_observation(tmp_path, phase=phase, condition="00_x", probe="p", facts={})
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(lines) == 4
+    assert {line["phase"] for line in lines} == set(PHASES)
+
+
+def test_append_observation_refuses_a_fifth_spelling_before_writing_anything(tmp_path):
+    """The re-measured claim this task closes: at this branch's own prior
+    commit, this same call wrote `"BOGUS_FIFTH_SPELLING"` verbatim to
+    `probes.jsonl` — the docstring's "closed vocabulary of four" was an
+    unenforced claim. Now it raises `AssertionError` before the `mkdir`
+    even runs, naming the offending value and all four legal names, and
+    leaves no line on disk. Mutation M6's non-mutated arm: moving the
+    assert below the write (exercised by hand, reported in the task
+    report) would still raise but leave the bogus line behind — only the
+    ledger's own content distinguishes the two placements."""
+    from publishable.apparatus import append_observation
+
+    with pytest.raises(AssertionError) as excinfo:
+        append_observation(
+            tmp_path, phase="BOGUS_FIFTH_SPELLING", condition="00_x", probe="p", facts={}
+        )
+    message = str(excinfo.value)
+    assert "BOGUS_FIFTH_SPELLING" in message
+    for name in ("run_start", "pre_execution", "dry_run", "freeze"):
+        assert name in message
+    assert not (tmp_path / "apparatus" / "probes.jsonl").exists()
+
+
+def test_cli_and_runner_call_sites_pass_the_named_constants():
+    """Enumerated by READING `cli.py` and `runner.py` for every place a
+    `phase` string can originate (§ Answering a question with a proxy: a
+    grep for one spelling is the fourth proxy and shipped a credential
+    leak once already) and confirmed afterwards with a grep for `phase=`
+    across `src/publishable/*.py`, in that order: exactly two core call
+    sites pass a phase at all — `cli.command_run`'s run-start round and
+    `runner.execute_plan`'s per-execution round — and both now read a
+    constant rather than a literal, checked here by source inspection so a
+    reversion back to a bare string fails this test rather than only
+    failing silently under `python -O`."""
+    import inspect
+
+    from publishable import cli as cli_mod
+    from publishable import runner as runner_mod
+
+    cli_source = inspect.getsource(cli_mod.command_run)
+    assert "phase=apparatus.PHASE_RUN_START" in cli_source
+    assert 'phase="run_start"' not in cli_source
+
+    runner_source = inspect.getsource(runner_mod.execute_plan)
+    assert "phase=apparatus.PHASE_PRE_EXECUTION" in runner_source
+    assert 'phase="pre_execution"' not in runner_source
