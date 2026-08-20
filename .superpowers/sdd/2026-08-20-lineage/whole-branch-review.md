@@ -1,7 +1,8 @@
 # H8a — whole-branch review (`h8a-lineage` → `main`)
 
-**Verdict: MERGE**, with one Major to close first (a two-line document repair, no code change) and
-four Minors that may be closed here or filed with owners.
+**Verdict: MERGE.** One Major was found and **closed in this review** (a normative document repair,
+no code change, `docs/reference.md` only — see the fix commit below this one); four Minors remain, each
+cheap and none blocking.
 
 Reviewed at `2065682`, 12 tasks / six batches, independently of the six batch reviews. Everything
 below is labelled **verified by running** or **read**. Gates at this commit, run by me:
@@ -20,7 +21,7 @@ All four match the plan's predicted literals (§ Corrections, correction 7: mypy
 
 ## Findings
 
-### Major 1 — `E-UPSTREAM-REPO-CONTAINED`'s § Errors row and its § Lineage paragraph are both narrower than the code, and this is a cross-batch interaction
+### Major 1 (FOUND AND FIXED IN THIS REVIEW) — `E-UPSTREAM-REPO-CONTAINED`'s § Errors row and its § Lineage paragraph were both narrower than the code, and this is a cross-batch interaction
 
 **Where.** `docs/reference.md:1049` (§ Errors core raises) — *"…, or an **absolute path** resolving
 inside the git repo the command was given"* — and `docs/reference.md:3175` (§ Lineage between runs)
@@ -49,8 +50,14 @@ shape"*) — and the same slice's task 9 repaired precisely that fault for `E-AR
 above. `lineage.py`'s own `resolve_run` docstring **is** complete (lines 116-127 explain the relative
 branch's check); only the documents are not.
 
-**Fix.** Widen the § Errors row to name both forms, and add the relative form's clause to § Lineage's
-paragraph. No code change; the behaviour is right and is what the filing's closure intended.
+**Fix, applied here** (the repo's own rule is *the document changes first*, and the behaviour is
+already right): the § Errors row now reads *"a locator of **either** form resolving inside the git
+repo … the relative form's path is resolved before that check too, so a symlink under `output_dir`
+pointing into the repo is refused the same way an absolute path to it is"*, and § Lineage's paragraph
+now opens *"**Both** forms are checked …"* and carries the reason the exemption was withdrawn (an
+ordinary subdirectory of `output_dir` inherits the guarantee; a symlink under it does not, and core
+writes one itself as `latest`). Re-verified after the edit: mechanical pass **0 problems**, suite
+**2512 passed, 1 skipped, 2 xfailed**. No code touched.
 
 ### Minor 1 — a stated Decision 6 rule is unpinned: moving `ledger.record` above `_read` leaves the whole suite green
 
@@ -109,6 +116,11 @@ already reads *"H8, H9, and H3c-3's remaining 14"*. So this is one paragraph, no
   check**, not this one's."* That check ships **in the same module** now (`resolve_step`,
   `E-UPSTREAM-STEP-INCOMPLETE`); name it. This is the *"docstring written in one batch, falsified by a
   later one, never re-read"* shape, in its mild form.
+- `src/publishable/lineage.py:351-365` — the cache comment credits locator-keying with preserving
+  *"the 'must sit under output_dir' check"*. There is no such check: the relative branch joins
+  `output_dir / locator` and then verifies the record's `run_id`, which a symlink under `output_dir`
+  satisfies. Not a hole (the `run_id` comparison and now the containment check both still run), but
+  the sentence names a guard that does not exist as one.
 - Also noted, not a finding: `lineage.py:228` and `:351` cite `task-b2-review.md` /
   `task-b3-review.md`. They are the only citations of a review file anywhere in `src/` (74 `task N`
   references pre-exist, so the *task* convention is established; the *review-file* one is new). The
@@ -227,12 +239,22 @@ technique `_resolve` already uses" (verified: the two predicates are identical �
 ### 6. The guard pin's whole life
 
 All four arms green (`arm_a`, `arm_b`, `arm_c` in `test_cli.py`; `arm_d` in `test_artifacts.py`).
-`git diff 1f55711..HEAD -- tests/test_cli.py` on the two twelve-key pins shows **exactly** the
-authorized edit: `"upstream"` appended after `"allocation_hash"`, nothing reordered, and
-`assert "upstream" not in provenance` → `assert provenance["upstream"] == []`, in **both** places (the
-task-11 arm B *and* the shipped H7d
-`test_a_run_with_no_declared_probe_records_a_null_apparatus_block_and_no_ledger`). Only docstrings
-moved besides. Adding one spurious key to `command_run`'s provenance dict **fails both pins**.
+
+**The deletion sweep is exhaustive, not sampled** — this is the check the named-editor mechanism
+exists to make possible, so it was run over the whole of `tests/` rather than over the arm:
+
+- `git diff main..HEAD -- tests/ | grep -c '^-[^-]'` → **0**. Across all twelve tasks, **not one
+  line was removed from `tests/`** — which also independently reproduces batch 4's
+  "+4-with-zero-deletions" result for the two shipped readers, from the other end and over the
+  whole branch rather than one commit.
+- `git diff 1f55711..HEAD -- tests/ | grep '^-'` (since the pin) prints **fourteen lines and no
+  others**: arm A's docstring reword, arm B's rename and docstring, and the single authorized
+  assertion swap `assert "upstream" not in provenance` → `assert provenance["upstream"] == []`.
+  Nothing reordered, no other assertion moved, in either file.
+
+The one-key append lands in **both** places the twelve-key list is pinned — the task-11 arm B *and*
+the shipped H7d `test_a_run_with_no_declared_probe_records_a_null_apparatus_block_and_no_ledger`.
+Adding one spurious key to `command_run`'s provenance dict **fails both pins**.
 Arm C — Decision 4's foundation — is genuinely breakable: routing `summary` into `shared` inside
 `run_record._execution_block` fails it and nothing else in the selection.
 
@@ -309,6 +331,24 @@ measured is HEAD's.
   spelled out) and `resolves_inside_repo`'s fail-open on an unresolved `repo_root` (owner
   **unassigned**, with the reason attached — no shipped caller can reach it, and it is the function's
   own gap rather than any slice's). Neither is "whoever does X".
+
+---
+
+## The one question batch 6 left open, ruled here
+
+Batch 6 is the only batch with **no review** (`task-b6-review.md` does not exist), and it owns tasks
+8, 9 and 10 — which is why items 8, 9 and 10 above were re-measured from scratch rather than read.
+Its § Concerns asks for a controller decision on `spec-defects.md`'s census table (§ *"23 entries"*),
+whose H6 row still says *"the six unwritten `run.yaml` keys (its allocation half is H3, its **upstream
+half H8**)"* while two of those six are now closed.
+
+**Ruled: no edit, and batch 6's disposition stands.** The table says of itself *"which is a census and
+not a work plan"* and *"A slice picking up an entry should read the whole entry rather than this
+table"* — so it is an index, dated by construction, and the entry it indexes carries the closure as a
+struck row plus a dated amendment. Re-tallying it would rewrite a historical count to keep a
+self-disclaimed index current, and the cheaper direction here is the one this repo prefers: leave the
+label, since the reader it routes lands on the amended entry. Recorded as decided rather than left
+open, which is the point of ruling it.
 
 ---
 
