@@ -1,13 +1,17 @@
 # tests/test_artifacts.py
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
+from publishable.lineage import UpstreamLedger, UpstreamResolver
+from publishable.run_record import SCHEMA_VERSION
 from publishable.units import ArmPlan, HoldoutPlan, Unit, UnitList, assignment_for
 
 
@@ -1637,3 +1641,225 @@ def test_a_resolver_io_reads_through_the_same_table_a_step_does(tmp_path, regist
 
     (tmp_path / "reads.fq").write_bytes(b"ACGT")
     assert ResolverIO(tmp_path).read_input("reads.fq") == {"parsed": "ACGT"}
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — io.reuse_from and the shared _contained helper.
+# `docs/superpowers/plans/2026-08-20-lineage.md` task 5; Fixture N (the name
+# rule, with its positive control) and Fixture R (a genuinely produced
+# upstream).
+# ---------------------------------------------------------------------------
+
+
+def _write_upstream_run(run_dir: Path, run_id: str, *, step: str = "step01") -> None:
+    """A synthesized upstream run whose `execution` block declares one
+    `run`-scoped step, completed — enough for `resolve_step` to locate
+    `shared/<step>/` without a real run behind it."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "status": "completed",
+        "execution": {
+            "shared": {step: {"status": "completed"}},
+            "summary": {},
+            "conditions": [],
+        },
+    }
+    (run_dir / "run.yaml").write_text(yaml.safe_dump(doc))
+
+
+def _reuse_io(tmp_path: Path, *, output_dir: "Path | None" = None) -> StepIO:
+    """A `StepIO` with a real `UpstreamResolver` injected — the only way
+    `reuse_from` is reachable at all, per Decision 2's zero-field surface.
+    `step_dir`/`input_dir`/`run_dir` are this (downstream) execution's own
+    and play no part in `reuse_from`, which reads only through the resolver.
+    """
+    resolved_output_dir = output_dir if output_dir is not None else tmp_path / "output_dir"
+    resolver = UpstreamResolver(
+        output_dir=resolved_output_dir,
+        repo_root=tmp_path / "unused_repo_root",
+        ledger=UpstreamLedger(),
+    )
+    return StepIO(
+        step_dir=tmp_path / "downstream_step",
+        input_dir=tmp_path / "downstream_input",
+        run_dir=tmp_path / "downstream_run",
+        upstream=resolver,
+    )
+
+
+def test_reuse_from_with_no_upstream_injected_is_a_bare_assert_not_a_coded_refusal():
+    """Step 1b: a missing resolver is core's own bug — `runner.py` always
+    threads one from `command_run`, so no config or step can cause its
+    absence. A bare `AssertionError`, not an `E-UPSTREAM-*` code: minting one
+    here would also make task 3's wiring mutation blind (the mutant would
+    then raise a code of its own)."""
+    io = StepIO(step_dir=Path("/unused"), input_dir=Path("/unused"), run_dir=Path("/unused"))
+    with pytest.raises(AssertionError):
+        io.reuse_from("run_x", "step01", "out.json")
+
+
+def test_reuse_from_reads_the_named_artifact_through_the_registered_reader(tmp_path):
+    """The positive path underlying every refusal arm below: an ordinary read
+    through the resolver, the located step directory, and `_read`'s dispatch."""
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_sssssss"
+    run_dir = output_dir / run_id
+    _write_upstream_run(run_dir, run_id)
+    (run_dir / "shared" / "step01").mkdir(parents=True)
+    (run_dir / "shared" / "step01" / "out.json").write_text('{"x": 1}')
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+    assert io.reuse_from(run_id, "step01", "out.json") == {"x": 1}
+
+
+def test_reuse_from_missing_step_directory_and_missing_name_share_one_code(tmp_path):
+    """Step 2: ONE code, `E-UPSTREAM-ARTIFACT-MISSING`, for both faults — the
+    remedy is identical in each case: the upstream published no such name."""
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_ttttttt"
+    run_dir = output_dir / run_id
+    # Declared under `shared` but nothing was ever written to disk for it —
+    # the missing-STEP-DIRECTORY half of the fault.
+    _write_upstream_run(run_dir, run_id, step="step_never_wrote")
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step_never_wrote", "out.json")
+    assert e.value.code == "E-UPSTREAM-ARTIFACT-MISSING"
+
+    # The step directory exists, but not this name within it — the
+    # missing-NAME half of the same fault.
+    (run_dir / "shared" / "step_never_wrote").mkdir(parents=True)
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step_never_wrote", "out.json")
+    assert e.value.code == "E-UPSTREAM-ARTIFACT-MISSING"
+
+
+def test_reuse_from_inherits_the_shipped_unreadable_suffix_refusal(tmp_path, registries):
+    """§ Errors carries one row per code: a writer-without-reader suffix is
+    already `E-ARTIFACT-UNREADABLE` (`_read`'s shipped refusal); H8a mints no
+    second code for it. Reuses the shipped fixture's own shape."""
+    from publishable import artifacts
+
+    artifacts.WRITERS[".fastq"] = lambda rows: b"x"
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_uuuuuuu"
+    run_dir = output_dir / run_id
+    _write_upstream_run(run_dir, run_id)
+    (run_dir / "shared" / "step01").mkdir(parents=True)
+    (run_dir / "shared" / "step01" / "a.fastq").write_bytes(b"x")
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", "a.fastq")
+    assert e.value.code == "E-ARTIFACT-UNREADABLE"
+
+
+def test_reuse_from_name_containment_refuses_traversal_absolute_path_and_symlink_escape(
+    tmp_path,
+):
+    """Fixture N's three `reuse_from` refusal arms, each targeting a file that
+    EXISTS and holds distinguishable content — so an unenforced check would
+    return it rather than fail for an unrelated reason (the live probe's own
+    shape, `docs/superpowers/specs/2026-08-20-lineage-design.md` Fixture N).
+    """
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_vvvvvvv"
+    run_dir = output_dir / run_id
+    _write_upstream_run(run_dir, run_id)
+    step_dir = run_dir / "shared" / "step01"
+    step_dir.mkdir(parents=True)
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+
+    # `..` traversal: a file that exists OUTSIDE the run entirely, reached by
+    # a relative path with exactly enough `..` segments to escape `step_dir`.
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"who": "SECRET_DOTDOT"}')
+    escape_name = os.path.relpath(secret, step_dir)
+    assert ".." in escape_name  # the fixture's own claim: this really escapes
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", escape_name)
+    assert e.value.code == "E-UPSTREAM-NAME"
+
+    # An absolute path, naming the same existing, distinguishable file.
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", str(secret))
+    assert e.value.code == "E-UPSTREAM-NAME"
+
+    # A symlink inside the step directory leading outside it.
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "leak.json").write_text('{"who": "SECRET_SYMLINK"}')
+    link = step_dir / "escape_dir"
+    link.symlink_to(outside_dir, target_is_directory=True)
+    with pytest.raises(ArtifactError) as e:
+        io.reuse_from(run_id, "step01", "escape_dir/leak.json")
+    assert e.value.code == "E-UPSTREAM-NAME"
+    assert not (outside_dir / "leak.json.reused").exists()  # nothing written back
+
+
+def test_reuse_from_positive_control_a_forward_separator_and_an_interior_dot_still_read(
+    tmp_path,
+):
+    """Fixture N's positive control, not optional per controller ruling 1: a
+    helper that refused every separator would pass the three refusal arms
+    above and still be the over-refusal the ruling forbids. Two legal names:
+    `programs/a.json` (a forward separator, § Steps and artifacts' own worked
+    shape) and `programs/gpt-4.1__seed29.json`, whose interior dot must still
+    dispatch as `.json`, not as some suffix ending in `.1`.
+    """
+    output_dir = tmp_path / "output_dir"
+    run_id = "run_2020-01-01T00-00-00Z_wwwwwww"
+    run_dir = output_dir / run_id
+    _write_upstream_run(run_dir, run_id)
+    programs = run_dir / "shared" / "step01" / "programs"
+    programs.mkdir(parents=True)
+    (programs / "a.json").write_text('{"a": 1}')
+    (programs / "gpt-4.1__seed29.json").write_text('{"b": 2}')
+    io = _reuse_io(tmp_path, output_dir=output_dir)
+    assert io.reuse_from(run_id, "step01", "programs/a.json") == {"a": 1}
+    assert io.reuse_from(run_id, "step01", "programs/gpt-4.1__seed29.json") == {"b": 2}
+
+
+# --- Fixture R: a genuinely produced upstream, read through reuse_from -------
+
+_SUMMARY_PUBLISH_STEP = """\
+# generated for the H8a task 5 Fixture R test
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        io.write("programs/a.json", {{"program": "a"}})
+        io.write("programs/b.json", {{"program": "b"}})
+        io.write("programs/c.json", {{"program": "c"}})
+        return {{}}
+"""
+
+
+def test_fixture_r_reuse_from_reads_a_genuinely_produced_summary_artifact(tmp_path):
+    """Fixture R for task 5: a real end-to-end `run` (`run_a_project`) with a
+    `summary`-scoped step that publishes `programs/{a,b,c}.json`; `reuse_from`
+    (through the absolute locator form, Decision 1) reads one back. The step
+    name is read from the upstream's own `execution.summary` block rather
+    than hard-coded — `run_a_project` prefixes a generated step's name
+    (Global Constraints correction 8), so a literal would be a guessed one.
+    """
+    from tests.test_cli import run_a_project
+
+    project = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=8,
+        extra_steps=["publish"],
+        extra_step_source=_SUMMARY_PUBLISH_STEP,
+    )
+    run_dir = project["run_dir"]
+    record = yaml.safe_load((run_dir / "run.yaml").read_text())
+    summary_steps = record["execution"]["summary"]
+    assert len(summary_steps) == 1  # the fixture's own claim: exactly the one we added
+    step_name = next(iter(summary_steps))
+
+    io = _reuse_io(tmp_path)  # output_dir is irrelevant: the absolute form ignores it
+    assert io.reuse_from(str(run_dir), step_name, "programs/a.json") == {"program": "a"}
