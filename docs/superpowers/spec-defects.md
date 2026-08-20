@@ -7352,7 +7352,23 @@ materialized by `materialize.py` — from a slice about something else.
 review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
 "filed" is not a filing.
 
-## OPEN — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: H8a tasks 3 and 5**
+## ~~OPEN~~ CLOSED — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: H8a tasks 3 and 5**
+
+**CLOSED by H8a task 3.** Option (a): the relative branch now resolves its path
+(`(output_dir / locator).resolve()`, following symlinks) and runs
+`resolves_inside_repo` on the result before reading the record — exactly the
+check the absolute branch already ran, on the same predicate, so the two
+branches cannot drift apart again. This also closes "the second half of the
+same finding" below: the relative form now returns a resolved path, the same
+kind the absolute form always did. Pinned by
+`tests/test_lineage.py::test_relative_form_containment_refuses_a_symlink_under_output_dir_into_the_repo`
+(the exact shape this filing verified by running — a symlink under
+`output_dir` addressing an in-repo run, now refused with
+`E-UPSTREAM-REPO-CONTAINED`) and its control,
+`test_relative_form_containment_control_reads_an_ordinary_subdirectory`
+(an ordinary, non-symlinked run directory must keep reading). Both mutations
+— dropping the fix, and re-checking the control — were run and confirmed to
+discriminate.
 
 `src/publishable/lineage.py`'s `resolve_run` (H8a task 2) exempts the relative form
 (`reuse_from("run_id", ...)`) from `provenance.resolves_inside_repo` entirely, on Decision 1's
