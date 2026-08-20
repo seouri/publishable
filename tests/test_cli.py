@@ -15023,6 +15023,8 @@ def test_g3_run_start_round_never_trips_the_gate_across_conditions(
 
     combined = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-APPARATUS-CHANGED" not in combined
+
+
 # --- H7d Part B task 9: no policy knob, arm (b) — Fixture K's most-permissive
 # arm still stops --------------------------------------------------------------
 
@@ -15132,3 +15134,166 @@ def test_fixture_k_arm_b_the_most_permissive_limits_still_stops(
     assert "max_failed_fraction" not in output
 
 
+# --- H7d Part B task 10: `batch` and the apparatus stay independent --------
+
+_APPARATUS_B_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("{template_name}")
+class ApparatusBAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "{probe_name}"
+    apparatus_facts = ["model_revision"]
+"""
+
+# One condition, `n: 4` (4 planned executions either way). The schedule is
+# Fixture G1's own shape (task 4), reused because it is what makes this
+# fixture DISCRIMINATING rather than merely quiet: a probe returning a
+# CONSTANT fact never changes, so the gate never fires regardless of how it
+# is keyed, and a mutation keying it on the repeat label too would be
+# invisible. `model_revision` answers `r1` on calls 1-3 (the run-start round
+# and the first two `pre_execution` rounds) and `r2` on call 4 — the round
+# guarding the third planned execution — so the gate fires before that
+# execution runs, in BOTH arms, at the same point, if `batch` and the
+# apparatus are genuinely independent (`apparatus.py` names `batch` nowhere,
+# § Corrections against the code). A fifth entry is appended beyond that
+# shape: this test's own prescribed mutation (task 10 step 4) keys the gate
+# on the repeat label too, under which the `seed` arm's four distinct labels
+# never contradict each other and the run needs a 5th probe call (the round
+# guarding the 4th planned execution) to exist rather than raising
+# `IndexError` out of the schedule itself — a different, uninteresting
+# failure that would still fail the assertion but for the wrong reason. Two
+# separately named probe modules, since the counter is module-level and
+# `sys.modules` caches across the session (Fixture P).
+_B_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = ["r1", "r1", "r1", "r2", "r2"]
+_calls = {{"n": 0}}
+
+
+@register_probe("{probe_name}")
+def probe(cfg):
+    value = _schedule[_calls["n"]]
+    _calls["n"] += 1
+    return Apparatus(facts={{"model_revision": value}})
+"""
+
+
+def test_fixture_b_batch_and_the_apparatus_stay_independent(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 8, pinned rather than left to the definition that invites the
+    mistake: `CLAUDE.md` defines `batch` as *"the state of the apparatus it
+    measures through"*, which reads as licence to wire the two together.
+    Measured at `814eadd` (§ Corrections against the code, item carried into
+    this task's brief): `apparatus.py` names `batch` nowhere and
+    `replication.py` names the apparatus nowhere — the only live wire between
+    a repeat kind and anything is `W-REPL-DETERMINISTIC`, which reads step
+    DECLARATIONS, not the apparatus. Part B is the first slice that can stop a
+    run over apparatus state, so it is the slice that owes this pin.
+
+    **Equal `n` in both arms, stated in this docstring because it is the
+    fixture's own load-bearing choice**: with unequal `n` the two arms have
+    different execution counts, so their ledgers would differ in length for a
+    reason that has nothing to do with the apparatus — a fixture whose two
+    arms differ for an uninteresting reason cannot see the interesting one.
+
+    The gate fires in BOTH arms, at the SAME point — 2 of 4 planned
+    executions complete, `status: failed`, `EXIT_FAILED` — which is "the stop
+    lands at the same execution index" the design's own computed expectation
+    names. Asserted on the ordered `(phase, condition)` sequence read off
+    `apparatus/probes.jsonl`, on `provenance.apparatus.facts` and `.hash`, and
+    on `len(executions.jsonl)` — never on whole stdout/stderr: the `batch` arm
+    earns `W-REPL-DETERMINISTIC` (no step here sets `nondeterministic = True`),
+    so its stdout differs from the `seed` arm's by that warning line alone,
+    for a reason that is not the apparatus. That difference is named here
+    rather than asserted away."""
+    seed_site = installed(
+        "dist-t10-seed", "1.0", {"publishable.probes": {"h7d_b_seed_probe": "t10b_seed_mod:probe"}}
+    )
+    (seed_site / "t10b_seed_mod.py").write_text(
+        _B_PROBE_MODULE.format(probe_name="h7d_b_seed_probe")
+    )
+    seed_doc = run_a_project(
+        tmp_path / "seed_arm",
+        capsys=capsys,
+        experiment_type="apparatus_b_seed_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_B_TEMPLATE.format(
+            template_name="apparatus_b_seed_assay", probe_name="h7d_b_seed_probe"
+        ),
+        expect_exit=EXIT_FAILED,
+    )
+
+    batch_site = installed(
+        "dist-t10-batch",
+        "1.0",
+        {"publishable.probes": {"h7d_b_batch_probe": "t10b_batch_mod:probe"}},
+    )
+    (batch_site / "t10b_batch_mod.py").write_text(
+        _B_PROBE_MODULE.format(probe_name="h7d_b_batch_probe")
+    )
+    batch_doc = run_a_project(
+        tmp_path / "batch_arm",
+        capsys=capsys,
+        experiment_type="apparatus_b_batch_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "batch", "n": 4}]},
+        _local_template=_APPARATUS_B_TEMPLATE.format(
+            template_name="apparatus_b_batch_assay", probe_name="h7d_b_batch_probe"
+        ),
+        expect_exit=EXIT_FAILED,
+    )
+
+    def _phase_condition_sequence(doc):
+        ledger = [
+            json.loads(line)
+            for line in (doc["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        return [(row["phase"], row["condition"]) for row in ledger]
+
+    seed_seq = _phase_condition_sequence(seed_doc)
+    batch_seq = _phase_condition_sequence(batch_doc)
+    assert seed_seq == batch_seq
+    assert seed_seq == [
+        ("run_start", "00"),
+        ("pre_execution", "00"),
+        ("pre_execution", "00"),
+        ("pre_execution", "00"),
+    ]
+
+    seed_run = yaml.safe_load((seed_doc["run_dir"] / "run.yaml").read_text())
+    batch_run = yaml.safe_load((batch_doc["run_dir"] / "run.yaml").read_text())
+    assert seed_run["status"] == "failed"
+    assert batch_run["status"] == "failed"
+    seed_apparatus = seed_run["provenance"]["apparatus"]
+    batch_apparatus = batch_run["provenance"]["apparatus"]
+    assert seed_apparatus["facts"] == batch_apparatus["facts"]
+    assert seed_apparatus["hash"] == batch_apparatus["hash"]
+
+    seed_exec = [
+        json.loads(line)
+        for line in (seed_doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    batch_exec = [
+        json.loads(line)
+        for line in (batch_doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(seed_exec) == 2
+    assert len(batch_exec) == 2
+
+    # The named, deliberately unasserted difference: the `batch` arm earns
+    # `W-REPL-DETERMINISTIC` on stdout and the `seed` arm does not, because no
+    # step here declares `nondeterministic = True`. Asserting whole output
+    # equal would make this fixture fragile against a warning that has
+    # nothing to do with the apparatus.
+    seed_output = (seed_doc["stdout"] or "") + (seed_doc["stderr"] or "")
+    batch_output = (batch_doc["stdout"] or "") + (batch_doc["stderr"] or "")
+    assert "W-REPL-DETERMINISTIC" not in seed_output
+    assert "W-REPL-DETERMINISTIC" in batch_output
