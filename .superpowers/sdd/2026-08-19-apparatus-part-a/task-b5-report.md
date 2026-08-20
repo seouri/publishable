@@ -286,3 +286,71 @@ them sound.
 - Findings not closed: none. All three Majors, both actionable Minors, and both remaining
   "owed at merge" items (ledger, CLAUDE.md) are closed. Minor 3 needed a note, not a fix, and Minor
   4 was closed by the review's own act of reviewing batch 5.
+
+## Whole-branch fix round — round 2: Major 1's fix was unpinned
+
+A coordinator's mutation, run against the full unfiltered suite, found Major 1's fix behaviourally
+correct but unasserted: `src/publishable/validate.py:982`'s type guard
+(`if not isinstance(declared, str) or not declared:`) replaced with `if False:` left the suite at
+**2423 passed, 1 skipped, 2 xfailed — unchanged.**
+
+**Root cause, found by reading the mutation's actual effect rather than assuming the guard was
+simply unreached.** With the type guard dead, `declared = ["wbr_probe"]` falls through to the
+registration check (`if declared in known: return` / the "not registered" `c.error`). `["wbr_probe"]
+in known` is `False` for any `known` (a list is never a member of a collection of registered
+`str` names), so the registration-check branch's own `c.error` fires — reporting
+`E-PROBE-UNKNOWN`, just with a **different message** ("...a name no installed distribution
+registers..." rather than "...is a non-empty `str`..."). That fallback message's `f"{declared!r}"`
+still renders `"['wbr_probe']"`, which contains the substring `wbr_probe` — so both existing tests'
+assertions (`"wbr_probe" in message`, `"E-PROBE-UNKNOWN" in output`) passed regardless of which
+branch actually fired. The type-check branch was never exercised by either test.
+
+**Fixed by strengthening both tests to assert a phrase unique to the type-check branch**
+("an `apparatus_probe` name is a non-empty `str`" — present only in that branch's message, absent
+from the registration-check fallback's):
+
+1. **`test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped`** (validate-level,
+   `tests/test_validate.py`): also declares `parameters: {"unknown_param": 1}` and asserts
+   `"E-PARAM-UNKNOWN" in found` alongside the strengthened `E-PROBE-UNKNOWN` message assertion — per
+   the coordinator's instruction to assert alongside whatever else is reported, never on a total
+   code set, since `validate` collects rather than aborting.
+2. **`test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_exists`**
+   (run-level, `tests/test_cli.py`, driven through the real `main(["run", ...])`, not a direct
+   call): this is the pin for the CLAUDE.md sentence claiming `run` refuses the same malformed
+   declaration because `command_run` validates first. **Verified by running: `run` DOES refuse** —
+   exit 1 (`EXIT_WRONG`), no run directory created (`doc["run_dir"] is None`,
+   `not list(doc["results_dir"].glob("run_*"))`), and the discriminating phrase present in the
+   command's own captured stdout/stderr. The claim in CLAUDE.md holds and did not need to be
+   deleted — it is now asserted by behaviour at the surface it describes, not merely by the
+   validate-level test's proxy.
+
+**Both re-run against the coordinator's exact mutation** (`if False:` at `validate.py`'s type
+guard): **both FAIL on `AssertionError`** — the discriminating phrase absent from the fallback
+message — never on a crash. Reverted by restoring a saved pre-mutation copy of `validate.py`;
+`diff` confirmed byte-identical; re-ran, both green.
+
+**Major 2's pin re-confirmed, not re-fixed.** Narrowing `apparatus.check_facts`'s credential check
+back to exact equality (`if value == cred_value:` in place of
+`if cred_value and cred_value in value:`) against the full unfiltered suite fails exactly **three**
+named tests, all on assertions:
+
+- `tests/test_apparatus.py::test_a_fact_value_containing_a_declared_credential_value_is_refused`
+- `tests/test_apparatus.py::test_the_containment_refusal_also_names_the_variable_and_never_the_value`
+- `tests/test_cli.py::test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_end`
+  (fails on `_assert_went_through_the_containment_wrapper`'s own assertion: the output carries
+  `E-APPARATUS-FACT-MISSING` instead, since the credential check no longer catches the substring
+  case and the missing-key check fires later in the same call)
+
+2420 passed + 3 failed = 2423, consistent with the full suite. Reverted by restoring a saved
+pre-mutation copy of `apparatus.py`; `diff` confirmed byte-identical; re-ran, all green. **No source
+change was needed for Major 2 — its containment fix was already properly pinned**; this round only
+confirmed it under the coordinator's specific request.
+
+Commit: `45d59a7`. `uv run pytest`: **2423 passed, 1 skipped, 2 xfailed** — unchanged, since this
+round strengthens test assertions rather than changing behaviour. Four gates clean.
+
+**Explicitly: does `run` refuse a non-`str` `apparatus_probe`? Yes** — verified by driving the exact
+shape through `main(["run", ...])` (not a direct call), confirming exit 1, no run directory created,
+and the type-check branch's own discriminating message present in the real command's output, then
+confirming that assertion fails (not crashes) under the coordinator's exact mutation and passes
+once reverted.
