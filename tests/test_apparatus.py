@@ -268,6 +268,44 @@ def test_a_fact_equal_to_a_declared_credential_value_is_refused():
     assert excinfo.value.code == "E-APPARATUS-FACT-CREDENTIAL"
 
 
+def test_a_fact_value_containing_a_declared_credential_value_is_refused():
+    """Whole-branch review Major 2: `check_facts` matched only by EXACT
+    equality, while `secrets.redact` — over the identical value set,
+    `credential_values(declared_credential_names(...))` — matches by
+    SUBSTRING. A probe returning an endpoint URL with the credential appended
+    (`".../v1?key=" + token`) sailed through the exact-equality check and was
+    published verbatim in `provenance.apparatus.facts` and every
+    `apparatus/probes.jsonl` line — the two artifacts `reference.md` calls
+    "publishable as-is". Match the way `redact` already matches: containment,
+    not a third rule."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"endpoint": "https://api.example.com/v1?key=lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"})
+    assert excinfo.value.code == "E-APPARATUS-FACT-CREDENTIAL"
+
+
+def test_the_containment_refusal_also_names_the_variable_and_never_the_value():
+    """The message for the substring case must uphold decision 6's own
+    constraint exactly as the exact-equality case does: the fact KEY and the
+    credential's NAME, never the value — the credential value `lab7` is
+    absent even though it is only part of the offending fact value."""
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+    from publishable.errors import ContractError
+
+    returned = Apparatus(facts={"endpoint": "https://api.example.com/v1?key=lab7"})
+    with pytest.raises(ContractError) as excinfo:
+        check_facts(returned, [], probe_name="p", credentials={"INSTRUMENT_API_TOKEN": "lab7"})
+    message = str(excinfo.value)
+    assert "lab7" not in message
+    assert "INSTRUMENT_API_TOKEN" in message
+    assert "endpoint" in message
+
+
 def test_the_refusal_names_the_variable_and_never_the_value():
     """A refusal that quoted the value would be the leak the check exists to
     prevent. Assert `lab7` is absent from the message and the variable's name is

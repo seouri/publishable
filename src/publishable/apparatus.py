@@ -163,19 +163,26 @@ def check_facts(
             )
     # 2. credentials      → E-APPARATUS-FACT-CREDENTIAL
     for key, value in facts.items():
-        # `isinstance(value, str)` guards the comparison itself: a credential
-        # value is always a `str` (`secrets.credential_values`'s return type),
-        # so this is behaviour-preserving for Decision 6's stated property —
-        # and without it, a fact value with an elementwise `__eq__` (a NumPy
-        # array is the standing example) reaches `value == cred_value` before
-        # the scalar walk below would have refused it, and raises an uncoded
-        # `ValueError` instead of `E-APPARATUS-FACT-TYPE`.
+        # `isinstance(value, str)` guards the containment check itself: a
+        # credential value is always a `str` (`secrets.credential_values`'s
+        # return type), and `in` is only the check this row wants for a
+        # `str` value — a non-`str` fact value is left for the scalar walk
+        # below to accept or refuse on its own terms (`E-APPARATUS-FACT-TYPE`),
+        # rather than being tested for containment at all. Matched by
+        # CONTAINMENT, the same way `secrets.redact` matches over the
+        # identical value set (`credential_values(declared_credential_names(
+        # ...))`) — exact equality alone let a probe publish a credential
+        # embedded in a larger value (an endpoint URL carrying `?key=<token>`)
+        # verbatim into `provenance.apparatus.facts` and the ledger, the two
+        # records § The apparatus core can only observe calls "publishable
+        # as-is". `cred_value and` skips an unset credential the same way
+        # `redact` does, so an empty value can never match every fact.
         if not isinstance(value, str):
             continue
         for cred_name, cred_value in credentials.items():
-            if value == cred_value:
+            if cred_value and cred_value in value:
                 raise ContractError(
-                    f"probe `{probe_name}` returned fact `{key}` equal to the value core "
+                    f"probe `{probe_name}` returned fact `{key}` containing the value core "
                     f"read for `{cred_name}` — a fact may not carry a credential's value, "
                     "so this refuses rather than redacting it into the record",
                     code="E-APPARATUS-FACT-CREDENTIAL",

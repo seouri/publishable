@@ -12941,6 +12941,18 @@ def probe(cfg):
     return Apparatus(facts={"model_revision": os.environ["PUBLISHABLE_TEST_TOKEN"]})
 """
 
+_CRED_LEAKING_EMBEDDED_FACT_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_cred_probe")
+def probe(cfg):
+    token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+    return Apparatus(facts={"endpoint": f"https://api.example.com/v1?key={token}"})
+"""
+
 _CRED_LEAKING_RAISE_PROBE_MODULE = """\
 import os
 
@@ -12958,6 +12970,44 @@ def probe(cfg):
 # which is exactly the shape whose mutation could not discriminate (§ The
 # discriminating fixtures, Fixture K).
 _ORDINARY_CRED_VALUE = "lab7"
+
+
+_NON_STR_PROBE_ASSAY_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_wbr_assay")
+class ApparatusWbrAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = ["h7d_probe"]
+    apparatus_facts = ["model_revision"]
+"""
+
+
+def test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_exists(
+    tmp_path, capsys
+):
+    """Whole-branch review Major 1, end to end: a template declaring
+    `apparatus_probe = ["h7d_probe"]` — plausible, since `apparatus_facts`
+    the very next line *is* a list — used to validate clean and record
+    `apparatus: null`. `validate._check_probe` now reports `E-PROBE-UNKNOWN`
+    for it, and since `command_run` calls `validate_config` first and returns
+    before ever inspecting `apparatus_probe` itself when `c.has_errors`, this
+    one fix closes both surfaces: `run` refuses before any run directory is
+    created at all, so there is no `apparatus/` directory and the probe is
+    never called."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_wbr_assay",
+        parameters={},
+        _local_template=_NON_STR_PROBE_ASSAY_TEMPLATE,
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-PROBE-UNKNOWN" in output
+    assert doc["run_dir"] is None
+    assert not list(doc["results_dir"].glob("run_*"))
 
 
 def test_a_declared_probe_is_called_once_per_condition_at_run_start(
@@ -13051,6 +13101,44 @@ def test_a_probe_returning_a_declared_credential_fails_the_command_and_writes_no
         "dist-k9", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9_probe_mod:probe"}}
     )
     (site / "k9_probe_mod.py").write_text(_CRED_LEAKING_FACT_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=4,
+        experiment_type="apparatus_cred_assay",
+        parameters={},
+        _local_template=_APPARATUS_CRED_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_ORDINARY_CRED_VALUE}\n",
+        expect_exit=EXIT_WRONG,
+    )
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    _assert_went_through_the_containment_wrapper(output, "E-APPARATUS-FACT-CREDENTIAL")
+    assert not list(doc["results_dir"].glob("run_*/run.yaml"))
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, (
+        "no artifacts were written — the per-file credential-absence check would be vacuous"
+    )
+    for path in swept:
+        assert _ORDINARY_CRED_VALUE not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+def test_a_fact_value_containing_a_declared_credential_fails_the_command_end_to_end(
+    installed, registries, tmp_path, capsys
+):
+    """Whole-branch review Major 2, end to end. The probe returns the
+    credential EMBEDDED in a larger value (an endpoint URL carrying
+    `?key=<token>`), not equal to it — the shape the exact-equality check let
+    through and `secrets.redact` would have caught over the identical value
+    set. Same assertions as Fixture K's exact-equality sibling: exit
+    non-zero, `E-APPARATUS-FACT-CREDENTIAL` in the output, no `run.yaml`, and
+    `lab7` in no byte of any file under the results directory, asserted on
+    RAW text over a file list proven non-empty first."""
+    site = installed(
+        "dist-k9c", "1.0", {"publishable.probes": {"h7d_cred_probe": "k9c_probe_mod:probe"}}
+    )
+    (site / "k9c_probe_mod.py").write_text(_CRED_LEAKING_EMBEDDED_FACT_PROBE_MODULE)
 
     doc = run_a_project(
         tmp_path,

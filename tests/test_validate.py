@@ -14086,6 +14086,34 @@ def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write
     assert "`plugin` says" not in plain
 
 
+_NON_STR_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("wbr_probing")
+class WbrProbing(BaseTemplate):
+    apparatus_probe = ["wbr_probe"]
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {}
+"""
+
+
+def test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped(git_repo, write_config):
+    """Whole-branch review Major 1: `_check_probe`'s guard was `if not
+    isinstance(declared, str) or not declared: return` — a plausible mistake
+    (`apparatus_facts` on the very next line *is* a list) silently read as "no
+    probe declared" rather than being reported. `None` (the documented
+    no-probe spelling) must still draw nothing; anything else non-`str` must
+    be refused."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "wbr_probing.py").write_text(_NON_STR_PROBE_TEMPLATE)
+
+    found = messages_by_code(write_config({"experiment_type": "wbr_probing", "parameters": {}}))
+    message = found["E-PROBE-UNKNOWN"]
+    assert "wbr_probe" in message
+
+
 _PROBING_TEMPLATE = """\
 from publishable import BaseTemplate, register_template
 
