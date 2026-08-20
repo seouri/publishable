@@ -115,3 +115,140 @@ every existing apparatus fixture in `test_cli.py` already follows this pattern f
 - Task 5 (not in this batch) is what changes task 4 step 3's `EXIT_WRONG` expectation to a stop with
   a record — that test's docstring says so explicitly, and the report above repeats it so a reviewer
   reading only the report knows it is expected to change.
+
+---
+
+## Fix round 1 (review at `task-b3-review.md`)
+
+Both Majors closed, all six Minors addressed. Suite: 2439 → 2442. `ruff check .`, `ruff format
+--check .` (`ruff format .` re-run, 82 files unchanged), `mypy` (46 source files) all clean.
+
+### Major 1 — the live credential leak (closed)
+
+**Cause, confirmed by reproducing the reviewer's exact repro.** A declared credential
+(`required_env = ["PUBLISHABLE_TEST_TOKEN"]`, `.env` supplying `PUBLISHABLE_TEST_TOKEN=13579`) held
+as an **`int`** fact that then moves printed `E-APPARATUS-CHANGED ... changed: 13579 → 999` to
+stderr, unredacted, exit 1. Two composing causes, both pre-existing: `check_facts`'s containment
+check skips any non-`str` value by its own carve-out, and `E-APPARATUS-CHANGED` sits outside
+`APPARATUS_CODES`, so task 4's new call site let the raise reach `command_run`'s containment `try`,
+find itself excluded by the `APPARATUS_CODES`-only filter, and re-raise to `main`'s bare
+`PublishableError` handler.
+
+**Fix.** `cli.command_run`'s containment filter (the `try` wrapping the run-start round and
+`execute_plan`) now admits `apparatus.STOP_CODES` as well as `apparatus.APPARATUS_CODES`
+(`src/publishable/cli.py`, one changed condition plus an expanded comment). `E-APPARATUS-CHANGED`
+itself still does **not** join `APPARATUS_CODES` — plan correction 4's exclusion is unchanged and
+still correct about not adding an unpinned member to `_probe_for`'s dispatch-time filter — this
+widens only the local exception filter in `command_run`, reusing the same `Collector` and
+`credentials` every `APPARATUS_CODES` member already renders through. This is an interim fix: task
+5/7 replaces this branch entirely with Decision 14's own fresh redacting `Collector` on the stop
+path.
+
+**Verified by running, end to end.** New test
+`test_a_moved_int_valued_credential_is_redacted_through_the_widened_wrapper`
+(`tests/test_cli.py`) reproduces the reviewer's exact fixture — `ApparatusIntCredAssay`,
+`required_env = ["PUBLISHABLE_TEST_TOKEN"]`, a probe returning `{"serial": 13579}` (an `int`) on its
+first two calls and `{"serial": 999}` on the third — and asserts, over combined stdout+stderr:
+`<redacted:PUBLISHABLE_TEST_TOKEN>` present, `"13579"` absent, and (via
+`_assert_went_through_the_containment_wrapper`) that the diagnostic went through the real `Collector`
+path (the code string, `"experiment_type"` as the path, and the `"1 problem (1 error, 0 warnings)"`
+summary line) rather than `main`'s bare one-line printer. A manual re-run outside pytest confirmed the
+exact terminal text:
+
+```
+  error   E-APPARATUS-CHANGED  experiment_type
+          condition `00`'s fact `serial` changed: <redacted:PUBLISHABLE_TEST_TOKEN> → 999
+1 problem (1 error, 0 warnings)
+```
+
+**Both `STOP_CODES` members now individually pinned through this wrapper**, the shape Part A's
+whole-branch review demanded of `APPARATUS_CODES`: `E-APPARATUS-RAISED` by Part A's own Fixture K2
+(`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`, unchanged, still green), and
+`E-APPARATUS-CHANGED` by the new test above — both going through
+`_assert_went_through_the_containment_wrapper`, the same discriminator the `APPARATUS_CODES` members
+use.
+
+**The disk half is deliberately not fixed here, per the reviewer's own adjudication.** The same run
+still writes `{"serial": 13579}` into `apparatus/probes.jsonl` in plaintext (confirmed by a manual
+run reading the ledger file directly) — `check_facts`'s non-`str` carve-out lets it through the
+credential check regardless of the gate, and this is pre-existing (not created by task 4's wiring).
+Filed as a new open entry in `spec-defects.md` (owner: unassigned), and the existing open entry for
+the credential-valued-**key** case is amended with a note that its own prediction — *"a future code
+added outside that set … would reopen the leak"* — is exactly what happened, and was closed in this
+fix round.
+
+### Major 2 — the overclaiming docstring (closed)
+
+**Confirmed and extended, exactly as the reviewer found.** Re-ran both prescribed orderings
+(gate-before-`record`, in either of the two literal forms task 4's own mutations used) against the
+direct-call count test and the end-to-end ledger test: both still crash with `AssertionError` from
+`apparatus.py`'s reflexivity-safety assert, and the named count assertion
+(`unobserved(["pinned"])["pinned"]["total_probes"] == 4`) is never reached. The assert fires on the
+**first answering observation of any fact**, so no fixture escapes it under a gate-before-`record`
+reordering — the finding stands and is narrower than my original report stated: the append half's
+discriminator is real (see below), and only the record half is affected.
+
+**Action 1 (minimum, taken).** Deleted the count test's overclaiming clause. It no longer says this
+count "is the only assertion that can see this ordering" or cites "the plan's own correction" (Minor
+3: `total_probes` appears in the plan's mutation table and in task 4 step 2, never in § Corrections
+against the code — fixed in the same edit). The docstring now states plainly that this is a census
+assertion true under the surviving ordering, names the assert as the actual guard, and points at the
+two new tests below for what they each do and do not pin.
+
+**Action 2 (taken).** Added `test_changed_asserts_when_called_without_record_first`
+(`tests/test_apparatus.py`): a direct call to `changed()` for a pair whose non-`None` value never
+went through `record()` first, asserting the `AssertionError`. Its docstring states precisely what
+this does and does not witness: that `changed` *requires* record-first (grep-confirmed no prior test
+asserted it), not that `_observe_one` *satisfies* that requirement — this test is unaffected by a
+reorder of `_observe_one` itself.
+
+**Action 3 (taken).** Added `test_the_ordering_chain_records_before_it_gates`
+(`tests/test_apparatus.py`): wraps `Observations.record` and `check_changed` with spies logging call
+order, drives one `Observer` round, and asserts `order == ["record", "check_changed"]` — the direct,
+legible witness of `_observe_one`'s actual sequence, independent of any downstream count or value.
+Verified against the same gate-before-record mutation used above: this test also fails (via the same
+`AssertionError`, since that assert is strictly earlier than anything this spy could observe under
+that specific reordering) — consistent with the reviewer's finding that the ordering is not
+unguarded, only untested at the count level.
+
+**The append discriminator, reconfirmed real.** Re-ran the reviewer's assert-safe form of mutation
+(a) — `append_observation` moved below `check_changed`, `record` left in place — against both tests:
+`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end` failed on its own
+`assert len(ledger) == 4` (`3 == 4`), and
+`test_the_ordering_chain_counts_the_moving_call_before_the_gate_fires` passed. Exactly the brief's
+original prediction. No test change was needed for this half; it was already sound.
+
+### Minors
+
+- **Minor 1** (`check_changed`'s "there is no call site yet"): deleted rather than rewritten, and the
+  surrounding paragraph updated to state what is now true — task 4 gave it a live call site, the
+  residual was real, and it is now mitigated (interim) by the widened containment filter, with
+  Decision 14's `Collector` as the permanent fix.
+- **Minor 2** (`STOP_CODES`' "Fixture U and Fixture G1 … do not exist here"): corrected. The
+  docstring now names Fixture K2 and Fixture G1 as `E-APPARATUS-RAISED`'s and
+  `E-APPARATUS-CHANGED`'s individual pins respectively, and states plainly that Fixture U (task 5's
+  own truncation pin) remains owed.
+- **Minor 3** (mis-citation of "the plan's own correction"): fixed in the same edit as Major 2's
+  action 1 — now cites the mutation table and task 4 step 2.
+- **Minor 4** (docstring names task 5 where the brief said task 7): kept and clarified rather than
+  reverted, per the reviewer's own adjudication ("keep the docstring; record the substitution"). The
+  G1 end-to-end test's docstring now separates the two halves explicitly: the redacted-vs-bare
+  rendering path is task 5's (Decision 14's `Collector`), while the exit code and `run.yaml`'s
+  presence are task 7's (Decision 4's `status: failed`/exit 4/written record) — recorded here as the
+  substitution the brief's step 3 anticipated differently.
+- **Minor 5** (redundant "above" locator): deleted.
+- **Minor 6** (Decision 11's cost-if-wrong sentence names the wrong test): appended a dated
+  correction to `docs/superpowers/specs/2026-08-19-apparatus-part-b-design.md` rather than
+  retro-editing Decision 11 — the sentence claimed Fixture G3's own test would fail if a future round
+  probed one condition twice; it would not, since G3's per-condition value is constant, and the
+  design's own mutation table already has the right guard (Part A's call-count contract). Neither
+  verdict changes; Fixture G3's actual pin (a true cross-condition comparison) still discriminates.
+
+### What was not touched
+
+The protected `test_max_failed_fraction_is_measured_against_the_test_partition` and the batch-1 guard
+pin (arms B and C) are unedited — confirmed by re-hashing the protected test's body
+(`sha256: 61e63bc5dc75…`, 2327 bytes, matching the reviewer's recorded value) and by `git diff
+c33f061 -- tests/test_cli.py` showing no deleted lines relative to that commit outside pure additions.
+§ Errors rows were not touched (none of this fix round's changes claim one). No sentence added in
+this fix round says this slice unblocks a config.
