@@ -7160,7 +7160,14 @@ a credential declared through `required_env` must not be handed to a probe as a 
 all and refuse that shape at `validate` — a design decision `reference.md` does not currently make
 either way, so this entry does not adjudicate it.
 
-## OPEN — `EXIT_EXTERNAL = 5` ships and is read by nothing — **Owner: Part B**
+## ~~`EXIT_EXTERNAL = 5` ships and is read by nothing~~ — CLOSED by H7d Part B task 8
+
+**Closed 2026-08-20.** `grep -n "EXIT_EXTERNAL" src/publishable/ tests/` at this branch's HEAD now
+returns multiple sites: `cli.py` returns it for a run-start probe raise (moved off `EXIT_WRONG`) and
+for a mid-plan apparatus-unreachable stop with the documented precedence over `partial`'s `3`, and
+`tests/test_cli.py` pins both (`test_g_fixture_u_unreachable_mid_plan` and the run-start-raise
+literal). The record below is kept as written — struck rather than rewritten, per this file's own
+rule — because the gap it describes was real for the whole time this branch carried it unclosed.
 
 `src/publishable/diagnostics.py` defines `EXIT_EXTERNAL = 5` alongside `EXIT_OK`, `EXIT_WRONG`,
 `EXIT_INVOCATION`, `EXIT_PARTIAL` and `EXIT_FAILED` — one definition, `grep -rn "EXIT_EXTERNAL"
@@ -7200,3 +7207,127 @@ repo's history.
 [`docs/superpowers/plans/2026-08-19-apparatus-part-a.md`](plans/2026-08-19-apparatus-part-a.md)
 § Corrections against the code, correction 13, re-confirmed here by grep at this branch's HEAD
 before filing rather than carried from that measurement unchecked.
+
+## OPEN — the four fact-contract refusals lose the run record mid-plan — **Owner: unassigned**
+
+`E-APPARATUS-RETURN`, `E-APPARATUS-FACT-TYPE`, `E-APPARATUS-FACT-MISSING` and
+`E-APPARATUS-FACT-CREDENTIAL` are raised in `apparatus.check_facts`, which `Observer._observe_one`
+calls before `append_observation`. None of the four is in `apparatus.STOP_CODES` — Decision 9 rules
+they stay contract refusals rather than joining the stop mechanism the two apparatus-*state* codes
+(`E-APPARATUS-RAISED`, `E-APPARATUS-CHANGED`) get — so `execute_plan`'s loop does not catch them:
+they propagate out of `execute_plan` uncaught, and `cli.command_run`'s own `except ContractError`
+around that call catches them only far enough to print a redacted diagnostic and return `EXIT_WRONG`.
+`execute_plan` never returns to its caller on that path, so `results` — whatever executions had
+already completed inside the loop before the raise — is never received, `assemble_run_yaml` is
+never called, and `run.yaml` is never written. The same shape a run-start refusal has always had
+(no `run.yaml`, since none existed yet) now also applies **mid-plan**, after real executions have
+run and been paid for.
+
+**Measured 2026-08-20 against this branch's HEAD**, by running rather than by reading: a probe
+whose declared fact goes missing on its third call (guarding the second planned execution, of four)
+gives exit `1`, `E-APPARATUS-FACT-MISSING` on stderr, no `run.yaml` anywhere under the results
+directory, and exactly one execution's artifacts on disk (`executions.jsonl` holds one `completed`
+line, and that repeat's own step directory holds its recorded units) — every execution paid for, the
+record lost, `CLAUDE.md`'s own name for this failure. The other three codes share the call site and
+the same absence of a `STOP_CODES` membership, so the same shape is expected of each, though only
+`E-APPARATUS-FACT-MISSING` was driven end to end for this entry.
+
+**Unassigned is a fact with a reason:** no chartered slice contains this work. No sentence in
+`reference.md` sites a fact-*contract* failure (a probe returning the wrong shape, a credential
+leaking through a fact, a declared key never answered) at run time as anything other than an
+immediate refusal — the four rows in [§ Errors core raises](reference.md#errors-core-raises) all
+read as ending the command, which was true until a mid-plan call could reach them. There is
+therefore no section whose owner this defect could be assigned to without inventing one.
+
+**The checks its owner must make**, rather than a route this entry prescribes:
+
+1. **Whether the fault recurs identically on the next call.** A declaration mismatch
+   (`E-APPARATUS-FACT-MISSING`, a probe that never supplies a declared key at all) does — nothing
+   about calling the same probe again would supply the missing key, so retrying buys nothing and
+   stopping the plan for good, the way `E-APPARATUS-CHANGED` does, is the shape that fits. An
+   unreachable apparatus does not — `E-APPARATUS-RAISED` already gets exactly this treatment via
+   `STOP_CODES` — but `E-APPARATUS-RETURN`, `-FACT-TYPE` and `-FACT-CREDENTIAL` are shape/credential
+   faults, closer to the first case than the second, and this entry does not decide which of the
+   two existing mechanisms (or a third) any of the four should join.
+2. **What `status` such a record would carry.** [§ What `status` means](reference.md#what-status-means-and-when-a-run-keeps-going)
+   has no row for "the run stopped because what the apparatus returned could not be trusted, as
+   opposed to what it reported." `failed` and `partial` are both live candidates and neither is
+   compelled by the existing table.
+3. **Whether assembling a record on this path costs anything Fixture Z's boundary did not
+   measure.** Fixture Z (task 7) measured the zero-results case for the two `STOP_CODES` members;
+   whether the same "no record when nothing executed, a record once something has" split holds for
+   these four, or whether a shape/credential fault should refuse the whole run's record on
+   principle regardless of how much already ran, is not something either fixture answers.
+
+**Found by:** [`docs/superpowers/specs/2026-08-19-apparatus-part-b-design.md`](specs/2026-08-19-apparatus-part-b-design.md)
+§ The filings this slice touches (Decision 9), filed here with the measurement the design itself
+did not yet have, per the controller's ruling that a ledger line saying "filed" is not a filing.
+
+## OPEN — `max_failed_fraction`'s truncation is undescribed by § What `status` means, on two faces — **Owner: unassigned**
+
+`runner.execute_plan`'s `max_failed_fraction` guard counts **units with no settled answer**, not
+failed executions, so a step that completes every execution while recording nothing trips it with
+every execution `status: completed`. Measured by running at this branch's HEAD: `units=20`,
+`limits.max_failed_fraction: 0.5`, a step that never records — 2 of 5 planned executions run, all
+`completed`, `run.yaml` reports `status: completed`, exit `0`. This is task 1's remainder — H7d
+Part B's own document task settled [§ What `status` means](reference.md#what-status-means-and-when-a-run-keeps-going)
+for the apparatus alone and named this state explicitly as left open, on the controller's ruling
+that a slice about the apparatus may not widen a neighbouring guard's semantics to make its own
+document edit tidy. Both halves are one document-versus-code disagreement about one guard, filed
+here together rather than split across two entries, so a reader looking for either finds both.
+
+**Two faces, not one — a review this branch ran (batch 1) found the second where the first
+report named only the first:**
+
+1. **The `failed` paragraph's `max_failed_fraction` clause is a clause the code contradicts.** The
+   paragraph names `limits.max_failed_fraction` among `failed`'s four producers, but the measurement
+   above produces `completed`, not `failed`. `partial`'s own **table row** — "stopped early with
+   executions already recorded" — already describes the shape correctly; it is the prose paragraph
+   below the table that both entries disagree with.
+2. **The `partial` paragraph's "one thing produces that" is *also* false, and task 1 sharpened this
+   sentence in the same commit that introduced it.** The paragraph reads: "A run that stops early
+   can still be `partial`, and one thing produces that: the apparatus becoming unreachable…" But a
+   `max_failed_fraction` stop over a **mixed** result set (some executions recorded, some not) also
+   stops the plan early and also produces `partial` — measured at this branch's HEAD: `units=20`,
+   `limits.max_failed_fraction: 0.5`, a step recording every unit on its first execution and raising
+   on every later one, gives 2 of 5 executions run, statuses `[completed, failed]`, `run.yaml`
+   `status: partial`, exit `3`. The apparatus becoming unreachable is not the only producer of an
+   early-stopping `partial`; `max_failed_fraction` is a second, and the sentence naming "one thing"
+   is contradicted by a mechanism task 1 did not touch, in a paragraph task 1 tightened to make the
+   apparatus case precise. **The report that named face 1 did not name face 2**; both belong in this
+   filing, corrected together.
+
+**Unassigned is a fact with a reason:** the guard belongs to no remaining chartered slice —
+[the spine design](specs/2026-08-08-implementation-spine-design.md) § The hardening slices scopes
+H8, H9 and H3c-3 elsewhere, and none of the three claims `max_failed_fraction`'s status semantics.
+Part B declines it as a neighbouring mechanism's semantics (Decision 5): carrying the two apparatus
+stop reasons into `run_status` is this slice's own charter, and re-deciding what the failure
+fraction reports would change every run that declares it — every generated config, at `0.2`,
+materialized by `materialize.py` — from a slice about something else.
+
+**The checks its owner must make:**
+
+1. **That the current behaviour is pinned with a written justification, to be argued against
+   rather than discovered.** `test_max_failed_fraction_is_measured_against_the_test_partition`'s own
+   docstring states the reason `completed` is judged correct for the all-completed case today; a
+   closer changes that reasoning in the same review that changes the code, not around it.
+2. **That the all-completed, mixed, and nothing-completed cases are three separate answers today,
+   and may need three separate rulings** rather than one rule covering all three — the two
+   measurements above already show the all-completed and mixed cases landing on different statuses
+   (`completed` and `partial` respectively) for what is, from the guard's own arithmetic, one
+   mechanism.
+3. **Which of § What `status` means' passages governs**, given that **no row or paragraph describes
+   the all-completed truncation at all** — the table's `completed` row says "every execution in the
+   plan completed," which is true of the 2-of-5 case only if "the plan" is read as "the executions
+   that ran," a reading the table does not state and the code does not currently contradict only
+   because nothing says otherwise.
+4. **That `run_status` already carries the `max_failed_fraction` reason after Part B** — `stop.reason
+   == "max_failed_fraction"` reaches `run_status` today, unused for anything but keeping its
+   truncation-assert sound (Decision 5) — **so the change this guard's owner makes is one mapping
+   entry plus the document rows, not new plumbing** — verified against the code rather than assumed
+   from this entry.
+
+**Found by:** [`docs/superpowers/specs/2026-08-19-apparatus-part-b-design.md`](specs/2026-08-19-apparatus-part-b-design.md)
+§ Ruling from the controller and § What did not survive the re-measurement, and H7d Part B batch 1's
+review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
+"filed" is not a filing.
