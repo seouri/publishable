@@ -244,6 +244,48 @@ class Observations:
                 # answer; a fact that never answers stays `null`.
                 self._first_answered[pair] = value
 
+    def changed(self, condition_key: str, facts: Mapping[str, Any]) -> tuple[str, Any, Any] | None:
+        """The first (fact, first_answered, incoming) triple that contradicts
+        this pair's first answered value, or None.
+
+        Compares each incoming fact against `_first_answered[(condition_key,
+        fact)]` — never the previous observation, never another condition's
+        (Decision 1). Called after `record` for the same `facts`, which is
+        what makes the assert below load-bearing rather than defensive:
+        `record` establishes `_first_answered[pair]` for every pair whose
+        incoming value is not `None`, so by the time this method runs, a
+        non-`None` incoming value's pair is *always* already keyed. A
+        `self._first_answered.get(pair)` returning `None` for such a pair
+        would be a dead branch reachable only if this method's caller broke
+        that ordering — invisible to every fixture, because no fixture can
+        reach it while the ordering holds. Written as an `assert` on core's
+        own contract (`execute_plan`'s shipped asserts about its own callers
+        are the precedent), not as a silent `continue`.
+
+        A `None` incoming value with no first-answered entry is not that
+        case: it is the ordinary "never yet answered" state — `null → value`
+        passes precisely because a fact that never answered cannot yet
+        contradict itself — so that combination is skipped rather than
+        asserted about. A key `facts` does not carry is not iterated at all,
+        so an undeclared fact's absence from a later call is never compared.
+        """
+        for fact, incoming in facts.items():
+            pair = (condition_key, fact)
+            first = self._first_answered.get(pair)
+            if first is None:
+                assert incoming is None, (
+                    "record() runs before changed() for the same `facts`; a "
+                    "non-null incoming value already became this pair's first "
+                    "answered entry, so a missing entry here would mean the "
+                    "caller broke that ordering, not that the fact never answered"
+                )
+                continue
+            if incoming is None:
+                continue
+            if incoming != first:
+                return (fact, first, incoming)
+        return None
+
     def facts_document(self) -> dict[str, dict[str, Any]]:
         """`provenance.apparatus.facts` — the first answered value per
         (condition, fact), `null` for a fact that never answered."""

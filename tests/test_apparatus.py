@@ -593,3 +593,97 @@ def test_observer_warn_unanswered_delegates_to_observations_with_declared_facts(
     # that `self.declared_facts`, not every observed fact, is what reached
     # `Observations.warn_unanswered` through this method.
     assert all("undeclared_fact" not in f.message for f in findings)
+
+
+def test_changed_value_to_different_value_fails():
+    """Reading 1 of Decision 1's five: a fact answered once and then answered
+    a DIFFERENT value fails, returning the (fact, first, incoming) triple.
+    `record` runs first so `_first_answered` is established before the
+    comparison, mirroring `_observe_one`'s own order (Decision 3)."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1"})
+    assert obs.changed("00", {"pinned": "r1"}) is None
+    obs.record("00", {"pinned": "r2"})
+    assert obs.changed("00", {"pinned": "r2"}) == ("pinned", "r1", "r2")
+
+
+def test_changed_null_to_value_passes_and_becomes_first_answered():
+    """Reading 2: a fact silent on its first call and answered on its second
+    does not fail, and the answered value becomes the pair's first answered —
+    read back through `facts_document`, never a second mapping."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"appears": None})
+    assert obs.changed("00", {"appears": None}) is None
+    obs.record("00", {"appears": "A1"})
+    assert obs.changed("00", {"appears": "A1"}) is None
+    assert obs.facts_document()["00"]["appears"] == "A1"
+
+
+def test_changed_value_to_null_passes_first_answered_stands():
+    """Reading 3: a fact that answered once and then goes quiet does not
+    fail, and the first answered value is unchanged by the null call."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"vanishes": "L1"})
+    assert obs.changed("00", {"vanishes": "L1"}) is None
+    obs.record("00", {"vanishes": None})
+    assert obs.changed("00", {"vanishes": None}) is None
+    assert obs.facts_document()["00"]["vanishes"] == "L1"
+
+
+def test_changed_an_absent_key_is_not_compared():
+    """Reading 4: a fact simply missing from a later call's mapping is never
+    iterated by `changed`, so it can never appear in the returned triple —
+    the only absence that reaches this method at all is an undeclared fact's,
+    since a declared fact's absence is already `E-APPARATUS-FACT-MISSING`
+    (Part A's, upstream of this method)."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"pinned": "r1", "sometimes": "S1"})
+    assert obs.changed("00", {"pinned": "r1", "sometimes": "S1"}) is None
+    # `sometimes` is absent from this call entirely.
+    obs.record("00", {"pinned": "r1"})
+    assert obs.changed("00", {"pinned": "r1"}) is None
+
+
+def test_changed_value_null_different_value_fails_against_first_not_most_recent():
+    """Reading 5, and the one that makes 'first answered' a different rule
+    from 'most recent': a fact answers v1, goes quiet, then answers v2 — and
+    FAILS, against v1, not against the intervening null. A two-observation
+    fixture cannot separate this from reading 1 (design's own constraint), so
+    this test chains three record/changed pairs in the order `_observe_one`
+    uses. Under a most-recent comparison the middle call's null would make
+    the third call's `null -> v2` transition read as reading 2 and PASS —
+    which is exactly mutation (a)'s discriminator."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"flip": "v1"})
+    assert obs.changed("00", {"flip": "v1"}) is None
+    obs.record("00", {"flip": None})
+    assert obs.changed("00", {"flip": None}) is None
+    obs.record("00", {"flip": "v2"})
+    assert obs.changed("00", {"flip": "v2"}) == ("flip", "v1", "v2")
+
+
+def test_changed_is_scoped_per_condition_never_across():
+    """The per-condition reading: two conditions record different values for
+    the SAME fact name — a swept fact, Part A's own shipped shape — and each
+    condition's first observation of its own value passes. `changed` must
+    never compare condition A's incoming value against condition B's first
+    answered one."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00_a", {"model_revision": "rev-a"})
+    assert obs.changed("00_a", {"model_revision": "rev-a"}) is None
+    obs.record("01_b", {"model_revision": "rev-b"})
+    # The second condition's own FIRST observation — must not be compared
+    # against "00_a"'s "rev-a", even though it differs.
+    assert obs.changed("01_b", {"model_revision": "rev-b"}) is None
