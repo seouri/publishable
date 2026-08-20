@@ -12995,7 +12995,16 @@ def test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_ex
     before ever inspecting `apparatus_probe` itself when `c.has_errors`, this
     one fix closes both surfaces: `run` refuses before any run directory is
     created at all, so there is no `apparatus/` directory and the probe is
-    never called."""
+    never called.
+
+    **This is the run-level pin for the same claim, and the discriminator
+    matters here too**: `_check_probe`'s registration-check fallback also
+    reports `E-PROBE-UNKNOWN` (with a different message) when the type guard
+    is skipped, so `"E-PROBE-UNKNOWN" in output` alone cannot tell "refused
+    for being the wrong type" from "refused for not being registered" —
+    confirmed by a coordinator's mutation (`if False:` in place of the type
+    guard) leaving the whole suite green. The phrase asserted below is the
+    type-check branch's alone."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -13005,7 +13014,7 @@ def test_a_non_str_apparatus_probe_fails_the_command_before_any_run_directory_ex
         expect_exit=EXIT_WRONG,
     )
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
-    assert "E-PROBE-UNKNOWN" in output
+    assert "an `apparatus_probe` name is a non-empty `str`" in output
     assert doc["run_dir"] is None
     assert not list(doc["results_dir"].glob("run_*"))
 

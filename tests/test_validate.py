@@ -14104,14 +14104,33 @@ def test_a_non_str_apparatus_probe_is_reported_rather_than_silently_skipped(git_
     (`apparatus_facts` on the very next line *is* a list) silently read as "no
     probe declared" rather than being reported. `None` (the documented
     no-probe spelling) must still draw nothing; anything else non-`str` must
-    be refused."""
+    be refused.
+
+    **The mutation-resistant assertion, found owed by a coordinator's own
+    mutation** (`if False:` in place of the type-check guard leaves the
+    branch dead but the suite green): `_check_probe` falls through to the
+    registration check below when the type guard is skipped, and that check
+    ALSO reports `E-PROBE-UNKNOWN` — with a *different* message — for a
+    declared value no installed distribution registers, since
+    `["wbr_probe"] in known` is `False` for any `known`. That fallback
+    message still contains the substring `wbr_probe` (inside its own
+    `repr`), so asserting only the probe name's presence cannot tell the two
+    branches apart. The phrase below appears in the type-check branch's
+    message alone — never in the registration-check branch's — so it is
+    what actually distinguishes "refused for being the wrong type" from
+    "refused for not being registered"."""
     templates = git_repo / "templates"
     templates.mkdir()
     (templates / "wbr_probing.py").write_text(_NON_STR_PROBE_TEMPLATE)
 
-    found = messages_by_code(write_config({"experiment_type": "wbr_probing", "parameters": {}}))
+    found = messages_by_code(
+        write_config({"experiment_type": "wbr_probing", "parameters": {"unknown_param": 1}})
+    )
+    # Asserted ALONGSIDE another finding this config also earns — never on a total code
+    # set, which `validate` collecting rather than aborting makes the wrong shape of test.
+    assert "E-PARAM-UNKNOWN" in found
     message = found["E-PROBE-UNKNOWN"]
-    assert "wbr_probe" in message
+    assert "an `apparatus_probe` name is a non-empty `str`" in message
 
 
 _PROBING_TEMPLATE = """\
