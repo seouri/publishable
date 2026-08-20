@@ -144,3 +144,96 @@ Decision 4 sections, and the plan's tasks 2 and 4 plus § Corrections against th
 None blocking. One item for the next batch to know: `resolve_step`'s name is this batch's
 choice (not specified upstream), so whichever task wires it into `io.reuse_from` (task 5)
 should import it by that name or say why it's renaming it.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-20-lineage/task-b2-review.md`, reviewed at `559167e`.
+Both verdicts PASS; one Major, eight Minors, none blocking. Fix commit: `a58a5fc`.
+
+**Major 1 — fixed.** The review reproduced this batch's own finding (mutation 5's brief
+prose doesn't hold in this environment — the existing fixtures crash with
+`E-GIT-NO-REPO` rather than misclassifying) and went one step further: it built the
+fixture the property actually needs and confirmed it discriminates. Added
+`test_containment_guard_uses_the_callers_repo_root_not_a_walk_up_from_the_upstream`
+(`tests/test_lineage.py`): an upstream inside its own `git init`'d sibling repo, distinct
+from the downstream's `repo_root`. **Verified by running**: unmutated code reads it
+(`resolved, record = resolve_run(...)` returns normally); re-applying the exact
+mutation (`resolves_inside_repo(resolved, find_repo_root(resolved))`) makes this test
+**and** the three the review already found fail — 4 failed against the full,
+unfiltered suite (`2480 passed, 1 skipped, 2 xfailed`), the new test failing with an
+actual `ContractError(code="E-UPSTREAM-REPO-CONTAINED")` propagating out (an assertion
+failure, not a crash), because walking up from the upstream now finds the sibling
+repo's own `.git`. Reverted by editing the two lines back; diffed byte-identical
+against the pre-mutation copy; re-ran `tests/test_lineage.py` (24 passed) and the full
+suite (2484 passed after both fixture additions in this round) to confirm the revert.
+
+**Minor 1 — fixed.** Deleted the docstring clause in
+`test_absolute_form_on_a_moved_directory_reads_the_records_own_id` claiming an
+assertion on "the RAW rendered text," and deleted the `yaml.safe_dump(record)`
+assertion it justified — `yaml.safe_dump` re-renders the already-parsed dict, which is
+exactly the normalisation the rule warns about, and the assertion was redundant with
+`record["run_id"] == run_id` on the preceding line (no mutation inside `resolve_run` can
+fail one without failing the other, since the function renders nothing). Preferred
+deleting the claim to rewriting it, per `CLAUDE.md`.
+
+**Minor 2 — fixed.** `resolve_run`'s `E-UPSTREAM-RUNID-MISMATCH` message now branches on
+`locator == "latest"`: the `latest`-specific clause appears only there, and the
+renamed-directory fault gets its own clause ("the relative form addresses a run by its
+own run_id, never by another name it happens to sit under"). Both existing tests now
+assert message text, not only `.code` — batch 1's lesson, one level down. **Verified by
+running**: reverting the split back to the single always-`latest` message made
+`test_a_renamed_run_directory_disagrees_with_its_own_record` fail on the new
+`assert "`latest`" not in str(e.value)` line (`AssertionError`, the substring found).
+Reverted; `tests/test_lineage.py` back to 24 passed.
+
+**Minor 3 — fixed.** `resolve_step`'s docstring no longer states
+`` `<run_dir>/<repeat>/<step>/` `` unconditionally; it now says the location sits
+directly under the run directory, never under `conditions/`, with a `<repeat>/`
+segment "only when the run resolved more than one repeat — a single repeat collapses
+it," matching what `runner.step_dir_for` actually does and what plan correction 9 itself
+qualifies.
+
+**Minor 4 — fixed.** `resolve_run`'s docstring now attributes the "two readings" to
+§ Lineage between runs and the `is_absolute()`-and-nothing-else predicate to Decision 1
+by name, rather than crediting both to the reference document.
+
+**Minor 5 — fixed.** Added
+`test_a_repeat_scoped_step_nested_under_its_repeat_label_is_also_refused`
+(`tests/test_lineage.py`): a `conditions[0].steps["step_repeat"]` value shaped as
+`{"seed47": {"status": "completed"}}` — the real nested shape
+`run_record._execution_block` writes for a repeat-scoped step — routes to the same
+`E-UPSTREAM-STEP-SCOPED` refusal as the flat condition-scoped shape, confirming
+membership in `conditions` really is the whole test regardless of what sits inside
+`steps[step]`. No code change; the review found the routing already correct and only
+the seam untested.
+
+**Minor 6 — closed by documenting, not by adding new behaviour.** Added a comment above
+`entry.get("status")` in `resolve_step` naming the `AttributeError` a non-mapping
+execution entry would raise, that this is a read with no call site yet, and that
+whether it earns a coded refusal is task 5's decision — not silenced, not given a new
+`E-` code (§ Errors rows and new call-site behaviour are outside this batch's and task
+9's remit respectively).
+
+**Minor 7 — not retro-edited; recorded here instead.** The original report's Test
+summary line ("`tests/test_cli.py -k h8a` (task 11's four guard-pin arms) still passes
+3/3") mislabels the selector: that command reaches three tests because arm D lives in
+`tests/test_artifacts.py`, not `tests/test_cli.py`. The 3/3 result itself was correct
+and arm D is covered by every full-suite run regardless; only the parenthetical was
+wrong. Left the original text as-is (a development-record report is not retro-edited)
+and correcting it here instead.
+
+**Minor 8 — filed, not fixed.** `docs/superpowers/spec-defects.md` §
+"`resolve_run`'s relative form skips the repo-containment check..." — owner named as
+whoever wires `io.reuse_from` (tasks 3/5), with the two checks its owner must make
+(resolve the relative path and check both branches, or record why the exemption is
+safe against a symlink specifically) spelled out in the filing. Not widened here: the
+code matches Decision 1 exactly, and changing the guard's behaviour is outside this
+batch's charter and would be a decision reversal made without the argument
+`design-principles.md` requires.
+
+**Verification after all fixes.** `uv run ruff check .` clean. `uv run ruff format
+--check .` → 84 files (unchanged — no new file). `uv run mypy` → 47 source files
+(unchanged). `uv run pytest -q` → **2484 passed, 1 skipped, 2 xfailed** (+2 from this
+round's two new fixtures: Major 1's sibling-repo test and Minor 5's repeat-nested-shape
+test). `tests/test_cli.py -k h8a` still 3/3 — arm C unedited and green throughout. No
+sentence in this section or the diff claims a config count moved.
