@@ -5767,6 +5767,22 @@ correction family. **The code is unchanged**, which is what "limitation" means h
 fix and must not be read as one. `W-STATS-REPORTBY-THIN`'s whole-roster-versus-arm gap is a
 *different* half of this entry and is left as § What isn't a repeat already records it.
 
+**RE-SCOPED 2026-08-20 (H8a task 10): "live on C1–C3" was never the whole roster this limitation
+sits on.** `docs/superpowers/specs/2026-08-20-lineage-design.md` § The prose read H8a's design owes
+for E3, E4 and E6 measures the gap directly against
+[the feasibility analysis](../feasibility-llm-growth-studies.md)'s own configs, by running
+`summarize_step` over one 12-row table: `t_over_units` `[0.3209, 0.7791]` without
+`resample_columns`, `percentile_over_units` `[0.3583, 0.7500]` with it, moving both `prob` and
+`latency_ms` — a per-recorded-column fault, not one tied to a weight or a cluster. Every one of
+E1, E2, E4, E6, C1, C2 and C3 declares both `statistics.report_by` and a `resample`, and draws its
+per-unit rows from the identical numeric-columns-throughout request step, so all seven meet it; E5
+alone escapes (`resample: null`, `report_by: []`). This entry's history — every decline from H4a's
+own review through H4c naming only C1–C3 — carried the attribution H4b-1 happened to leave behind
+rather than re-deriving it, the same *carried claim* shape `docs/feasibility-llm-growth-studies.md`
+§ Executability on this build's own two corrections name. **Owner unchanged: H4 Statistics**, since
+H4d is already terminal for this family and H8a builds nothing in `statistics`; this amendment
+narrows who the limitation applies to, not who owns fixing it.
+
 ## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -6160,23 +6176,23 @@ the design. `field_convention` is now the **sole** remaining member of this entr
 unassigned; H7d Part A does not adopt it — folding it in here would make this slice the owner of a
 gap it did not find.
 
-## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
+## `io.reuse_from` is unbuilt and unowned by any H7 sub-slice — CLOSED by H8a
 
-`docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
+~~`docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names
 `io.reuse_from` as "unbuilt and unowned by any H7 sub-slice, which is a gap this slice files rather
 than closes." Re-confirmed on 2026-08-16: `grep -n "reuse_from" docs/superpowers/spec-defects.md`
 returned nothing before this entry, so there was no prior filing to re-owner. `reference.md` §
 Steps that consume an earlier run's artifacts is where `reuse_from` is specified — a step that
 reads another run's output records it as an upstream with its own hashes — and nothing in `src/`
-implements it.
+implements it.~~
 
-**Owner:** unassigned. No H7 sub-slice (H7a, H7b, H7c, H7d) claims it in its charter.
+~~**Owner:** unassigned. No H7 sub-slice (H7a, H7b, H7c, H7d) claims it in its charter.~~
 
-**Found by:** H7c, Task 14. **Severity:** Minor. Specification of an unbuilt feature, not a
+~~**Found by:** H7c, Task 14. **Severity:** Minor. Specification of an unbuilt feature, not a
 contradiction between a built check and its documentation — filed so it is not silently assumed
-closed by a later slice's scoping.
+closed by a later slice's scoping.~~
 
-**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
+~~**AMENDED 2026-08-17 (H7b Part B task 33): now the sole remaining core-side blocker for three
 experiments, and an owner request rather than a second filing.** With `E-DATA-RESOLVER-UNSUPPORTED`
 retired, [the feasibility analysis](../feasibility-llm-growth-studies.md) § Executability on this
 build's 2026-08-17 entry finds E1, E2 and E5's `data`/`statistics` blocks validate with no core-side
@@ -6186,7 +6202,19 @@ returns nothing. Still no H7 sub-slice claims it. Amending this entry rather tha
 one, per `CLAUDE.md`'s own rule that a duplicate filing is the same failure as an unfiled gap in the
 other direction — this is the same gap, now with three concrete configs waiting on it. **Owner
 request:** the next slice to touch step-level artifact consumption should claim it, or the spine
-design should assign it explicitly rather than leaving it to be rediscovered a third time.
+design should assign it explicitly rather than leaving it to be rediscovered a third time.~~
+
+**STRUCK 2026-08-20 (H8a task 10): BUILT.** `io.reuse_from` resolves both locator forms (Decision 1
+of `docs/superpowers/specs/2026-08-20-lineage-design.md`), reads through the registered reader
+dispatch, and writes `provenance.upstream` with the upstream's own two hashes and the names read —
+verified end to end by real `run`s in `tests/test_cli.py` (Fixtures E, F, R, P) and pinned by the
+`E-UPSTREAM-*` refusal family in `src/publishable/lineage.py` and `artifacts.py`. **Also worth
+striking here rather than carrying forward:** this entry's own citation, "`reference.md` § Steps
+that consume an earlier run's artifacts," names a heading that is nowhere at all — that phrase
+appears only as a table cell in `experimental-designs.md`; `reference.md` has no section by that
+name and never did. The specification lives under `reference.md` § Lineage between runs, which is
+where H8a's own document task points. A filing's claims about the code go stale like any other
+comment, and this one's claim about *where the code was specified* was never even current.
 
 ## `python-dotenv` honoured an undocumented behavior-changing environment variable — CLOSED by H7c
 
