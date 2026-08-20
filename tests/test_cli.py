@@ -14406,3 +14406,74 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     stderr = doc["stderr"] or ""
     assert "pinned" in stderr
     assert "r1 → r2" in stderr
+
+
+# --- H7d Part B task 13: the run-start round cannot trip the gate, and the
+# sentinel that proves the suite would notice --------------------------------
+
+_APPARATUS_G3_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("apparatus_g3_assay")
+class ApparatusG3Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_g3_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
+    }
+"""
+
+_G3_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h7d_g3_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+
+def test_g3_run_start_round_never_trips_the_gate_across_conditions(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture G3, re-driven to completion (task 13 step 1, Decision 11).
+    Two conditions sweeping `instrument.model`, a probe returning the swept
+    value as `model_revision` — Part A's shipped swept-fact shape
+    (`_SWEPT_FACT_PROBE_MODULE`/`_APPARATUS_ASSAY_TEMPLATE` above), rebuilt
+    under this task's own distribution and module names, since Fixture P
+    warns that two fixtures sharing one importable module name in one test
+    session get the first one's code. `Observations.changed` is scoped per
+    condition key (Decision 1), so the run-start round's two calls — one per
+    resolved condition, never twice for the same one — can never disagree
+    with each other; no `(condition, fact)` pair has a prior observation to
+    contradict until a SECOND round exists for that same condition, and the
+    run-start round is the only round that never repeats a condition.
+
+    The absence assertion (`E-APPARATUS-CHANGED` nowhere in stdout or
+    stderr) is paired with the two distinct recorded values and the
+    `completed` status, which must report: the absence alone would pass
+    identically if nothing ran at all."""
+    site = installed(
+        "dist-t13g3", "1.0", {"publishable.probes": {"h7d_g3_probe": "t13g3_probe_mod:probe"}}
+    )
+    (site / "t13g3_probe_mod.py").write_text(_G3_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_g3_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_APPARATUS_G3_TEMPLATE,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    block = run["provenance"]["apparatus"]
+    values = {block["facts"][k]["model_revision"] for k in block["facts"]}
+    assert values == {"m1", "m2"}, "two conditions, two distinct recorded values"
+
+    combined = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" not in combined
