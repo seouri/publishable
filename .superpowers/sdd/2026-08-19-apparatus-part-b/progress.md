@@ -73,3 +73,40 @@ And the plan says plainly what it could not measure: **whether Part A's Fixture 
 for a spuriously-firing gate.** It looks like one, **nobody has run the mutation**, and task 13
 prescribes the measurement **without assuming its outcome**, with a fixture owed if the sentinel turns
 out imaginary. That is the *reading a mutation's silence as confirmation* row, avoided in advance.
+
+## Batch 1 — tasks 12, 1 — the pin and the document, no behaviour changed
+
+Commits `2a10c3a` (the three-arm guard pin), `a59ef6f` (`reference.md` consistent about the apparatus
+only), report `e1e178f`. Suite 2423 → **2426**.
+
+### Review: both verdicts PASS — no Critical, no Major
+
+**The circularity risk resolved, and the proof is the interesting part.** Arms B and C exist to protect
+the controller's ruling that `max_failed_fraction` keeps `completed` — so if the pin *were* the protected
+test, a later batch could satisfy the pin by editing the very thing it guards. The reviewer settled it by
+running a **record-only status flip**: the shipped `max_failed_fraction` test **passed** while arm B
+**failed** on `run["status"] == "completed"` — **an assertion the shipped test does not make at all.**
+Not circular. And the property that makes it non-circular is the one the report described as a shortcut:
+**arm B duplicates the shipped fixture rather than reusing it.**
+
+All three arms discriminate, verified by three separate mutations, and **neither B nor C is an
+absence-only control** — the reviewer instrumented the guard to check arm C's arithmetic directly rather
+than inferring it (`failed=20 resolved=20 nres=2`).
+
+**The ruling held under inspection:** `git diff` touches three files, **none under `src/`**; the protected
+test's assertions and docstring are **untouched**; the `max_failed_fraction` clause in `reference.md` is
+**byte-identical**.
+
+**One Minor is a carry-forward worth naming here rather than only in a report.** `reference.md` states
+**unconditionally** that a moved fact keeps the record, while decision 4 rules `Moved | 0 results → none |
+exit 1` — and **the same commit qualified the unreachable twin but not this one.** It was
+**brief-prescribed**, which is exactly why the batch's own review of its work did not catch it. Owed by
+task 8.
+
+**And the fourth "zero disagreements" report on this project was the fourth to be wrong.** Two real
+divergences were found by measurement — an unreported brief departure that was an *improvement* (reading
+`sweep.yaml` instead of the helper the brief named), and a helper named by the brief and never consumed.
+**The transferable form: a claim carried from brief prose is a claim about the code, and brief-prescribed
+text is where "zero" hides.** Every one of the four was found in prose the brief supplied, never in the
+implementer's own reasoning — which suggests the check to add is *grep what the brief asserted*, not
+*think harder*.
