@@ -274,8 +274,7 @@ class Observations:
         non-`None` incoming value's pair is *always* already keyed. A
         `self._first_answered.get(pair)` returning `None` for such a pair
         would be a dead branch reachable only if this method's caller broke
-        that ordering — reachable by a direct call that skips `record` first
-        (verified by review; no shipped test calls it that way), not by any
+        that ordering — reachable by a direct call that skips `record` first, not by any
         fixture that keeps the ordering. Written as an `assert` on core's own
         contract (`execute_plan`'s shipped asserts about its own callers are
         the precedent), not as a silent `continue`.
@@ -522,8 +521,7 @@ test), plus each member is now also pinned individually and end to end:
 `tests/test_cli.py`). Task 4 shipped Fixture G1
 (`test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end`, mid-plan,
 `E-APPARATUS-CHANGED`); task 5 added Fixture U, the unreachable-mid-plan
-sibling for `E-APPARATUS-RAISED` (`tests/test_cli.py`, `status: partial`,
-`EXIT_PARTIAL`).
+sibling for `E-APPARATUS-RAISED` (`tests/test_cli.py`).
 
 **`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
 That frozenset is `command_run`'s containment filter for a probe CALL
