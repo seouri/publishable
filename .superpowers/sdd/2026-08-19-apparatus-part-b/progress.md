@@ -284,3 +284,7 @@ one that never had any.**
 A fourth consecutive batch shipped a docstring naming a fixture or state wrongly. The narrow form here is
 the most avoidable yet: **when your own change makes a sentence false, that sentence is in the diff you
 are already reading.**
+
+**Fix round 1 — all findings closed except Major 1, which is carried by design** (`6d5d3f0`). Suite
+unchanged at **2450**; every fix was prose or comment. Major 1 travels to task 7 **with its siting
+requirement attached** rather than as a description of a defect.
