@@ -624,6 +624,8 @@ likewise apart from those same two envelope rows, none of the others.
 
 `reproduce` accepts either — a config to run fresh, or a `run.yaml` to re-run exactly what that run did.
 
+A run directory also holds a **byte copy** of the config it was started from, written at run start and never modified since — see [The other files a run writes](#the-other-files-a-run-writes), which is the section that enumerates everything a run directory holds. Its purpose is to let a mid-run command (`freeze`, and `resume` when it lands) reach the config a run is executing under *before* `run.yaml` exists; naming it here would make this "the two files" plus an asterisk, and it isn't a third thing to edit — editing it does not change the run. "The two files" counts *roles* — what you edit, what you report — not every file inside a run directory.
+
 ```yaml
 # <output_dir>/run_2026-08-06T14-02-11Z_8e21ab3/run.yaml
 schema_version: "1.0"
@@ -798,8 +800,9 @@ Results go here rather than back into the config for four compounding reasons: w
 /secure/results/cohort-pilot/
 ├── run_2026-08-06T14-02-11Z_8e21ab3/     # <timestamp>_<short code_hash>
 │   ├── run.yaml
+│   ├── config.yaml
 │   ├── manifest/input.json
-│   ├── environment/{uv.lock,pyproject.toml}
+│   ├── environment/{uv.lock,pyproject.toml,repo_root.txt}
 │   ├── sweep.yaml
 │   ├── executions.jsonl
 │   ├── conditions/01_method=spearman/seed17/step03_analyze/...
@@ -834,7 +837,15 @@ Like `latest`, the lock is bookkeeping rather than an artifact, so creating and 
 
 ## The other files a run writes
 
-`run.yaml` is the deliverable, and the rest of the run directory is read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each file below is therefore a contract rather than a log. All of them are append-only, which is not the same as written-once: `sweep.yaml` and `allocation.json` are settled before the first execution and never touched again, while the ledger and the per-unit tables grow as the run goes. Neither kind is ever rewritten.
+`run.yaml` is the deliverable, and the rest of the run directory is read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each file below is therefore a contract rather than a log. All of them are append-only, which is not the same as written-once: `sweep.yaml`, `allocation.json`, `config.yaml` and `environment/repo_root.txt` are settled before the first execution and never touched again, while the ledger and the per-unit tables grow as the run goes. Neither kind is ever rewritten.
+
+### `config.yaml` and `environment/repo_root.txt` — what a mid-run command reads instead of `run.yaml`
+
+Written at run start, beside `environment/pyproject.toml`. `config.yaml` is a **byte copy** of the config file the run was started from; `environment/repo_root.txt` holds one line, the absolute repo root `run` walked up to from the config path it was given. Both exist because a mid-run command — [`freeze`](#cli-reference), and `resume` when it lands — needs the config a run is executing under and cannot wait for `run.yaml`, which is written only once at the end.
+
+`config.yaml` is what such a command loads in `run.yaml`'s place; a run directory started by a build that predates this pair cannot be frozen (`E-FREEZE-NO-CONFIG`). `environment/repo_root.txt` exists because a **project-local** template — where `apparatus_probe` is declared — resolves only through discovery by path, and that discovery needs the repo root; without it, `freeze` could resolve a core template but never the project's own.
+
+Together the pair holds exactly the two facts a mid-run command cannot otherwise obtain and cannot compute: the config as it was, and the repo it came from. Everything else such a command might want is either computable from those two (`parameters_hash` over the copied config) or is a **recorded** figure belonging to `run.yaml` alone — `code_hash` at run start is not recoverable from a tree that has since moved, which is why `freeze` does not compare code.
 
 ### `sweep.yaml` — the resolved plan
 
