@@ -2,6 +2,8 @@
 § The apparatus core can only observe and § Creating a plugin.
 """
 
+import math
+
 import pytest
 
 
@@ -755,3 +757,27 @@ def test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on():
     assert STOP_CODES == {"E-APPARATUS-RAISED", "E-APPARATUS-CHANGED"}
     assert "E-APPARATUS-CHANGED" not in APPARATUS_CODES
     assert "E-APPARATUS-RAISED" in APPARATUS_CODES
+
+
+def test_changed_is_reflexivity_safe_for_a_constant_nan_fact():
+    """Whole-branch review Major 1: `reference.md`'s `E-APPARATUS-FACT-TYPE`
+    row admits `float` unqualified, so `coerce_scalars` legally passes a
+    non-finite value through, and `float('nan') != float('nan')` is `True`
+    in plain Python — a fact whose value is a constant `nan` would report a
+    change against ITSELF on its own first observation once task 4 wires
+    this into a run, tripping Decision 11's run-start guarantee. `changed`
+    must treat a `nan`-vs-`nan` pair as unchanged; a `nan` compared against a
+    genuinely different value must still fail."""
+    from publishable.apparatus import Observations
+
+    obs = Observations()
+    obs.record("00", {"drift": float("nan")})
+    # Same nan-valued fact, observed again — must NOT read as a change.
+    assert obs.changed("00", {"drift": float("nan")}) is None
+    obs.record("00", {"drift": 1.5})
+    triple = obs.changed("00", {"drift": 1.5})
+    assert triple is not None
+    fact, first, incoming = triple
+    assert fact == "drift"
+    assert isinstance(first, float) and math.isnan(first)
+    assert incoming == 1.5

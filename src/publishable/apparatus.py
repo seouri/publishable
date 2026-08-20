@@ -9,6 +9,7 @@ is the one shape it may return.
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -204,6 +205,22 @@ def check_facts(
     return checked
 
 
+def _unchanged(incoming: Any, first: Any) -> bool:
+    """Reflexivity-safe equality for `Observations.changed` (whole-branch
+    review, Major 1). A bare `incoming != first` reports `float('nan')` as a
+    change against itself, because `nan != nan` is `True` in Python — and
+    `coerce_scalars` legally admits a non-finite float (`reference.md`'s
+    `E-APPARATUS-FACT-TYPE` row names `float` unqualified), so this is not a
+    hypothetical input. Only the nan-vs-nan case is special-cased; every
+    other pair, including a `nan` compared against a *different* `nan`-typed
+    value or a non-float, still falls through to ordinary `==`.
+    """
+    if isinstance(incoming, float) and isinstance(first, float):
+        if math.isnan(incoming) and math.isnan(first):
+            return True
+    return bool(incoming == first)
+
+
 class Observations:
     """Every observation this run made, and the two documents derived from them.
 
@@ -257,10 +274,11 @@ class Observations:
         non-`None` incoming value's pair is *always* already keyed. A
         `self._first_answered.get(pair)` returning `None` for such a pair
         would be a dead branch reachable only if this method's caller broke
-        that ordering — invisible to every fixture, because no fixture can
-        reach it while the ordering holds. Written as an `assert` on core's
-        own contract (`execute_plan`'s shipped asserts about its own callers
-        are the precedent), not as a silent `continue`.
+        that ordering — reachable by a direct call that skips `record` first
+        (verified by review; no shipped test calls it that way), not by any
+        fixture that keeps the ordering. Written as an `assert` on core's own
+        contract (`execute_plan`'s shipped asserts about its own callers are
+        the precedent), not as a silent `continue`.
 
         A `None` incoming value with no first-answered entry is not that
         case: it is the ordinary "never yet answered" state — `null → value`
@@ -268,6 +286,15 @@ class Observations:
         contradict itself — so that combination is skipped rather than
         asserted about. A key `facts` does not carry is not iterated at all,
         so an undeclared fact's absence from a later call is never compared.
+
+        **`!=` alone is not reflexivity-safe.** `reference.md`'s
+        `E-APPARATUS-FACT-TYPE` row admits `float` unqualified, so
+        `coerce_scalars` legally passes through a non-finite value, and
+        `float('nan') != float('nan')` is `True` in Python — a fact whose
+        value is a constant `nan` would report a change against ITSELF on
+        its very first observation, which is exactly the false-stop this
+        slice exists to prevent. `_unchanged` below is the reflexivity-safe
+        comparison this method uses instead of a bare `!=`.
         """
         for fact, incoming in facts.items():
             pair = (condition_key, fact)
@@ -282,7 +309,7 @@ class Observations:
                 continue
             if incoming is None:
                 continue
-            if incoming != first:
+            if not _unchanged(incoming, first):
                 return (fact, first, incoming)
         return None
 
@@ -348,18 +375,23 @@ def check_changed(
     and raises `E-APPARATUS-CHANGED` for the first contradicting triple, or
     returns silently.
 
-    **What the message may name, and why it is safe.** The message names the
-    condition key, the fact name, and both values — `condition `00`'s fact
-    `pinned` changed: r1 → r2` — in the shape `diff`'s own apparatus row
-    prints. Naming both values is safe because `check_facts` (Part A) refuses
-    a fact value that equals or contains a declared credential **before**
-    anything is recorded, so by the time `Observations.changed` sees a pair
-    of values, core has already established that neither is a credential it
-    read. That ordering is reused here, not re-derived: this function does
-    not repeat the containment check, because repeating it would be a second
-    answer to the question `check_facts` already answered once.
+    **What the message may name, and why it is safe for a `str` fact value.**
+    The message names the condition key, the fact name, and both values —
+    `condition `00`'s fact `pinned` changed: r1 → r2` — in the shape `diff`'s
+    own apparatus row prints. For a `str` fact value this is safe because
+    `check_facts` (Part A) refuses a value that equals or contains a declared
+    credential **before** anything is recorded, so by the time
+    `Observations.changed` sees a pair of `str` values, core has already
+    established that neither is a credential it read. That ordering is
+    reused here, not re-derived. **The containment check itself is skipped
+    by `check_facts` for any non-`str` value** (its own deliberate carve-out),
+    so a non-`str` fact equal to a declared credential's value is not caught
+    there; there is no call site yet, and the wired diagnostic's redacting
+    `Collector` (Decision 14) is the mitigation for that residual — worth
+    naming for whoever wires the diagnostic, not a claim this function makes
+    good on itself.
 
-    Not called anywhere yet — task 5 wires this into `Observer._observe_one`,
+    Not called anywhere yet — task 4 wires this into `Observer._observe_one`,
     after `Observations.record`, on the order Decision 3 fixes. This function
     exists as its own direct-call surface so that ordering can be tested
     before the wiring exists, the same way `check_facts` and `observe_once`
@@ -470,12 +502,12 @@ STOP_CODES: frozenset[str] = frozenset(
         "E-APPARATUS-CHANGED",
     }
 )
-"""The two codes `execute_plan`'s loop breaks on (task 5), each pinned by its
-own fixture — `E-APPARATUS-RAISED` by Fixture U, `E-APPARATUS-CHANGED` by
-Fixture G1 — rather than one shared assertion, on `APPARATUS_CODES`'s own
-precedent that every member of a code-filtering frozenset here earns its own
-pin (Part A's Major 2: deleting three of that set's five members left the
-suite byte-identical).
+"""The two codes `execute_plan`'s loop breaks on (task 5). At this commit the
+only pin is one shared set-equality assertion over both members (each
+member's absence is independently checked by deleting it and rerunning that
+one test), because Fixture U and Fixture G1 — the run-level pins each code
+eventually earns on its own — are owed by tasks 5 and 7 and do not exist
+here.
 
 **`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
 That frozenset is `command_run`'s containment filter for a probe CALL
