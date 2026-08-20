@@ -14320,3 +14320,40 @@ def test_the_yield_checks_are_not_sited_at_dry_run_alone():
     assert "`dry-run` warns instead of the run failing" not in designs
     assert "wherever a probe runs" in reference
     assert "warns, wherever a probe runs, instead of the run failing" in designs
+
+
+# --- H7d Part B task 9: no policy knob, arm (a) — Fixture K's schema arm ----
+
+
+def test_no_apparatus_change_policy_knob_can_be_written(tmp_path: Path) -> None:
+    """Decision 7: no policy knob for a changed fact. `CLAUDE.md` § Invariants —
+    operation commands take paths and nothing else, and a mode gets its own
+    command name rather than a flag — is structural here because `limits` is a
+    closed key set answering `E-CONFIG-KEY-UNKNOWN`, so a knob cannot even be
+    written.
+
+    Uses `_validate_with` rather than `write_config`: it writes straight under
+    `tmp_path`, whose directory name is never `cohort-pilot`, so BOTH configs
+    below earn an incidental `E-NAME-DIR` on `metadata.name`. The assertion is
+    on the DIFFERENCE in `E-CONFIG-KEY-UNKNOWN` paths, never on a total code
+    set — `validate` collects rather than aborting, so a second, unrelated
+    finding alongside the one under test is expected, not a defect.
+
+    **What this pins, and what it cannot (task 9 step 3):** only that TODAY's
+    schema refuses the key. Arm (b), in `tests/test_cli.py`, pins that today's
+    most permissive `limits` does not soften the gate at `run`. Neither arm —
+    nor any test — can pin the ABSENCE of a field nobody has written; a
+    docstring claiming this proves no future knob will ever be added would be
+    a name claiming a guarantee no assertion makes.
+    """
+    without_knob = {
+        f.path for f in _validate_with(tmp_path, {}) if f.code == "E-CONFIG-KEY-UNKNOWN"
+    }
+    with_knob = {
+        f.path
+        for f in _validate_with(tmp_path, {"limits": {"allow_apparatus_change": True}})
+        if f.code == "E-CONFIG-KEY-UNKNOWN"
+    }
+
+    assert "limits.allow_apparatus_change" not in without_knob
+    assert "limits.allow_apparatus_change" in with_knob

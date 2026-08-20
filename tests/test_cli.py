@@ -15023,3 +15023,112 @@ def test_g3_run_start_round_never_trips_the_gate_across_conditions(
 
     combined = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-APPARATUS-CHANGED" not in combined
+# --- H7d Part B task 9: no policy knob, arm (b) — Fixture K's most-permissive
+# arm still stops --------------------------------------------------------------
+
+_APPARATUS_K_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("apparatus_k_assay")
+class ApparatusKAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h7d_k_probe"
+    apparatus_facts = ["pinned", "appears", "vanishes"]
+"""
+
+# Fixture G1's own by-call schedule, under this task's own distribution and
+# module names (Fixture P's caching warning: two fixtures sharing one
+# importable module name in one session get the first one's code): one
+# condition, four `seed` repeats, `pinned` changing on call 4 before
+# execution 3 runs — the same transition. A fifth entry is appended beyond
+# G1's own four: this test's own prescribed mutation (task 9 step 5) skips
+# the gate, so the run needs a 5th probe call (the round guarding execution
+# 4) to exist rather than raising `IndexError` out of the schedule itself —
+# a different, uninteresting failure that would still fail the assertion but
+# for the wrong reason.
+_K_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+_schedule = [
+    {"pinned": "r1", "appears": None, "vanishes": "L1", "sometimes": "S1"},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r1", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+    {"pinned": "r2", "appears": "A1", "vanishes": None},
+]
+_calls = {"n": 0}
+
+
+@register_probe("h7d_k_probe")
+def probe(cfg):
+    facts = dict(_schedule[_calls["n"]])
+    _calls["n"] += 1
+    return Apparatus(facts=facts)
+"""
+
+
+def test_fixture_k_arm_b_the_most_permissive_limits_still_stops(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 7, arm (b): every EXISTING `limits` key set to its most
+    permissive value does not soften the gate. `max_failed_fraction: 1.0` is
+    load-bearing — that neighbouring guard fires on `>` (`runner.execute_plan`),
+    so it can never fire at `1.0` and its stop can never be confused with
+    `E-APPARATUS-CHANGED`'s. The other five keys are set the same way: large
+    enough or low enough that nothing in THIS fixture's simple, cluster-free,
+    contrast-free, cell-free design could trip them either — there is nothing
+    here for `min_units_per_cell`, `min_clusters`, `min_reported_n` or
+    `max_ineligible_fraction` to fire on regardless of value, so setting them
+    permissive is a control against a knob interacting with the gate, not a
+    fixture that could warn on its own.
+
+    Same schedule as Fixture G1 (task 4): `pinned` changes on call 4, before
+    execution 3 runs, so 2 of 4 planned executions complete and the run stops
+    with `status: failed` at `EXIT_FAILED` — G1's own computed counts,
+    reconciled here rather than re-derived, because arm (b)'s point is that
+    THESE counts are unmoved by the permissive `limits`, not that they exist."""
+    site = installed(
+        "dist-t9k", "1.0", {"publishable.probes": {"h7d_k_probe": "t9k_probe_mod:probe"}}
+    )
+    (site / "t9k_probe_mod.py").write_text(_K_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="apparatus_k_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}]},
+        _local_template=_APPARATUS_K_TEMPLATE,
+        limits={
+            "max_executions": 1000,
+            "max_failed_fraction": 1.0,
+            "max_ineligible_fraction": 1.0,
+            "min_units_per_cell": 1,
+            "min_clusters": 1,
+            "min_reported_n": 1,
+        },
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+    executions = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(executions) == 2
+    assert all(e["status"] == "completed" for e in executions)
+
+    output = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-APPARATUS-CHANGED" in output
+    assert "pinned" in output
+    assert "r1 → r2" in output
+    # The neighbouring guard's own reason never fires at `1.0` — reconciled
+    # rather than asserted as a total set, since `max_ineligible_fraction`'s
+    # warning code is a distinct, unrelated string this fixture does not earn
+    # either.
+    assert "max_failed_fraction" not in output
+
+
