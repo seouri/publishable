@@ -167,3 +167,14 @@ distinction *a mutation is a claim too* exists to draw.
 *"no fixture can reach it"* was false, and the batch's own narrowing of that assert was correct and
 necessary while being filed as a clarification. **The check that would have caught all five is the same
 one: grep what the brief asserts before repeating it.**
+
+**Fix round 1 — all five findings closed** (`abb04a9`, `9e50912`). Suite **2436**. The `nan` mutation was
+run against the full unfiltered suite (1 failed under the mutant, 2436 after revert), and the shipped
+fixture was reconfirmed sound with a **correctly non-degenerate** mutation matching the reviewer's own
+result.
+
+**I verified the `nan` fix myself, including that it did not over-suppress**, which is the failure mode a
+reflexivity guard invites: `nan` against `nan` now returns `None`, while **`nan → 1.0` still fires**, and
+all five of Decision 1's readings are intact — including `1.0 → null → 2.0` firing against `1.0` rather
+than against the `null`. A guard that had silently exempted every `nan` comparison would have passed the
+prescribed fixture just as well.
