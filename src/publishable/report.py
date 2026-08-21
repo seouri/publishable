@@ -441,6 +441,155 @@ class BaseReport:
         yield attrition_section(run)
 
 
+# Decision 16: two renderers, one section stream. Both consume the SAME
+# generator — a section's `body` is markdown text or a mapping core tables —
+# and differ only in how they emit a heading, a table and a block. No third
+# representation and no template language, so both call this one cell
+# formatter rather than each inventing their own stringification.
+_VALID_FORMATS = frozenset({"markdown", "html"})
+
+
+def _format_cell(value: Any) -> str:
+    """One value, as text — shared by both renderers so a formatting
+    decision (how a `None`, a nested mapping, or a list renders) is made
+    once rather than twice and risking drift between them."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(f"{k}: {_format_cell(v)}" for k, v in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_cell(v) for v in value) + "]"
+    return str(value)
+
+
+def _table_columns(rows: "list[Mapping[str, Any]]") -> list[str]:
+    """The union of every row's keys, in first-seen order — a section's
+    rows are not required to share one key set (a `by` stratum row and a
+    top-level metric row differ by exactly `repeat_spread`), so the column
+    set is derived from what the rows actually carry rather than declared
+    once and risking a silently dropped field."""
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                columns.append(key)
+    return columns
+
+
+def _as_rows(body: "str | Mapping[str, Any]") -> "list[Mapping[str, Any]] | None":
+    """`body["rows"]` when `body` is one of the four standard sections'
+    own shape; a one-row `{key, value}` table over an arbitrary mapping an
+    override handed `self.section(..., body=...)`, so a renderer never has
+    to special-case a shape this module did not itself construct; `None`
+    for a `str` body, which is a block rather than a table."""
+    if isinstance(body, str):
+        return None
+    rows = body.get("rows")
+    if isinstance(rows, list):
+        return rows
+    return [{"key": k, "value": v} for k, v in body.items()]
+
+
+def _render_markdown_section(section: Section) -> str:
+    heading = f"## {section.title}\n"
+    rows = _as_rows(section.body)
+    if rows is None:
+        return f"{heading}\n{section.body}\n"
+    if not rows:
+        return f"{heading}\n*(none)*\n"
+    columns = _table_columns(rows)
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(_format_cell(row.get(c)) for c in columns) + " |")
+    return heading + "\n" + "\n".join(lines) + "\n"
+
+
+def render_markdown(sections: Iterator[Section]) -> str:
+    """The markdown emitter: `## ` for a heading, a pipe table for rows, the
+    text verbatim for a `str` block."""
+    return "\n".join(_render_markdown_section(section) for section in sections)
+
+
+def _escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def _render_html_section(section: Section) -> str:
+    heading = f"<h2>{_escape_html(section.title)}</h2>"
+    rows = _as_rows(section.body)
+    if rows is None:
+        return heading + f"<pre>{_escape_html(str(section.body))}</pre>"
+    if not rows:
+        return heading + "<p><em>(none)</em></p>"
+    columns = _table_columns(rows)
+    head = "".join(f"<th>{_escape_html(c)}</th>" for c in columns)
+    body_rows = "".join(
+        "<tr>"
+        + "".join(f"<td>{_escape_html(_format_cell(row.get(c)))}</td>" for c in columns)
+        + "</tr>"
+        for row in rows
+    )
+    return heading + f"<table><thead><tr>{head}</tr></thead><tbody>{body_rows}</tbody></table>"
+
+
+def render_html(sections: Iterator[Section]) -> str:
+    """The HTML emitter: self-contained and offline (Decision 16) — no
+    external stylesheet, script or font, ever, because a bundle render is
+    explicitly offline and an archived report degrading on a dead link is
+    exactly what that promise forbids. An override that embeds a figure
+    embeds it; this function never fetches anything to build the page
+    around one.
+    """
+    body = "".join(_render_html_section(section) for section in sections)
+    return f'<!doctype html><html><head><meta charset="utf-8"></head><body>{body}</body></html>'
+
+
+def render_report(report_cls: "type[BaseReport] | None", run: Mapping[str, Any], io: Any) -> str:
+    """Render `run` through `report_cls` (or, when `None` — no override
+    declared — through `BaseReport` itself) and return the finished text.
+    The one place `format` is read and the one place `E-REPORT-FORMAT` is
+    raised.
+
+    `report_cls is None` is the ordinary case (`generate report` is
+    opt-in) and is not the class-declares-nothing refusal: there is no
+    class here for "declared" and "omitted" to disagree about, so core
+    renders its own four standard sections as markdown, unconditionally.
+    A REAL class — the override subclass `render_with_override` resolved —
+    that nonetheless declares no `format` (or a value other than
+    `"markdown"`/`"html"`) is refused, because a class that exists and
+    said nothing is exactly the case Decision 2 rules on: a base default
+    would make that indistinguishable from a class that meant to say
+    `"markdown"`.
+    """
+    fmt: Any
+    if report_cls is None:
+        report: BaseReport = BaseReport()
+        fmt = "markdown"
+    else:
+        report = report_cls()
+        fmt = getattr(report_cls, "format", None)
+        if fmt not in _VALID_FORMATS:
+            raise ContractError(
+                f"{report_cls.__module__}.{report_cls.__qualname__} declares "
+                f'`format` = {fmt!r}, not "markdown" or "html" — report cannot '
+                "render it",
+                code="E-REPORT-FORMAT",
+            )
+    sections = report.sections(run, io)
+    if fmt == "html":
+        return render_html(sections)
+    return render_markdown(sections)
+
+
 def report_form(path: Path) -> str:
     """Decide whether `path` names a run record or a bundle, from its file
     NAME alone — `"run"` for `run.yaml`, `"bundle"` for `study.yaml`, and

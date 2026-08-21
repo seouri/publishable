@@ -29,6 +29,9 @@ from publishable.report import (
     conditions_section,
     deltas_section,
     hypotheses_section,
+    render_html,
+    render_markdown,
+    render_report,
     render_with_override,
     report_form,
 )
@@ -1294,3 +1297,184 @@ def test_attrition_section_does_not_mention_nondeterministic(fixture_r: dict[str
     rows = attrition_section(run).body["rows"]
     for row in rows:
         assert "nondeterministic" not in row
+
+
+# ---------------------------------------------------------------------------
+# H8c task 7 — two renderers over one section stream, `E-REPORT-FORMAT`, and
+# the section order pinned from a real render
+# (docs/superpowers/plans/2026-08-21-report-study.md task 7;
+# docs/superpowers/specs/2026-08-21-report-study-design.md Decision 16).
+# ---------------------------------------------------------------------------
+
+
+def test_render_markdown_emits_a_heading_and_a_pipe_table():
+    section = Section(title="Conditions", body={"rows": [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]})
+    text = render_markdown(iter([section]))
+    assert "## Conditions" in text
+    assert "| a | b |" in text
+    assert "| 1 | x |" in text
+    assert "| 2 | y |" in text
+
+
+def test_render_markdown_emits_a_block_for_a_str_body():
+    section = Section(title="Figure", body="some *markdown* text")
+    text = render_markdown(iter([section]))
+    assert "## Figure" in text
+    assert "some *markdown* text" in text
+
+
+def test_render_html_emits_a_heading_and_a_table():
+    section = Section(title="Conditions", body={"rows": [{"a": 1, "b": "x"}]})
+    text = render_html(iter([section]))
+    assert "<h2>Conditions</h2>" in text
+    assert "<table>" in text
+    assert "<td>1</td>" in text
+    assert "<td>x</td>" in text
+
+
+def test_render_html_escapes_a_title_and_a_cell():
+    section = Section(title="<script>", body={"rows": [{"value": "<b>x</b>"}]})
+    text = render_html(iter([section]))
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+    assert "<b>x</b>" not in text
+    assert "&lt;b&gt;x&lt;/b&gt;" in text
+
+
+def test_render_html_is_self_contained_and_the_assertion_can_actually_fail():
+    """Decision 16: HTML is self-contained and offline — no external
+    stylesheet, script or font. The assertion is built so it CAN fail: a
+    body deliberately carrying `http://` text is checked first, to prove
+    the substring search actually looks (CLAUDE.md's "prove each sweep can
+    fail by running it against a string known to be present")."""
+    section = Section(title="Conditions", body={"rows": [{"a": "http://example.com/not-a-link"}]})
+    text = render_html(iter([section]))
+    # The control: this text IS present (a plain data value containing a
+    # URL-shaped string), which the next assertion's kind of check WOULD
+    # catch if it looked for the wrong thing.
+    assert "http://example.com/not-a-link" in text
+    # The real assertion: no actual external reference tag exists.
+    for external in ("<link ", "<script src=", '<img src="http', "@import", "fonts.googleapis"):
+        assert external not in text
+
+
+def test_render_report_with_a_real_override_dispatches_by_its_declared_format(
+    tmp_path: Path,
+):
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    _write_report(
+        built["root"],
+        built["pkg"],
+        "from publishable import BaseReport\n\n\nclass Report(BaseReport):\n    format = 'html'\n",
+    )
+    text = render_with_override(
+        built["run_dir"],
+        built["record"],
+        render=lambda cls: render_report(cls, built["record"], io=object()),
+    )
+    assert text.startswith("<!doctype html>")
+    assert "<h2>Conditions</h2>" in text
+
+
+def test_render_report_with_no_override_renders_markdown_with_no_diagnostic(
+    tmp_path: Path,
+):
+    """Fixture O's positive control: no `report.py` at all renders the
+    four standard sections and prints no diagnostic — `report_cls is None`
+    is the ordinary case, not the class-declares-nothing refusal."""
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    text = render_with_override(
+        built["run_dir"],
+        built["record"],
+        render=lambda cls: render_report(cls, built["record"], io=object()),
+    )
+    for title in ("Conditions", "Deltas", "Hypothesis verdicts", "Attrition"):
+        assert f"## {title}" in text
+
+
+def test_render_report_with_an_override_declaring_no_format_is_e_report_format(
+    tmp_path: Path,
+):
+    """Fixture O's no-`format` arm, and M10's discriminating arm: a REAL
+    class exists (this project wrote `report.py`) and genuinely declares
+    no `format` — refused rather than defaulted, because a base default
+    would make this indistinguishable from a class that meant `markdown`.
+    """
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    _write_report(
+        built["root"],
+        built["pkg"],
+        "from publishable import BaseReport\n\n\nclass Report(BaseReport):\n    pass\n",
+    )
+    with pytest.raises(ContractError) as exc_info:
+        render_with_override(
+            built["run_dir"],
+            built["record"],
+            render=lambda cls: render_report(cls, built["record"], io=object()),
+        )
+    assert exc_info.value.code == "E-REPORT-FORMAT"
+
+
+def test_render_report_with_an_override_declaring_an_unknown_format_is_e_report_format(
+    tmp_path: Path,
+):
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    _write_report(
+        built["root"],
+        built["pkg"],
+        "from publishable import BaseReport\n\n\nclass Report(BaseReport):\n    format = 'pdf'\n",
+    )
+    with pytest.raises(ContractError) as exc_info:
+        render_with_override(
+            built["run_dir"],
+            built["record"],
+            render=lambda cls: render_report(cls, built["record"], io=object()),
+        )
+    assert exc_info.value.code == "E-REPORT-FORMAT"
+
+
+def test_report_takes_no_format_argument_render_report_has_no_such_parameter():
+    """Decision 16, task 7 step 4: an operation command takes paths and
+    nothing else, so `report` never takes a format argument — pinned at
+    the type this module actually exposes, `render_report`'s own
+    signature, rather than as a CLI assertion task 8 owns.
+    """
+    import inspect as _inspect
+
+    params = _inspect.signature(render_report).parameters
+    assert "format" not in params
+
+
+def test_section_order_is_pinned_from_the_rendered_text_of_fixture_r(fixture_r: dict[str, Any]):
+    """Assert the four standard section titles' order in the RENDERED
+    TEXT, never by reordering `BaseReport.sections`'s own yields — that
+    would be the thing under test iterating itself, the shape a recent
+    slice shipped where removing a member moved the expectation and the
+    actual together and the second assertion went vacuous under every
+    mutation."""
+    text = render_report(None, fixture_r["run"], io=object())
+    titles = ["Conditions", "Deltas", "Hypothesis verdicts", "Attrition"]
+    positions = [text.index(f"## {title}") for title in titles]
+    assert positions == sorted(positions)
+
+
+# --- M10 -----------------------------------------------------------------
+
+
+def test_m10_a_report_class_genuinely_declaring_no_format_is_refused_not_defaulted(
+    tmp_path: Path,
+):
+    """M10, run directly against `render_report` rather than through the
+    override machinery, to isolate the property from discovery: giving
+    `BaseReport` a base `format = "markdown"` would make this arm render
+    at exit 0 instead of refusing, because the override subclass below
+    inherits it and both branches read the identical input — a class that
+    declares nothing. See the task report for the mutation's exact text
+    and outcome."""
+
+    class NoFormatReport(BaseReport):
+        pass
+
+    with pytest.raises(ContractError) as exc_info:
+        render_report(NoFormatReport, {"results": {}}, io=object())
+    assert exc_info.value.code == "E-REPORT-FORMAT"
