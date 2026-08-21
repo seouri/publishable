@@ -173,3 +173,37 @@ wrong moment, a one-spelling grep, `pop(0)`, and a reserved name.** Six.
 **And the third Major was the same shape one level down** — two of three `execution` nesting branches were
 exercised by nothing, because **Fixture R's `shared` block was empty while the test's own name claimed
 it.** A fixture that does not instantiate the branch its name claims is a name standing in for a fact.
+
+## Batch 5 — tasks 8, 9 — `report` becomes a real command
+
+Commits `65207c1` (task 8), `f54c3e7` (task 9), `96b7060` (report), `fd3f843` (fix round). Suite 2738 →
+2746 → **2753**. **Both verdicts FAILED on review: one Critical, three Majors, six Minors — all closed.**
+
+**The Critical is the sixth credential leak of this class, and its cause is the most transferable yet.**
+`get_template` and `declared_credential_names_for` ran **outside every `try`** and **before `credentials`
+existed**, so a project-local template raising at import escaped to `main`'s un-redacted printer.
+Verified with a positive control: **`validate` over the identical project prints `<redacted:…>` while
+`report` printed the sentinel** — and § Secrets explicitly promises redaction for a post-registration
+raise.
+
+**`freeze` — the recipe cited as the precedent — already had it right.** The calls were lifted; **the
+`try` they sit inside was not.** Now a `CLAUDE.md` entry: **a recipe is its calls PLUS where they sit.**
+The fix mirrors `freeze._precheck`'s own `except BaseException`, with the reasoning written beside it and
+the reason `command_run` gets away with an unguarded call (it validates first; `command_report` does not).
+
+**My scrutiny question about the placeholder was the right one to ask.** `report <study.yaml>` printed
+*"specified but not built"* and **exited 2** — false as of the commit that flipped the `Status` cell to
+`built`, and **Decision 6 reserves 2 for invocation faults.** The CLI-table test forbids that sentence for
+a built row **and cannot reach it**, while the batch's own test **pinned the sentence as present.** **A
+placeholder that lies about build state is not a placeholder**; it is now a coded refusal at a permitted
+exit code.
+
+**A judgement I endorsed rather than overruled.** A credential an override renders **into a body** reaches
+stdout, and the reviewer **declined to grade it Critical** because § Secrets' documented limit covers only
+an execution's `error` and a diagnostic's message. That is correct — the specification permits it, and
+grading it Critical against a blanket instruction would have been wrong. **The remedy is the sentence, not
+the behaviour:** the limit now names a rendered report body, so the next reader need not re-derive it.
+
+**And a fix that was correct and unpinned, again.** Mutating `raise KeyboardInterrupt from None` to a bare
+`raise` left the **full suite unchanged** while the probe leaked the sentinel — the row `CLAUDE.md` counts
+five times in three slices, now six.
