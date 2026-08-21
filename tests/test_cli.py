@@ -313,6 +313,37 @@ def test_operation_commands_take_no_flags(capsys):
     assert main(["run", "cfg.yaml", "--allow-dirty"]) == EXIT_INVOCATION
 
 
+# H8b batch 6 review, Major 1: `diff`'s own CLI arm (arity exactly two, no
+# flags) was reached by no test but a prose probe — weakening the guard to
+# `if len(rest) < 1:` left the full suite green. Each shape below is its
+# own test, on `test_operation_commands_take_no_flags`'s own precedent, and
+# each asserts BOTH the exit code and the exact message, since a control
+# asserting only an absence passes identically if nothing ran.
+_DIFF_ARITY_MESSAGE = "`diff` takes exactly two paths and no flags"
+
+
+def test_diff_with_no_paths_is_an_invocation_error(capsys):
+    assert main(["diff"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_with_one_path_is_an_invocation_error(capsys):
+    assert main(["diff", "a"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_with_three_paths_is_an_invocation_error(capsys):
+    assert main(["diff", "a", "b", "c"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_rejects_a_leading_dash_on_either_path(capsys):
+    assert main(["diff", "-x", "b"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+    assert main(["diff", "a", "--flag"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
 def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path, capsys):
     """The ruled-on fix: `run`'s OSError surfaces as `E-IO-FAILED` at exit 1, never a
     bare traceback. `output_dir` existing as a *file* makes `Path.mkdir` raise

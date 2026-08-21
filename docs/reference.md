@@ -3536,7 +3536,7 @@ These take paths and nothing else.
 | `publishable report` | NOT BUILT | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
 | `publishable freeze` | built | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
 | `publishable reproduce` | NOT BUILT | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
-| `publishable diff` | built | two config or run paths | Prints a per-side header (form, identity, status, `draft`), then five rows — `identical`, `DIFFERS` with its detail lines, `not captured` (the figure is `null`), or `not comparable` (a config side) — and an `upstream` block when either side consumed one, naming it when all five rows agree despite it |
+| `publishable diff` | built | two config or run paths | Prints a per-side header (form, identity, status, `draft`), then each row that applies — five over a run-vs-run pair with a declared apparatus, four when both sides' apparatus is `null` — as `identical`, `DIFFERS` with its detail lines, `not captured` (the figure is `null`), or `not comparable` (a config side); and an `upstream` block when either side consumed one, naming it when every printed row agrees despite it |
 | `publishable docs` | NOT BUILT | *(none)* | Regenerates every `publishable:begin/end` managed region |
 | `publishable list-templates` | NOT BUILT | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
 
@@ -3549,9 +3549,9 @@ of its five rows.** `parameters_hash` is a pure function of the file — the con
 computed against either operand, config or run. The other four — `code_hash`, `input_manifest`,
 `uv.lock`, `apparatus` — print `not comparable` with a reason rather than being computed from the
 config's own repo, which would answer the tree or the environment **now**, not the one a run used:
-[`reproduce`](#reproducing-on-another-device) refuses `code_hash` for the identical reason, and a probe
-answering `apparatus` is not something `diff` is one of [the four places](#the-apparatus-core-can-only-observe)
-that call one. Config-vs-config and config-vs-run are therefore the same rule, computing the one row
+[`reproduce`](#reproducing-on-another-device) refuses `code_hash` for the identical reason, and
+`diff` is not one of [the four places a probe runs](#the-apparatus-core-can-only-observe), so it cannot
+answer `apparatus` either. Config-vs-config and config-vs-run are therefore the same rule, computing the one row
 either can supply and refusing the other four the identical way. A row's verdict is one of four words:
 `identical`, `DIFFERS`, `not captured` (the figure is `null` on a side that could have held one, over
 a run-vs-run pair — a scaffolded project's `uv.lock` row, say), or `not comparable` (a config side

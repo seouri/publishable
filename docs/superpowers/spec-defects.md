@@ -7584,3 +7584,41 @@ if it prefers not to wait on H9.
 **Found by:** H8b task 4/6, while building a fixture for `E-FREEZE-PROBE-MISMATCH` (`tests/
 test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
 resolved the pre-edit class.
+
+## OPEN — `diff`'s `apparatus` row reports `DIFFERS` on a `null → value` transition the gate deliberately permits — **Owner: unassigned**
+
+`docs/reference.md` § The apparatus core can only observe rules, for the run-time gate, that
+`null → "LOT-88231"` and the reverse are "that fact becoming available and becoming unavailable.
+Neither is evidence the apparatus moved" — the third of the three `Param`-shaped states (a value, a
+declared absence, a key that isn't there at all), and only a value-to-different-value move fails a
+run. `diff`'s `apparatus` row (H8b task 9, Decision 2) does not share that tolerance: its verdict
+compares `provenance.apparatus.hash`, computed over the FULL facts mapping including every `null`,
+so a probe that answered `null` in run A and a real value in run B moves the hash and prints
+`DIFFERS` with a detail line naming the transition.
+
+**Verified by running**, 2026-08-21, with a probe answering `None` for `calibration_id` in one run
+and `"CAL-X"` in the other, both other facts held equal:
+
+```
+apparatus          DIFFERS
+  00_model=m1.calibration_id  null → CAL-X
+```
+
+**Defensible as built, not yet defensible as documented.** `diff` reports observations — what
+changed between two records — rather than replaying the gate's own tolerance; a reader who knows
+`reference.md`'s "neither is evidence the apparatus moved" sentence has no way to learn from `diff`'s
+output alone that this particular `DIFFERS` is the tolerated kind rather than the failing kind.
+No decision (1-15 in `docs/superpowers/specs/2026-08-20-diff-freeze-design.md`), no `reference.md`
+sentence and no prior filing says which reading is correct.
+
+**The check to run before dispositioning it.** Two readings, neither built here. (a) `diff` gains
+the gate's own tolerance: a `null ↔ value` transition on an otherwise-unmoved fact renders as
+`identical` (or a distinct third word), which would need its own fixture pair distinguishing it
+from a genuine value-to-value move — the same two-conditions-needed shape this batch's Major 2
+finding named. (b) `reference.md` gains one sentence next to the apparatus row's fenced example
+saying `DIFFERS` here is a strictly wider net than the gate's, and a `null` on either side of an
+arrow is exactly the tolerated case, not a failure — the cheaper fix, and the one closer to "`diff`
+reports; it doesn't decide" (`freeze`'s own stated posture in the same section).
+
+**Found by:** H8b task-b6 review, Minor 11, verified by running a probe returning `None` then a real
+value across two runs and reading `diff`'s own output.

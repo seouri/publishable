@@ -167,3 +167,155 @@ document edits (including the `diff` clause task 10's brief asked for and the co
 and the § Executability re-measurement. This batch moved no config's executable count — the table
 stays 8 of 8 · 0 · 7 · 1, unchanged by any of the three tasks, consistent with "H8b moves NO config
 count."
+
+## Fix round 1
+
+Against `.superpowers/sdd/2026-08-20-diff-freeze/task-b6-review.md`. Both verdicts were PASS with
+findings (four Majors, twelve Minors); every Major closed, twelve Minors closed or disposed of
+below. Gates before this round: `mypy` 49, `ruff format` 88, suite 2623 passed/1 skipped/2 xfailed.
+After: `mypy` 49, `ruff format` 88, suite **2631 passed, 1 skipped, 2 xfailed** (+8 tests: four for
+the CLI arm, one for the one-sided-condition line, one for the upstream `not captured` render, two
+for the empty-string render).
+
+### Major 1 — `diff`'s CLI arm was entirely unpinned
+
+Added four tests to `tests/test_cli.py` (`test_diff_with_no_paths_is_an_invocation_error`,
+`_with_one_path_`, `_with_three_paths_`, `_rejects_a_leading_dash_on_either_path`), each asserting
+**both** `EXIT_INVOCATION` and the exact stderr message — the review's own named defect being a
+control that asserted only absences. **Verified by mutation**: replaced the guard with
+`if len(rest) < 1:` (dropping both the arity rule and the flag rejection, the review's exact
+mutation) — all four new tests failed, one of them (`test_diff_with_one_path_is_an_invocation_error`)
+on the bare `IndexError` the review named as load-bearing, not merely a wrong exit code. Reverted by
+editing the file back; reran the four tests green. Property-preserving arm: none needed — this
+mutation has no reading under which any valid-arity, no-flag invocation behaves differently, so
+there is no property-preserving counterpart to report; the four new tests are the first pins on this
+arm at all.
+
+### Major 2 — Decision 2's third sub-ruling had no fixture
+
+Added `test_h8b_a_condition_missing_from_one_side_s_facts_gets_its_own_line` (`tests/test_diff.py`),
+on the review's own repro: two hand-built `provenance.apparatus` records built through
+`apparatus.apparatus_hash` (never a literal digest), one holding a condition the other's `facts`
+lacks entirely, checked in both operand orders. **Verified by mutation**: replaced the branch with a
+bare `continue` (the review's exact mutation) — the new test failed (`assert False` on the "any line
+names the missing condition" check). Reverted by editing the file back; reran green.
+Property-preserving arm: Fixture A1 (both conditions present on both sides) and Fixture A2's
+one-sided arm (`apparatus: null` entirely) both still pass under the same mutation, because neither
+puts the two sides' condition-key SETS in disagreement — which is exactly why a third fixture was
+missing rather than redundant.
+
+### Major 3 — Fixture U's section comment licensed the edit that would have destroyed it
+
+Deleted the comment's claim (*"a deliberate, reported relaxation; see the batch report"*) — the
+report says the opposite, and the comment cited it as authority for the opposite. Replaced with an
+accurate description: all five rows read `identical` by construction, including `uv.lock`, which
+needed a real committed lockfile precisely because the relaxation the old comment invited would have
+destroyed the fixture's discriminating half. No code changed under this finding — the fixture and
+its assertions were already correct, per the review's own "keep it."
+
+### Major 4 — the upstream block's `not captured` render was unreachable
+
+Added `test_h8b_an_upstream_entry_with_a_missing_hash_renders_not_captured`, on hand-built `_Side`
+objects (no real `reuse_from` needed) checking both fields independently — `code_hash: None` in one
+entry, `parameters_hash: None` in another. **Verified by mutation**: replaced `_upstream_hash_repr`'s
+body with `return _truncated(value)` (the review's exact mutation) — the test failed on the exact
+`AttributeError: 'NoneType' object has no attribute 'partition'` the review predicted. Reverted by
+editing the file back; reran green. Property-preserving arm: none — every existing upstream fixture
+(Fixture U, Fixture F-style) writes a `run_id` through `UpstreamLedger.record`'s own machinery, which
+always supplies both hashes when the upstream's own `run.yaml` has them, so no existing fixture could
+have caught this without a hand-built entry.
+
+### Minor 1 — the `Does` cell's "five rows" claim
+
+Fixed: now reads "each row that applies — five over a run-vs-run pair with a declared apparatus,
+four when both sides' apparatus is `null`" and "every printed row agrees" rather than "all five".
+
+### Minor 2 — the garbled § Operation commands sentence
+
+Rewritten: "`diff` is not one of the four places a probe runs … so it cannot answer `apparatus`
+either" — same argument (Decision 5's grounds), parseable prose.
+
+### Minor 3 — § Exit codes contradiction
+
+No action — already recorded as task 12's in the original report, and the review confirms the
+implementer's call to follow the controller over the brief was right. Left exactly where it was.
+
+### Minor 4 — `_truncated`'s "all three worked outputs" claim
+
+Swept `docs/design-principles.md`'s fenced example (the file the original sweep stopped short of):
+`sha256:8e21...` / `3d8a...` / `6b1f...` → `…`. Grepped all four documents afterward for the ASCII
+form beside `identical`/`DIFFERS` — none remain. The remaining ASCII `...` elsewhere in
+`reference.md` (run.yaml/sweep.yaml examples, `design_digest`, etc.) are a different claim entirely —
+not `diff`'s own worked output — and are out of this finding's scope.
+
+### Minor 5 — the `not captured`/`not comparable` control was one-directional
+
+Added `assert "not captured" not in out` to `test_h8b_config_vs_run_one_row_computed_four_not_comparable`,
+closing the converse of the existing run-vs-run control.
+
+### Minor 6 — nothing asserted `apparatus` prints fourth in real output
+
+Added `assert _row_labels_in_output(out) == ROW_LABELS` to the Fixture U test — the one fixture where
+`apparatus` actually prints (Fixture R2/L's pairs omit it), so it is the one place able to pin
+position for all five labels against the real emitted text rather than the constant.
+
+### Minor 7 — a report claim was not about the same thing as its evidence
+
+The original report's § Gates sentence ("no shipped test other than the two named CLI-table tests
+changed outcome") is corrected here rather than edited in place, per the development-record's own
+append-a-correction convention: those two tests did not change outcome (both passed before and after
+the flip); what changed is which branch each exercises, which the task-11 section two paragraphs
+above it already said correctly.
+
+### Minor 8 — the closing config-count claim was reasoned, not measured
+
+Not restated here. The expectation stands ("H8b moves no config count"); the table itself is task
+12's to re-measure and state.
+
+### Minor 9 — `_render_apparatus_row`'s unused `letter_a`/`letter_b` parameters
+
+Dropped. The function now hardcodes `"A"`/`"B"` at its one branch that needs a letter, since its one
+caller (`_render_row`) never supplies anything else and `command_diff` always compares exactly two
+sides under those two labels.
+
+### Minor 10 — the M2 fixture's per-condition reorder was a no-op
+
+Removed the inner per-fact reversal (each condition here holds exactly one fact, so reversing a
+one-entry mapping changes nothing) and kept only the outer condition-order reversal, which is the
+one that does real work. Updated the "confirm the reorder survives" assertion to match — it no
+longer claims to check a per-fact order that was never exercised.
+
+### Minor 11 — `apparatus DIFFERS` on a `null → value` transition the gate permits
+
+**Filed, not fixed.** Appended an OPEN entry to `docs/superpowers/spec-defects.md` (owner:
+unassigned) naming the divergence between `diff`'s row (compares the full `.hash`, which moves on
+any `null ↔ value` transition) and the run-time gate's documented tolerance for exactly that
+transition. Verified by running a probe answering `None` then a real value across two runs and
+reading `diff`'s own output, reproducing the review's repro. Ruling: changing `diff`'s behavior to
+share the gate's tolerance is a real design decision — it needs its own fixture pair distinguishing
+a tolerated `null↔value` move from a genuine value move, the same two-fixture shape Major 2 needed —
+and minting it inside a review fix round would be deciding a design question under review pressure
+rather than through the process `CLAUDE.md` describes for one. The filing names both readings (fix
+`diff`, or add one sentence to `reference.md`) and leaves the choice to whoever takes it.
+
+### Minor 12 — an empty-string fact/parameter value rendered as nothing
+
+Fixed in `_render_leaf`: `value == ""` now renders `""` explicitly, on the same false-appearance
+reasoning `null`/`(absent)` already get their own words for. Two new tests
+(`test_h8b_an_empty_string_apparatus_fact_renders_visibly`,
+`test_h8b_an_empty_string_parameter_value_renders_visibly`) pin both the apparatus-detail path and
+the parameter-delta path, since `_render_leaf` is shared between them.
+
+### What was verified sound and left untouched
+
+The review's own "what I verified by running and found sound" section — Decision 4's three exit
+outcomes and its mutation pins, the `ROW_LABELS` edit and the emitted-order literal's reasoning, both
+doc-agreement inversions, Decision 2's four shapes, the `not captured`/`not comparable` distinction,
+Fixture U's honesty, the safe `entry['run_id']` direct index, and the document-scope check — none of
+these needed a change and none was touched.
+
+### Findings not closed, and why
+
+None. All four Majors and all twelve Minors were either fixed, filed (Minor 11, deliberately, as a
+design question this fix round should not decide alone), or disposed of with a stated reason (Minors
+3 and 8, both already correctly scoped to task 12 by the original report).

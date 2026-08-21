@@ -22,6 +22,8 @@ from publishable.diff import (
     _header_line,
     _load_side,
     _render_row,
+    _Side,
+    _upstream_block_lines,
     command_diff,
     parameter_deltas,
 )
@@ -793,17 +795,16 @@ def test_h8b_apparatus_identical_survives_a_facts_key_reorder(
     run_b = yaml.safe_load((doc_b["run_dir"] / "run.yaml").read_text())
 
     facts_b = run_b["provenance"]["apparatus"]["facts"]
-    reordered = {
-        condition: dict(reversed(list(fact_map.items()))) for condition, fact_map in facts_b.items()
-    }
-    reordered = dict(reversed(list(reordered.items())))
-    # Confirm the reordering actually survives into what the comparison
-    # sees, per the brief's own instruction — CPython dicts preserve
-    # insertion order, so this is measuring that fact rather than assuming
-    # it.
-    assert list(reordered) != list(facts_b) or any(
-        list(reordered[c]) != list(facts_b[c]) for c in facts_b
-    ), "the reorder must actually change iteration order, or this fixture proves nothing"
+    # Fix round 1, Minor 10: reverse only the OUTER (condition) order.
+    # Each condition here holds exactly one fact (`calibration_id`), so a
+    # per-fact reversal inside a one-entry dict is a no-op that decorated
+    # this fixture without doing any work — reversing the two conditions'
+    # order is the one reordering that actually changes iteration order,
+    # and it is what the assertion below measures rather than assumes.
+    reordered = dict(reversed(list(facts_b.items())))
+    assert list(reordered) != list(facts_b), (
+        "the reorder must actually change iteration order, or this fixture proves nothing"
+    )
     run_b["provenance"]["apparatus"]["facts"] = reordered
 
     lines = _render_row("apparatus", run_a, run_b)
@@ -851,6 +852,12 @@ def test_h8b_config_vs_run_one_row_computed_four_not_comparable(
     assert re.search(r"^parameters_hash\s+(identical|DIFFERS)", out, re.M)
     for row, reason in _NOT_COMPARABLE_REASONS.items():
         assert re.search(rf"^{re.escape(row)}\s+not comparable\s+{re.escape(reason)}$", out, re.M)
+    # Fix round 1, Minor 5: the converse of the run-vs-run control below —
+    # a config side never prints `not captured` either, which
+    # `_render_parameters_hash_mixed`'s own docstring claims ("has no
+    # reachable case here"). `parameters_hash` is always freshly computed
+    # for a config and always written unconditionally for a run.
+    assert "not captured" not in out
 
 
 def test_h8b_config_vs_config_same_shape(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
@@ -909,20 +916,21 @@ def test_h8b_a_config_that_is_not_a_mapping_still_yields_no_render(
 # ---------------------------------------------------------------------------
 # Task 11: the upstream block (Decision 6), and the CLI arm.
 #
-# Fixture U: two runs identical in every printed row, one of which consumed
-# an upstream through `io.reuse_from` and one which did not. The two runs
-# are the SAME project (same commit, same config, unedited between them —
-# `main(["run", str(cfg)])` called twice) so `code_hash`, `input_manifest`,
-# `parameters_hash` are identical by construction rather than by luck, and
+# Fixture U: two runs identical in EVERY printed row — all five read
+# `identical`, which is what proves the upstream block carries information
+# no row does — one of which consumed an upstream through `io.reuse_from`
+# and one which did not. A real `uv.lock` is committed (Fixture L's own
+# mechanism) before either of the two compared runs, so `uv.lock` reads
+# `identical` rather than `not captured`; `code_hash`/`input_manifest`/
+# `parameters_hash` are identical by construction (same commit, same
+# config, unedited between the two `main(["run", str(cfg)])` calls), and
 # the Fixture-P apparatus template (same `calibration_id` both times) makes
-# `apparatus` identical too. Only `uv.lock` is `not captured` on both sides
-# (no lockfile committed) rather than literally `identical` — a deliberate,
-# reported relaxation; see the batch report. Which run consumes the
-# upstream is decided by an ENVIRONMENT VARIABLE the starter step reads at
-# call time, never by editing source or config, which is what keeps every
-# other row identical: a step that instead had two different SOURCE forms
-# (one calling `reuse_from`, one not) would make `code_hash` itself differ,
-# defeating the fixture before it starts.
+# `apparatus` identical too. Which run consumes the upstream is decided by
+# an ENVIRONMENT VARIABLE the starter step reads at call time, never by
+# editing source or config, which is what keeps every other row identical:
+# a step that instead had two different SOURCE forms (one calling
+# `reuse_from`, one not) would make `code_hash` itself differ, defeating
+# the fixture before it starts.
 # ---------------------------------------------------------------------------
 
 _H8B_FIXTURE_U_UPSTREAM_STEP = (
@@ -1055,6 +1063,11 @@ def test_h8b_fixture_u_upstream_block_and_the_differ_only_line(
     assert "not captured" not in out
     for row in ROW_LABELS:
         assert re.search(rf"^{re.escape(row)}\s+identical", out, re.M), (row, out)
+    # Fix round 1, Minor 6: the real EMITTED order, not just each row's
+    # presence — this fixture is the one place `apparatus` actually prints
+    # (Fixture R2/L's pairs omit it), so it is the one place that can pin
+    # position for all five labels at once.
+    assert _row_labels_in_output(out) == ROW_LABELS
 
     # The upstream block: not a sixth row, present, naming B's entry.
     assert re.search(r"^upstream$", out, re.M)
@@ -1192,3 +1205,106 @@ def test_h8b_the_differ_only_line_absent_when_a_row_also_differs(
     assert re.search(r"^parameters_hash\s+DIFFERS$", out, re.M)
     assert re.search(r"^upstream$", out, re.M)
     assert "these runs differ only in their upstreams" not in out
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, Major 2: Decision 2's third sub-ruling — a condition key
+# present in one side's `facts` and not the other gets its own line — had
+# no fixture. Hand-built records, on the review's own repro, exercise it
+# directly through `_render_row` without a real probe: two conditions on
+# one side, one of them entirely missing from the other's `facts`.
+# ---------------------------------------------------------------------------
+
+
+def _apparatus_record(facts: dict) -> dict:
+    from publishable.apparatus import apparatus_hash
+
+    return {"provenance": {"apparatus": {"hash": apparatus_hash(facts), "facts": facts}}}
+
+
+def test_h8b_a_condition_missing_from_one_side_s_facts_gets_its_own_line():
+    facts_a = {
+        "00_baseline": {"calibration_id": "CAL-X"},
+        "01_m=s": {"calibration_id": "CAL-X"},
+    }
+    facts_b = {"00_baseline": {"calibration_id": "CAL-X"}}  # "01_m=s" entirely absent
+    record_a = _apparatus_record(facts_a)
+    record_b = _apparatus_record(facts_b)
+
+    lines = _render_row("apparatus", record_a, record_b)
+    assert any(line.strip() == "01_m=s" or "01_m=s" in line for line in lines), lines
+    matching = [line for line in lines if "01_m=s" in line]
+    assert len(matching) == 1
+    assert "no apparatus recorded for B" in matching[0]
+    # And the reverse operand order names the other letter.
+    reverse_lines = _render_row("apparatus", record_b, record_a)
+    reverse_matching = [line for line in reverse_lines if "01_m=s" in line]
+    assert len(reverse_matching) == 1
+    assert "no apparatus recorded for A" in reverse_matching[0]
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, Major 4: the upstream block's `not captured` render
+# (`_upstream_hash_repr`) was unreachable from any fixture — no test built
+# an upstream entry with a missing hash. § Corrections correction 7:
+# `UpstreamLedger.record` copies `record.get("code_hash")`/
+# `record.get("parameters_hash")`, so either CAN be `None` on an honest
+# record. Hand-built `_Side` objects exercise the render directly, on both
+# fields independently, without needing a real `reuse_from` call.
+# ---------------------------------------------------------------------------
+
+
+def _side_with_upstream(entries: list[dict]) -> _Side:
+    from pathlib import Path as _P
+
+    return _Side(
+        _P("unused"),
+        "run record",
+        record={"provenance": {"upstream": entries}},
+    )
+
+
+def test_h8b_an_upstream_entry_with_a_missing_hash_renders_not_captured():
+    side_a = _side_with_upstream([])
+    side_b = _side_with_upstream(
+        [{"run_id": "run_x", "code_hash": None, "parameters_hash": "sha256:abcd1234", "used": []}]
+    )
+    lines = _upstream_block_lines(side_a, side_b)
+    matching = [line for line in lines if "run_x" in line]
+    assert len(matching) == 1
+    assert "code_hash not captured" in matching[0]
+    assert "parameters_hash sha256:abcd…" in matching[0]
+
+    # And the reverse field: `parameters_hash` missing, `code_hash` present.
+    side_c = _side_with_upstream(
+        [{"run_id": "run_y", "code_hash": "sha256:deadbeef", "parameters_hash": None, "used": []}]
+    )
+    lines2 = _upstream_block_lines(side_a, side_c)
+    matching2 = [line for line in lines2 if "run_y" in line]
+    assert len(matching2) == 1
+    assert "code_hash sha256:dead…" in matching2[0]
+    assert "parameters_hash not captured" in matching2[0]
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, Minor 12: an empty-string fact/parameter value must render
+# visibly, not as zero characters.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_an_empty_string_apparatus_fact_renders_visibly():
+    facts_a = {"00_baseline": {"calibration_id": ""}}
+    facts_b = {"00_baseline": {"calibration_id": "CAL-X"}}
+    record_a = _apparatus_record(facts_a)
+    record_b = _apparatus_record(facts_b)
+    lines = _render_row("apparatus", record_a, record_b)
+    detail = [line for line in lines if "calibration_id" in line]
+    assert len(detail) == 1
+    assert '"" → CAL-X' in detail[0]
+
+
+def test_h8b_an_empty_string_parameter_value_renders_visibly():
+    a = {"experiment_type": "generic", "parameters": {"analysis": {"method": ""}}}
+    b = {"experiment_type": "generic", "parameters": {"analysis": {"method": "pearson"}}}
+    lines = parameter_deltas(a, b)
+    assert lines == ['  parameters.analysis.method  "" → pearson']

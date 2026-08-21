@@ -181,6 +181,14 @@ def _render_leaf(value: Any) -> str:
         return "true" if value else "false"
     if value is None:
         return "null"
+    if value == "":
+        # Fix round 1, Minor 12: an empty string must not render as
+        # nothing — `null` gets the word `null` and an absent key gets
+        # `(absent)`, so an empty value rendering as zero characters made
+        # it visually indistinguishable from a missing operand, the exact
+        # false-appearance class Decision 1's `not captured` exists to
+        # prevent.
+        return '""'
     return str(value)
 
 
@@ -277,9 +285,7 @@ def _apparatus_detail_lines(app_a: dict[str, Any], app_b: dict[str, Any]) -> lis
     return [f"  {qualifier:<{width}}{text}" for _, _, qualifier, text in items]
 
 
-def _render_apparatus_row(
-    record_a: dict[str, Any], record_b: dict[str, Any], letter_a: str = "A", letter_b: str = "B"
-) -> list[str]:
+def _render_apparatus_row(record_a: dict[str, Any], record_b: dict[str, Any]) -> list[str]:
     """The `apparatus` row (Decision 2). Its VERDICT compares
     `provenance.apparatus.hash` — the figure `report study.yaml` cross-checks
     in H8c — never the `facts` mappings directly (M2: a mapping comparison
@@ -308,7 +314,12 @@ def _render_apparatus_row(
     if app_a is None and app_b is None:
         return []
     if app_a is None or app_b is None:
-        missing = letter_a if app_a is None else letter_b
+        # Fix round 1, Minor 9: no caller ever passes anything but the
+        # defaults for "which side is which" — `command_diff` always
+        # compares exactly two sides, always labeled A and B by
+        # `_header_line` — so the letters are hardcoded here rather than
+        # threaded as parameters nothing calls with a different value.
+        missing = "A" if app_a is None else "B"
         return [f"{'apparatus':<{_LABEL_WIDTH}}DIFFERS", f"  {missing} recorded no apparatus"]
     hash_a = app_a.get("hash")
     hash_b = app_b.get("hash")
