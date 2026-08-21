@@ -588,6 +588,30 @@ def replay_ledger(run_dir: Path) -> Observations:
                 f"apparatus/probes.jsonl line {line_no} is missing {', '.join(missing)}",
                 code="E-FREEZE-LEDGER-UNREADABLE",
             )
+        # Shape, not just presence (batch 4 review, Major 2 — carried from
+        # batch 2's review and reported closed there when it was not: at
+        # `1fc05dc` and at every commit since, this guard checked key
+        # PRESENCE only, so `facts: null`/`facts: [1, 2]` reached
+        # `Observations.record` and raised a bare `AttributeError` out of
+        # `main`, and `condition: 42` was accepted silently and produced an
+        # int-keyed baseline — `freeze` reporting every condition
+        # `unchanged` over a ledger nobody should trust). Core cannot write
+        # either shape: `append_observation`'s one call site always passes
+        # a `str` `condition_key(...)` and `check_facts`'s already-checked
+        # return, so both are exactly the edited-or-truncated-file class
+        # this refusal exists for.
+        if not isinstance(doc["facts"], Mapping):
+            raise ContractError(
+                f"apparatus/probes.jsonl line {line_no}'s `facts` is a "
+                f"{type(doc['facts']).__name__}, not a JSON object",
+                code="E-FREEZE-LEDGER-UNREADABLE",
+            )
+        if not isinstance(doc["condition"], str):
+            raise ContractError(
+                f"apparatus/probes.jsonl line {line_no}'s `condition` is a "
+                f"{type(doc['condition']).__name__}, not a string",
+                code="E-FREEZE-LEDGER-UNREADABLE",
+            )
         if doc["phase"] not in (PHASE_RUN_START, PHASE_PRE_EXECUTION):
             continue
         observations.record(doc["condition"], doc["facts"])

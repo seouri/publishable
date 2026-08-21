@@ -1152,7 +1152,16 @@ def test_replay_ledger_an_unrecognized_phase_is_skipped_not_refused(tmp_path):
     "raw",
     [
         "not json at all {{{",
-        "[1, 2, 3]",
+        # Batch 4 review, Minor 2: `[1, 2, 3]` is caught by the NEXT guard
+        # (the missing-keys check: `"phase" not in [1, 2, 3]` is `True`)
+        # regardless of whether the `isinstance(doc, Mapping)` guard exists
+        # at all — deleting that guard left every arm here green. A JSON
+        # array containing the three key STRINGS as elements is what the
+        # missing-keys check cannot catch (`"phase" in doc` is `True` for a
+        # list holding the string `"phase"`), so this fixture reaches
+        # `doc["phase"]` next — a `TypeError` if the `Mapping` guard is
+        # gone, `E-FREEZE-LEDGER-UNREADABLE` if it is there.
+        '["phase", "condition", "facts"]',
         '{"phase": "run_start", "condition": "00_x"}',
     ],
     ids=["not-json", "not-a-mapping", "missing-facts"],

@@ -54,7 +54,12 @@ class _Refused(NamedTuple):
 
 
 class _Ready(NamedTuple):
-    """Every gate in `_precheck` passed. What the probe round needs to run."""
+    """Every gate in `_precheck` passed. What the probe round needs to run.
+
+    `baseline` is the SAME `Observations` gate (i) already built and
+    validated the whole ledger to get — carried forward rather than
+    re-read a second time (batch 4 review, Minor 9: `command_freeze` used
+    to call `apparatus.replay_ledger` again, discarding this one)."""
 
     doc: dict[str, Any]
     repo_root: Path
@@ -64,6 +69,7 @@ class _Ready(NamedTuple):
     conditions: list[Condition]
     cfgs: dict[int, Config]
     credentials: dict[str, str]
+    baseline: "apparatus.Observations"
 
 
 def _refuse(c: Collector, code: str, path: str, message: str, exit_code: int) -> _Refused:
@@ -109,7 +115,20 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
                                                        from `apparatus.replay_ledger`)   exit 1
     (j) probe name vs the ledger's `probe`       -> E-FREEZE-PROBE-MISMATCH exit 1
     (k) a declared credential is unset           -> EXIT_EXTERNAL          exit 5
+
+    **Before any of these**, a `run_dir` that is not a real directory at all is not
+    `E-FREEZE-NO-CONFIG` — that code's remedy ("the run was started by a build
+    before this artifact existed, or the directory was edited") answers a
+    directory that exists but is missing an artifact, not a typo'd path or a
+    config path passed by mistake (batch 4 review, Minor 7). `validate`'s own
+    precedent for a path problem it did not anticipate is to let the `OSError`
+    propagate to `main`'s generic handler, which reports it as `E-IO-FAILED` at
+    exit `1` — reused here rather than answered with a narrower code of this
+    module's own.
     """
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"{run_dir} is not a directory")
+
     # (a)
     if (run_dir / "run.yaml").exists():
         return _refuse(
@@ -388,6 +407,7 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
         conditions=conditions,
         cfgs=cfgs,
         credentials=credentials,
+        baseline=baseline,
     )
 
 
@@ -403,11 +423,17 @@ def _warn_lock_moved(ready: "_Ready", run_dir: Path) -> None:
     `uv_lock_info` only ever hashes a real file on disk and the captured
     copy is the one artifact that answers "what did the run start with".
 
-    **Absent on either side is not a move.** A captured copy that does not
-    exist means nothing was captured at run start — the `not captured`
-    case `diff` also uses — so there is nothing to warn about regardless of
-    what the repo holds now; a project with no lockfile then and none now
-    must not warn on every scaffolded run.
+    **Absent on the CAPTURED side is not a move.** A captured copy that
+    does not exist means nothing was captured at run start — the `not
+    captured` case `diff` also uses — so there is nothing to warn about
+    regardless of what the repo holds now; a project with no lockfile then
+    and none now must not warn on every scaffolded run. The current side
+    IS guarded when the captured side exists: a repo whose `uv.lock` was
+    deleted since the run started still warns, because `uv_lock_info`
+    answers `(None, None)` for a missing file and that disagrees with any
+    non-empty captured hash (batch 4 review, Minor 4 — the prior wording
+    claimed the absent-is-quiet rule for "either side", which is false of
+    this one; narrowed rather than rewritten to keep a false claim true).
     """
     captured = run_dir / "environment" / "uv.lock"
     if not captured.is_file():
@@ -468,7 +494,6 @@ def command_freeze(run_dir: Path) -> int:
         print(c.render(), file=sys.stderr)
         return EXIT_WRONG
 
-    baseline = apparatus.replay_ledger(run_dir)
     observer = apparatus.Observer(
         probe_name=ready.probe_name,
         probe=probe_fn,
@@ -477,7 +502,7 @@ def command_freeze(run_dir: Path) -> int:
         cfgs=ready.cfgs,
         run_dir=run_dir,
         credentials=ready.credentials,
-        observations=baseline,
+        observations=ready.baseline,
     )
     try:
         observer.observe_round(phase=apparatus.PHASE_FREEZE, condition_index=None)
@@ -497,9 +522,21 @@ def command_freeze(run_dir: Path) -> int:
             return EXIT_EXTERNAL
         return EXIT_WRONG
 
+    # Decision 10's exit-0 row: "the observation, per condition" — the
+    # facts document is the first-answered value per (condition, fact),
+    # which by construction of the exit-0 path IS this round's own
+    # observation (a disagreement would have raised `E-APPARATUS-CHANGED`
+    # already). Decision 8: "the output states the count" — one line, the
+    # number of conditions actually probed this invocation (batch 4
+    # review, Minor 1 — this was printing a bare `unchanged` verdict word
+    # with no observed fact and no count, unmet and undisclosed).
+    facts_by_condition = observer.observations.facts_document()
     for condition in ready.conditions:
         key = apparatus.condition_key(condition.index, condition.label)
-        print(f"  {key}  unchanged")
+        facts = facts_by_condition.get(key, {})
+        rendered = ", ".join(f"{name}={value!r}" for name, value in facts.items())
+        print(f"  {key}  {rendered}" if rendered else f"  {key}  (no declared facts)")
+    print(f"{len(ready.conditions)} condition(s) probed")
 
     warn_c = Collector()
     warn_c.credentials = ready.credentials

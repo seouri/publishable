@@ -35,7 +35,7 @@ class FAssay(BaseTemplate):
     apparatus_probe = "f_probe"
     apparatus_facts = ["model_revision"]
     parameter_spec = {
-        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2", "m3"]),
     }
 """
 
@@ -56,8 +56,8 @@ class FCredAssay(BaseTemplate):
         "instrument.model": Param(
             str,
             default="m1",
-            choices=["m1", "m2"],
-            requires_env={"m1": ["F_CRED_TOKEN"], "m2": []},
+            choices=["m1", "m2", "m3"],
+            requires_env={"m1": ["F_CRED_TOKEN"], "m2": [], "m3": []},
         ),
     }
 """
@@ -318,6 +318,94 @@ def test_gate_i_ledger_missing_covers_a_ledger_with_no_qualifying_line(
     _assert_refused(result, "E-FREEZE-LEDGER-MISSING", EXIT_WRONG, before, run_dir)
 
 
+# --- Batch 4 review, Major 2: the three hand-edited ledger shapes core's
+# own single `append_observation` call site can never write, each pinned
+# individually through `main` --------------------------------------------
+
+
+def _append_raw_ledger_line(run_dir: Path, doc: dict) -> None:
+    with (run_dir / "apparatus" / "probes.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc) + "\n")
+
+
+def test_a_hand_edited_facts_null_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_traceback(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 4 review, Major 2, shape 1: before this fix, `facts: null`
+    reached `Observations.record` and raised a bare `AttributeError` out of
+    `main` — never a diagnostic. Driven through `main`, exactly as the
+    reviewer measured, not through `_precheck` directly."""
+    from publishable.cli import main
+    from publishable.diagnostics import EXIT_WRONG
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    _append_raw_ledger_line(
+        run_dir,
+        {"at": "t", "phase": "run_start", "condition": "00_x", "probe": "f_probe", "facts": None},
+    )
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-FREEZE-LEDGER-UNREADABLE" in output
+    assert "AttributeError" not in output
+
+
+def test_a_hand_edited_facts_list_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_traceback(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 4 review, Major 2, shape 2: `facts: [1, 2]` — same
+    `AttributeError` site (`Observations.record`'s `.items()` call), same
+    fix, same code."""
+    from publishable.cli import main
+    from publishable.diagnostics import EXIT_WRONG
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    _append_raw_ledger_line(
+        run_dir,
+        {
+            "at": "t",
+            "phase": "run_start",
+            "condition": "00_x",
+            "probe": "f_probe",
+            "facts": [1, 2],
+        },
+    )
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-FREEZE-LEDGER-UNREADABLE" in output
+    assert "AttributeError" not in output
+
+
+def test_a_hand_edited_int_condition_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_false_unchanged(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 4 review, Major 2, shape 3 — the quieter fail-open: before this
+    fix, `condition: 42` was accepted silently, producing an int-keyed
+    baseline nothing else in the ledger ever matches, and `freeze` reported
+    every condition `unchanged` at exit 0 over a ledger nobody should
+    trust. Must now refuse rather than reach that verdict."""
+    from publishable.cli import main
+    from publishable.diagnostics import EXIT_WRONG
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    _append_raw_ledger_line(
+        run_dir,
+        {"at": "t", "phase": "run_start", "condition": 42, "probe": "f_probe", "facts": {}},
+    )
+    code = main(["freeze", str(run_dir)])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert "E-FREEZE-LEDGER-UNREADABLE" in captured.err
+    assert "unchanged" not in captured.out
+
+
 def test_gate_j_probe_mismatch_when_template_now_declares_a_different_registered_probe(
     installed, registries, tmp_path, capsys
 ):
@@ -392,6 +480,75 @@ def test_f5_sibling_arm_credential_precheck_before_any_probe_call(
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
     _assert_refused(result, "E-APPARATUS-RAISED", EXIT_EXTERNAL, before, run_dir)
+
+
+def test_m1_credential_check_precedes_the_metered_call_end_to_end_through_main(
+    installed, registries, tmp_path, capsys, monkeypatch
+):
+    """Batch 4 review, Major 1: the shipped suite's only credential-pre-check
+    test asserted `isinstance(result, _Refused)`, which is true whether the
+    check runs BEFORE `_probe_for`/`observe_round` or is moved to AFTER
+    them — a proxy for the property Decision 10 actually states ("no probe
+    call made"). This is the reviewer's own discriminating triple, built
+    here: a probe that appends to a MARKER FILE on every call, driven
+    through `main`, with the credential genuinely unset and `.env` deleted.
+
+    Verified by hand against both mutations the review ran (not persisted,
+    since the shipped code already has the right order and there is no
+    lever in `freeze.py` to keep both branches without duplicating the
+    check): moving gate (k)'s block from `_precheck` into `command_freeze`
+    AFTER `observer.observe_round(...)` makes the marker file appear and
+    the ledger grow by one line — this test's own three assertions below
+    would each fail. Moving the same block to just before `_probe_for`
+    (still after `_precheck` returns) leaves this test passing, since the
+    probe is still never reached.
+    """
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    marker_file = tmp_path / "marker"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    probe_src = f"""from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+MARKER_FILE = {str(marker_file)!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    with Path(MARKER_FILE).open("a") as fh:
+        fh.write("called\\n")
+    return Apparatus(facts={{"model_revision": cfg.parameters.instrument.model}})
+"""
+    (site / f"{mod}.py").write_text(probe_src)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="f_cred_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={},
+        _local_template=_F_CRED_TEMPLATE,
+        _env_file="F_CRED_TOKEN=shh\n",
+    )
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    assert marker_file.exists(), "the probe must have run at least once during the run itself"
+    marker_file.unlink()
+
+    monkeypatch.delenv("F_CRED_TOKEN", raising=False)
+    (doc["root"] / ".env").unlink()
+    before_lines = _ledger_lines(run_dir)
+
+    from publishable.cli import main
+
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == EXIT_EXTERNAL
+    assert "E-APPARATUS-RAISED" in output
+    assert not marker_file.exists(), "the probe must never be called once a credential is missing"
+    assert _ledger_lines(run_dir) == before_lines
 
 
 def test_credentials_include_a_parameter_value_s_requires_env(
@@ -587,29 +744,70 @@ def test_f1_freeze_end_to_end_on_a_constructed_mid_run_directory(
     assert after_snapshot == before_snapshot
 
 
+_MULTI_MOVING_PROBE_TEMPLATE = """\
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+ANSWER_DIR = {answer_dir!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    model = cfg.parameters.instrument.model
+    text = (Path(ANSWER_DIR) / f"{{model}}.txt").read_text().strip()
+    return Apparatus(facts={{"model_revision": text}})
+"""
+
+
 def test_f2_freeze_sees_a_moved_fact(installed, registries, tmp_path, capsys):
+    """Batch 4 review, Minor 8: a ONE-condition fixture cannot see "every
+    condition up to and including the mover, none after" — widened to
+    three conditions with the SECOND one moving, exactly as the reviewer's
+    own re-measurement did."""
     from publishable.diagnostics import EXIT_WRONG
     from publishable.freeze import command_freeze
 
-    answer_file = tmp_path / "answer.txt"
-    answer_file.write_text("rev1")
-    doc = _fixture_p_moving(installed, tmp_path, capsys, answer_file)
+    answer_dir = tmp_path / "answers"
+    answer_dir.mkdir()
+    for model in ("m1", "m2", "m3"):
+        (answer_dir / f"{model}.txt").write_text("rev1")
+
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    (site / f"{mod}.py").write_text(_MULTI_MOVING_PROBE_TEMPLATE.format(answer_dir=str(answer_dir)))
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="f_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2", "m3"]}},
+        _local_template=_F_TEMPLATE,
+    )
     run_dir = doc["run_dir"]
     _mid_run(run_dir)
     before_lines = _ledger_lines(run_dir)
 
-    answer_file.write_text("rev2")
+    (answer_dir / "m2.txt").write_text("rev2")  # only the SECOND condition moves
     code = command_freeze(run_dir)
     assert code == EXIT_WRONG
 
     after_lines = _ledger_lines(run_dir)
-    # The ledger holds the moving observation — appended before the gate
-    # fires, per H7d Part A's ruling, so the stop is legible from the
-    # artifacts.
-    assert len(after_lines) == len(before_lines) + 1
-    moved = after_lines[-1]
+    new_lines = after_lines[len(before_lines) :]
+    # Every condition UP TO AND INCLUDING the mover, none after: the first
+    # condition (unchanged) gets a line, the second (moved) gets a line and
+    # raises, the third is never reached.
+    assert [line["condition"] for line in new_lines] == ["00_model=m1", "01_model=m2"]
+    assert new_lines[0]["facts"]["model_revision"] == "rev1"
+    moved = new_lines[-1]
     assert moved["phase"] == "freeze"
+    assert moved["condition"] == "01_model=m2"
     assert moved["facts"]["model_revision"] == "rev2"
+
+    assert not (run_dir / "run.yaml").exists()
 
 
 def test_f5_arm_one_a_probe_raising_with_a_credential_is_redacted_end_to_end(
@@ -622,12 +820,17 @@ def test_f5_arm_one_a_probe_raising_with_a_credential_is_redacted_end_to_end(
     from publishable.diagnostics import EXIT_EXTERNAL
     from publishable.freeze import command_freeze
 
-    # The probe must succeed during the run (so the run itself completes)
-    # and only raise once `freeze` calls it — a `TRIGGER_FILE` whose
-    # presence flips the behaviour, checked at call time on the SAME module
-    # object rather than by rewriting the file on disk (which `load_
-    # entry_point`'s ordinary `importlib` caching would not re-import).
+    # Batch 4 review, Minor 8: widened to three conditions with the SECOND
+    # one raising — a one-condition fixture cannot show "no line for the
+    # raising condition, none after". The probe must succeed for every
+    # condition during the run (so the run itself completes) and only
+    # raise for the TRIGGERED model once `freeze` calls it — a
+    # `TRIGGER_FILE` naming which model should raise, checked at call time
+    # on the SAME module object rather than by rewriting the file on disk
+    # (which `load_entry_point`'s ordinary `importlib` caching would not
+    # re-import).
     trigger_file = tmp_path / "trigger"
+    trigger_file.write_text("")
     global _fixture_p_counter
     _fixture_p_counter += 1
     mod = f"f9_probe_mod_{_fixture_p_counter}"
@@ -644,10 +847,11 @@ TRIGGER_FILE = {str(trigger_file)!r}
 
 @register_probe("f_probe")
 def probe(cfg):
-    if Path(TRIGGER_FILE).exists():
+    model = cfg.parameters.instrument.model
+    if Path(TRIGGER_FILE).read_text().strip() == model:
         token = os.environ["F_CRED_TOKEN"]
         raise RuntimeError(f"could not reach the instrument, token was {{token}}")
-    return Apparatus(facts={{"model_revision": cfg.parameters.instrument.model}})
+    return Apparatus(facts={{"model_revision": model}})
 """
     (site / f"{mod}.py").write_text(site_and_probe)
     doc = run_a_project(
@@ -655,23 +859,27 @@ def probe(cfg):
         capsys=capsys,
         experiment_type="f_cred_assay",
         parameters={"instrument": {"model": "m1"}},
-        sweep={},
+        sweep={"grid": {"instrument.model": ["m1", "m2", "m3"]}},
         _local_template=_F_CRED_TEMPLATE,
         _env_file="F_CRED_TOKEN=shh\n",
     )
     run_dir = doc["run_dir"]
     _mid_run(run_dir)
     before_lines = _ledger_lines(run_dir)
-    trigger_file.write_text("go")
+    trigger_file.write_text("m2")  # only the SECOND condition raises
 
     code = command_freeze(run_dir)
     output = capsys.readouterr().err
     assert code == EXIT_EXTERNAL
     assert "shh" not in output
     assert "E-APPARATUS-RAISED" in output
-    # No line for the raising probe call — `observe_once` raises before
-    # `append_observation` ever runs for that condition.
-    assert _ledger_lines(run_dir) == before_lines
+    # A line for the first (unaffected) condition, none for the raising
+    # second condition, and none for the third — `observe_once` raises
+    # before `append_observation` ever runs for the raising condition, and
+    # `Observer.observe_round`'s plain loop aborts the remaining conditions.
+    after_lines = _ledger_lines(run_dir)
+    new_lines = after_lines[len(before_lines) :]
+    assert [line["condition"] for line in new_lines] == ["00_model=m1"]
 
 
 def test_m8_two_exit_codes_through_main_before_and_after_admitting_freeze_lines(
@@ -893,3 +1101,174 @@ class Step(BaseStep):
     finally:
         release.write_text("go")
         proc.wait(timeout=20)
+
+
+# --- Batch 4 review, Major 3: both of Decision 10's warnings, pinned -------
+
+
+def test_w_freeze_lock_moved_fires_when_the_captured_copy_and_the_repo_disagree(
+    installed, registries, tmp_path, capsys
+):
+    """`W-FREEZE-LOCK-MOVED` must actually print when the two disagree —
+    replacing `_warn_lock_moved`'s body with a bare `return` was shown to
+    leave the whole suite green, so this asserts the printed text rather
+    than merely calling the command."""
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    (run_dir / "environment" / "uv.lock").write_text("captured-content\n")
+    (doc["root"] / "uv.lock").write_text("moved-content\n")
+
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == 0
+    assert "W-FREEZE-LOCK-MOVED" in output
+
+
+def test_w_freeze_lock_moved_is_silent_when_the_captured_copy_and_the_repo_agree(
+    installed, registries, tmp_path, capsys
+):
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    (run_dir / "environment" / "uv.lock").write_text("same-content\n")
+    (doc["root"] / "uv.lock").write_text("same-content\n")
+
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == 0
+    assert "W-FREEZE-LOCK-MOVED" not in output
+
+
+def test_w_freeze_lock_moved_is_silent_when_nothing_was_captured(
+    installed, registries, tmp_path, capsys
+):
+    """Minor 4's own pin: absent on the CAPTURED side is not a move,
+    regardless of what the repo holds now — the docstring's claim narrowed
+    to this side only."""
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    assert not (run_dir / "environment" / "uv.lock").exists()
+    (doc["root"] / "uv.lock").write_text("some-content\n")
+
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == 0
+    assert "W-FREEZE-LOCK-MOVED" not in output
+
+
+_NULLABLE_PROBE_TEMPLATE = """\
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+ANSWER_FILE = {answer_file!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    text = Path(ANSWER_FILE).read_text().strip()
+    return Apparatus(facts={{"model_revision": text or None}})
+"""
+
+
+def test_w_apparatus_unanswered_fires_at_freeze_when_a_declared_fact_comes_back_null(
+    installed, registries, tmp_path, capsys
+):
+    """Decision 10's fourth row, at `freeze`: deleting the four-line
+    `warn_unanswered` block was shown to leave `test_freeze.py` green, so
+    this asserts the printed warning text — never merely that the command
+    ran — over a probe that answers a real value during the run and
+    `null` only once `freeze` calls it."""
+    from publishable.cli import main
+
+    answer_file = tmp_path / "answer.txt"
+    answer_file.write_text("rev1")
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    (site / f"{mod}.py").write_text(_NULLABLE_PROBE_TEMPLATE.format(answer_file=str(answer_file)))
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="f_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={},
+        _local_template=_F_TEMPLATE,
+    )
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+
+    answer_file.write_text("")  # -> None, once freeze calls it
+    code = main(["freeze", str(run_dir)])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "W-APPARATUS-UNANSWERED" in captured.out
+
+
+def test_exit_0_prints_the_observation_per_condition_and_the_count(
+    installed, registries, tmp_path, capsys
+):
+    """Batch 4 review, Minor 1: Decision 10's exit-0 row says "the
+    observation, per condition"; Decision 8 says "the output states the
+    count." Both were unmet, undisclosed and unfiled; built here rather
+    than filed, since nothing in `reference.md` § Operation commands
+    specifies a `freeze` output to override."""
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+
+    code = main(["freeze", str(run_dir)])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "model_revision=" in captured.out
+    assert "2 condition(s) probed" in captured.out
+
+
+def test_w_freeze_lock_moved_fires_when_the_repos_lockfile_is_deleted(
+    installed, registries, tmp_path, capsys
+):
+    """Minor 4's other half: the captured side is guarded (see the silent
+    test above), but the CURRENT side is not — a repo whose `uv.lock` was
+    deleted since the run started still warns, since `uv_lock_info`
+    answers `(None, None)` and that disagrees with any non-empty captured
+    hash."""
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    (run_dir / "environment" / "uv.lock").write_text("captured-content\n")
+    assert not (doc["root"] / "uv.lock").exists()
+
+    code = main(["freeze", str(run_dir)])
+    output = capsys.readouterr().err
+    assert code == 0
+    assert "W-FREEZE-LOCK-MOVED" in output
+
+
+def test_a_nonexistent_run_directory_is_E_IO_FAILED_not_E_FREEZE_NO_CONFIG(tmp_path, capsys):
+    """Batch 4 review, Minor 7: a typo'd path or a config path passed by
+    mistake both used to land on `E-FREEZE-NO-CONFIG`'s remedy, which is
+    about a real directory missing an artifact — not this. `validate`'s own
+    precedent for an unanticipated path problem is `E-IO-FAILED` at exit 1,
+    through `main`'s generic `OSError` handler."""
+    from publishable.cli import main
+    from publishable.diagnostics import EXIT_WRONG
+
+    code = main(["freeze", str(tmp_path / "nope" / "nope")])
+    output = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-IO-FAILED" in output
+    assert "E-FREEZE-NO-CONFIG" not in output

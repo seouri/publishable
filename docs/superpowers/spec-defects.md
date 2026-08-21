@@ -7531,7 +7531,7 @@ against the function itself, for the next caller that does not route through `fi
 
 **Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
 
-## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: unassigned**
+## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: H9 (option a); H8b task 12 may instead take the narrower option (b)**
 
 `src/publishable/templates/discovery.py`'s `_import_file` builds its spec through
 `importlib.util.spec_from_file_location`, which hands back an ordinary `SourceFileLoader` — the
@@ -7568,14 +7568,18 @@ NEW filename rather than overwriting the path a prior resolution already read in
 test in this repo overwrites a `templates/*.py` path and re-resolves within the same process, so
 nothing already green depends on the stale answer.
 
-**The check its owner must make.** Either (a) pass `check=False` is not an option — the cache
-still gets consulted — so the fix is more likely `importlib.util.spec_from_file_location(...,
-loader=importlib.machinery.SourceFileLoader(module_name, str(path)))`, forcing recompilation, or a
-belt-and-suspenders `sys.dont_write_bytecode = True` scoped around the import (module-global,
-audited for side effects on concurrent imports elsewhere in the process); or (b) document that
-`discover_local` is resolved fresh per **process**, never guaranteed fresh per **call**, which
-would make `freeze`'s own "resolves the template NOW" claim (`reference.md` § Operation commands)
-imprecise and in need of its own correction.
+**The check its owner must make.** Two options. (a) Force recompilation: passing `check=False` to
+`spec_from_file_location` does not help — the loader still consults the cache — so the fix is more
+likely handing it a fresh `importlib.machinery.SourceFileLoader(module_name, str(path))` explicitly,
+or a belt-and-suspenders `sys.dont_write_bytecode = True` scoped around the import (module-global,
+so audit it for side effects on any concurrent import elsewhere in the process). (b) Document the
+weaker property instead: `discover_local` is resolved fresh per **process**, never guaranteed
+fresh per **call** — which would make the phrase "resolves the template NOW" (a code comment in
+`src/publishable/freeze.py`, not a claim `reference.md` makes anywhere) imprecise and in need of
+its own correction there. **Routed rather than left unowned**: (a) sits naturally with **H9**, which
+resolves the same template from the same two run-start artifacts for `resume` and would inherit
+this exact hazard; (b), the narrower documentation-only fix, is this slice's own **task 12** to take
+if it prefers not to wait on H9.
 
 **Found by:** H8b task 4/6, while building a fixture for `E-FREEZE-PROBE-MISMATCH` (`tests/
 test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently

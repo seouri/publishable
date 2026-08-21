@@ -265,3 +265,197 @@ means "fresh" is only guaranteed per **process**, not per **call**, within one l
    against shipped code, not against anything this batch built — but it was found *while* building
    this batch's own fixtures, so a reviewer should decide whether it wants its own follow-up task
    rather than sitting unowned.
+
+---
+
+## Fix round 1
+
+Reviewed at `2675cc8`. Both verdicts PASS with findings: three Majors, nine Minors. All closed in
+this round, one commit. Gates before this round: `uv run pytest` → 2569 passed, 1 skipped, 2
+xfailed; `mypy` → 48 source files; `ruff check .` clean; `ruff format --check .` → 86 files. After:
+`uv run pytest` → **2580 passed, 1 skipped, 2 xfailed** (+11, all new tests below); `mypy` → 48
+source files, clean; `ruff check .` clean; `ruff format --check .` → 86 files, unchanged. Guard
+pin's final arms did not fire.
+
+### Two adjudications noted, no action needed
+
+- **Attack 3 is not a Critical** (verified by the reviewer by running: a second `freeze` after
+  restoring the answers exits 0 again; `freeze` does not pin itself against its own prior line).
+  Nothing to change.
+- The report's candour was credited. Noted, no action.
+
+### Major 2 — batch 2's carried finding, actually closed now, each shape pinned individually
+
+`src/publishable/apparatus.py`'s `replay_ledger` gained two `isinstance` checks right after the
+existing missing-keys check: `isinstance(doc["facts"], Mapping)` and `isinstance(doc["condition"],
+str)`, both raising `E-FREEZE-LEDGER-UNREADABLE` — the exact repair the batch-2-carried finding
+specified, now actually present (it was not, at `1fc05dc` or at `2675cc8` — the report's claim was
+false, and I did not re-derive the isinstance guard from a fresh read before writing that sentence
+the first time, which is the root cause here, not a slip in the grep command itself).
+
+**Each of the three shapes pinned as its own test in `tests/test_freeze.py`, through
+`main(["freeze", ...])`, exactly as the reviewer measured:**
+- `test_a_hand_edited_facts_null_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_traceback` — `facts:
+  null` → `E-FREEZE-LEDGER-UNREADABLE`, `AttributeError` absent from output.
+- `test_a_hand_edited_facts_list_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_traceback` — `facts: [1,
+  2]` → same.
+- `test_a_hand_edited_int_condition_line_is_E_FREEZE_LEDGER_UNREADABLE_not_a_false_unchanged` —
+  `condition: 42` → `E-FREEZE-LEDGER-UNREADABLE`, `"unchanged"` absent from stdout (the false
+  verdict the un-fixed code produced).
+
+**Verified by mutation**: removed both `isinstance` checks, re-ran the three tests — all three
+failed (two on a raw `AttributeError` traceback reaching `main`, one on `code == 0` where 1 was
+expected). Restored, re-ran — all three pass, plus the full `test_freeze.py`/`test_apparatus.py`
+pair at 95 passed. Diffed the restored file against the pre-mutation copy — byte-identical.
+
+### Minor 2 — same shape, one layer down: `replay_ledger`'s not-a-mapping guard, made reachable
+
+The parametrized `not-a-mapping` fixture in `tests/test_apparatus.py`'s
+`test_replay_ledger_a_malformed_line_is_E_FREEZE_LEDGER_UNREADABLE` was `"[1, 2, 3]"`, which the
+NEXT guard (missing-keys) also catches on its own — deleting the `isinstance(doc, Mapping)` guard
+left it green. Replaced with `'["phase", "condition", "facts"]'` — a JSON array whose ELEMENTS are
+the three key strings, so the missing-keys check's `"phase" not in doc` reads `False` (the string
+IS an element) and cannot substitute for the deleted guard; without it, the next line
+(`doc["phase"]`) raises `TypeError: list indices must be integers`, not the coded refusal.
+Confirmed by running: with the guard present, the new fixture still raises
+`E-FREEZE-LEDGER-UNREADABLE` (all three arms pass); with it deleted, only this arm's assertion
+fails, on the wrong exception type reaching `pytest.raises(ContractError)`.
+
+### Major 1 — the credential-before-the-probe ordering, pinned with the reviewer's own discriminating shape
+
+Added `test_m1_credential_check_precedes_the_metered_call_end_to_end_through_main`: a probe that
+appends to a MARKER FILE on every call, driven through `main`, credential genuinely unset and
+`.env` deleted. Asserts exit `EXIT_EXTERNAL`, `E-APPARATUS-RAISED` present, the marker file
+**absent** (the probe was never called), and the ledger unchanged.
+
+**Verified against both of the reviewer's mutations, applied by hand and reverted (not persisted —
+there is no lever in shipped `freeze.py` to keep both branches live at once without duplicating the
+check, so this was run as a manual probe rather than kept as a second copy of the test):**
+- **M-b** (gate (k)'s block moved from `_precheck` into `command_freeze`, AFTER
+  `observer.observe_round(...)`): the new test fails — the marker file exists after the call, since
+  the probe genuinely ran before the credential was ever checked.
+- **M-a** (the same block moved into `command_freeze`, but BEFORE `_probe_for` — still after
+  `_precheck` returns): the new test passes, since the probe is still never reached.
+
+Both mutations applied and reverted against a saved pre-mutation copy of `freeze.py`; the restored
+file diffs byte-identical to the pre-mutation copy, and `test_freeze.py` is green at HEAD (the
+check remains inside `_precheck`, unmoved — no production code changed for this finding, only the
+test).
+
+### Major 3 — both warnings, pinned by asserting the printed text
+
+Four new tests:
+- `test_w_freeze_lock_moved_fires_when_the_captured_copy_and_the_repo_disagree` — asserts
+  `"W-FREEZE-LOCK-MOVED"` actually appears in stderr when the captured `environment/uv.lock` and a
+  hand-written repo `uv.lock` disagree.
+- `test_w_freeze_lock_moved_is_silent_when_the_captured_copy_and_the_repo_agree` — the negative
+  control.
+- `test_w_freeze_lock_moved_is_silent_when_nothing_was_captured` — the `not captured` case.
+- `test_w_apparatus_unanswered_fires_at_freeze_when_a_declared_fact_comes_back_null` — a probe
+  answering a real value during the run and `null` only once `freeze` calls it; asserts
+  `"W-APPARATUS-UNANSWERED"` in **stdout** (`warn_unanswered`'s own render call, `command_run`'s
+  precedent — `_warn_lock_moved` prints to stderr instead, which is why the lock test above reads
+  `.err` and this one reads `.out`).
+
+**Verified by mutation, each against the specific new test it pins, reverted after:** replacing
+`_warn_lock_moved`'s body with a bare `return` fails the "fires" test (assertion on the missing
+text) while leaving the two silent tests green, as expected; deleting the four-line
+`warn_unanswered` block fails the unanswered test. Both restored; `diff` against saved pre-mutation
+copies is byte-identical; full `test_freeze.py` green at 35 (before Minor 8's widening) and 38
+(final) passed.
+
+### Minor 1 — built the exit-0 output Decision 10/8 specify, rather than filing it
+
+`command_freeze`'s success path now prints each condition's OBSERVED facts (read off
+`observer.observations.facts_document()`, which by construction of the exit-0 path equals what
+this round just observed — a disagreement would have raised `E-APPARATUS-CHANGED` first) and a
+final `"N condition(s) probed"` line, replacing the bare `unchanged` verdict word. Pinned by
+`test_exit_0_prints_the_observation_per_condition_and_the_count`, asserting both `"model_revision="`
+and `"2 condition(s) probed"` appear in stdout. The one pre-existing test asserting `"unchanged"`
+(Major 2's `condition: 42` arm) asserts its ABSENCE, which still holds — that arm never reaches the
+print path at all.
+
+### Minor 4 — `_warn_lock_moved`'s docstring narrowed to the side it actually guards
+
+"**Absent on either side is not a move**" → "**Absent on the CAPTURED side is not a move**", with a
+new sentence stating the asymmetry explicitly (the current side IS guarded: a deleted repo
+`uv.lock` still warns, since `uv_lock_info` answers `(None, None)` and that disagrees with any
+non-empty captured hash). Pinned by a new fifth test,
+`test_w_freeze_lock_moved_fires_when_the_repos_lockfile_is_deleted` — captured side present, repo's
+`uv.lock` absent, warning fires.
+
+### Minor 5 / Minor 6 — the `spec-defects.md` filing's citation and owner
+
+- The mis-attribution ("`freeze`'s own 'resolves the template NOW' claim (`reference.md` § Operation
+  commands)") is fixed: the phrase is now correctly identified as a code comment in
+  `src/publishable/freeze.py`, and the sentence no longer claims `reference.md` says anything of
+  the kind.
+- The garbled opening of "The check its owner must make" paragraph is rewritten for clarity (option
+  (a) and option (b), each now a complete, readable sentence rather than a dangling clause).
+- **Owner assigned**: the title line now reads *"Owner: H9 (option a); H8b task 12 may instead take
+  the narrower option (b)"* — routed per the reviewer's own suggestion (H9 resolves the identical
+  template from the identical two run-start artifacts for `resume` and inherits the same hazard;
+  task 12 is this slice's own document-and-code-cleanup task, available if it prefers the narrower
+  fix instead of waiting on H9).
+
+### Minor 7 — a nonexistent run directory now routes to `E-IO-FAILED`, not `E-FREEZE-NO-CONFIG`
+
+`_precheck` now raises a bare `FileNotFoundError` (an `OSError` subclass) at its very first line
+when `run_dir` is not a real directory, before any of the seven gates run. Uncaught locally, it
+propagates through `command_freeze` and `cli._dispatch` to `main`'s existing generic `OSError`
+handler, landing on `E-IO-FAILED` at exit 1 — `validate`'s own precedent for the identical class of
+unanticipated path problem. Pinned by
+`test_a_nonexistent_run_directory_is_E_IO_FAILED_not_E_FREEZE_NO_CONFIG`, asserting `E-IO-FAILED`
+present and `E-FREEZE-NO-CONFIG` absent.
+
+### Minor 8 — F2 and F5 arm one widened to three conditions, second one moving/raising
+
+Both rebuilt over `sweep.grid: {instrument.model: [m1, m2, m3]}` (the two templates' `choices`
+widened to admit `"m3"` to make this possible):
+- **F2** (`test_f2_freeze_sees_a_moved_fact`): a probe reading per-model answer files; only
+  `m2.txt` is rewritten between the run and `freeze`. Asserts the new ledger lines are exactly
+  `["00_model=m1", "01_model=m2"]` — the first condition's own (unmoved) observation recorded, the
+  second's moved value recorded and the round then aborted, the third never reached.
+- **F5 arm one** (`test_f5_arm_one_...`): a probe that raises only when `cfg.parameters.instrument.
+  model` matches a trigger file's content, set to `"m2"` before `freeze`. Asserts the new ledger
+  lines are exactly `["00_model=m1"]` — nothing for the raising second condition, nothing for the
+  third.
+
+Both properties — "up to and including the mover, none after" / "none for the raiser, none after"
+— are now measured on a fixture that can actually distinguish them from a one-condition fixture
+that happened to agree with the claim, rather than argued from the loop's shape.
+
+### Minor 9 — the redundant second `replay_ledger` call removed
+
+`_Ready` gained an eighth field, `baseline: apparatus.Observations` — the SAME object gate (i)
+already built while validating the whole ledger. `command_freeze` now passes `ready.baseline`
+straight to `Observer(observations=...)` instead of calling `apparatus.replay_ledger(run_dir)` a
+second time and discarding gate (i)'s result. `mypy` clean; full suite unaffected (this reads the
+identical object the second call would have reconstructed).
+
+### What was grepped, and its scope, this round
+
+- Grepped `1fc05dc:src/publishable/apparatus.py` and `HEAD:src/publishable/apparatus.py` for
+  `isinstance` before writing the Major 2 fix, to confirm the reviewer's own two `grep -c` results
+  (both `0` for the missing guards) rather than trusting the review's prose alone — reproduced.
+- Grepped `tests/`, `src/`, and the four documents for `W-FREEZE-LOCK-MOVED` before writing Major
+  3's fix, to confirm the reviewer's "zero occurrences" claim — reproduced (zero, before this
+  round's tests).
+- Grepped the repo for the literal phrase `resolves the template NOW` before fixing Minor 5: one
+  site, `src/publishable/freeze.py`, a code comment — confirmed the reviewer's finding rather than
+  taking it on faith.
+
+### Corrects, without retro-editing, the original report's own Minor 3
+
+The original report (above the `---`) states "the Command table still holds ten `NOT BUILT` rows."
+Measured through `_status_tables()["Command"]` at `2675cc8`, that count is **eleven** — ten is the
+plan's own figure for the state after BOTH `diff` and `freeze` flip, carried forward as if it
+described the state after only `freeze`'s. The conclusion the number was offered for (the
+`{"built", "NOT BUILT"}` control does not go vacuous) holds regardless, and both CLI-table tests
+still pass unedited. Left as a correction here rather than editing the original section, per this
+project's own rule for its development record.
+
+### Findings not closed, and why
+
+None. All three Majors and all nine Minors are addressed above, each with the test or the fix, or
+both, that closes it.
