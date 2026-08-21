@@ -7585,7 +7585,28 @@ if it prefers not to wait on H9.
 test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
 resolved the pre-edit class.
 
-## OPEN — `diff`'s `apparatus` row reports `DIFFERS` on a `null → value` transition the gate deliberately permits — **Owner: unassigned**
+## ~~`diff`'s `apparatus` row reports `DIFFERS` on a `null → value` transition the gate deliberately permits~~ — RULED not a divergence, 2026-08-21
+
+**Ruled by the controller, 2026-08-21: these are not two answers to one question — they are two
+questions.** The filing below states both readings faithfully and is kept for that reasoning; what it
+lacked is the observation that the gate and `diff` are asking different things.
+
+**The gate asks: did the apparatus move DURING this run?** Part B's Decision 1 compares against the
+first *answered* observation, so `null → value` is a fact **being answered for the first time**, not a
+fact changing — which is why it does not fail the run.
+
+**`diff` asks: did these two runs measure through the same apparatus?** A fact one run answered and the
+other did not is a **real difference between the runs**, and `diff`'s job is to report it. Suppressing it
+would make two genuinely different observation sets read as `identical`, which is the opposite of the
+failure mode `not captured` was minted to prevent.
+
+**So no behaviour changes**, and the remedy is one sentence in `reference.md` saying why the two rules
+differ — because a reader who knows the gate's tolerance will otherwise read `diff`'s row as a bug, which
+is exactly what happened here. **Owner: H8c**, which writes § Errors and the apparatus cross-check and is
+already in the documents.
+
+**Cost if wrong:** a reader who wants run-to-run apparatus drift judged by the gate's rule has to compute
+it themselves from the two `facts` mappings, which `diff` prints in full.
 
 `docs/reference.md` § The apparatus core can only observe rules, for the run-time gate, that
 `null → "LOT-88231"` and the reverse are "that fact becoming available and becoming unavailable.
