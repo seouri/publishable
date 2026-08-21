@@ -397,6 +397,7 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | Varying config **shape** when the property is about roster **content** | Nineteen adversary configs over one roster made every refusal roster-incidental. **A refusal that happens to fire must be attributed before it is counted** |
 | A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
 | A test that **iterates the thing under test** | A vocabulary test looped over `sorted(PHASES)` — the very frozenset under test — so removing a member changed the expectation and the actual together: all four removals failed on `assert 3 == 4` rather than through the guard, and the test's second assertion went **vacuous** under every mutation. **Enumerate the literals the set should contain**, or the test measures only that the set equals itself |
+| A decoy whose **sort position agrees with the bug** | Twice in one task a scan-versus-lookup fixture ruled out only *first*-wins: the decoy sorted before the real package, so scan-first failed and **scan-last passed**. The second instance came after the first had been caught and disclosed — **catching it once does not immunize the next fixture.** Put a decoy on **each side** (`aaa_`/`zzz_`), or the fixture tests the ordering it happens to have |
 | A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 | A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
@@ -418,6 +419,14 @@ closed by asking the direct question — does this class's defining file sit und
 A corollary that cost its own round: **state read at the wrong moment is a third proxy.** The first fix
 was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
 class's module is gone, while an external one is still cached.
+
+**Removing by position is a fifth.** A `sys.path` entry inserted at index 0 was removed with `pop(0)` —
+which answers *which entry did I add?* with a **position** rather than with the entry. User code runs
+inside that window by design, so an override doing its own `sys.path.insert(0, …)` made the pop remove
+the wrong entry and leak one project's `src/` into the next render. The precedent cited in its defence —
+`load_experiment` pops by index too — **held for the mechanism and not for the exposure**: only an import
+runs inside that window, and a whole render runs inside this one. Remove by identity, and pin the
+restoration on the failure path.
 
 **A grep for one spelling is a fourth**, and it shipped a credential leak. H7c's redaction was sited by
 measuring every place an exception reaches a stream with `grep 'type(exc).__name__'` — which answers

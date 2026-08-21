@@ -1,12 +1,10 @@
 # src/publishable/report.py
-"""`BaseReport` and `Section`. docs/reference.md § A report override renders one
-experiment's own figures, § The importable surface.
+"""`BaseReport`, `Section`, and override discovery. docs/reference.md § A report
+override renders one experiment's own figures, § The importable surface.
 
-Nothing here dispatches: the real `report` command, override discovery, and the
-standard sections arrive in later tasks. This module builds only the API every
-override is written against — `BaseReport.sections` and the `Section` values it
-yields — so its shape is load-bearing for every subclass that will ever be
-written on top of it.
+Nothing here dispatches: the real `report` command and the standard sections
+arrive in later tasks. `render_with_override` is called by nothing outside
+this module's own tests yet — task 8 wires it into the `report` command.
 """
 
 import importlib
