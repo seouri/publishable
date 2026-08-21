@@ -9,9 +9,16 @@ yields — so its shape is load-bearing for every subclass that will ever be
 written on top of it.
 """
 
-from collections.abc import Iterator, Mapping
+import importlib
+import sys
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, TypeVar
+
+from publishable.errors import ContractError
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -65,3 +72,176 @@ class BaseReport:
         elsewhere, over `run` and `io`, once the sections themselves exist.
         """
         yield from ()
+
+
+def _read_repo_root(run_dir: Path) -> Path:
+    """`environment/repo_root.txt`, checked for shape, never walked up to.
+
+    `report <run.yaml>` is handed a path inside `output_dir`, and
+    `output_dir` may never resolve inside the git repo — the standing
+    invariant, checked at generate, at validate, and by every command that
+    executes. A walk-up from the argument therefore answers "is there a
+    repo above `output_dir`", a different question, and on a correctly
+    configured project `provenance.find_repo_root` **raises**
+    `E-GIT-NO-REPO` rather than answering it (measured at `ebf642a`) — a
+    mutation replacing this read with that walk-up would be caught by a
+    crash rather than by a property, which is why it is not one of this
+    module's four. The fact is `environment/repo_root.txt`, the run-start
+    artifact H8b introduced for the identical problem in `freeze`.
+    `provenance.git.repo_root` is not read here: it is the same value
+    recorded at run end, `study add` redacts it out of a bundle member, and
+    two sources for one fact is how the two drift.
+
+    Missing, empty, or naming something that is not a directory is refused
+    with the matching remedy (`E-REPORT-OVERRIDE-REPO`) rather than read as
+    "no override" — a silent fail-open is exactly what this function
+    exists to avoid.
+    """
+    repo_root_path = run_dir / "environment" / "repo_root.txt"
+    if not repo_root_path.is_file():
+        raise ContractError(
+            f"no environment/repo_root.txt in {run_dir} — the run was "
+            "started by a build before this artifact existed, or the "
+            "directory was edited; a report override cannot be discovered",
+            code="E-REPORT-OVERRIDE-REPO",
+        )
+    text = repo_root_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ContractError(
+            f"{repo_root_path} is empty — the directory was edited; a "
+            "report override cannot be discovered",
+            code="E-REPORT-OVERRIDE-REPO",
+        )
+    repo_root = Path(text)
+    if not repo_root.is_dir():
+        raise ContractError(
+            f"{repo_root_path} names `{text}`, which is not a directory — "
+            "the directory was edited; a report override cannot be "
+            "discovered",
+            code="E-REPORT-OVERRIDE-REPO",
+        )
+    return repo_root
+
+
+def _root_package(record: Mapping[str, Any]) -> str:
+    """This run's own `config.entrypoint`'s root package — the direct
+    question Decision 3 poses (docs/superpowers/specs/2026-08-21-report-
+    study-design.md), and the only fact this function consults: not a
+    directory scan of `src/`, not a module-name prefix, not a marker
+    stamped on a class, not "does this file sit under this repo", and not
+    definition order among two subclasses.
+
+    A hand-edited record can hold an `entrypoint` that is absent, empty, or
+    not a string, and a `None` reaching `.partition` would be a traceback
+    rather than a diagnostic — so every shape but a well-formed
+    `<module>:<attribute>` string is routed to a refusal with a remedy
+    (`E-REPORT-OVERRIDE-ENTRYPOINT`), never to "no override", which would
+    be this function's own fail-open.
+    """
+    config = record.get("config") if isinstance(record, Mapping) else None
+    entrypoint = config.get("entrypoint") if isinstance(config, Mapping) else None
+    if not isinstance(entrypoint, str) or not entrypoint:
+        raise ContractError(
+            f"this run's config.entrypoint is {entrypoint!r}, not a "
+            "non-empty string — the record was edited by hand; a report "
+            "override cannot be discovered",
+            code="E-REPORT-OVERRIDE-ENTRYPOINT",
+        )
+    module_name, _, attr = entrypoint.partition(":")
+    if not module_name or not attr:
+        raise ContractError(
+            f"this run's config.entrypoint {entrypoint!r} is not "
+            "`<module>:<attribute>` — the record was edited by hand; a "
+            "report override cannot be discovered",
+            code="E-REPORT-OVERRIDE-ENTRYPOINT",
+        )
+    return module_name.split(".", 1)[0]
+
+
+def render_with_override(
+    run_dir: Path,
+    record: Mapping[str, Any],
+    render: Callable[["type[BaseReport] | None"], T],
+) -> T:
+    """Discover this run's own `BaseReport` override, if it declares one,
+    and call `render` with the resolved subclass — or `None` when there is
+    no override — entirely inside the `sys.path` window opened to import
+    it (docs/superpowers/specs/2026-08-21-report-study-design.md
+    Decision 3).
+
+    **This does NOT call `base_experiment.load_experiment`.** Discovery
+    needs `<root_pkg>.report`, not the entrypoint's own `<module>:
+    <attribute>`, so it re-implements `load_experiment`'s window by
+    calling the same two steps in the same order — purge `sys.modules` for
+    the root package first (`load_experiment`'s own docstring: "two
+    projects in one process can declare the same package name", and this
+    repo's own suite runs many projects in one process off a scaffold
+    whose package name is stable), then insert `<repo_root>/src` on
+    `sys.path` — rather than importing and calling `load_experiment`
+    itself. One consequence of re-implementing rather than calling: a
+    corrupt or missing `entrypoint` here is this function's OWN refusal,
+    `E-REPORT-OVERRIDE-ENTRYPOINT` (`_root_package` above), never
+    `E-ENTRYPOINT-IMPORT`.
+
+    The render happens before `sys.path` is popped, inside the same `try`
+    whose `finally` pops it — never after — because a `sections` body that
+    lazily imports a sibling module at render time would otherwise fail on
+    an already-restored path: H7a's "state read at the wrong moment" in a
+    new costume.
+
+    Three refusals, and a fourth case that is not one:
+
+    - no `<root_pkg>/report.py` at all → **no override**: `render(None)`,
+      the ordinary case (`generate report` is opt-in).
+    - `<root_pkg>.report` exists and raises on import →
+      `E-REPORT-OVERRIDE-IMPORT`, distinguished from the case above by the
+      import machinery's own answer — `ModuleNotFoundError.name` naming
+      the exact module this call tried to import — never by catching
+      every exception alike.
+    - `<root_pkg>.report` defines no `BaseReport` subclass, or more than
+      one → `E-REPORT-OVERRIDE-CLASS`. "More than one" is refused rather
+      than resolved by definition order: order is exactly the proxy this
+      function forbids, and a project has one report.
+    """
+    repo_root = _read_repo_root(run_dir)
+    root_pkg = _root_package(record)
+    module_name = f"{root_pkg}.report"
+
+    for cached in [
+        name for name in sys.modules if name == root_pkg or name.startswith(root_pkg + ".")
+    ]:
+        del sys.modules[cached]
+    sys.path.insert(0, str(repo_root / "src"))
+    try:
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name == module_name:
+                return render(None)
+            raise ContractError(
+                f"{module_name!r} could not be imported: {exc}",
+                code="E-REPORT-OVERRIDE-IMPORT",
+            ) from exc
+        except Exception as exc:
+            raise ContractError(
+                f"{module_name!r} could not be imported: {exc}",
+                code="E-REPORT-OVERRIDE-IMPORT",
+            ) from exc
+
+        subclasses = [
+            obj
+            for obj in vars(module).values()
+            if isinstance(obj, type)
+            and issubclass(obj, BaseReport)
+            and obj is not BaseReport
+            and obj.__module__ == module.__name__
+        ]
+        if len(subclasses) != 1:
+            raise ContractError(
+                f"{module_name!r} defines {len(subclasses)} `BaseReport` "
+                "subclasses, not exactly one",
+                code="E-REPORT-OVERRIDE-CLASS",
+            )
+        return render(subclasses[0])
+    finally:
+        sys.path.pop(0)
