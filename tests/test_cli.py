@@ -16406,6 +16406,7 @@ def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
         "ArtifactError",
         "ArtifactExistsError",
         "BaseExperiment",
+        "BaseReport",
         "BaseStep",
         "BaseTemplate",
         "ContractError",
@@ -16420,4 +16421,3 @@ def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
         "register_writer",
     ]
     assert list(publishable.__all__) == sorted(publishable.__all__)
-    assert "BaseReport" not in publishable.__all__

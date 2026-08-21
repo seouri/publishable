@@ -998,7 +998,7 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `BaseExperiment` | subclass | built | The ordered `steps` list, and nothing else — see [Generators](#generators) |
 | `BaseStep` | subclass | built | One stage: `scope`, `run(cfg, io)`, `nondeterministic`, `derive_seed` — see [Steps and artifacts](#steps-and-artifacts) |
 | `BaseTemplate` | subclass | built | An experiment type's `parameter_spec`, `validate`, `aggregate` — see [Templates](#templates-where-parameters-are-defined) |
-| `BaseReport` | subclass | not yet built | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
+| `BaseReport` | subclass | built | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
 | `Param` | construct | built | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
 | `Unit` | construct | built | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
 | `Apparatus` | construct | built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
@@ -1039,7 +1039,7 @@ Core imports your classes before any instance exists — the [execution plan is 
 | `BaseStep` | `run(self, cfg, io)` | `scope = "repeat"`, `nondeterministic = False` | `__init__`, `self.condition` / `self.repeat` / `self.rng`, `derive_seed` |
 | `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]`, `version` is `None` | The registry, materialization, and every check `parameter_spec` drives |
 | `BaseExperiment` | `steps` | — | Everything the plan is derived from |
-| `BaseReport` | `sections(self, run, io)`, a generator | — | The standard sections `super().sections` yields |
+| `BaseReport` | `sections(self, run, io)`, a generator | — | The standard sections `super().sections` yields, `self.section`, `__init__` |
 
 `BaseReport.format` is deliberately absent from the middle column: [`generate report` always writes the line](#a-report-override-renders-one-experiments-own-figures), so a base default would be a value no generated class could ever be observed to take. `BaseTemplate.aggregate` is on neither list: it has no base implementation, and a template either defines it or doesn't. That absence is readable — it's what [`validate`'s "template `generic` defines no `aggregate`"](#validation) is testing — and a base returning `{}` would make the two cases indistinguishable.
 

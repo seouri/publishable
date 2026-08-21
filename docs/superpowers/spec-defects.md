@@ -2567,7 +2567,7 @@ Pinned by `test_an_estimate_is_refused_at_every_other_scope` and
 `test_an_estimate_with_an_n_does_not_warn`, and `test_an_estimate_with_no_interval_does_not_warn`
 (`-N`, `tests/test_cli.py`, all three through `main(["run", ...])`).
 
-## ~~The importable surface names five things `publishable/__init__.py` does not export~~ — MOSTLY CLOSED; only `BaseReport` remains
+## ~~The importable surface names five things `publishable/__init__.py` does not export~~ — CLOSED
 
 **Corrected 2026-08-20, measured at `993aeec`.** Five of the six names this entry lists are now
 exported from `publishable/__init__.py`: `Unit`, `Apparatus`, `register_template`,
@@ -2666,6 +2666,12 @@ therefore names **five** absent things, not six: `Apparatus`, `BaseReport`, `reg
 `register_resolver`/`register_writer`, `register_probe` and `Apparatus` are **H7b/H7d** — H7a shipped
 none of entry-point resolution, the other three registries, probes, the `Apparatus`, or the change
 gate — and `BaseReport` is still shared with **H8**.
+
+**CLOSED 2026-08-21 (H8c task 1).** `BaseReport` is now defined at
+`src/publishable/report.py` and exported: `__all__` holds `"BaseReport"` in sorted
+position, checked directly by `test_h8c_arm_b_publishable_all_is_a_full_sorted_list`. The
+last of the six names this entry ever named has a home. Struck rather than deleted, per
+this file's own rule for a closed gap.
 
 ## Carried out of S5a for S5b: `Estimate.ci95` has no length or ordering rule
 
