@@ -74,20 +74,12 @@ position.
   narrowing only bites once a *covered, non-`parameters`* field is edited, which is arm two and
   three of Fixture M's own construction.
   Arm two failed (`0 == 1` delta lines expected), as did the sorted/absent/reordered-list tests and
-  the real-run Fixture R2 test (`min_samples` lives under `parameters`, so it happened to still
-  work for the wrong reason there — no, checked again: `min_samples` IS under `parameters`, so
-  that failure came from a different assertion in the same test; see below).
-- Reverted by editing `diff.py`'s two lines back; `diff /tmp/diff.py.orig src/publishable/diff.py`
-  → **identical**; re-ran `tests/test_diff.py tests/test_hashes.py` → **41 passed**.
-
-Fixture R2's own row-output test also failed under M4, and it is worth being precise about why,
-since `min_samples` genuinely lives under `parameters` and the mutation still sees a value there.
-Read the failure text rather than trusting the pass/fail count: `M4`'s mutation is
-`flat_a = _flatten(config_a.get("parameters") or {})` — it flattens the **`parameters` sub-dict
-directly, with no prefix**, so the emitted path becomes `analysis.min_samples`, not
-`parameters.analysis.min_samples`. The test's own filter
-(`line.strip().startswith("parameters.analysis.min_samples")`) then matches **zero** lines — not
-because the value disappeared, but because the path lost its `parameters.` root. That is still a
+  the real-run Fixture R2 test. Fixture R2's failure is worth being precise about, since
+  `min_samples` genuinely lives under `parameters` and the mutation still sees a value there:
+  `M4`'s mutation flattens the **`parameters` sub-dict directly, with no prefix**, so the emitted
+  path becomes `analysis.min_samples`, not `parameters.analysis.min_samples`. The test's own filter
+  (`line.strip().startswith("parameters.analysis.min_samples")`) then matches **zero** lines — not
+  because the value disappeared, but because the path lost its `parameters.` root. That is still a
 correct catch of the mutation (the delta line it prints is wrong), just not for the reason a first
 skim suggests.
 
@@ -275,5 +267,171 @@ set run this batch, each with the file(s) it targeted.
 - The one-sided `not captured` arm (non-null vs. null) was checked manually against a hand-rolled
   script this batch, not committed as a test — Fixture L's own two runs are both non-null once the
   lockfile exists, and no fixture in this batch mixes a null-`uv_lock_hash` run against a non-null
-  one. This is in scope for task 10's "not comparable" work or could be added earlier; flagging
-  rather than silently deferring.
+  one. **Closed in Fix round 1** (Major 2, below) — this bullet is kept rather than deleted so the
+  record shows what the original gap was.
+
+---
+
+## Fix round 1 (2026-08-21)
+
+Review at `.superpowers/sdd/2026-08-20-diff-freeze/task-b5-review.md`. Both verdicts PASS with
+findings: four Majors, four Minors. All eight closed. Gates at clean HEAD before this round:
+suite 2600 passed / 1 skipped / 2 xfailed, mypy 49, ruff format 88 — all unchanged from the batch
+this round fixes. After this round: suite **2609** passed / 1 skipped / 2 xfailed (+9 new tests),
+mypy 49 (unchanged — no new module), ruff format 88 (unchanged).
+
+**Credit acknowledged, not re-litigated.** The reviewer's own ten-config digest-stability check,
+the M4/list-recursion/row-order re-runs, and the correctness of Decision 3's extraction all stand;
+this round only closes what was found wrong.
+
+### Major 1 — `_flatten` dropped an empty mapping
+
+**Changed:** replaced the per-side-independent `_flatten` with `_diff_values(value_a, value_b,
+path)`, a DUAL walk over both configs at once. It descends into a `dict` present on EITHER side
+(empty or not) by recursing on the UNION of that path's keys; a path becomes a leaf only when
+NEITHER side has a child there (both empty, or one absent and the other empty). `parameter_deltas`
+now calls this once, sorts the resulting `(path, value_a, value_b)` triples, and renders them with
+the same column-aligned format as before.
+
+A simpler patch — just "treat every empty `dict` as a leaf" in the original per-side flatten —
+was tried first and **rejected** because it regresses a shipped case: given
+`a = {"parameters": {}}` and `b = {"parameters": {"z": {"late": 1}, "a": {"early": 1}}}`, treating
+`a`'s empty `parameters` as a leaf makes it appear ONLY on `a`'s side (since `b`'s non-empty dict
+never appears as a leaf, only its recursed children do), producing a false extra line
+`parameters  {} → (absent)` — wrong, since `b` does not lack `parameters`, it has real content
+just represented one level deeper. Caught by re-running `test_h8b_parameter_deltas_are_sorted_by_path`
+(already shipped, unrelated to this finding) against that simpler patch before committing to it;
+the dual-walk does not have this defect, verified by the same test passing unchanged.
+
+**Verified by:**
+- `test_h8b_an_empty_mapping_leaf_prints_one_line_not_a_bare_differs` (pure function, both
+  directions) and `test_h8b_fixture_m_arm_four_sweep_empty_block_deleted_end_to_end` (end to end:
+  scaffolds a real project, reads back `config_a["sweep"] == {}` — measured, not assumed, from
+  `init`'s own output — deletes the key, reruns, and asserts `parameters_hash` differs while
+  `parameter_deltas` names exactly one line).
+- **Mutation, reverted:** restored the exact pre-fix per-side-independent flatten (kept as
+  `_old_buggy_flatten` for the duration of the check) → `2 failed, 48 passed` in
+  `tests/test_diff.py tests/test_hashes.py`. The two failures were exactly the two new tests
+  above; all 48 property-preserving tests — including every pre-existing Fixture M arm and the
+  sorted-path test that the simpler patch would have broken — stayed green, confirming the fix is
+  neither blind nor a regression. Reverted by restoring the saved fixed copy; `diff` against it →
+  identical; re-ran → 50/50 passed.
+- **Digest stability re-verified empirically, not assumed from reading.** `hashes.py` has **zero
+  diff** in this fix round (`git diff --stat HEAD -- src/publishable/hashes.py` → empty output),
+  so no hash could have moved — but also ran `hashes.parameters_hash` over ten configs (`{}`,
+  `{"data": {}}`, `{"data": {"input_dir": "/x"}}` and its `output_dir` twin, `{"metadata": {"x":
+  1}}`, `{"sweep": {}}`, `{"data": None}`, `{"data": "not-a-dict"}`, `{"data": ["list"]}`, a
+  populated `parameters`+`limits` config) against the pre-fix-round commit (via `git stash` on
+  `diff.py`/`test_diff.py` alone, leaving `hashes.py` untouched either way) and the post-fix-round
+  tree: **all ten digests byte-identical.**
+
+### Major 2 — the one-sided `not captured` arm was unpinned
+
+**Changed:** no source change — behaviour at HEAD was already correct (`or`, not `and`). Added
+`test_h8b_the_one_sided_not_captured_arm`: a real lockfile-backed run (Fixture L's own mechanism,
+non-null `uv_lock_hash`) against an ordinary `run_a_project` scaffold (null), through
+`_render_row("uv.lock", ...)` in both operand orders.
+
+**Verified by:** mutation `or` → `and` in `_render_row`'s guard → `1 failed, 49 passed`; the new
+test failed with the exact crash the review named
+(`AttributeError: 'NoneType' object has no attribute 'partition'` inside `_truncated`), and all 49
+other tests — including Fixture R2's both-null case, the property-preserving arm this guard's
+`and` variant does not touch — stayed green. Reverted; `diff` against the saved fixed copy →
+identical; re-ran → 50/50 passed.
+
+Closed now rather than deferred to task 10, per the review's three reasons: the material already
+existed in this batch, task 10 owns a different code path (`not comparable`, the config side) and
+a different word, and the exposure was a crash.
+
+### Major 3 — Python reprs instead of the config's own YAML vocabulary
+
+**Changed:** `_render_leaf` now special-cases `bool` (→ `true`/`false`) and `None` (→ `null`)
+before falling through to `str(value)` for every other scalar — `str` values are untouched, so
+this is not a blanket `yaml.safe_dump` widening (a quoted string would be a new, unrequested
+change). `bool` is checked before the generic branch because `isinstance(True, int)` is also
+`True`, noted in the docstring as future-relevant rather than load-bearing today (there is no
+separate `int` branch).
+
+**Verified by:** `test_h8b_bool_and_none_leaves_render_as_yaml_not_python_repr` (both `True`/`False`
+and `None`/`"site"` pairs, asserting the YAML spellings appear and the strings `"True"`/`"None"`
+do not) and `test_h8b_scalar_string_leaves_are_not_yaml_quoted` (the property-preserving control —
+an ordinary string delta must still render unquoted). **Mutation, reverted:** removed the two new
+branches → `1 failed, 49 passed`; only the bool/None test failed, the string-scalar control passed
+unchanged, confirming the fix is scoped to the two types named and does not touch strings. Reverted;
+`diff` → identical; re-ran → 50/50 passed.
+
+### Major 4 — the row-label pin was not built, and a pre-writing grep was presented as its discharge
+
+**Changed:** added `_document_row_labels(path)` to `tests/test_diff.py`, the
+`_status_tables`/`_interval_method_names` shape from `tests/test_cli.py` — it parses a fenced
+`diff` output for `<label>  identical|DIFFERS` lines, anchored at line-start so an indented detail
+line never matches. Three tests: a non-vacuous-parse control over all three documents, an equality
+pin against README's and design-principles.md's four-row form, and a pin against reference.md's
+five-row form with `apparatus` filtered out. Each compares the DOCUMENT-derived list against
+`ROW_LABELS` — the code's own constant — not against a second hard-coded literal, which is the
+property Major 4 named as missing (a document rename must be able to fail this).
+
+**Verified by:** re-ran the same grep the review named absent (`grep -rn
+'README.md\|design-principles.md\|reference.md' tests/` narrowed to files actually opening those
+paths) — before this round, none in `tests/` derived `diff`'s row labels from them; now
+`tests/test_diff.py` does. **Mutation, reverted:** changed `ROW_LABELS` to
+`["code_hash", "input_manifest_hash", "uv_lock_hash", "parameters_hash"]` (the exact `_hash`-suffixed
+misspelling the review used as its example) → `6 failed, 44 passed`, including both new
+document-agreement tests (the third, the parse-control, does not depend on `ROW_LABELS` and stayed
+green, correctly). Reverted; `diff` → identical; re-ran → 50/50 passed.
+
+### Minor 1 — column alignment did not match the worked outputs
+
+**Changed:** `_render_row` pads a row's label to `_LABEL_WIDTH = 19` and (for `identical`) its
+verdict to `_VERDICT_WIDTH = 13` before the digest — both measured directly against
+`design-principles.md`'s fenced example (`code_hash          identical    sha256:8e21...`, verdict
+column at character 19 for every label length tried). `parameter_deltas` now aligns its value
+column to the LONGEST changed path in a given comparison (`width = max(len(path) for path, _, _ in
+changed) + 2`), matching the same document's two-line example where `parameters.analysis.method`
+and the longer `parameters.analysis.min_samples` both start their values at the same column. For a
+single-line batch this reduces to exactly the old fixed two-space gap, so every existing
+single-delta test kept its literal-equality assertion unchanged.
+
+**Verified by:** existing Fixture M single-line tests (`arm_one`, `arm_two`, `arm_three`, the
+absent-arrow test) all still pass with exact-equality assertions unmodified; the multi-line sorted
+test (which uses `.split()`, not exact equality) also unaffected. Updated the three tests that DID
+assert exact fixed-spacing literals against `_render_row`'s row output (`test_h8b_fixture_r2_row_output`,
+both `test_h8b_fixture_l_*` tests) to `re.search`/`re.fullmatch` on label+verdict rather than a
+literal space count, since the point of those assertions was never the exact width.
+
+### Minor 2 — M4 conflates two properties; only Fixture M's arm two isolates coverage
+
+No code change — this is a note carried into the record, as the review asked. M4 (`_flatten(
+config_a.get("parameters") or {})`) both narrows coverage AND strips the `parameters.` prefix from
+every surviving path. Fixture M's arm one (metadata) is blind to both changes; arm two
+(`limits.max_failed_fraction`) is what actually proves the walk lost `limits` coverage, since its
+failure is "zero lines" rather than "lines with the wrong path." Recorded here so a future re-run
+of M4 does not read arm two's failure as proof of a narrower claim than it supports.
+
+### Minor 3 — reasoning-in-progress left in the committed report
+
+**Changed:** edited the M4 mutation paragraph above (this same file) to remove the
+"— no, checked again: ... see below" fragment and state the conclusion once, where the correct
+explanation already lived two sentences later. This is a same-batch tidying of an unfinished
+sentence, not a retro-edit of a past ruling — the report had not yet had its verdict recorded when
+this round started.
+
+### Minor 4 — with both operands unreadable, only the first was reported
+
+**Changed:** `command_diff` now attempts both `_load_side` calls unconditionally (each in its own
+`try`/`except ContractError`, appending to one shared `Collector`) before deciding whether to
+refuse, rather than returning on side A's failure without ever attempting side B. An `OSError`
+(a missing path) is untouched by this — it still propagates uncaught from whichever side raises it
+first, since only `ContractError` is caught.
+
+**Verified by:** `test_h8b_both_operands_unreadable_are_both_reported` (two empty directories,
+both `E-UPSTREAM-RECORD-MISSING`, both paths named in the rendered output, `out.count(...) == 2`).
+**Mutation, reverted:** restored the original return-on-first-failure form → `1 failed, 49 passed`;
+only the new both-unreadable test failed, and every single-bad-path test (the property-preserving
+arm — old and new code behave identically when only one side fails) stayed green. Reverted; `diff`
+→ identical; re-ran → 50/50 passed.
+
+### Gates after all eight findings closed
+
+`uv run pytest` → **2609 passed, 1 skipped, 2 xfailed**. `uv run mypy` → 49 source files, clean.
+`uv run ruff check .` → clean. `uv run ruff format --check .` → 88 files. Tree clean at commit time.

@@ -4,6 +4,7 @@ detection, the per-side header and the four rows that need no apparatus row
 11, so every call here is direct, on `command_diff`.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,15 @@ from publishable.diff import (
     _form,
     _header_line,
     _load_side,
+    _render_row,
     command_diff,
     parameter_deltas,
 )
 from publishable.errors import ContractError
+
+README_MD = Path(__file__).resolve().parents[1] / "README.md"
+DESIGN_PRINCIPLES_MD = Path(__file__).resolve().parents[1] / "docs" / "design-principles.md"
+REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
 
 # ---------------------------------------------------------------------------
 # Fixture M (task 7 step 4): metadata versus limits, the coverage pin.
@@ -101,6 +107,82 @@ def test_h8b_parameter_deltas_are_sorted_by_path():
 
 
 # ---------------------------------------------------------------------------
+# Batch 5 review, Major 1: an empty mapping is a leaf too, and `sweep: {}`
+# — what `publishable init` itself materializes — is the reachable case.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_an_empty_mapping_leaf_prints_one_line_not_a_bare_differs():
+    """`covered_config({"sweep": {}})` and `covered_config({})` must NOT
+    flatten identically — the defect Major 1 named: `_flatten` used to drop
+    an empty `dict` entirely, so `parameters_hash` moved while the delta
+    walk printed nothing."""
+    a = {"experiment_type": "generic", "parameters": {}, "sweep": {}}
+    b = {"experiment_type": "generic", "parameters": {}}
+    lines = parameter_deltas(a, b)
+    assert lines == ["  sweep  {} → (absent)"]
+    reverse = parameter_deltas(b, a)
+    assert reverse == ["  sweep  (absent) → {}"]
+
+
+def test_h8b_fixture_m_arm_four_sweep_empty_block_deleted_end_to_end(tmp_path: Path):
+    """Major 1, end to end against `init`'s own output: `generate_experiment`
+    materializes `sweep: {}` (`materialize.py`'s own comment: "Empty (or
+    omitted) means a single, unswept condition"), so deleting the key
+    between two runs is a real, reachable edit — not a hand-built dict.
+    `parameters_hash` must differ (the projection includes `sweep` either
+    way) AND the delta walk must name exactly one line, never zero."""
+    doc = run_a_project(tmp_path, units=8)
+    run_a = doc["run_dir"]
+    config_a = yaml.safe_load((run_a / "config.yaml").read_text())
+    assert config_a["sweep"] == {}, "measured: init/generate_experiment writes sweep: {}"
+
+    def edit(config: dict) -> None:
+        del config["sweep"]
+
+    run_b = _second_run_after_edit(doc, edit)
+    doc_a = yaml.safe_load((run_a / "run.yaml").read_text())
+    doc_b = yaml.safe_load((run_b / "run.yaml").read_text())
+    assert doc_a["parameters_hash"] != doc_b["parameters_hash"]
+    lines = parameter_deltas(doc_a["config"], doc_b["config"])
+    assert lines == ["  sweep  {} → (absent)"]
+
+
+# ---------------------------------------------------------------------------
+# Batch 5 review, Major 3: a scalar leaf renders in the config's own YAML
+# vocabulary, not Python's repr.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_bool_and_none_leaves_render_as_yaml_not_python_repr():
+    a = {
+        "experiment_type": "generic",
+        "parameters": {"analysis": {"drop_missing": True}},
+        "data": {"units": {"cluster_by": None}},
+    }
+    b = {
+        "experiment_type": "generic",
+        "parameters": {"analysis": {"drop_missing": False}},
+        "data": {"units": {"cluster_by": "site"}},
+    }
+    lines = parameter_deltas(a, b)
+    joined = "\n".join(lines)
+    assert "true → false" in joined
+    assert "null → site" in joined
+    assert "True" not in joined
+    assert "None" not in joined
+
+
+def test_h8b_scalar_string_leaves_are_not_yaml_quoted():
+    """A `str` scalar keeps `str(value)` — Major 3's fix is not a blanket
+    `safe_dump` widening that would start quoting ordinary strings."""
+    a = {"experiment_type": "generic", "parameters": {"analysis": {"method": "pearson"}}}
+    b = {"experiment_type": "generic", "parameters": {"analysis": {"method": "spearman"}}}
+    lines = parameter_deltas(a, b)
+    assert lines == ["  parameters.analysis.method  pearson → spearman"]
+
+
+# ---------------------------------------------------------------------------
 # Real runs: Fixture R (base), Fixture R2 (one parameter edited), Fixture L
 # (a real lockfile, and a lockfile that then moves).
 # ---------------------------------------------------------------------------
@@ -146,10 +228,13 @@ def test_h8b_fixture_r2_the_documented_payoff(tmp_path: Path, capsys: pytest.Cap
     code = command_diff(run_a, run_b)
     out = capsys.readouterr().out
     assert code == EXIT_OK
-    assert "code_hash    identical" in out
-    assert "input_manifest    identical" in out
-    assert "uv.lock    not captured" in out
-    assert "parameters_hash    DIFFERS" in out
+    # Regex, not a literal, since batch 5's fix round pads labels/verdicts
+    # to the worked outputs' own column widths (Minor 1) rather than a
+    # fixed number of spaces.
+    assert re.search(r"^code_hash\s+identical", out, re.M)
+    assert re.search(r"^input_manifest\s+identical", out, re.M)
+    assert re.search(r"^uv\.lock\s+not captured$", out, re.M)
+    assert re.search(r"^parameters_hash\s+DIFFERS$", out, re.M)
     delta_lines = [
         line
         for line in out.splitlines()
@@ -229,7 +314,7 @@ def test_h8b_fixture_l_row_output(tmp_path: Path, capsys: pytest.CaptureFixture[
     capsys.readouterr()
     command_diff(run_a, run_b)
     out = capsys.readouterr().out
-    assert "uv.lock    identical" in out
+    assert re.search(r"^uv\.lock\s+identical", out, re.M)
 
     (root / "uv.lock").write_text("# a stand-in lockfile, moved\n")
     subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
@@ -244,7 +329,46 @@ def test_h8b_fixture_l_row_output(tmp_path: Path, capsys: pytest.CaptureFixture[
     capsys.readouterr()
     command_diff(run_a, run_c)
     out2 = capsys.readouterr().out
-    assert "uv.lock    DIFFERS" in out2
+    assert re.search(r"^uv\.lock\s+DIFFERS", out2, re.M)
+
+
+# ---------------------------------------------------------------------------
+# Batch 5 review, Major 2: the one-sided `not captured` arm — a null figure
+# on only one side, not both. Fixture R2 only ever exercises the
+# both-null case; this is the pin that was missing.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_the_one_sided_not_captured_arm(tmp_path: Path):
+    """`_render_row`'s `or` guard must fire when exactly one side's figure
+    is `null`, not only when both are. Real records: a lockfile-backed run
+    (Fixture L's own mechanism) against an ordinary `run_a_project`
+    scaffold, in both operand orders."""
+    import subprocess
+
+    root, cfg, results = build(tmp_path)
+    (root / "uv.lock").write_text("# a stand-in lockfile\n")
+    subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "lock"],
+        cwd=root,
+        check=True,
+    )
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_with_lock = next(results.glob("run_*"))
+    doc_with_lock = yaml.safe_load((run_with_lock / "run.yaml").read_text())
+    assert doc_with_lock["provenance"]["environment"]["uv_lock_hash"] is not None
+
+    without_lock_root = tmp_path / "second_project"
+    without_lock_root.mkdir()
+    second = run_a_project(without_lock_root, units=8)
+    doc_without_lock = yaml.safe_load((second["run_dir"] / "run.yaml").read_text())
+    assert doc_without_lock["provenance"]["environment"]["uv_lock_hash"] is None
+
+    for line in _render_row("uv.lock", doc_with_lock, doc_without_lock):
+        assert re.fullmatch(r"uv\.lock\s+not captured", line)
+    for line in _render_row("uv.lock", doc_without_lock, doc_with_lock):
+        assert re.fullmatch(r"uv\.lock\s+not captured", line)
 
 
 # ---------------------------------------------------------------------------
@@ -390,3 +514,71 @@ def test_h8b_row_order_is_pinned(tmp_path: Path, capsys: pytest.CaptureFixture[s
         "uv.lock",
         "parameters_hash",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Batch 5 review, Major 4: `ROW_LABELS` pinned against the DOCUMENTS'
+# text, not against the code's own idea of itself — the
+# `_status_tables`/`_interval_method_names` shape from `tests/test_cli.py`.
+# ---------------------------------------------------------------------------
+
+
+def _document_row_labels(path: Path) -> list[str]:
+    """Every `<label>  identical|DIFFERS` line in a fenced `diff` output.
+    Anchored at the start of the line, so an indented detail line
+    (`  calibration_id   CAL... → CAL...`) never matches — a detail line
+    starts with whitespace, a row line starts with its label."""
+    labels = []
+    for line in path.read_text().splitlines():
+        match = re.match(r"^([A-Za-z][A-Za-z0-9_.]*)\s{2,}(identical|DIFFERS)\b", line)
+        if match:
+            labels.append(match.group(1))
+    return labels
+
+
+def test_h8b_row_labels_are_parsed_from_the_documents_at_all():
+    """The control: each of the three documents must yield at least one row
+    label, or every agreement pin below passes vacuously."""
+    assert _document_row_labels(README_MD)
+    assert _document_row_labels(DESIGN_PRINCIPLES_MD)
+    assert _document_row_labels(REFERENCE_MD)
+
+
+def test_h8b_row_labels_agree_with_readme_and_design_principles():
+    """README § The loop you'll actually live in and design-principles.md
+    § Same code, different parameters both show the four-row form (no
+    apparatus row, since template `generic` declares no probe) —
+    `ROW_LABELS` must equal what THEY say. If either document renamed
+    `uv.lock` tomorrow, this must fail."""
+    assert _document_row_labels(README_MD) == ROW_LABELS
+    assert _document_row_labels(DESIGN_PRINCIPLES_MD) == ROW_LABELS
+
+
+def test_h8b_row_labels_agree_with_reference_once_apparatus_is_dropped():
+    """reference.md § The apparatus core can only observe shows the
+    five-row form. `apparatus` is task 9's row; until it lands,
+    `ROW_LABELS` is that same document sequence with `apparatus` removed."""
+    labels = _document_row_labels(REFERENCE_MD)
+    assert "apparatus" in labels
+    assert [label for label in labels if label != "apparatus"] == ROW_LABELS
+
+
+# ---------------------------------------------------------------------------
+# Batch 5 review, Minor 4: with both operands unreadable, both are reported
+# in one run rather than one at a time.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_both_operands_unreadable_are_both_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    empty_a = tmp_path / "empty_a"
+    empty_a.mkdir()
+    empty_b = tmp_path / "empty_b"
+    empty_b.mkdir()
+    code = command_diff(empty_a, empty_b)
+    out = capsys.readouterr().out
+    assert code == EXIT_WRONG
+    assert str(empty_a) in out
+    assert str(empty_b) in out
+    assert out.count("E-UPSTREAM-RECORD-MISSING") == 2

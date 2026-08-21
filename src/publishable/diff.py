@@ -119,46 +119,93 @@ def _header_line(letter: str, side: _Side) -> str:
     return "  ".join([letter, side.form, str(side.path)])
 
 
-def _flatten(config: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Dotted leaf paths over `covered_config`'s projection. A leaf is
-    anything that is not a `dict` — a list is a leaf, not a subtree, because
-    a config list (`statistics.contrasts`, `metadata.authors`, a sweep grid's
-    values) is one declaration and splitting it by index would print a delta
-    per element for a mere reordering (Decision 3)."""
-    out: dict[str, Any] = {}
-    for key, value in config.items():
-        path = f"{prefix}{key}"
-        if isinstance(value, dict):
-            out.update(_flatten(value, prefix=f"{path}."))
-        else:
-            out[path] = value
-    return out
+def _diff_values(value_a: Any, value_b: Any, path: str) -> list[tuple[str, Any, Any]]:
+    """Walk two config values in lockstep, descending into a `dict` present
+    on EITHER side (empty or not), and returning every leaf where the two
+    sides disagree as `(dotted path, value_a, value_b)`.
+
+    **Replaces an earlier, per-side-independent flatten** (batch 5 review,
+    Major 1): flattening each side on its own drops an empty `dict`
+    entirely — nothing to loop over — so `covered_config({"sweep": {}})`
+    and `covered_config({})` flattened identically while their hashes
+    differed. Reachable from `init`'s own output: `materialize_config`
+    writes `sweep: {}`, and its own inline comment calls that spelling
+    equivalent to omitting the key, so deleting it between two runs printed
+    `parameters_hash DIFFERS` with zero delta lines underneath.
+
+    Walking BOTH sides together fixes this without the regression a
+    simpler "treat every empty dict as a leaf" patch causes: when one
+    side's dict at a path is empty and the OTHER side's is non-empty,
+    recursing into the UNION of their keys still finds every real leaf
+    underneath the populated side. Only when NEITHER side has a child at
+    that path — both empty, or one absent and the other empty — does the
+    path become a leaf itself, rendering e.g. `sweep  {} → (absent)`.
+
+    A leaf is anything that is not a `dict` on either side — a `list`
+    stays a leaf, never a subtree (Decision 3): splitting it by index
+    would print one delta per moved position for a mere reordering."""
+    a_dict = isinstance(value_a, dict)
+    b_dict = isinstance(value_b, dict)
+    if a_dict or b_dict:
+        keys_a = value_a if a_dict else {}
+        keys_b = value_b if b_dict else {}
+        all_keys = set(keys_a) | set(keys_b)
+        if not all_keys:
+            return [] if value_a == value_b else [(path, value_a, value_b)]
+        out: list[tuple[str, Any, Any]] = []
+        for key in all_keys:
+            child_path = f"{path}.{key}" if path else str(key)
+            out.extend(_diff_values(keys_a.get(key, _ABSENT), keys_b.get(key, _ABSENT), child_path))
+        return out
+    return [] if value_a == value_b else [(path, value_a, value_b)]
 
 
 def _render_leaf(value: Any) -> str:
+    """A leaf's printed form, in the config's own YAML vocabulary — not
+    Python's. `bool`/`None` render `true`/`false`/`null` (batch 5 review,
+    Major 3): `str(True)` and `str(None)` print `True`/`None`, which a
+    reader greps their own `config.yaml` for and does not find, since a
+    generated config spells them `true`/`null`. `bool` is checked before
+    the generic scalar branch because `isinstance(True, int)` is also
+    `True` — not load-bearing here (there is no separate `int` branch) but
+    the ordering that would matter if one were added. A `str` scalar keeps
+    `str(value)` — no YAML quoting — so this is not a blanket `safe_dump`
+    widening."""
     if value is _ABSENT:
         return "(absent)"
     if isinstance(value, (dict, list)):
         return yaml.safe_dump(value, default_flow_style=True, sort_keys=True).strip()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
     return str(value)
 
 
 def parameter_deltas(config_a: dict[str, Any], config_b: dict[str, Any]) -> list[str]:
-    """The delta walk flattens `covered_config`'s return on both sides to
-    dotted leaf paths (Decision 3) — never a second, independently-built
-    list, which is how the verdict above these lines and the lines
-    themselves cannot disagree about coverage. Sorted by path, so two runs
-    of `diff` over the same pair print identically."""
-    flat_a = _flatten(covered_config(config_a))
-    flat_b = _flatten(covered_config(config_b))
-    lines = []
-    for path in sorted(set(flat_a) | set(flat_b)):
-        value_a = flat_a.get(path, _ABSENT)
-        value_b = flat_b.get(path, _ABSENT)
-        if value_a == value_b:
-            continue
-        lines.append(f"  {path}  {_render_leaf(value_a)} → {_render_leaf(value_b)}")
-    return lines
+    """The delta walk over `covered_config`'s return on both sides
+    (Decision 3) — never a second, independently-built list, which is how
+    the verdict above these lines and the lines themselves cannot disagree
+    about coverage. Sorted by path, so two runs of `diff` over the same
+    pair print identically.
+
+    The value column aligns to the LONGEST changed path in this batch
+    (batch 5 review, Minor 1) — `design-principles.md`'s own two-line
+    example (`parameters.analysis.method` beside the longer
+    `parameters.analysis.min_samples`) shows both values starting in the
+    same column, which a fixed two-space separator does not reproduce. For
+    a single-line batch this is exactly a two-space gap, so it changes
+    nothing about a one-delta comparison — only a multi-line batch's
+    columns move."""
+    changed = _diff_values(covered_config(config_a), covered_config(config_b), "")
+    if not changed:
+        return []
+    changed.sort(key=lambda item: item[0])
+    width = max(len(path) for path, _, _ in changed) + 2
+    return [
+        f"  {path:<{width}}{_render_leaf(value_a)} → {_render_leaf(value_b)}"
+        for path, value_a, value_b in changed
+    ]
 
 
 def _truncated(figure: str) -> str:
@@ -180,6 +227,10 @@ def _figure(row: str, doc: dict[str, Any]) -> Any:
     raise ValueError(row)  # pragma: no cover — ROW_LABELS is the only caller
 
 
+_LABEL_WIDTH = 19  # measured against all three worked outputs' fenced `diff` examples
+_VERDICT_WIDTH = 13  # "identical" (9) padded to the same examples' digest column
+
+
 def _render_row(row: str, record_a: dict[str, Any], record_b: dict[str, Any]) -> list[str]:
     """One row's lines: the label, its verdict, and any detail lines.
 
@@ -190,17 +241,26 @@ def _render_row(row: str, record_a: dict[str, Any], record_b: dict[str, Any]) ->
     holds. `parameters_hash`'s `DIFFERS` detail is task 7's parameter
     deltas; the other rows' `DIFFERS` detail is the two digests, because a
     bare `DIFFERS` gives a reader nothing to cite.
+
+    The label and (for `identical`) the verdict are padded to
+    `_LABEL_WIDTH`/`_VERDICT_WIDTH` — the widths all three worked outputs
+    show (batch 5 review, Minor 1) — so a line copied out of a document
+    matches a line this function prints.
     """
     figure_a = _figure(row, record_a)
     figure_b = _figure(row, record_b)
     if figure_a is None or figure_b is None:
-        return [f"{row}    not captured"]
+        return [f"{row:<{_LABEL_WIDTH}}not captured"]
     if figure_a == figure_b:
-        return [f"{row}    identical    {_truncated(figure_a)}"]
+        verdict = f"{'identical':<{_VERDICT_WIDTH}}{_truncated(figure_a)}"
+        return [f"{row:<{_LABEL_WIDTH}}{verdict}"]
     if row == "parameters_hash":
         deltas = parameter_deltas(record_a["config"], record_b["config"])
-        return [f"{row}    DIFFERS", *deltas]
-    return [f"{row}    DIFFERS", f"  {_truncated(figure_a)} → {_truncated(figure_b)}"]
+        return [f"{row:<{_LABEL_WIDTH}}DIFFERS", *deltas]
+    return [
+        f"{row:<{_LABEL_WIDTH}}DIFFERS",
+        f"  {_truncated(figure_a)} → {_truncated(figure_b)}",
+    ]
 
 
 def command_diff(a: Path, b: Path) -> int:
@@ -210,19 +270,28 @@ def command_diff(a: Path, b: Path) -> int:
     apparatus row are later tasks' (9, 10); this function's job is not to
     guess ahead of them.
     """
+    # Both sides are loaded before either failure is reported (batch 5
+    # review, Minor 4): loading them in two unconditional `try` blocks,
+    # rather than returning on the first `ContractError`, is what lets a
+    # caller with two bad paths learn about both in one run instead of
+    # fixing one and re-running to discover the second. An `OSError` (a
+    # missing path) is NOT caught here — it propagates uncaught either
+    # way, on `validate`'s/`freeze`'s own precedent.
     c = Collector()
+    side_a: _Side | None = None
+    side_b: _Side | None = None
     try:
         side_a = _load_side(a)
     except ContractError as exc:
         c.error(exc.code, str(a), str(exc))
-        print(c.render())
-        return EXIT_WRONG
     try:
         side_b = _load_side(b)
     except ContractError as exc:
         c.error(exc.code, str(b), str(exc))
+    if c.findings:
         print(c.render())
         return EXIT_WRONG
+    assert side_a is not None and side_b is not None
 
     print(_header_line("A", side_a))
     print(_header_line("B", side_b))
