@@ -406,7 +406,16 @@ def study_add(bundle: Path, run_yaml: Path, name: str) -> list[tuple[str, str]]:
     record's OWN embedded config — never a config in the working
     directory, since the limit is a property of the run being bundled.
     Quitting returns `[]` having written nothing, not even a partial copy.
+
+    Checked in-repo the same way `study_new` is (whole-branch review,
+    Minor 8): the three-part argument in § Why not in the repo — a
+    publication artifact belongs beside the paper it supports, never
+    inside the code repo it cites — is about the BUNDLE, not about which
+    command last touched it, so a bundle created outside a repo and later
+    enclosed by one (a `git init` a directory above it, or a move) must
+    not become writable again just because `study new` already ran.
     """
+    _refuse_if_in_repo(bundle, "E-STUDY-IN-REPO", "a study")
     doc = _load_study_doc(bundle)
     target = bundle / f"{name}.run.yaml"
     if name in (doc.get("runs") or {}) or target.exists():

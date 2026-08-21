@@ -6355,6 +6355,24 @@ patch, per the routing brief.
 path was closed in the same slice) but structural — any future `PublishableError` raised with a
 credential in its text, outside a collector, reaches stderr unredacted.
 
+**AMENDED 2026-08-21 (H8c whole-branch review, Minor 1): a fourth shape, this one INSIDE a
+command's own collector rather than past it.** `report <run.yaml>` and `study add` both read a run
+record through `lineage.read_record_file`, and a `run.yaml` corrupt enough that PyYAML's own
+`MarkedYAMLError` embeds the offending source line (`f"{path} is not valid YAML: {exc}"`,
+`lineage.py:71`) carries that line — credential and all, if the corrupt edit happened to land on
+one — into `command_report`'s `Collector()`, constructed **with no `credentials`** because the
+record has not parsed yet and there is nothing to derive a credential set from. Verified by
+running: a `run.yaml` rewritten to `run_id: x\nbad: [unclosed <SENTINEL>` prints the sentinel
+verbatim at exit `1`, while the same project's override-raise arm (a positive control proving the
+same collector redacts when it IS populated) prints `<redacted:…>` for the identical value. Same
+probe against `diff` — untouched by H8c, shipped on `main` — leaks identically, so this is
+pre-existing and structurally forced by the same ordering this entry already names for `main`'s
+own handler: the credential set can only be known once the record parses, and a YAML syntax fault
+is exactly the failure that happens before it does. Not re-scored: still Minor, for the reason the
+entry above already gives — `docs/reference.md` § Secrets & credentials scopes `report`'s own
+redaction commitment to *user-code* faults, so this is an honest gap rather than a broken promise,
+and it is one instance of the ordering problem this entry is about rather than a second one.**
+
 ## OPEN — the constraint table documents `min_items`/`max_items` in the rendered comment; `Param.comment()` doesn't render them
 
 `reference.md` § Templates: where parameters are defined documents the `list` row's constraint
@@ -8026,3 +8044,78 @@ should name `plugin new` alongside `publishable new`.
 **Cost if wrong / if unclaimed:** a reader following a normative code reference finds nothing at the
 destination, and `run`/`generate` outside a repository print a diagnostic this document never
 describes at its own source.
+
+## OPEN — a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0` — **Owner: H9**
+
+**Found by:** H8c whole-branch review, Minor 9, verified by running.
+
+**The sibling of the entry immediately above** (`discover_local`'s bytecode cache serving a STALE
+`templates/*.py`), reached through a third call site: `report.py`'s `render_with_override` and
+`base_experiment.py`'s `load_experiment` both `del sys.modules[...]` for the entrypoint's root
+package and re-`importlib.import_module` it, exactly as `discover_local` re-imports a template —
+and CPython's `SourceFileLoader` validates its `__pycache__/*.pyc` against source `(mtime, size)`,
+with `mtime` at whole-second resolution on the filesystems this was measured against.
+
+**Verified by running:** render an override whose section body is `MARKER_AAA`, then rewrite the
+identical file with `MARKER_BBB` — **byte-identical in length**, within the same wall-clock
+second — and render again. The second render prints **`MARKER_AAA`**, at exit `0`, with no
+diagnostic: `sys.modules` was correctly purged (both call sites do this right), but the `.pyc`
+cache validated against `(mtime, size)` was not invalidated, so the stale bytecode served the old
+body anyway. A rewrite that changes the file's *length* (`MARKER_CCCCCCCC`) is picked up
+correctly, which is what isolates the cause to the cache rather than to the module purge.
+
+**Why this one is worse than the entry above's shape.** `discover_local`'s staleness surfaces as a
+wrong *value* inside a validation the reader already treats with some suspicion (a config's own
+declarations). This one surfaces as `report`'s entire rendered artifact — the thing a paper cites —
+being silently the PREVIOUS version of an override the author just edited, at exit `0`, with
+nothing to distinguish it from a correct render. `report` is also the one command in this build a
+user is expected to iterate an override against repeatedly inside one process (rerun after each
+edit while writing a figure), which is exactly the access pattern that reaches this.
+
+**Not this branch's invention.** `base_experiment.load_experiment` (`validate`/`run`) has the
+identical exposure and predates H8c; neither site calls `importlib.invalidate_caches()` or sets
+`sys.dont_write_bytecode`, and grepping both names finds neither anywhere in `src/`.
+
+**The check its owner must make.** Same two options the entry above already names: (a) force
+recompilation at these two additional call sites the way its own remedy is decided for
+`discover_local`, or (b) document the weaker property — a render inside a long-lived process is
+fresh per **process**, never guaranteed fresh per **call** — at both `report`'s and `run`'s own
+descriptions of override/entrypoint resolution. Whichever option this owner picks for the entry
+above should be picked for both `report.py`'s and `base_experiment.py`'s sites in the same pass,
+since it is one root cause with three call sites, not three separate defects.
+
+**Cost if wrong / if unclaimed:** a user iterating a `report.py` override inside one long-lived
+process (a notebook, a script driving several renders, this repo's own test suite) can ship a
+figure one edit stale, with no diagnostic distinguishing it from a correct render.
+
+## OPEN — a bundle render's heading levels are flat, so a member boundary reads like a section — **Owner: unassigned**
+
+**Found by:** H8c whole-branch review, Minor 7, verified by running.
+
+`render_bundle` (`report.py`) and `_render_markdown_section` (which emits `## ` for every
+`Section` regardless of caller) together produce, for a two-member bundle: `## alpha`,
+`## Conditions`, `## Deltas`, `## Hypothesis verdicts`, `## Attrition`, `## beta`, `## Conditions`,
+… , `## Hypotheses`. A member's own name and its own four sections are siblings at the same
+heading depth, so nothing in the rendered artifact marks where one run's block ends and the next
+begins, or that "Conditions" under `## beta` belongs to a different run than the "Conditions"
+under `## alpha` three headings above it.
+
+**Not a spec violation.** Decision 16 does not rule heading depth, and `Section` (the value class
+`self.section(title, body=...)` returns and the four standard sections build) carries no `level`
+field at all — so this is a consequence of a design that never needed two heading depths until the
+bundle render introduced them, not a document a reviewer can cite against the code.
+
+**The check its owner must make.** The bundle render is the one place two genuine levels exist: a
+member (an `## alpha`-shaped boundary) and that member's own sections (nested under it). Options,
+cheapest first: (a) bump every section heading to `###` inside `render_bundle` specifically, with
+`##` reserved for the member boundary — no `Section` change, a `render_bundle`-local decision; (b)
+give `Section` an optional `level` field, defaulted so every existing caller (the four standard
+sections, an override's own `self.section(...)`) is unaffected, and have `render_bundle` pass a
+deeper one. (a) costs nothing outside `report.py`; (b) is more general and is the one to prefer if
+a future renderer ever needs a third level.
+
+**Cost if wrong / if unclaimed:** a bundle rendered to markdown or HTML and skimmed by heading
+alone reads as one long flat document; a reader has to track member boundaries by the plain-text
+name rather than by structure, which is a paper's own citable rendering of several runs at once —
+exactly the artifact this section's own load-bearing property (member boundaries stay legible) is
+about.

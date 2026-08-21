@@ -37,7 +37,8 @@ def load_experiment(repo_root: Path, entrypoint: str) -> BaseExperiment:
     root_pkg = module_name.split(".", 1)[0]
     for cached in [m for m in sys.modules if m == root_pkg or m.startswith(root_pkg + ".")]:
         del sys.modules[cached]
-    sys.path.insert(0, str(repo_root / "src"))
+    src_entry = str(repo_root / "src")
+    sys.path.insert(0, src_entry)
     try:
         module = importlib.import_module(module_name)
         cls = getattr(module, attr)
@@ -47,6 +48,22 @@ def load_experiment(repo_root: Path, entrypoint: str) -> BaseExperiment:
             code="E-ENTRYPOINT-IMPORT",
         ) from exc
     finally:
-        sys.path.pop(0)
+        # Removed by IDENTITY (the exact path string this call inserted),
+        # never by POSITION (`sys.path.pop(0)`) — the whole-branch review's
+        # Minor 10: the entrypoint's own module runs inside this window by
+        # import, and a project vendoring a sibling directory via
+        # `sys.path.insert(0, ...)` (an ordinary idiom) is user code this
+        # window invites in; a positional pop would then remove THAT entry
+        # and leak `src_entry` on every import, success or failure alike.
+        # `report.py`'s `render_with_override` fixed the identical exposure
+        # this way (batch 3 review) — this is the sibling site `CLAUDE.md`'s
+        # "removing by position is a fifth [proxy]" rule was written about
+        # and did not itself reach. `if` rather than an unguarded `remove`
+        # for the same reason: an import that raised before the insert
+        # never reaches here missing its own entry, but one that removed
+        # our entry itself (or cleared `sys.path` outright) must not turn
+        # our own cleanup into a second, unhandled exception.
+        if src_entry in sys.path:
+            sys.path.remove(src_entry)
     experiment: BaseExperiment = cls()
     return experiment

@@ -2745,9 +2745,10 @@ def test_bundle_two_runs_same_commit_same_code_hash_no_notice(
     )
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.err
 
 
 def test_bundle_notice_code_hash_mismatch_under_one_commit(
@@ -2767,9 +2768,13 @@ def test_bundle_notice_code_hash_mismatch_under_one_commit(
     )
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK  # a notice, never a refusal
-    assert "W-STUDY-CODE-HASH-MISMATCH" in out
+    # Minor 6 (whole-branch review): a bundle notice prints to STDERR, not
+    # stdout — stdout is the rendered artifact, and a reader redirecting
+    # it must get a clean file.
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.out
+    assert "W-STUDY-CODE-HASH-MISMATCH" in captured.err
 
 
 def test_bundle_no_code_hash_notice_across_two_different_commits(
@@ -2790,9 +2795,10 @@ def test_bundle_no_code_hash_notice_across_two_different_commits(
     )
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.err
 
 
 def test_bundle_apparatus_hashes_agree_no_notice(
@@ -2804,9 +2810,10 @@ def test_bundle_apparatus_hashes_agree_no_notice(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-APPARATUS-MISMATCH" not in out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.err
 
 
 def test_bundle_missing_code_hash_excluded_not_printed_as_none(
@@ -2828,10 +2835,12 @@ def test_bundle_missing_code_hash_excluded_not_printed_as_none(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
-    assert "None" not in out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.out
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in captured.err
+    assert "None" not in captured.out
+    assert "None" not in captured.err
 
 
 def test_bundle_apparatus_mapping_with_no_hash_key_excluded_not_printed_as_none(
@@ -2847,10 +2856,12 @@ def test_bundle_apparatus_mapping_with_no_hash_key_excluded_not_printed_as_none(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-APPARATUS-MISMATCH" not in out
-    assert "None" not in out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.err
+    assert "None" not in captured.out
+    assert "None" not in captured.err
 
 
 def test_bundle_apparatus_hashes_differ_under_one_commit_is_a_notice(
@@ -2861,9 +2872,10 @@ def test_bundle_apparatus_hashes_differ_under_one_commit_is_a_notice(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-APPARATUS-MISMATCH" in out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
+    assert "W-STUDY-APPARATUS-MISMATCH" in captured.err
 
 
 def test_bundle_apparatus_hand_edited_hash_disagrees_with_recomputation(
@@ -2889,9 +2901,10 @@ def test_bundle_apparatus_hand_edited_hash_disagrees_with_recomputation(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-APPARATUS-MISMATCH" in out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
+    assert "W-STUDY-APPARATUS-MISMATCH" in captured.err
 
 
 def test_bundle_null_apparatus_excluded_not_counted_a_mismatch(
@@ -2908,6 +2921,7 @@ def test_bundle_null_apparatus_excluded_not_counted_a_mismatch(
     bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert code == EXIT_OK
-    assert "W-STUDY-APPARATUS-MISMATCH" not in out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
+    assert "W-STUDY-APPARATUS-MISMATCH" not in captured.err

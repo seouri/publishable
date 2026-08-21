@@ -228,3 +228,110 @@ next — not a documents-audit task's to rule on unilaterally under a fix round.
 - The `E-GIT-NO-REPO` / `E-PROJECT-EXISTS` family's own resolution (dedicated rows vs. documented
   convention) — filed with an owner, not decided, since ruling on it was outside this task's
   brief and the reviewer's own remedy was "a filing... not a row."
+
+## Whole-branch fix round
+
+Review at `.superpowers/sdd/2026-08-21-report-study/whole-branch-review.md`, against commit
+`c10aa44`. Verdict: MERGE, no Critical, no Major, ten Minors. The gate looked hardest for *a
+§ Errors row narrower than its code* — the whole-branch Major on both preceding sub-slices,
+shipped twice on this one's own fix round — and did not find it; the fix round's own widening of
+`E-ARTIFACT-NAME` held, and every raise reachable from `ReportIO` through the shared helpers has a
+row. Arm D was proven to fail on a mutated hash prefix and a mutated delta line, and `git log -L`
+per arm confirmed arm B has exactly its one authorized edit and arm D only its creating commit.
+Minors 4 and 5 (the `CLAUDE.md`/ledger proxy-tally reconciliation, and the missing batch 8/9
+ledger entries) are the coordinator's own and are not touched here — landed separately at
+`611c572`.
+
+**Minor 10 — `sys.path.pop(0)` still live at `base_experiment.py:50`, the sibling site.** Fixed the
+same way `report.py`'s `render_with_override` was fixed at batch 3's review: remove by the exact
+path STRING (`src_entry`), guarded by `if src_entry in sys.path`, never by position. **Verified by
+the same discriminating pair the gate used**, pinned as
+`tests/test_validate.py::test_load_experiment_removes_its_own_sys_path_entry_by_identity_not_position`:
+an entrypoint module that does `sys.path.insert(0, vendored)` at import pushes `load_experiment`'s
+own `<repo_root>/src` entry to index 1; the fix leaves the vendored entry alone and removes only
+`<repo_root>/src` by identity. Confirmed the test **discriminates**: reverted the fix to
+`sys.path.pop(0)` in a scratch copy, re-ran — fails with `<repo_root>/src` still on `sys.path`
+(the exact inversion the review found); restored the fix, byte-diffed against a pre-mutation
+backup (identical), re-ran — passes.
+
+**Minor 9 — a same-size, same-second override rewrite is silently stale, exit `0`.** Filed rather
+than fixed, per the coordinator's framing and the review's own "worth a filing rather than
+silence": new `spec-defects.md` entry, **Owner: H9**, cross-referencing the immediately preceding
+entry (`discover_local`'s identical `.pyc`-staleness shape) by name and stating this is the same
+root cause reached through a third call site (`report.py`'s `render_with_override` and
+`base_experiment.py`'s `load_experiment`, alongside `discover_local`'s own), so one owner's fix for
+the entry above should cover both call sites this review adds rather than being decided three
+times.
+
+**Minor 1 — a credential inside a corrupt run record leaks unredacted through `report`/`study
+add`.** Not fixed, per the coordinator's explicit instruction and the review's own three reasons
+(pre-existing on `main` through `diff`; `command_report`'s docstring already scopes its promise to
+user-code faults; the ordering is structurally forced — no credential set exists before the record
+parses). Amended the existing `spec-defects.md` entry ("`main`'s last-resort stderr handler prints
+an exception un-redacted, by construction") with a dated paragraph naming this fourth shape and
+both commands, since the entry as filed covered only `main`'s own handler and not a command's own
+populated-but-empty collector.
+
+**Minor 2 — `report_form`'s docstring claimed an exit path the code doesn't produce.** Deleted the
+false `E-IO-FAILED` clause rather than rewriting it with the correct codes, per the review's own
+stated remedy ("the sentence's first half is true and self-maintaining") and `CLAUDE.md`'s "prefer
+deleting a claim to rewriting it." **Verified by reading**: both readers (`read_record_file`,
+`read_bundle`) check existence themselves before any `open`, so `E-IO-FAILED` is unreachable on
+either path — the deleted clause was simply false, not imprecise.
+
+**Minor 3 — `E-STUDY-IN-REPO`'s row named the wrong object.** Fixed the one-word error: the
+walk-up is over the **bundle path**, not `input_dir`/`output_dir` — reworded to name the bundle
+path while keeping the comparison to `input_dir`/`output_dir`'s own walk-up the design's prose
+already draws. **Verified by reading** `study.py:42-64`'s `_refuse_if_in_repo(path, ...)`, called
+with the bundle argument at both its call sites.
+
+**Minor 6 — bundle notices print to stdout, ahead of the artifact.** Fixed: both notices now print
+to **stderr**, on `freeze`'s own precedent for splitting a report command's diagnostics away from
+its stream-as-artifact. Added a sentence to § Building one stating the split and why. Updated all
+ten `W-STUDY-*` assertions in `tests/test_report.py` to check `captured.out`/`captured.err`
+separately rather than a single `out` — each "must not fire" test now asserts absence from BOTH
+streams (so a notice that moved streams without this fix landing would still be caught), and each
+"must fire" test now asserts presence in `err` and absence from `out` specifically. **Verified by
+running**: full `tests/test_report.py` (122 tests) green after the edit.
+
+**Minor 8 — `study add` didn't enforce the in-repo rule `study new` does.** Fixed, per the
+coordinator's "either fixing or filing" and the structural argument being about the bundle rather
+than about which command last touched it: `study_add` now calls the identical
+`_refuse_if_in_repo(bundle, "E-STUDY-IN-REPO", "a study")` `study_new` already calls, checked
+before `_load_study_doc` so no `study.yaml` needs to exist for the refusal to fire. Widened
+`E-STUDY-IN-REPO`'s row (folded into Minor 3's edit) to name both commands. **Verified by running**
+a new test, `test_study_add_refuses_inside_a_git_repo_and_writes_nothing`, and confirmed it
+**discriminates**: reverted the added call in a scratch copy — the test fails with
+`E-STUDY-UNREADABLE` instead (the old, wrong behaviour: it reaches past the in-repo check straight
+to "no study.yaml here"), restored, byte-diffed identical, re-ran green.
+
+**Minor 7 — the bundle render's heading levels are flat.** Filed rather than fixed: this needs a
+design call (`Section` gaining an optional `level`, or a `render_bundle`-local heading bump) that a
+whole-branch fix round shouldn't make unilaterally. New `spec-defects.md` entry, **Owner:
+unassigned**, naming both remedies the review itself sketched, cheapest first.
+
+**The symmetry question and the recurring-Major search** — both already closed by the review
+itself with no code change needed (`ReportIO` calling `StepIO`'s methods by class vs. the
+module-level helpers; no row narrower than its code found) — required no action here.
+
+## Gates (whole-branch fix round)
+
+- `uv run ruff check .` — all checks passed
+- `uv run ruff format --check .` — 93 files already formatted (unchanged)
+- `uv run mypy` — success, 52 source files (unchanged)
+- `uv run pytest -q` — **2835 passed, 1 skipped, 2 xfailed** (2833 baseline + 2 new discriminating
+  pins: Minor 10's `test_load_experiment_removes_its_own_sys_path_entry_by_identity_not_position`,
+  Minor 8's `test_study_add_refuses_inside_a_git_repo_and_writes_nothing`)
+
+## What I did not close
+
+- **Minor 1** (credential leak from a corrupt record) — deliberately not fixed, per the
+  coordinator's instruction; named in the existing filing instead.
+- **Minor 9** (stale `.pyc` under a same-second override rewrite) — filed with Owner: H9 rather
+  than fixed, since the fix belongs with the sibling `discover_local` entry's own remedy and
+  should not be decided three times across three call sites in three different reviews.
+- **Minor 7** (flat bundle heading levels) — filed with Owner: unassigned, since closing it means
+  picking a design (a `Section.level` field vs. a `render_bundle`-local heading bump) rather than
+  applying a fix the review already specified.
+- **Minors 4 and 5** — the coordinator's own; not touched, per explicit instruction. Landed at
+  `611c572` before this fix round started.

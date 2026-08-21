@@ -724,9 +724,7 @@ def report_form(path: Path) -> str:
     guessing.
 
     Nothing here checks whether `path` exists. A missing operand stays
-    whatever the read that follows makes of it — `E-IO-FAILED` at exit `1`
-    through `main`'s `OSError` handler, exactly as `diff`'s config operand
-    does — never caught here.
+    whatever the read that follows makes of it, never caught here.
     """
     if path.is_dir():
         raise ContractError(
@@ -1358,15 +1356,22 @@ def command_report(path: Path) -> int:
             return EXIT_WRONG
 
         # Decision 8: two notices, never a refusal — exit stays `0`
-        # regardless of what they find. Printed before the render, on
-        # `command_validate`'s own precedent for a finding a build command
-        # reports rather than raises.
+        # regardless of what they find. Printed to STDERR, never stdout
+        # (whole-branch review, Minor 6): stdout is the artifact for this
+        # command — `publishable report study.yaml > report.md` is the
+        # ordinary way to use it — so a diagnostic ahead of the render
+        # would land inside the file a reader redirects to. `freeze`
+        # already splits its own two warnings across stdout/stderr (one
+        # of them stderr, "as shipped rather than as decided" — see
+        # docs/reference.md § The apparatus core can only observe); this
+        # command decides deliberately, and puts both notices on the
+        # stream that keeps the redirected artifact clean.
         notices = _bundle_cross_checks(members)
         if notices:
             notice_c = Collector()
             for code, message in notices:
                 notice_c.warn(code, str(path), message)
-            print(notice_c.render())
+            print(notice_c.render(), file=sys.stderr)
 
         print(text)
         return EXIT_OK

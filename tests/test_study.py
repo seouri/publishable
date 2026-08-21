@@ -185,6 +185,26 @@ def _write_record(path: Path, record: dict) -> None:
     path.write_text(yaml.safe_dump(record, sort_keys=False))
 
 
+def test_study_add_refuses_inside_a_git_repo_and_writes_nothing(tmp_path: Path):
+    """Whole-branch review, Minor 8: `study add` enforces the same in-repo
+    rule `study new` does, on the identical `_refuse_if_in_repo` call — a
+    bundle assembled outside a repo and later enclosed by one (a `git
+    init` above it, or a move) must not become writable again just
+    because `study new` already ran. Checked BEFORE `_load_study_doc`, so
+    no `study.yaml` needs to exist here at all — the same "nothing
+    reached disk" shape `test_study_new_refuses_inside_a_git_repo_and_
+    writes_no_study_yaml` pins for the sibling command."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    bundle = repo / "study"
+    run = _real_run(tmp_path, "proj1")
+    before = _snapshot(bundle)
+    with pytest.raises(ContractError) as exc_info:
+        study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert exc_info.value.code == "E-STUDY-IN-REPO"
+    assert _snapshot(bundle) == before
+
+
 def test_study_add_copies_the_record_and_updates_runs_in_study_yaml(tmp_path: Path):
     bundle = tmp_path / "study"
     study_new(bundle, "Title")
