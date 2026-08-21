@@ -71,3 +71,27 @@ contains** rather than by position — and task 16 inserts its two header lines 
 separator moved. **It deliberately has no authorized editor**: if it fires, that is a finding. Arm B, by
 contrast, names **task 1** as sole editor with the post-edit state stated in advance — the fourth clean
 cycle of that mechanism.
+
+## Batch 2 — tasks 1, 2 — `BaseReport` and `ReportIO`, nothing dispatched
+
+Commits `6b0bd04` (`BaseReport`, frozen `Section`, the one new export), `56e6dc1` (`ReportIO` and one
+traversal two classes call), `0140715` (report). Suite 2643 → 2651 → **2665**; mypy 49 → **50**,
+formatter 88 → **90**.
+
+**The authorized-editor mechanism completed a fourth clean cycle**, and this one inverted a negative the
+right way: arm B's `assert "BaseReport" not in publishable.__all__` is **gone**, replaced by the name
+entering the **full sorted list equality** — which asserts presence *and* position, so it is strictly
+stronger than the negative it replaced. Same shape as H8a's `not in` → `== []`.
+
+**A carry-forward was made correctly and I am carrying it myself, because a report cannot reach a brief.**
+Task 1's render-level mutation arm — an override reaching into a **standard** section's mapping body —
+could not be written yet, because no standard section with a mapping body exists until task 5. The batch
+named it forward to task 5 **explicitly citing the routing failures on H8a and H8b**. But briefs are
+extracted from the plan, and **that is exactly how H8a lost a finding between a review and the brief
+written from it** — so **the carry travels in B4's dispatch**, not only in the report.
+
+**One structural note the batch disclosed rather than hid:** `ReportIO` calls `StepIO._read` and
+`StepIO._contained` directly — both stateless static methods, reuse rather than inheritance — so
+`ReportIO`'s module still names `StepIO`. Disclosed as a symmetry question for a later reviewer rather
+than resolved unilaterally, which is the right disposition for a shape that is correct but arguably
+misplaced.
