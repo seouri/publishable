@@ -72,13 +72,56 @@ def _present_fields(entry: Mapping[str, Any], names: "tuple[str, ...]") -> dict[
     return {name: entry[name] for name in names if name in entry}
 
 
+def _is_metric_entry(value: Any) -> bool:
+    """A genuine metric entry, identified by what it CARRIES — `value`,
+    always present in the measured record's own field inventory — never by
+    the key it sits under. Major 3 (task-b4 review): Decision 5's own
+    grounds for excluding `by` were "the record `report` reads can never
+    hold a metric called `by`", which `cli.py`'s `W-STATS-STRATUM-SHADOWED`
+    disproves in writing — a recorded column named `by` "keeps its value"
+    on the write side, as a real metric entry. Filtering by the STRING
+    `"by"` is the fifth instance on this project of answering a structural
+    question with a name (a module-name prefix, a class marker, state read
+    at the wrong moment, a one-spelling grep, `pop(0)`), so this asks the
+    direct question instead: does this value look like a metric, not what
+    is it called.
+    """
+    return isinstance(value, Mapping) and "value" in value
+
+
+def _is_strata_block(value: Any) -> bool:
+    """The `report_by` strata shape and nothing else: attribute → level →
+    metric → entry, three `Mapping`s deep with a genuine metric entry
+    (`_is_metric_entry`) at the bottom of every branch. Never identified by
+    sitting under the key `"by"` — `cli.py` does not write this block at
+    all when a recorded column of that name exists (`W-STATS-STRATUM-
+    SHADOWED`: "no strata are reported for this step"), so the two shapes
+    never actually collide under one key, but a structural test costs
+    nothing to make correct in the collision's absence too.
+    """
+    if not isinstance(value, Mapping) or not value:
+        return False
+    for levels in value.values():
+        if not isinstance(levels, Mapping) or not levels:
+            return False
+        for level_metrics in levels.values():
+            if not isinstance(level_metrics, Mapping) or not level_metrics:
+                return False
+            for entry in level_metrics.values():
+                if not _is_metric_entry(entry):
+                    return False
+    return True
+
+
 def _condition_metric_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]:
     """One row per metric in one condition's `aggregated` block, plus one row
     per `by[attribute][level]` stratum metric when `statistics.report_by` was
-    declared. `by` is a SIBLING of the metric names in `aggregated[step]`,
-    never a metric itself — excluded via `stats.RESERVED_METRIC_NAMES`,
-    never a literal `"by"` (Decision 5), so a second reserved name minted
-    elsewhere is excluded here too without an edit.
+    declared and no recorded column shadows it. Which of the two a given
+    key's value is is decided STRUCTURALLY (`_is_metric_entry` /
+    `_is_strata_block`), never by the key's name — see Major 3, task-b4
+    review, and `docs/superpowers/spec-defects.md`'s "New reserved metric
+    name: `by`" entry, whose own rule for the write side ("the column
+    wins") this read side must agree with rather than silently override.
     """
     rows: list[dict[str, Any]] = []
     identity = {
@@ -94,35 +137,29 @@ def _condition_metric_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]
         if not isinstance(block, Mapping):
             continue
         for metric, entry in block.items():
-            if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
+            if not _is_metric_entry(entry):
                 continue
             row = dict(identity)
             row.update({"step": step, "metric": metric, "by_attribute": None, "by_level": None})
             row.update(_present_fields(entry, _CONDITION_METRIC_FIELDS))
             rows.append(row)
-        by = block.get("by")
-        if not isinstance(by, Mapping):
-            continue
-        for attribute, levels in by.items():
-            if not isinstance(levels, Mapping):
+        for value in block.values():
+            if not _is_strata_block(value):
                 continue
-            for level, level_metrics in levels.items():
-                if not isinstance(level_metrics, Mapping):
-                    continue
-                for metric, entry in level_metrics.items():
-                    if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
-                        continue
-                    row = dict(identity)
-                    row.update(
-                        {
-                            "step": step,
-                            "metric": metric,
-                            "by_attribute": attribute,
-                            "by_level": level,
-                        }
-                    )
-                    row.update(_present_fields(entry, _CONDITION_METRIC_FIELDS))
-                    rows.append(row)
+            for attribute, levels in value.items():
+                for level, level_metrics in levels.items():
+                    for metric, entry in level_metrics.items():
+                        row = dict(identity)
+                        row.update(
+                            {
+                                "step": step,
+                                "metric": metric,
+                                "by_attribute": attribute,
+                                "by_level": level,
+                            }
+                        )
+                        row.update(_present_fields(entry, _CONDITION_METRIC_FIELDS))
+                        rows.append(row)
     return rows
 
 
@@ -175,6 +212,17 @@ def _delta_entry_row(
 
 
 def _vs_baseline_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """`by` cannot reach this loop through an honest record: `cli.py`'s
+    `_comparison_step_blocks` already drops it from every comparison's
+    metric set unconditionally, on the write side, before a `vs_baseline`
+    block is ever assembled — so the `RESERVED_METRIC_NAMES` guard below
+    is DEFENSIVE rather than reachable (unlike the Conditions-side
+    structural check `_is_metric_entry`/`_is_strata_block` replace, which
+    guards a real collision). Kept anyway, on the precedent that a second,
+    cheap check costs nothing when the first one's own guarantee ever
+    moves — noted here in a comment rather than left to look pinned by a
+    test that cannot reach it (m1, task-b4 review).
+    """
     rows: list[dict[str, Any]] = []
     vs_baseline = condition.get("vs_baseline")
     if not isinstance(vs_baseline, Mapping):
@@ -199,6 +247,22 @@ def _vs_baseline_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _declared_contrast_rows(contrast: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Same defensive note as `_vs_baseline_rows` above: `_comparison_step_
+    blocks` drops `by` from a declared contrast's metric set on the write
+    side too, so the `RESERVED_METRIC_NAMES` guard below is unreachable
+    from an honest record (m1, task-b4 review).
+
+    The `{"id", "of", "against"}` blacklist separating this entry's own
+    identity keys from its step keys is correct against `cli.py`'s
+    `_compute_declared_contrasts` today — that function's own entry is
+    exactly `{id, of, against}` plus a step -> metric mapping from
+    `_comparison_step_blocks` (m2, task-b4 review) — but it is a literal
+    set rather than a shared constant, unlike every other key decision
+    this module makes. A future mapping-valued key added beside those
+    three would render as a phantom step; a step genuinely named `id`,
+    `of` or `against` would lose its rows. Neither is reachable from the
+    schema this build validates against.
+    """
     rows: list[dict[str, Any]] = []
     comparison = contrast.get("id")
     of = contrast.get("of")
@@ -380,8 +444,10 @@ def attrition_section(run: Mapping[str, Any]) -> Section:
     printed `false` for a genuinely boolean field elsewhere).
 
     Does **not** claim `nondeterministic` — see the filing in
-    `docs/superpowers/spec-defects.md`, "A repeat's `nondeterministic`..." —
-    because nothing in this build writes it onto an execution or a record,
+    `docs/superpowers/spec-defects.md`, "`nondeterministic` is documented
+    as a `run.yaml` field and a thing `report` notes, and nothing writes
+    it or reads it back" — because nothing in this build writes it onto an
+    execution or a record,
     and a section printing `nondeterministic: false` for every execution
     would be reporting a default nothing measured.
     """

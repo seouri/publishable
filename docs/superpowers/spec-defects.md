@@ -7769,8 +7769,9 @@ Nothing computes from them, and every value they do show is correct.
 **Found by:** H8c task 6, building the Attrition section, which is where § The two files' `run.yaml`
 example says a reader would see it.
 
-**The measurement.** At `ebf642a`: `nondeterministic` appears **zero** times in a real project's
-`run.yaml` and **zero** times in its `executions.jsonl`, over a run whose steps include a
+**The measurement.** Measured 2026-08-21, at `ebf642a`: `nondeterministic` appears **zero** times
+in a real project's `run.yaml` and **zero** times in its `executions.jsonl`, over a run whose steps
+include a
 repeat-scoped one — grepped over both files after a genuine `main(["run", ...])`. It exists in
 `src/` only as a `BaseStep` class **attribute** (a step author's own declaration) and as what
 `W-REPL-DETERMINISTIC` reads off the step classes at `validate` — never as a value copied onto an

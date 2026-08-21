@@ -875,6 +875,29 @@ class Step(BaseStep):
 """
 
 
+_SHARED_CHECK_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        return {}
+"""
+
+_CONDITION_CHECK_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        return {}
+"""
+
+
 def _fixture_r_or_d(
     tmp_path: Path, *, declare_contrast: bool, capsys: pytest.CaptureFixture[str]
 ) -> dict[str, Any]:
@@ -882,45 +905,105 @@ def _fixture_r_or_d(
     declared `statistics.contrasts` entry — task 5's own seam: without it,
     Decision 5's "read both `vs_baseline` and `results.contrasts`" ships
     unpinned, since R's every delta is already in `vs_baseline`).
+
+    Built directly (not through `run_a_project`'s `extra_steps`, which
+    generates every extra step from the SAME `extra_step_source`) because
+    Major 2 (task-b4 review) found `_execution_rows`' `shared` walk and its
+    condition-scoped discriminator exercised by NOTHING: this fixture's
+    `execution.shared` was `{}` and its only `conditions[].steps` entry was
+    repeat-label-keyed. Fixture R now carries all THREE nesting shapes a
+    real `execution` block can hold — a `run`-scoped step (`shared_check`,
+    lands in `execution.shared`), a `condition`-scoped step (`cond_check`,
+    lands in `execution.conditions[].steps` with a direct `status`, no
+    repeat label), the original `repeat`-scoped starter step, and the
+    `summary`-scoped step — generated one at a time so each can carry its
+    own scope.
     """
     import publishable.generators.experiment as experiment_gen
+    from publishable.cli import main
+    from publishable.generators.experiment import generate_experiment
+    from publishable.generators.step import generate_step
 
-    statistics: dict[str, Any] = {"report_by": ["cohort"]}
-    if declare_contrast:
-        statistics["contrasts"] = [
-            {"id": "spearman_vs_baseline", "of": "method=spearman", "against": "baseline"}
-        ]
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir(parents=True)
+    units = 24
+    rows = "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1))
+    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{rows}\n")
+    assert main(["new", str(root)]) == 0
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(experiment_gen, "STARTER_STEP", _SCORE_STEP)
-        doc = run_a_project(
-            tmp_path,
-            capsys=capsys,
-            units=24,
-            unit_attributes=["cohort"],
-            replication={"repeats": [{"kind": "seed", "n": 3}]},
-            sweep={
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {"analysis.method": ["spearman"]},
-            },
-            statistics=statistics,
-            extra_steps=["summarize"],
-            extra_step_source=_TWO_ESTIMATE_SUMMARY_STEP,
-            hypotheses=[
-                {
-                    "id": "h1",
-                    "kind": "confirmatory",
-                    "statement": "spearman's score exceeds pearson's",
-                    "metric": "step01_summarize_units.score",
-                    "compare": {"condition": "method=spearman", "to": "baseline"},
-                    "direction": "greater",
-                    "threshold": 0.0,
-                    "evaluate_on": "observed",
-                }
-            ],
+        cfg = generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(results),
         )
-    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-    doc["run"] = run
-    return doc
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="shared_check").write_text(
+        _SHARED_CHECK_STEP
+    )
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="cond_check").write_text(
+        _CONDITION_CHECK_STEP
+    )
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="summarize").write_text(
+        _TWO_ESTIMATE_SUMMARY_STEP.format()
+    )
+
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "H8c batch 4 fix round 1 — Fixture R, all three nesting shapes"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["replication"] = {"repeats": [{"kind": "seed", "n": 3}]}
+    doc["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    doc["data"]["units"]["attributes"] = ["cohort"]
+    statistics: dict[str, Any] = {"report_by": ["cohort"]}
+    if declare_contrast:
+        # TWO declared contrasts, not one (m3, task-b4 review: a fixture
+        # with exactly one element cannot tell a loop from a first-element
+        # read — `[:1]` on the `results.contrasts` walk stays green against
+        # a single-entry list). Both name the same comparison on purpose
+        # (H4b-1's own precedent for "declared twice, counted twice"), with
+        # distinct `id`s so each is independently findable in the rendered
+        # rows.
+        statistics["contrasts"] = [
+            {"id": "spearman_vs_baseline", "of": "method=spearman", "against": "baseline"},
+            {"id": "spearman_vs_baseline_2", "of": "method=spearman", "against": "baseline"},
+        ]
+    doc["statistics"] = statistics
+    doc["hypotheses"] = [
+        {
+            "id": "h1",
+            "kind": "confirmatory",
+            "statement": "spearman's score exceeds pearson's",
+            "metric": "step01_summarize_units.score",
+            "compare": {"condition": "method=spearman", "to": "baseline"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        }
+    ]
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        [
+            "-c",
+            "user.email=t@e.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "fixture r, all three nesting shapes",
+        ],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    assert main(["run", str(cfg)]) == 0
+    run_dir = next(results.glob("run_*"))
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    return {"root": root, "run_dir": run_dir, "run": run}
 
 
 @pytest.fixture
@@ -953,10 +1036,13 @@ def test_fixture_r_is_shaped_the_way_this_task_needs(fixture_r: dict[str, Any]):
     assert run["results"]["hypotheses"][0]["id"] == "h1"
 
 
-def test_fixture_d_declares_one_contrast_beside_r_s_own_shape(fixture_d: dict[str, Any]):
+def test_fixture_d_declares_two_contrasts_beside_r_s_own_shape(fixture_d: dict[str, Any]):
     run = fixture_d["run"]
-    assert len(run["results"]["contrasts"]) == 1
-    assert run["results"]["contrasts"][0]["id"] == "spearman_vs_baseline"
+    assert len(run["results"]["contrasts"]) == 2
+    assert {c["id"] for c in run["results"]["contrasts"]} == {
+        "spearman_vs_baseline",
+        "spearman_vs_baseline_2",
+    }
 
 
 # --- Conditions ---------------------------------------------------------
@@ -985,12 +1071,19 @@ def test_conditions_section_metric_names_exclude_by_and_match_the_record_exactly
     fixture_r: dict[str, Any],
 ):
     """M13's discriminating assertion: the rendered metric set is EXACTLY
-    the record's real metric names — `by` excluded not because a literal
-    string is filtered out downstream, but because `stats.RESERVED_METRIC_
-    NAMES` never let it become a row's `metric` in the first place. Fixture
-    R declares `report_by: [cohort]`, so `aggregated[step01_summarize_
-    units]` genuinely holds a `by` key beside `score` — the arm this
-    fixture exists to give the exclusion something to bite on."""
+    the record's real metric names — `by` excluded not because the STRING
+    `"by"` is filtered out, but because Fixture R's `by` key structurally
+    IS the `report_by` strata block (attribute -> level -> metric), which
+    `_is_strata_block` recognizes on shape, never on name (Major 3, task-b4
+    review: excluding by the literal name is the same proxy substitution
+    as a module-name prefix, a class marker, or `pop(0)`). Fixture R
+    declares `report_by: [cohort]`, so `aggregated[step01_summarize_
+    units]` genuinely holds that stratum block beside `score` — the arm
+    this fixture exists to give the structural test something to bite on.
+    The sibling case — a recorded COLUMN literally named `by`, which must
+    render rather than vanish — is
+    `test_a_recorded_column_named_by_renders_as_a_real_metric_row` below.
+    """
     run = fixture_r["run"]
     rows = section_rows_for_step(run, "step01_summarize_units")
     metrics = {r["metric"] for r in rows if r["by_attribute"] is None}
@@ -1000,6 +1093,63 @@ def test_conditions_section_metric_names_exclude_by_and_match_the_record_exactly
 
 def section_rows_for_step(run: dict[str, Any], step: str) -> list[dict[str, Any]]:
     return [r for r in conditions_section(run).body["rows"] if r["step"] == step]
+
+
+_RECORDS_A_BY_COLUMN_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"pred": float(i), "by": float(i) * 2.0}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_recorded_column_named_by_renders_as_a_real_metric_row(tmp_path, capsys):
+    """Major 3, task-b4 review: Decision 5's own grounds for excluding
+    `by` — "the record `report` reads can never hold a metric called
+    `by`" — are false against the code. `cli.py`'s `W-STATS-STRATUM-
+    SHADOWED` says in writing that a recorded column of that name "keeps
+    its value" and that no strata are written for that step, whether or
+    not `report_by` was declared — verified here over a REAL run, over
+    `docs/superpowers/spec-defects.md`'s own "New reserved metric name:
+    `by`" ruling ("the column wins"). The Conditions section must agree
+    with the write side: a column named `by` renders as a real metric,
+    with its own `value`/`ci95`/`basis`, never dropped.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_BY_COLUMN_STEP)
+        doc = run_a_project(
+            tmp_path,
+            capsys=capsys,
+            units=40,
+            unit_attributes=["cohort"],
+            statistics={"report_by": ["cohort"]},
+        )
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    real_entry = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    assert real_entry["basis"] == "units"
+    assert "value" in real_entry
+    rows = section_rows_for_step(run, "step01_summarize_units")
+    by_rows = [r for r in rows if r["metric"] == "by" and r["by_attribute"] is None]
+    assert by_rows, "the recorded `by` column never reached the Conditions section"
+    row = by_rows[0]
+    assert row["value"] == real_entry["value"]
+    assert row["basis"] == real_entry["basis"]
+    assert row["ci95"] == real_entry["ci95"]
+    # And no phantom stratum rows were produced from misreading the same
+    # key: `report_by: [cohort]` was declared, but `cli.py` writes no
+    # strata block for THIS step because the column shadows it, so there
+    # must be no `by_attribute == "cohort"` row for step01 at all.
+    assert not [r for r in rows if r["by_attribute"] == "cohort"]
 
 
 def test_conditions_section_top_level_metric_carries_the_named_fields(fixture_r: dict[str, Any]):
@@ -1071,19 +1221,22 @@ def test_deltas_section_reads_vs_baseline(fixture_r: dict[str, Any]):
 def test_deltas_section_reads_results_contrasts_too(fixture_d: dict[str, Any]):
     """Decision 5's own correction: § The two files' `run.yaml` example
     shows only `vs_baseline`, and reading only it is the bug. Fixture D
-    declares one `statistics.contrasts` entry, and this asserts the
-    rendered rows carry it by its declared `id` — the seam M4 exists to
-    cut."""
+    declares TWO `statistics.contrasts` entries (m3, task-b4 review: one
+    entry cannot distinguish a loop from a first-element read), and this
+    asserts BOTH reach the rendered rows by their own declared `id` — the
+    seam M4 exists to cut."""
     run = fixture_d["run"]
-    contrast = run["results"]["contrasts"][0]
+    contrasts_by_id = {c["id"]: c for c in run["results"]["contrasts"]}
+    assert set(contrasts_by_id) == {"spearman_vs_baseline", "spearman_vs_baseline_2"}
     rows = deltas_section(run).body["rows"]
-    declared_rows = [r for r in rows if r["comparison"] == "spearman_vs_baseline"]
-    assert declared_rows, "the declared contrast never reached the Deltas section"
-    real_entry = contrast["step01_summarize_units"]["score"]
-    row = next(r for r in declared_rows if r["step"] == "step01_summarize_units")
-    assert row["of"] == contrast["of"]
-    assert row["against"] == contrast["against"]
-    assert row["delta"] == real_entry["delta"]
+    for comparison_id, contrast in contrasts_by_id.items():
+        declared_rows = [r for r in rows if r["comparison"] == comparison_id]
+        assert declared_rows, f"{comparison_id!r} never reached the Deltas section"
+        real_entry = contrast["step01_summarize_units"]["score"]
+        row = next(r for r in declared_rows if r["step"] == "step01_summarize_units")
+        assert row["of"] == contrast["of"]
+        assert row["against"] == contrast["against"]
+        assert row["delta"] == real_entry["delta"]
 
 
 def test_deltas_section_family_is_read_as_a_mapping_and_travels_with_each_row(
@@ -1133,8 +1286,11 @@ def test_m14_an_override_mutating_a_standard_sections_mapping_body_in_place_reac
     REBOUND. This is the render-level arm task 1 could not write because no
     standard section with a mapping body existed yet: reach into the
     Conditions section's `body["rows"]` and mutate a value in place, then
-    confirm what a reader ultimately sees (the row dict, read back after the
-    override's `sections` has run) is the mutated figure, not the record's.
+    confirm the mutated figure is what a reader ultimately sees — the
+    RENDERED TEXT, through both renderers, never the row dict a mutation
+    was just written into (M1, task-b4 review: a test named "reaches the
+    page" has to read the page, not the dict a mutation and its own
+    assertion share).
     """
     run = fixture_r["run"]
 
@@ -1145,12 +1301,24 @@ def test_m14_an_override_mutating_a_standard_sections_mapping_body_in_place_reac
                     section.body["rows"][0]["value"] = "MUTATED-BY-OVERRIDE"
                 yield section
 
+    # The control: render the SAME sections with no mutation applied, and
+    # confirm the real, unmutated figure is what appears — so the next
+    # assertion (the mutated text appearing instead) is known to mean
+    # something, rather than "MUTATED-BY-OVERRIDE" merely being present
+    # somewhere incidental.
+    plain_markdown = render_markdown(BaseReport().sections(run, io=object()))
+    assert "MUTATED-BY-OVERRIDE" not in plain_markdown
+
+    markdown = render_markdown(MutatingReport().sections(run, io=object()))
+    assert "MUTATED-BY-OVERRIDE" in markdown
+    html = render_html(MutatingReport().sections(run, io=object()))
+    assert "MUTATED-BY-OVERRIDE" in html
+
+    # The frozen guarantee itself still holds: the override cannot rebind
+    # `body` to a different mapping entirely, only mutate the one object
+    # core handed it.
     sections = list(MutatingReport().sections(run, io=object()))
     conditions = next(s for s in sections if s.title == "Conditions")
-    assert conditions.body["rows"][0]["value"] == "MUTATED-BY-OVERRIDE"
-    # And the frozen guarantee itself still holds: the override cannot
-    # rebind `body` to a different mapping entirely, only mutate the one
-    # object core handed it.
     with pytest.raises(dataclasses.FrozenInstanceError):
         conditions.body = {"rows": []}  # type: ignore[misc]
 
@@ -1244,40 +1412,68 @@ def test_attrition_section_input_manifest_changed_is_rendered_as_the_list_it_is(
 
 
 def test_attrition_section_carries_each_metrics_own_n(fixture_r: dict[str, Any]):
+    """Checked against BOTH conditions (m3, task-b4 review: `_metric_n_
+    rows`' condition loop is asserted on only its first element otherwise,
+    which cannot tell a loop from a single read even though Fixture R has
+    two conditions)."""
     run = fixture_r["run"]
-    baseline = next(c for c in run["results"]["conditions"] if c["is_baseline"])
-    real_n = baseline["aggregated"]["step01_summarize_units"]["score"]["n"]
     rows = attrition_section(run).body["rows"]
-    row = next(
-        r
-        for r in rows
-        if r["kind"] == "metric_n"
-        and r["condition_index"] == baseline["index"]
-        and r["step"] == "step01_summarize_units"
-        and r["metric"] == "score"
-        and r["by_attribute"] is None
-    )
-    assert row["n"] == real_n
+    for condition in run["results"]["conditions"]:
+        real_n = condition["aggregated"]["step01_summarize_units"]["score"]["n"]
+        row = next(
+            r
+            for r in rows
+            if r["kind"] == "metric_n"
+            and r["condition_index"] == condition["index"]
+            and r["step"] == "step01_summarize_units"
+            and r["metric"] == "score"
+            and r["by_attribute"] is None
+        )
+        assert row["n"] == real_n
 
 
 def test_attrition_section_walks_shared_conditions_and_summary(fixture_r: dict[str, Any]):
     """The mutation this pins against: walking only `execution.conditions`
-    and skipping `shared`/`summary`. Fixture R has a `summary` step
-    (`step02_summarize`), so its execution's presence in the rendered rows
-    is the discriminator — a mutant reading only `conditions[]` would omit
-    it entirely."""
+    and skipping `shared`/`summary`. Major 2 (task-b4 review): Fixture R
+    now carries all THREE nesting shapes for real — a `run`-scoped step
+    (`step02_shared_check`, lands in `execution.shared`), a
+    `condition`-scoped step (`step03_cond_check`, direct `status` under
+    `conditions[].steps`, no repeat label) and the `repeat`-scoped starter
+    step, plus the `summary`-scoped step — so each of the four asserted
+    scopes below has a REAL row to fail its own absence on, not merely a
+    name in the test's docstring.
+    """
     run = fixture_r["run"]
     rows = attrition_section(run).body["rows"]
     execution_rows = [r for r in rows if r["kind"] == "execution"]
     scopes = {r["scope"] for r in execution_rows}
-    assert "summary" in scopes
+    assert scopes == {"shared", "condition", "repeat", "summary"}
+
+    shared_row = next(r for r in execution_rows if r["scope"] == "shared")
+    assert shared_row["step"] == "step02_shared_check"
+    assert shared_row["status"] == run["execution"]["shared"]["step02_shared_check"]["status"]
+
+    condition_rows = [r for r in execution_rows if r["scope"] == "condition"]
+    assert {r["condition_index"] for r in condition_rows} == {
+        c["index"] for c in run["results"]["conditions"]
+    }
+    for row in condition_rows:
+        assert row["step"] == "step03_cond_check"
+        assert "status" in row and "repeat" not in row
+
     summary_row = next(r for r in execution_rows if r["scope"] == "summary")
-    assert summary_row["step"] == "step02_summarize"
-    assert summary_row["status"] == run["execution"]["summary"]["step02_summarize"]["status"]
+    assert summary_row["step"] == "step04_summarize"
+    assert summary_row["status"] == run["execution"]["summary"]["step04_summarize"]["status"]
+
     # And the repeat-scoped starter step's execution is walked too, nested
-    # correctly under `conditions[]`.
+    # correctly under `conditions[]`, for BOTH conditions (m3, task-b4
+    # review: a loop asserted on only its first element is not asserted on
+    # at all).
     repeat_rows = [r for r in execution_rows if r["scope"] == "repeat"]
     assert repeat_rows, "no repeat-scoped execution reached the Attrition section"
+    assert {r["condition_index"] for r in repeat_rows} == {
+        c["index"] for c in run["results"]["conditions"]
+    }
     for row in repeat_rows:
         assert row["step"] == "step01_summarize_units"
         assert "repeat" in row and row["repeat"]
