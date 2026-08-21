@@ -125,3 +125,45 @@ between a review and the brief written from it.
 **And the fix round declined to re-verify one thing and said so** — the review's own third-call-site
 repro, accepted at face value rather than re-run, recorded in a *what was not independently re-verified*
 section. **That is the right shape for a limit**: name it rather than let a silence imply coverage.
+
+## Batch 3 — task 3 alone — the one behaviour change to a shipped command
+
+Commit `6335c1d`. Suite 2541 → **2542**, **+1 exactly**, attributable to one new fixture. **Both
+verdicts PASS; four Minors, all in the report's evidence rather than the code.**
+
+**Additivity was verified the strongest way available**, not argued: the reviewer diffed **two full
+artifact trees** — the commit against a throwaway worktree at its parent — and found the file lists
+differ by **exactly the two new files**, with `run.yaml`'s top-level and `provenance` key lists,
+`status`, `draft`, both hashes, `layout`, `results`, `units_hash`, `allocation_hash`, `apparatus`,
+`upstream` and parsed `sweep.yaml` **all equal.** That is what requirement 1 of the ruling asked for and
+what a prose argument could not have delivered.
+
+**The authorized-pin-edit mechanism completed a second cycle, and this time the auditable half existed.**
+Batch 1's fix round added the requirement that task 3's report *show the diff is exactly one entry per arm
+with nothing reordered* — and it does: `config.yaml` into arm A, `repo_root.txt` into arm B, `pyproject.toml`
+still first. **Both arms discriminate in all four directions** (stray and missing, each arm). **Two
+cycles, two clean edits** — the mechanism is now house practice rather than an experiment.
+
+**The blind mutation the plan caught before anyone built it stayed caught.** M12's original form could
+never fail (`yaml.safe_dump(yaml.safe_load(x)) == x` holds for what the helper writes), so Fixture C was
+built on a **raw scaffold-and-run** with a `b"#"` control — and the predicted asymmetry was reproduced
+**and isolated**: under the re-dump mutation the byte arm fails while the mapping arm independently
+passes. **An asymmetry claimed but not demonstrated is the same defect as a blind mutation.**
+
+**And the credential sweep's widening was measured rather than reasoned.** Injecting the sentinel into
+`repo_root.txt` and into `config.yaml` each fails 6 of the 8 callers. The plan had said that *reasoning* a
+config holds only a variable's name is right and still not the measurement; this is the measurement.
+
+**The reviewer disclosed its own blind first attempt, which is the discipline in miniature:** its initial
+credential injection failed all eight callers with `NameError` because `os` was not imported at the
+injection site. **It caught that by reading the failure text rather than the pass/fail count**, and
+redid it. A mutation that fails for the wrong reason is not a pin, and only reading *why* it failed tells
+you which you have.
+
+**The Minors are all one shape: a claim broader than its evidence.** *"No other site in `src/` references
+either name"* was grepped in `cli.py` alone (the conclusion holds; two real sites exist elsewhere), the
+`_files_under` enumeration was grepped in one file (complete, but not shown to be), and a docstring said
+"two assertions" where three exist — the third being **the sole pin on `repo_root.txt`'s trailing
+newline.** Worth crediting: **the report refused the blanket zero-disagreements claim and reported what
+it grepped**, which is the new `CLAUDE.md` row working; the remaining gap is only that a *none found* line
+and a mis-scoped grep cannot both be right.
