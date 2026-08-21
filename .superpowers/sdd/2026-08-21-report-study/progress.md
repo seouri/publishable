@@ -252,3 +252,60 @@ the implementer four times.
 `(size, mtime_ns, bytes)` rather than bytes alone, identical on **both** halves with the check preceding
 the record read; and the redaction, verified by a **full leaf-path diff** — exactly four paths change,
 **all six hash paths unchanged**, where the shipped test asserted three.
+
+## Batches 8 and 9 — `generate report`, then the documents
+
+Batch 8: `51fb7cb`, `37a8f68`, `ae71d2a` (fix round). Batch 9: `c794029`, `c10aa44` (fix round).
+Suite 2823 → 2828 → 2829 → 2832 → **2833**; mypy 51 → **52**, formatter 92 → **93**.
+
+**Batch 8's Major was pre-existing and family-wide, and its severity is worth stating precisely.** An
+unescaped user string is interpolated into generated Python, so `--format 'ht"ml'` exits `0` and writes a
+file that does not parse. **This is not a privilege boundary** — the user types the argument in their own
+shell against their own repo — so it is a **robustness** defect. **The serious half is the sibling:
+`generate step` with a crafted name exits `0` while leaving an existing `experiment.py` NON-PARSING**,
+corrupting a file it did not create. Fixed here for `--format`; filed family-wide.
+
+**The deferral that produced it is a shape this slice kept hitting:** the batch adjudicated *"let render
+catch it"* from the `--input-dir` precedent **without running it** — and the precedent does not hold,
+because **`--input-dir` seeds YAML while this seeds a Python literal.** Same class as the `pop(0)`
+defence: **a precedent that matches the mechanism but not the exposure.**
+
+### Batch 9 was reviewed, and reviewing it was the right call
+
+**Four Majors, all in the steps whose job was checking the record's own honesty** — the code audit
+produced two, the filing strike one, the dated entry one. That is the `CLAUDE.md` row I added after H8b,
+confirmed by measurement.
+
+**A dated build fact was pinned to the commit that most contradicts it** — the § Executability entry
+pinned to the branch's **first** commit, where all three commands were still unbuilt. **Worse than an
+undated claim**, because it invites a reader to verify and be misled. **A row narrower than its code
+shipped for the third slice running** — and this time **the same commit correctly widened the sibling row
+for the identical second caller and missed its neighbour**, both raised from one shared helper. **The
+lesson is not "audit harder": finding one instance of a shape is the moment to grep for the rest of it.**
+And **two filings this commit fixed were left unstruck**, sitting immediately below the one it did strike.
+
+**Arm D did what it was built three batches earlier to do.** The gate proved it **fires** on a mutated
+delta line and on a mutated hash prefix, and `git log -L` confirms **arm B has exactly its one authorized
+edit and arm D only its creating commit.** § The worked example is therefore **provably** untouched rather
+than asserted untouched — the strongest form that claim has taken here.
+
+## Independent whole-branch review: MERGE — no Critical, no Major, ten Minors
+
+**The gate looked hardest for the shape that was the whole-branch Major on both preceding sub-slices and
+did not find it**: it enumerated every raise reachable through the shared helpers and **every row covers
+every site**.
+
+**The sharpest Minor is the sibling rule running in reverse.** **`sys.path.pop(0)` is still live one file
+from where this branch replaced it with identity removal and wrote the rule down** — demonstrated as a
+discriminating pair, `validate` leaking the project's `src` while `report` removes correctly. **We found
+the shape, fixed it, recorded it, and left the neighbour holding it.**
+
+**And a routed question was closed with a reason rather than a change**: batch 2's symmetry question about
+`ReportIO` calling `StepIO._read`/`_contained` by class needs **no** change, recorded explicitly so it does
+not read as missed. **A routed question closed with a reason is worth as much as one closed with a
+change.**
+
+**The proxy tally is reconciled** — `CLAUDE.md` and this ledger had disagreed on the sixth. The reserved-
+name instance now has its own entry, and the positional-removal one is named as **the same fault as the
+one-spelling grep in a different currency** rather than a separate number, because inventing ordinals for
+one recurring mistake obscures that it is one mistake.

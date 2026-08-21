@@ -446,14 +446,20 @@ A corollary that cost its own round: **state read at the wrong moment is a third
 was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
 class's module is gone, while an external one is still cached.
 
-**Copying a recipe's calls without its containment is a sixth.** `freeze`'s credential wiring was
+**A reserved NAME standing in for a structural fact is another.** A `report_by` stratum was excluded
+from a render by testing the string `by` — and a recorded column legitimately named `by` was silently
+dropped, its value, interval, method and `repeat_spread` all present in the record. The design's ground
+— *"the record `report` reads can never hold a metric called `by`"* — was false against a real run.
+A stratum is identifiable by **where it sits**, not by what it is called.
+
+**Copying a recipe's calls without its containment is a fifth.** `freeze`'s credential wiring was
 cited as the precedent for `report`'s, and the calls were lifted while **the `try` they sit inside was
 not** — so a project-local template raising at import escaped to `main`'s un-redacted printer and a
 declared credential reached stderr verbatim, in a case § Secrets explicitly promises to redact. The
 same file already had it right. **A recipe is its calls PLUS where they sit**; the reviewer's positive
 control was `validate` over the identical project printing `<redacted:…>`.
 
-**Removing by position is a fifth.** A `sys.path` entry inserted at index 0 was removed with `pop(0)` —
+**Removing by position is a fourth-and-a-half — the same fault as the grep, in a different currency.** A `sys.path` entry inserted at index 0 was removed with `pop(0)` —
 which answers *which entry did I add?* with a **position** rather than with the entry. User code runs
 inside that window by design, so an override doing its own `sys.path.insert(0, …)` made the pop remove
 the wrong entry and leak one project's `src/` into the next render. The precedent cited in its defence —
