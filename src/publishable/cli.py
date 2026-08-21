@@ -39,6 +39,7 @@ from publishable.diagnostics import (
 from publishable.errors import ContractError, PublishableError
 from publishable.estimate import Estimate
 from publishable.generators.experiment import generate_experiment
+from publishable.generators.report import generate_report
 from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
@@ -153,11 +154,10 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "resume": "Resuming",
 }
 
-# The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
-# and this build materializes three.
-NOT_BUILT_GENERATORS: dict[str, str] = {
-    "report": "A report override renders one experiment's own figures",
-}
+# The same, for `generate`'s kinds: `docs/reference.md` § Generators names
+# four and this build materializes all four (H8c task 15 built `report`,
+# the last of them).
+NOT_BUILT_GENERATORS: dict[str, str] = {}
 
 
 def _report_not_built(what: str, section: str) -> int:
@@ -3993,6 +3993,20 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
             )
             return EXIT_INVOCATION
         generate_template(repo_root=repo_root, name=name)
+        return EXIT_OK
+    if kind == "report":
+        # Arity before anything reaches disk, on `template`'s own precedent
+        # just above: the CLI-table test probes every built generator with
+        # two junk positionals inside this repository, so a generator that
+        # wrote first would scaffold a report override into the working
+        # tree that a later `report` run would then discover.
+        if len(positional) != 1:
+            print(
+                "`generate report` takes one experiment name — see docs/reference.md § Generators",
+                file=sys.stderr,
+            )
+            return EXIT_INVOCATION
+        generate_report(repo_root=repo_root, experiment=positional[0], fmt=opts.get("format"))
         return EXIT_OK
     if kind in NOT_BUILT_GENERATORS:
         return _report_not_built(f"generate {kind}", NOT_BUILT_GENERATORS[kind])

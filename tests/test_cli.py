@@ -844,6 +844,157 @@ def test_generate_template_takes_exactly_one_name_and_writes_nothing_otherwise(
     assert sorted(p.name for p in templates.iterdir()) == before
 
 
+GENERATED_REPORT = "src/cohort_pilot/report.py"
+
+
+def test_generate_report_writes_a_class_discovery_resolves_and_renders_all_four_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The round trip, not a file-existence check — the same shape
+    `test_generate_template_writes_a_template_that_resolves_by_name` uses.
+
+    `render_with_override` is called directly, with a `render` callback that
+    receives the RESOLVED CLASS, so this asserts two things a substring check
+    on the CLI's stdout could not tell apart (M6, the vacuity this slice's
+    own `CLAUDE.md` names against a neighbouring rendering): first, that
+    discovery genuinely found `cohort_pilot.report.Report` rather than
+    falling back to `render(None)` — the no-override path renders the exact
+    same four sections, so a test that only inspected rendered text could
+    not distinguish "the generated override ran" from "no override exists
+    at all"; second, that calling `.sections(record, io)` on that resolved
+    class yields all four standard titles, in Decision 5's order, because
+    the generated body is nothing but `yield from super().sections(run, io)`
+    and a `TODO` comment.
+    """
+    from publishable.report import render_with_override
+
+    built = run_a_project(tmp_path)
+    root = built["root"]
+    monkeypatch.chdir(root)
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_OK
+    generated = root / GENERATED_REPORT
+    assert generated.is_file()
+
+    record = yaml.safe_load((built["run_dir"] / "run.yaml").read_text())
+
+    def render(cls: Any) -> Any:
+        assert cls is not None, "discovery fell back to no-override"
+        assert cls.__module__ == "cohort_pilot.report"
+        assert cls.__name__ == "Report"
+        return [section.title for section in cls().sections(record, object())]
+
+    titles = render_with_override(built["run_dir"], record, render=render)
+    assert titles == ["Conditions", "Deltas", "Hypothesis verdicts", "Attrition"]
+
+
+def test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Decision 2: `BaseReport.format` has no base default, because
+    `generate report` ALWAYS writes the line — this is the test that makes
+    that claim true rather than aspirational. Two arms: `--format html`
+    seeds `html` verbatim, and omitting the flag still writes a line, never
+    an unset attribute — this generator's own default of `markdown`, not
+    `BaseReport`'s, which stays undeclared.
+    """
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot", "--format", "html"]) == EXIT_OK
+    text = (root / GENERATED_REPORT).read_text()
+    assert 'format = "html"' in text
+
+    namespace: dict[str, Any] = {}
+    exec(compile(text, str(root / GENERATED_REPORT), "exec"), namespace)  # noqa: S102
+    report_cls = namespace["Report"]
+    assert report_cls.format == "html"
+
+    (root / GENERATED_REPORT).unlink()
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_OK
+    text = (root / GENERATED_REPORT).read_text()
+    assert 'format = "markdown"' in text
+
+
+def test_generate_report_refuses_an_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Greenfield only, the same line every other generator draws
+    (Decision 17, joining the `E-*-EXISTS` family `study new`'s does).
+    The file's whole text is asserted, so a generator that wrote the stub
+    anyway fails here even though the refusal printed."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    mine = root / GENERATED_REPORT
+    mine.write_text("# hand-written, and worth more than a stub\n")
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_WRONG
+    printed = capsys.readouterr().err
+    assert "E-REPORT-EXISTS" in printed
+    assert "src/cohort_pilot/report.py" in printed
+    assert mine.read_text() == "# hand-written, and worth more than a stub\n"
+
+
+def test_generate_report_takes_exactly_one_name_and_writes_nothing_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Arity before anything reaches disk — `template`'s own stated reason:
+    the CLI-table test probes every built generator with two junk
+    positionals inside this repository, and a generator that wrote first
+    would scaffold a report override into the working tree that a later
+    `report` run would then discover."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate report` takes one experiment name — see docs/reference.md § Generators\n"
+    )
+    assert main(["generate", "report"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate report` takes one experiment name — see docs/reference.md § Generators\n"
+    )
+    assert not (root / GENERATED_REPORT).exists()
+
+
+def test_generate_report_on_a_missing_package_is_e_experiment_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Reused from `generate step` (Decision 17/task 15 step 1): the identical
+    fault under the identical code, regardless of which generator hit it
+    first — no second "no package here" message invented for this one."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "no-such-experiment"]) == EXIT_WRONG
+    printed = capsys.readouterr().err
+    assert "E-EXPERIMENT-UNKNOWN" in printed
+
+
 def test_command_run_aggregate_resolves_a_project_local_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -9221,15 +9372,28 @@ def test_a_contrast_draw_that_cannot_vary_is_documented_as_reporting_no_interval
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to
-    catch. Both statuses must be present in both tables — a document that stopped
-    marking anything, or marked everything, fails here rather than silently."""
+    catch. Every status found must be one this document defines, and a table
+    that found no rows at all is the same vacuity by a different route — so
+    both are checked, per table, rather than the single set-equality this
+    assertion used before H8c task 15 (§ Corrections, correction 3): once
+    § Generators lost its only `NOT BUILT` row, that table's status set became
+    `{"built"}` alone, which a `== {"built", "NOT BUILT"}` check would fail
+    even though nothing shrank. A row-presence pair per table — the same
+    device the Command table's two lines already were — is what keeps this
+    a real check rather than a subset test alone: a parser returning `[]` for
+    a table still satisfies "a subset of the valid statuses, non-empty" only
+    if it finds at least one row, and finding one row is not finding a
+    SPECIFIC one, so the named pairs are what a vacuous parse cannot fake."""
     tables = _status_tables()
     assert set(tables) == {"Command", "Generator"}
     for column, rows in tables.items():
         statuses = {status for _, status in rows}
-        assert statuses == {"built", "NOT BUILT"}, column
+        assert statuses, column
+        assert statuses <= {"built", "NOT BUILT"}, column
     assert ("dry-run", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
+    assert ("report", "built") in tables["Generator"]
+    assert ("template", "built") in tables["Generator"]
     # Set equality against the CLI's own mapping, which the behavioural check
     # below cannot see: a whole table losing its `Status` column, or a marked row
     # being deleted, would quietly shrink what that check covers rather than fail
