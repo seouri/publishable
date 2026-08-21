@@ -710,6 +710,30 @@ otherwise each have to guess at the same envelope. Task 14 closed the narrower `
 class inside `_check_sweep`/`_check_contrasts`; the five leaf-type crashes listed above are
 untouched and remain live.
 
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H1 Validation has shipped (merged
+2026-08-11); four of the five sites are fixed and one is genuinely still open.** Verified by
+running `validate_config` against probe configs built for this sweep. Three close through
+`envelope.check_envelope`'s `LEAF_TYPES` walk, which H1 built: `data.input_dir`/`data.output_dir`
+as a list, `metadata.name` as a list, and `data.units.key` as a list each now report
+`E-CONFIG-TYPE` rather than crashing, one dotted path apiece. The fourth — `data.units.attributes`
+items that are lists or dicts — closes a different way: `check_envelope` cannot reach it, because
+`LEAF_TYPES` types the whole `attributes` block a `list` and names no dotted path for a list
+*element* (the same reason `sweep.grid`'s axis values aren't in the table either), but
+`validate.py`'s own `_check_data` carries a dedicated guard — `isinstance(a, str)` over every
+declared attribute name, reported as `E-UNITS-ATTR-MISSING` before `units.py`'s `_from_table` ever
+reaches the `columns` set whose membership test would otherwise hash an unhashable name — verified
+by probing a config with `attributes: [["a", "b"], {"y": 1}]`, which reports two
+`E-UNITS-ATTR-MISSING` findings and does not crash. Only `replication.repeats[i].n` as `"many"` or
+as a list still crashes (`ValueError`/`TypeError` inside `int(count)` at `validate.py`'s
+repeat-budget loop), because that field sits inside a list item rather than at a fixed dotted path
+or behind a dedicated per-item guard like `attributes`' — the same class of gap the
+`hypotheses`/`statistics.contrasts` per-entry-key entries elsewhere in this file describe. No
+remaining chartered slice has `replication.repeats`'s per-item scalar types as its surface — H5
+owns `units.parquet` integrity, H6 owns hashes and provenance, H9 owns
+`reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, and H3c-3 owns folds inside cells, none of
+which is "validate a repeat-level's own scalar fields." **Owner: unassigned** — the one remaining
+crash site has no home in what is left of the spine.
+
 ## New error identifiers: `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED`
 
 Raised by `io.record`/`io.skip`. Neither is in § Errors core raises, which enumerates the
@@ -986,6 +1010,11 @@ pinned by `test_a_baseline_that_leaves_a_grid_axis_free_is_refused`.
 per-cell expansion lands" named no slice. **Owner: H2 Sweeps** (spine § The hardening slices),
 which owns per-cell baseline expansion alongside `ablate`, `groups`, `paired` and `sample` — the
 four refusals this one was modelled on, so all five retire together.
+
+**STRUCK 2026-08-21 (spec-defects staleness sweep): already CLOSED 2026-08-12 (H2 Sweep
+expansion modes, task 7), recorded under the `W-SWEEP-BASELINE-CONFOUNDED` entry above.**
+`E-SWEEP-BASELINE-PARTIAL` is retired — `test_a_baseline_that_leaves_a_grid_axis_free_validates_
+and_expands` pins per-cell baseline targeting end to end. Nothing owes this entry further.
 
 ## `io.read_upstream` can only reach `run`-scoped steps — MARKED FOR THE NEXT SLICE
 
@@ -1671,6 +1700,17 @@ They are one piece of work, not two: the nested-`fold` figure and the derived-me
 need the same `resample_fns`-shaped closure threaded from `cli.py` into `stats.py`, and building it
 twice is how one of them ends up computing a different number than the other. H4 is ordered after
 H3 Units for the related reason that H3 is what makes a `fold` level real.
+
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H4 Statistics is complete (H4d merged
+2026-08-19, the last of the family) and neither figure was built.** Verified by reading
+`stats.repeat_spread`, current at HEAD:
+`if len(levels) > 1 and any(lv.kind == "fold" for lv in levels): return []` still guards the nested-fold case exactly as this entry describes, and the
+function still takes no template/`cfg`/callable, so a derived metric still gets no `repeat_spread`
+entry — the `resample_fns`-shaped closure this entry calls for was never threaded from `cli.py`.
+No remaining chartered slice owns `stats.py`'s per-level dispersion construction: H5 is artifacts,
+H6 is hashes and provenance, H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, and H3c-3
+is folds inside cells specifically for the holdout-validation refusal, not for `repeat_spread`'s
+recompute machinery. **Owner: unassigned.**
 
 ## `resample_draws: null` and `resample_draws: 0` were the same fact until this fix
 
@@ -3224,6 +3264,17 @@ carries the original claim verbatim ("which is what a lone repeat's dispersion h
 is the remaining copy of the sentence, and it was left in place because this pass was scoped to the
 documents.
 
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H4 Statistics is complete (H4d merged
+2026-08-19) and the design decision this entry named — omit the entry, or write `std: null` —
+was never made.** Verified by reading `stats.repeat_spread` at HEAD: a declared level resolving to
+one contributing member still appends
+`{"std": math.sqrt(variance), "n": len(member_means), "kind": level.kind}` with no `n == 1` special case, so `std: 0.0` is still written for exactly the shape
+this entry describes, and `reference.md` § The two files still records the omit-versus-zero choice
+as open rather than decided. No remaining chartered slice owns `stats.py`'s `repeat_spread`
+construction (see the entry above, "Two `repeat_spread` figures the S4a passenger declines to
+compute" — same function, same absent owner, same reasoning: not H5 artifacts, not H6 hashes, not
+H9's CLI surfaces, not H3c-3's folds-in-cells). **Owner: unassigned.**
+
 ## `finalize` lets a declared attribute named `unit` shadow the unit key in `units.parquet`
 
 Found by task 13's reviewer during the S5 checkpoint, filed by task 16. **Pre-existing, live, and
@@ -3576,6 +3627,15 @@ docstring rather than let it disappear with the test that used to prove it end t
 envelope causing this, and the one positioned to decide whether defence-in-depth earns its own
 test or is retired.
 
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H1 Validation has shipped and neither
+option was taken.** Verified by reading `cli.py` at HEAD: both guards are still inline in
+`command_run`, still written `isinstance(x, (int, float)) and not isinstance(x, bool) and ...`
+around the `W-DATA-INELIGIBLE` and `W-STATS-STRATUM-THIN` comparisons, with no extracted
+function and no removal. No remaining chartered slice has `command_run`'s inline `limits` guards
+as its surface — H5 is `units.parquet` integrity and the reserved-column namespace, H6 is hashes
+and provenance, H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, H3c-3 is folds inside
+cells, and none of them touches this pair of comparisons. **Owner: unassigned.**
+
 ## Nine undocumented run-time and creation-command `E-` codes
 
 Found by task 7's reviews while landing the validate-time `E-` registry (see "Validate-time `E-`
@@ -3677,6 +3737,15 @@ this did not also close it — it owns "the full ~85-check engine," and this is 
 well-formedness question that engine exists to make reliable regardless of the
 directory a command is run from.
 
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H1 Validation has shipped without fixing
+this.** Verified by running: a config named `wrong-name-here` under `metadata.name`, validated
+via `config_path = Path("config.yaml")` with the working directory already inside the config's
+own directory, produces no `E-NAME-DIR` finding among `validate_config`'s output — the exact
+failure this entry describes, still live at HEAD. `validate._check_metadata` still reads
+`config_path.parent.name` with no `.resolve()`. No remaining chartered slice has
+`_check_metadata`'s path handling as its surface (H5 artifacts, H6 hashes/provenance, H9's
+CLI commands, H3c-3's folds-in-cells all touch different code). **Owner: unassigned.**
+
 ## New warning identifier: `W-SWEEP-BASELINE-CONFOUNDED`, and `W-STATS-CONTRAST-THIN` gains a validate-time half
 
 H1 task 10, the two rows of `reference.md` § Validation that state a check nothing performed and
@@ -3743,6 +3812,14 @@ family, not about either check's behaviour, and neither this task nor the `repor
 minted the split had the standing to settle it. **Owner: whichever slice next touches the
 `limits.min_reported_n` family.**
 
+**Owner corrected 2026-08-21: `unassigned`, stated as a fact with the reason.** *"Whichever slice next
+touches the `limits.min_reported_n` family"* is the form **this file rejects by name** at its own
+`RE-OWNED 2026-08-19` entry: it reads as covered while naming nobody, and it resolves to a **closed**
+slice the moment that family is touched — which **H8c task 14 then did**, building the `min_reported_n`
+prompt without settling the documentation question this entry names. No remaining slice (H5, H6, H9,
+H3c-3's 14) has the `W-…-THIN` family's documentation as its surface. **The check its closer must make
+is unchanged: decide the rule for the whole family rather than for either check's behaviour.**
+
 The one behavioural subtlety, pinned by
 `test_an_unknown_within_attribute_is_refused_without_also_being_called_thin`: the thinness count is
 skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused. An undeclared
@@ -3764,6 +3841,15 @@ a `W-` code is looked up, and both rows resolve there now.
    passes unchanged). Closing it means deciding whether a baseline-only axis is part of the design
    the warning describes — a baseline-semantics question. **Owner: H2 Sweeps**, alongside per-cell
    baseline expansion, which is the same block of work.
+
+   **RE-OWNED 2026-08-21 (spec-defects staleness sweep): H2 Sweeps shipped 2026-08-12 without
+   deciding this.** Verified by reading `validate.py`'s `_check_sweep` at HEAD: the check still
+   reads `swept_axes = list(grid)` and compares only those axes against `baseline_fixed`, and the
+   surrounding comment still states the same reasoning this entry gives for why it does not import
+   `contrasts.differing_axes`'s wider, union-based semantics. A baseline-only axis (fixed in
+   `sweep.baseline` but never swept in `sweep.grid`) still passes `validate` silently and can still
+   be written `confounded: true` at run time. No remaining chartered slice owns `sweep.baseline`/
+   `contrasts` semantics — H5, H6, H9 and H3c-3 are all elsewhere. **Owner: unassigned.**
 2. **The message-text assertion in
    `test_a_baseline_fixing_every_axis_of_a_crossed_grid_warns_before_the_run` is deliberate.** This
    project pins identifiers and not wording, so an assertion on `"2 of 4 baseline comparisons"` would
@@ -3854,6 +3940,14 @@ plugin ships a template with a version of its own" — are still the condition, 
 separately as `## OPEN — an installed template's name resolves but its class is never loaded`,
 **owner unassigned**. Strike this row when that one is closed, not before.
 
+**NOTED 2026-08-21 (spec-defects staleness sweep, so an `Owner:` sweep does not stop at this
+heading): the heading's "Owner: H7 Plugins and the apparatus" and this section's own "Owner stays
+H7 — specifically H7b" are both superseded text, not live pointers.** H7 (all parts, including
+H7d) is now complete, and this row's own last word is that the remaining work belongs entirely to
+the companion entry named above, which already carries `owner unassigned` with H7d's own scoping
+confirming no chartered slice populates `Claim.cls` for an installed template. Nothing here is
+still asking H7 for anything.
+
 ### Row 284 "Correction can be applied" — **Owner: H4 Statistics**
 
 `_check_sweep` raises `W-STATS-CORRECTION-INAPPLICABLE` whenever `statistics.correction` is
@@ -3886,6 +3980,15 @@ independent of whether the disjunction is complete. What is unchanged, and what 
 routed to H4 for, is the *condition* — `if comparisons > 0 and correction == "fdr_bh"` tests none of
 the row's three disjuncts and is narrowed by whichever slice implements `null_test`.
 
+**STRUCK 2026-08-21 (spec-defects staleness sweep): CLOSED by H4d task 10.** `statistics.null_test`
+was the block this row's disjunction waited on, and H4d built it. Verified by reading
+`validate.py`'s current `_check_sweep`: the `fdr_bh` guard now reads `null_test`, computes
+`crossed_by_any_comparison` from `crossed_group_axes` over every resolved contrast, and tests all
+three disjuncts by name — no `null_test` declared, every comparison differing only on a parameter
+axis, or a declared `shuffle` naming an axis no comparison crosses — each with its own `reason`
+string in the warning. This is exactly the row's three-way condition, not the accident-of-refusal
+placeholder this entry described. Nothing owes this row further.
+
 ### Not one of the seven, but measured while closing 225: `seeds` is declared and read by nothing — **Owner: H1 Validation**
 
 `reference.md` § Repeat kinds gives a `seed` level two ways to say what it repeats over: "`n` (how
@@ -3914,6 +4017,14 @@ task belongs to; or `_seed_members` honors it, which the H1–H9 table assigns t
 `replication.py` appearing there only as "the `seed` kind: *n* repeats, resolved seeds, repeat
 labels". **That absence is itself part of what is being recorded here.** The refusal is the smaller
 and the safer of the two, and it is the one that stops a config from running seeds nobody asked for.
+
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H1 Validation has shipped without choosing
+either route.** Verified by reading `replication._seed_members` at HEAD: it still derives every
+seed from `digest|kind` with no read of a declared `seeds` list, and no `E-REPL-*` refusal for a
+`seed` level carrying `seeds` exists in `validate.py` — the field is still silently divergent under
+both shapes this entry describes. No remaining chartered slice owns `replication.py`'s `seed`-level
+resolution: H5, H6, H9 and H3c-3 are all elsewhere (H3c-3's folds-in-cells touches `fold`, not
+`seed`). **Owner: unassigned.**
 
 ### The closed-schema walk does not reach a leaf's own keys — **Owner: H4 Statistics for two of the three blocks; H1 Validation for `hypotheses`**
 
@@ -4014,6 +4125,27 @@ stays with **H1 Validation** and `statistics.contrasts` with **H4 Statistics**, 
 `data.units.from`'s mapping vocabulary belongs with whichever slice implements `resolver`
 (`E-DATA-RESOLVER-UNSUPPORTED`), since that is the second key of the two. The `seed`/`fold`
 closure belongs to no slice in the H1–H9 table.
+
+**RE-OWNED 2026-08-21 (spec-defects staleness sweep): H1 and H4 have both shipped, one gap
+closed and two still open.** Verified by probing `validate_config` with a real config for each:
+
+- **`data.units.from`'s mapping vocabulary is CLOSED**, and this entry's own prediction is what
+  closed it: `{glob: "*.csv", junky_extra_key: true}` now reports `E-CONFIG-KEY-UNKNOWN` at
+  `data.units.from.junky_extra_key` — H7b Part B, which built `data.units.from.resolver`'s
+  dispatch, closed the mapping's key vocabulary as part of the same work. Nothing owes this
+  half further.
+- **`hypotheses` is still open.** A `hypotheses` entry carrying `evaluate_onn` beside the real
+  `evaluate_on` still validates with no finding naming the typo — checked directly, not
+  re-derived. H1 Validation shipped without closing it, and no remaining chartered slice
+  (H5, H6, H9, H3c-3) has the `hypotheses` block as its surface. **Owner: unassigned.**
+- **`statistics.contrasts` is still open.** A contrast entry carrying `withn` beside the real
+  `within` still validates with only the shape/label findings its other fields earn — the typo
+  itself is unreported. H4 Statistics shipped without closing it, and no remaining chartered
+  slice has `statistics.contrasts` as its surface either. **Owner: unassigned.**
+
+`statistics.report_by`'s own per-entry closure (once an entry is a mapping rather than a bare
+string) was not independently re-probed here; it shares `_check_report_by`'s shape with
+`_check_contrasts` and this sweep found no reason to expect it differs.
 
 **It does not merge with the `seeds` entry filed earlier in this slice, and they stand
 separately.** That entry is about `_seed_members` *ignoring a key the document defines* —
@@ -5807,6 +5939,32 @@ rather than re-deriving it, the same *carried claim* shape `docs/feasibility-llm
 H4d is already terminal for this family and H8a builds nothing in `statistics`; this amendment
 narrows who the limitation applies to, not who owns fixing it.
 
+**RESOLVED 2026-08-21 (spec-defects staleness sweep): "Owner unchanged: H4 Statistics" is itself
+stale, and the contradiction with the global RE-OWNED sweep is real — but both readings are
+superseded by a fact neither one accounted for.** The **RE-OWNED 2026-08-19** entry elsewhere in
+this file swept every filing still naming `Owner: H4d` after H4d merged and moved this asymmetry
+to `unassigned` among the five, treating it as unclaimed live work. The **H8a task 10** amendment
+above, written a day later, restates `Owner: H4 Statistics` instead, reasoning only that H8a
+itself builds nothing in `statistics` — which is true but answers the wrong question, since it was
+never H8a's to claim.
+
+Neither amendment noticed what the paragraph directly above this one on the page already recorded:
+**CONVERTED 2026-08-18 (H4d, task 24)** turned this asymmetry into a documented, permanent
+limitation, one day *before* the RE-OWNED sweep ran and two days before H8a's task 10. Checked
+against the document rather than assumed: `reference.md` § Statistical reporting states, in the
+present tense and without qualification, "A `statistics.report_by` level's recorded-column
+interval is a `t_over_units` one even under a declared `resample`, and that is a documented
+limitation rather than a gap awaiting a slice." The code is unchanged and is not expected to
+change — that is what "limitation" means here, per the entry's own terminal instruction, which
+this is.
+
+**Which reading wins: neither "H4 Statistics" nor "unassigned" in the sense either amendment
+meant it, because there is no fix left to own.** `unassigned` read as "nobody has claimed this
+live gap yet" is false — it is not a live gap, it is a settled specification. `H4 Statistics` read
+as "H4 owns closing this" is false for the reason H4d's own task 24 gives — H4d was terminal and
+closed it in the only way its own ruling allowed, by converting it rather than fixing the code.
+**This entry needs no further owner of either kind.**
+
 ## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -6083,6 +6241,16 @@ defect — two claimed call sites against three real ones — and H3d's task 7 c
 four. An enumeration of call sites inside a docstring is a maintenance obligation nobody
 owns, so the fix worth preferring is to state what the helper is *for* and drop the count.
 
+**CORRECTED 2026-08-21 (spec-defects staleness sweep): the count itself has moved again, which
+is the entry's own point, not a reason to chase it.**
+`grep -rn "stratum_names(" src/publishable/*.py | grep -v "def stratum_names"`, run against HEAD, finds **eight** call sites now
+(`validate.py` ×5, `units.py` ×2, `cli.py` ×1) — the heading's "seven" is itself stale, one slice
+after H3d added the eighth. Not corrected to "eight" here: a form that names a number goes stale
+on the next call site regardless of which number it is, which is exactly why this entry's own
+proposed fix — "state what the helper is for and drop the count" — is the one worth taking rather
+than re-measuring forever. The substance (a docstring enumeration is a maintenance obligation
+nobody owns) stands unweakened by which number is currently wrong.
+
 **Found by:** H3d, Task 6 review; deferred again at Task 7. **Owner:** whichever slice next
 edits `units.stratum_names` — re-owner this entry when that slice finishes rather than
 leaving it pointing at a closed one.
@@ -6317,6 +6485,8 @@ supplied a value that just isn't visible to a path-flattening reader.
 **Owner:** whichever slice next touches `_flatten_parameters`/`_flatten` or
 `declared_credential_names`.
 
+**Owner corrected 2026-08-21: `unassigned`, stated as a fact with the reason.** The line above used the *"whichever slice next touches X"* form **this file rejects by name** at its own `RE-OWNED 2026-08-19` entry — a form that reads as covered while naming nobody, and that resolves to a closed slice the moment X is touched. No remaining slice (H5 Artifacts, H6 Hashes and provenance, H9, or H3c-3's remaining 14) has this surface, so there is no successor to name and saying so is the honest record. The check its closer must make is stated in the entry above; nothing about it changed.
+
 **Found by:** H7c, Task 14. **Severity:** Minor. The config is refused regardless (by
 `E-PARAM-UNKNOWN` on the nested leaf, not by the `choices` check — corrected above), so nothing
 invalid runs — the defect is a misleading message on an already-refused config, not a missed
@@ -6388,6 +6558,8 @@ Pre-existing, unrelated to `requires_env`/`required_env` — found while sweepin
 slice's own changes to `comment()` and not owned by any H7c task.
 
 **Owner:** whichever slice next touches `Param.comment()` or the list constraint row.
+
+**Owner corrected 2026-08-21: `unassigned`, stated as a fact with the reason.** The line above used the *"whichever slice next touches X"* form **this file rejects by name** at its own `RE-OWNED 2026-08-19` entry — a form that reads as covered while naming nobody, and that resolves to a closed slice the moment X is touched. No remaining slice (H5 Artifacts, H6 Hashes and provenance, H9, or H3c-3's remaining 14) has this surface, so there is no successor to name and saying so is the honest record. The check its closer must make is stated in the entry above; nothing about it changed.
 
 **Found by:** H7c, Task 14. **Severity:** Minor. `validate` still enforces the bound at value time
 regardless of what the comment says — a reader is under-informed, not let through a bad config.
@@ -7471,6 +7643,18 @@ materialized by `materialize.py` — from a slice about something else.
 review (Minor 1, the second face). Filed here per the controller's ruling that a ledger line saying
 "filed" is not a filing.
 
+**INSTRUCTION 2026-08-21 (spec-defects staleness sweep, making `CLAUDE.md`'s H7d Part B paragraph
+true of this entry): the owner is unassigned, and check 1 above is the standing order for whoever
+claims it.** `CLAUDE.md`'s H7d Part B entry says of this guard that "it is filed, with its owner
+told to argue against that justification rather than discover it" — that sentence describes a
+directive, and `Owner: unassigned` on its own does not carry one; nobody has yet been told
+anything. So it is said explicitly here, addressed to whoever claims this entry next: **do not
+treat `test_max_failed_fraction_is_measured_against_the_test_partition`'s pinned justification as
+neutral background to read past.** Open that test, read its docstring's argument for why
+`completed` is correct on the all-completed case, and either refute that argument in the same
+change that edits the behaviour, or leave the behaviour alone. Discovering that a justification
+exists and proceeding anyway is not the standard this instruction sets.
+
 ## ~~OPEN~~ CLOSED — `resolve_run`'s relative form skips the repo-containment check, so a symlink under `output_dir` can address an in-repo run — **Owner: H8a tasks 3 and 5**
 
 **CLOSED by H8a task 3.** Option (a): the relative branch now resolves its path
@@ -7867,6 +8051,13 @@ print each section as `render_markdown`/`render_html` produce it, which is a rea
 a shipped command, not a wording fix — out of a review's fix-round scope and not owned by any task
 in this slice.
 
+**Why unassigned, stated rather than left implicit (2026-08-21):** `command_report` and the two
+renderers are H8c's own surface, and H8c is complete — the family this file elsewhere records as
+finished (`docs/superpowers/plans/2026-08-21-report-study.md`'s ledger). None of what remains
+charted — H5 (artifacts), H6 (hashes and provenance), H9 (`reproduce`/`dry-run`/`draft`/`resume`/
+`demo`/`docs`), H3c-3 (folds inside cells) — touches `report.py`'s render-then-print path, so there
+is no slice left to name without inventing one.
+
 **Cost if wrong/if unclaimed:** a reader of the design doc believes an override can make an
 expensive figure's slowness invisible by ordering it last; at the real command, it cannot — every
 section blocks the first byte of output.
@@ -7927,6 +8118,17 @@ fixture nesting. This closes the reachability gap the amendment names — the `r
 branch is now genuinely wired to what `run` writes — but it does **not** touch the substance of
 this entry: `basis: "repeats"` is still written nowhere, the disposition question above is
 unchanged, and the entry stays OPEN, Owner: unassigned.
+
+**CORRECTED 2026-08-21 (spec-defects staleness sweep): "the grep returns five emit sites" no
+longer holds as a grep claim; "writes ... at five sites" does.**
+`grep -n '"basis"' src/publishable/*.py` now returns **eight** matches, not five: the five original emit sites
+(`cli.py` ×3, `stats.py` ×2, all `"basis": "units"`) plus three reader sites this entry's own
+opening sentence did not have — `report.py`'s `_CONDITION_METRIC_FIELDS` tuple and `study.py`'s
+two reads of an entry's `"basis"` key (`study.py:199` and `:326`), both added by H8c to read the
+record this entry is about, not to write it. The **writes** claim this entry rests its argument
+on is unchanged and still exactly five; only the bare "the grep returns five" phrasing is now
+false of a plain re-run. Say *writes*, not *the grep returns*, and the sentence survives readers
+being added without another correction.
 
 ## OPEN — a user-supplied name or flag value is interpolated unescaped into a generated Python file, and `generate step` corrupts an existing file when it is — **Owner: whichever slice next touches `generators/step.py` or `generators/experiment.py`**
 
@@ -8041,6 +8243,15 @@ protect"), with no § Errors row of their own — and that sentence's own claim 
 enough that a future audit does not re-open it as a gap. Either way, `E-PROJECT-EXISTS`'s sentence
 should name `plugin new` alongside `publishable new`.
 
+**Why unassigned, stated rather than left implicit (2026-08-21):** the family spans `cli.py`'s
+run/generate path, `provenance.py`, and the generator modules — no single remaining chartered
+slice owns "give every raise-time code its own § Errors row." H5 owns artifact integrity, H6 owns
+hashes and provenance proper (not the registry question of which codes get rows), H9 owns the
+named commands (`reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`) rather than the error
+registry, and H3c-3 owns folds inside cells. The nearest precedent, "Validate-time `E-` identifiers
+have no registry" above, was H1 Validation's to close and closed there; this is its raise-time
+sibling and no slice was ever chartered to do that half.
+
 **Cost if wrong / if unclaimed:** a reader following a normative code reference finds nothing at the
 destination, and `run`/`generate` outside a repository print a diagnostic this document never
 describes at its own source.
@@ -8114,8 +8325,54 @@ sections, an override's own `self.section(...)`) is unaffected, and have `render
 deeper one. (a) costs nothing outside `report.py`; (b) is more general and is the one to prefer if
 a future renderer ever needs a third level.
 
+**Why unassigned, stated rather than left implicit (2026-08-21):** `render_bundle` and `Section`
+are H8c's surface, and H8c is complete. No remaining chartered slice touches report rendering —
+H5, H6 and H3c-3 are elsewhere in the code entirely, and H9's commands do not include `report`.
+
 **Cost if wrong / if unclaimed:** a bundle rendered to markdown or HTML and skimmed by heading
 alone reads as one long flat document; a reader has to track member boundaries by the plain-text
 name rather than by structure, which is a paper's own citable rendering of several runs at once —
 exactly the artifact this section's own load-bearing property (member boundaries stay legible) is
 about.
+
+## RE-OWNED 2026-08-21, after H8 completed — every remaining "whichever slice next touches X" owner
+
+**This file rejects that form by name** at its own `RE-OWNED 2026-08-19` entry: it **reads as covered
+while naming nobody**, and it **resolves to a closed slice the moment X is touched** — at which point the
+entry reads as live work someone already declined. Three entries got individual corrections above
+(`_flatten_parameters`/`_flatten`, `Param.comment()`, and the `limits.min_reported_n` family, the last
+having already been consumed by H8c task 14 without settling its question). **These are the rest**, named
+by what they are rather than by position:
+
+- the one owned by *"whichever slice next changes"* a documents-only H3d finding;
+- the one owned by *"whichever slice next adds a diagnostic to"* that surface;
+- the H3d Task 6 finding deferred again at Task 7;
+- the one owned by *"whichever slice next edits `new`'s README emission"*;
+- and the one owned by *"whichever slice next edits that paragraph or the provenance table it names
+  positionally"* — **whose trigger H8c task 16 already pulled**, rewriting that paragraph while the
+  positional phrase survived.
+
+**Owner: unassigned for all of them, stated as a fact with the reason.** The remaining slices are **H5
+Artifacts** (`units.parquet` integrity, the reserved-column namespace), **H6 Hashes and provenance**,
+**H9** (`reproduce`, `dry-run`, `draft`, `resume`, `demo`, `docs`), and **H3c-3's remaining 14** (folds
+inside cells). **None of these five entries falls inside any of those surfaces** — they are documentation
+and diagnostic-shape questions about surfaces that already shipped. **Each entry's own check is unchanged
+and is stated in its body; nothing here re-derives one.**
+
+**Why this is a consolidated entry rather than five appended corrections.** The `RE-OWNED 2026-08-19`
+entry did the same for five at once, on the same grounds: editing five bodies would destroy what each
+recorded on its date, and five near-identical corrections would bury the one fact that matters — **that
+the form itself is the defect, not any single entry's choice of successor.**
+
+**And the check that would have caught all of this does not exist.** The `RE-OWNED 2026-08-19` entry
+recommended *"a test that greps for a closed slice named as an owner"*, and `grep -rn "spec-defects"
+tests/` returns only docstring citations. **This entry is the recurrence that entry predicted**, two days
+later and at four times the scale — ten entries naming shipped families, seven `unassigned` without a
+reason, and eight surviving instances of a form this file rejects in writing. **A recommendation recorded
+in a filing is not a check**, which is the same distinction as *a ledger line saying "filed" is not a
+filing*.
+
+**Owner of the missing check: unassigned, with the reason.** It would live in `tests/`, and no remaining
+slice's surface is this file's own hygiene — so it wants a claimant rather than a schedule. Its shape is
+stated here so whoever claims it needs no re-derivation: **parse every `## ` heading not marked closed,
+extract its `Owner:` line, and fail on any that names a slice whose merge commit exists on `main`.**
