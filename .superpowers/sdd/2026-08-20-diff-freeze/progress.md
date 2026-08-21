@@ -320,3 +320,70 @@ consistency bar than an ordinary sentence, not touched without its own review ro
 
 Full details, per finding, of what changed and what verified it: `task-b7-report.md` § Whole-branch
 fix round.
+
+## Batches 6 and 7 — `diff` completes, then the codes and the re-measurement
+
+Batch 6: `8bb90c2` (apparatus row), `b4be0c8` (exit code, config side), `bdaccaa` (upstream block, CLI
+arm — **`diff` dispatches**), `f138536`, `4afe0dc` (fix round). Batch 7: `639d0f7` (nine § Errors rows,
+two § Package layout homes, the dated entry). Suite 2609 → 2623 → 2631 → **2636**.
+
+**Batch 6's scrutinized claim survived.** I flagged *"the exit-code ruling turned out to already be the
+code's shape"* as the exact shape that had failed three batches — and it held: Decision 4 **was** already
+the code's shape **and its pins are real** (the mutation fails **seven** named tests on assertions).
+Worth recording that the pattern is not universal and that checking cost nothing.
+
+**Three of batch 6's four Majors were one defect — a ruled behaviour that works and no mutation can
+see.** `diff`'s CLI arm was **entirely unpinned**: dropping both the arity rule and the flag rejection
+left the full suite green, because the only test reaching the command passed valid-arity junk and asserted
+two stderr **absences** with no exit code. *A control asserting only absences passes identically if
+nothing ran.*
+
+**And one was a comment licensing the destruction of its own pin** — a fixture's section comment called its
+`uv.lock` handling *"a deliberate, reported relaxation; see the batch report"* while the test below
+committed a real lockfile and asserted the opposite, and the report disagreed with the comment. **A comment
+that authorizes weakening a pin, citing a document that contradicts it, is worse than no comment.**
+Deleted.
+
+**A semantic question I ruled rather than left filed.** `diff`'s `apparatus DIFFERS` on a `null → value`
+transition looked like a divergence from the gate, which tolerates it. **It is not a divergence — they are
+two questions.** The gate asks *did the apparatus move during this run?*, so a first answer is not a
+change. `diff` asks *did these two runs measure through the same apparatus?*, where a fact one answered and
+the other did not **is** a real difference; suppressing it would make two different observation sets read
+`identical`, the opposite of what `not captured` was minted to prevent. No behaviour changed; one sentence
+was owed and written.
+
+## Independent whole-branch review: DO NOT MERGE → four Majors closed
+
+**A controller error the gate found, and the second instance of it: I never dispatched a review of batch
+7, and three of the four Majors lived in exactly that task.** Now a `CLAUDE.md` row — **a documents-and-
+codes task looks like the safest one to skip and is the one whose output no later batch reads, so nothing
+else will find its errors.**
+
+**The behavioural Major was a true cross-batch defect no per-batch review could reach.** `diff` **tracebacks**
+on a config operand holding a non-JSON-serializable scalar — `expires: 2026-01-01` becomes a
+`datetime.date`, and the command prints its header and four rows before a bare `TypeError`. **No batch owned
+"what may a config operand contain"**: batch 5 built the projection, batch 8 the reader, batch 10 the hash
+call. And the asymmetry that hid it — **`parameter_deltas` renders a date fine, so only the hash died.**
+
+**Two Majors were § Errors rows narrower than their code, which is H8a's whole-branch Major repeating** in
+codes Decision 10 explicitly reuses: `freeze` is a third surface for both `E-APPARATUS-RAISED` and
+`W-APPARATUS-UNANSWERED`, and both rows still enumerated two. **Repairing an instance of a shape does not
+immunize the next one** — this is the second slice running where it recurred.
+
+**What the gate confirmed sound, by running:** `freeze`'s three verdicts with lock, `sweep.yaml` and
+`executions.jsonl` **byte-identical** and `run.yaml` never created; a run holding `run.yaml` refused;
+**Decision 9's exclusion across three consecutive freezes** (freeze #3 exits 0 despite two freeze lines);
+`diff`'s five rows, both locator forms, all three apparatus shapes, exit 0 on `DIFFERS` and 1 only on an
+unreadable operand; flags and wrong arity rejected at exit 2; **the credential story with a working
+positive control** that leaks the sentinel when redaction is unwired; **digest stability against `main`
+over 11 configs, zero mismatches**; **additivity by full artifact-tree comparison**; the guard pin's whole
+life audited by `git log -L` with **only** the authorized edits (arms A/B by task 3, `ROW_LABELS` by task
+9); the mechanical pass at **0 problems with the sweep proven able to fail against 6 injected defects**;
+and § Executability's table repeated **character for character** with the date matching its commit.
+
+**One Minor was filed rather than fixed, by both the task and me.** The three worked `diff` outputs predate
+the per-side header. The cheap fix is in **the shared worked example** — and the three blocks sit at
+**different levels of concreteness** (`reference.md` carries real run IDs; the others use placeholders), so
+**there is no single identical edit**. **A wrong worked example is self-propagating in a way a filed defect
+is not**, so it is filed to H8c with the measured header format and an explicit list of what must not
+change. Nothing computes from those blocks and every value they show is correct.
