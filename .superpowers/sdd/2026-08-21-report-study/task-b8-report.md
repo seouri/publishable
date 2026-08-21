@@ -201,3 +201,206 @@ generator with no enum validation at generate time (an invalid value is left to 
 `E-REPORT-FORMAT` at render) — this follows the brief's "`--format` writes the attribute and nothing
 else" and the `--input-dir`-seeds-a-field-it-doesn't-own precedent, rather than inventing a second,
 untested validation surface the brief did not ask for.
+
+---
+
+## Fix round 1
+
+Review: `.superpowers/sdd/2026-08-21-report-study/task-b8-review.md`. Both verdicts PASS. One Major
+(pre-existing, family-wide, not task 15's own), nine Minors. All addressed below; two are filings
+rather than fixes, per the coordinator's explicit routing to task 16 and to an unowned family entry.
+
+### Correction to this report's own Minor 3 (mutation-1 account)
+
+**What the original report said:** "3 of 5 new tests failed … the other two failures are collateral,"
+implying the refuse-before-write property was not pinned on its own.
+
+**What the review found, and what I re-verified:** the prescribed mutation (swap the two statements'
+order) is degenerate — it makes `path.exists()` true immediately after every write, so it also
+breaks the FIRST, legitimate call, which is why 3 tests failed rather than 1. That is a fact about
+the prescribed mutation's degeneracy, not evidence that the property is unpinned. The reviewer built
+the non-degenerate arm (capture `existed = path.exists()` before writing, write, then raise on
+`existed`) and got exactly one failure. **I re-ran the reviewer's own non-degenerate mutation against
+the full, unfiltered suite**:
+
+```python
+path = pkg_dir / "report.py"
+existed = path.exists()
+resolved_fmt = fmt if fmt is not None else "markdown"
+path.write_text(REPORT_PY.format(pkg=pkg, fmt=json.dumps(resolved_fmt)))
+if existed:
+    raise ContractError(..., code="E-REPORT-EXISTS")
+return path
+```
+
+`uv run pytest -q` (full suite) → **1 failed, 2828 passed, 1 skipped, 2 xfailed** — the one failure is
+`test_generate_report_refuses_an_existing_file`, on `assert mine.read_text() == "# hand-written, and
+worth more than a stub\n"`. **The refuse-before-write property is pinned on its own**, discriminated
+by the bytes-unchanged assertion alone. The property-preserving arm — a first, legitimate
+`generate report` call where the target does not yet exist — is unaffected by either the honest code
+or this mutant, which is exactly why the earlier account's "collateral" framing was wrong: those two
+extra failures were a symptom of the prescribed mutation's own degeneracy (it corrupts every call,
+not only the one that should be refused), not evidence about what the assertion covers. Reverted by
+writing the pre-mutation copy back; `diff` → identical; re-ran `-k generate_report` → 6 passed.
+
+**This supersedes the original report's Minor-3-relevant paragraph** in § Mutations (mutation 1's
+account of "the other two failures are collateral"): that framing stands corrected to the above.
+
+### MAJOR 1 — closed for `generate report`'s own instance; family gap filed
+
+**Fix.** `generators/report.py`'s `REPORT_PY` template interpolated `--format`'s raw value between
+hand-written quotes (`format = "{fmt}"`). A value containing `"` produced a non-parsing file; a value
+of the form `x"\n    import os\n    os.system(...)  # ` compiled and **ran the injected statement at
+import** (the value reached the class body, not only the literal). Changed to
+`format = {fmt}` with `fmt=json.dumps(resolved_fmt)` supplied at the call site — `json.dumps` always
+emits a double-quoted, backslash-escaped Python string literal (JSON's escape vocabulary is a subset
+of Python's), so the substituted text is already a complete, self-contained literal and the raw value
+can never sit between quotes it could break out of.
+
+**Verified by running**, both before committing the fix and again as a permanent test
+(`test_generate_report_escapes_a_format_value_that_would_otherwise_break_the_literal`):
+
+- `--format 'ht"ml'` → the written file **parses** (`compile(..., doraise=True)` succeeds), imports
+  cleanly, and `Report.format == 'ht"ml'` — the exact string, held as data. Rendering that class
+  through `render_report` now raises `E-REPORT-FORMAT` (not `E-REPORT-OVERRIDE-IMPORT`, which is what
+  the pre-fix code produced for this exact value, per the review's Minor 1).
+- The reviewer's own injection payload, `x"\n    import os\n    os.system("echo PWNED_AT_IMPORT")  # `
+  → the written file parses; importing it via `importlib.util.spec_from_file_location` +
+  `exec_module` does **not** run the injected `os.system` call (verified with a `touch
+  injected.marker` variant in the permanent test — the marker file is never created); `Report.format`
+  holds the payload verbatim as an inert string.
+
+`uv run pytest tests/test_cli.py -k generate_report -q` → 6 passed (5 prior + 1 new). Full suite:
+2829 passed, 1 skipped, 2 xfailed. Gates unchanged (mypy 52, format 93).
+
+**Family gap filed, not fixed** (`docs/superpowers/spec-defects.md`, new entry "a user-supplied name
+or flag value is interpolated unescaped into a generated Python file, and `generate step` corrupts
+an existing file when it is" — Owner: whichever slice next touches `generators/step.py` or
+`generators/experiment.py`). States plainly, as instructed, that **`generate step`'s instance is the
+worse half**: `generate step cohort-pilot 'foo"bar'` exits `0` and leaves `src/<pkg>/experiment.py`
+— a file `generate step` did not create — non-parsing, because the raw name is interpolated into
+`from .steps.step02_foo"bar import Step as Foo"bar`. `generate report`'s own (now-closed) instance
+only ever wrote one brand-new file the caller could delete; `generate step` corrupts an existing one
+silently, at exit `0`. The filing names the check its owner must make: a name reaching a Python
+*identifier* position cannot be escaped the way a string-literal position was (`json.dumps` produces
+a valid string, never a valid identifier), so the fix there has to be validation before any file is
+touched — extending `generators/template.py`'s `is_usable_name` (or equivalent) to `generate step`'s
+`step_name` and to `generate experiment`'s `name`, checked before `experiment.py` is ever opened for
+writing.
+
+### Minor 1 — the docstring's routing claim, made true by the Major 1 fix rather than rewritten
+
+Old text: *"a class declaring anything else is `report`'s own refusal to make (`E-REPORT-FORMAT`, at
+render)"* — false for a value that broke the literal, since such a value never reached a class that
+declared anything (`E-REPORT-OVERRIDE-IMPORT` instead). Per the reviewer's own preference ("prefer
+fixing the interpolation, which makes the sentence true, to rewriting the sentence"), I fixed the
+interpolation (Major 1, above) rather than softening the claim. The docstring is now updated to
+explain the mechanism (`json.dumps`, the identifier-vs-literal distinction) and to state the claim in
+its now-true form, with an explicit note that this used to route to `E-REPORT-OVERRIDE-IMPORT` for
+exactly this kind of value before the fix. Verified by the same `'ht"ml'` run above:
+`E-REPORT-FORMAT`, not `E-REPORT-OVERRIDE-IMPORT`.
+
+### Minor 2 — the transferred arity-hazard comment, deleted rather than rewritten
+
+`src/publishable/cli.py`'s `if kind == "report":` branch carried a comment copied from `generate
+template`'s arm claiming a write-first ordering would "scaffold a report override into the working
+tree that a later `report` run would then discover." **Verified false by running**:
+`generate_report`'s own existence check (`pkg_dir.is_dir()`) means an unknown probe name
+(`_probe_a`) never reaches a write at all — it raises `E-EXPERIMENT-UNKNOWN` first, regardless of
+arity — so the hazard `generate template` has (any usable name scaffolds a real file) does not
+transfer. Deleted the comment from `cli.py` (per "prefer deleting a claim to rewriting it") and
+rewrote the two docstrings that repeated it (`test_generate_report_takes_exactly_one_name_and
+_writes_nothing_otherwise`, and this report's own *What was built* section is superseded by this
+paragraph) to state why the arity check is still correct to make first, without the borrowed
+justification. Verified by re-running `-k generate_report` → all pass; the arity check's own
+behavior is unchanged (still `EXIT_INVOCATION` before any generator call).
+
+### Minor 4 — symmetric pin on both `format` arms
+
+`test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted` only `exec`'d and checked
+the class attribute for the `--format html` arm; the omitted-flag (`markdown`-default) arm checked
+only a source-text substring. Added the identical `exec`-and-check-attribute step to the default arm
+(`_exec_report` helper, shared by both). Verified by running: `Report.format == "markdown"` when
+`--format` is omitted, `Report.format == "html"` when given — both observed on the constructed class,
+not only its source text.
+
+### Minor 5 — the missing-package refusal now asserts nothing reached disk
+
+`test_generate_report_on_a_missing_package_is_e_experiment_unknown` asserted only the error code.
+Added a before/after `sorted(p.name for p in (root / "src").iterdir())` comparison, matching its three
+sibling refusal arms. Verified: `src/` holds only `.gitkeep` both before and after the refusal (this
+test never calls `generate_experiment`, so there is no `cohort_pilot` package to leave undisturbed —
+confirmed by running a standalone check of a fresh `new`-scaffolded project's `src/` listing).
+
+### Minor 6 — the self-contradictory docstring sentence in the shipped test, corrected
+
+The added docstring paragraph on `test_reference_cli_tables_are_parsed_at_all` claimed the
+row-presence pairs were needed because a `[]` parse would satisfy "subset and non-empty" — false,
+since `assert statuses, column` already fails outright on an empty set. Rewrote the paragraph to
+state what the row-presence pairs actually add: ruling out a parser that finds *some* valid-status
+rows but not the *specific* ones this document carries (a non-empty subset of `{"built", "NOT
+BUILT"}` is satisfied by any one found row, not necessarily the expected one). The four assertions
+themselves are unchanged — only the prose explaining them.
+
+### Minor 7 — filed, not fixed (task 16's document sweep)
+
+New `spec-defects.md` entry: § A report override's fenced block is labelled `— generated` and now
+diverges from what `generate report` actually writes (extra `yield` calling an undefined
+`render_scatter`, a different blank-line count) — a claim that only became a *build* claim once this
+task flipped § Generators' `report` row to `built`. Owner: H8c task 16, which owns § A report
+override's document sweep; the check its owner must make is stated in the filing (drop the
+`— generated` label, or mark the extra material as added-by-example rather than generated).
+
+### Minor 8 — filed, not fixed (task 16's document sweep)
+
+New `spec-defects.md` entry: § Creation commands' `generate` Arguments cell (*"generator, name,
+generator args (`experiment` accepts `--plugin`)"*) does not name `report`'s new `--format`. Task
+15's brief scoped document edits to § Generators' row, the `generate` cell's inline `(NOT BUILT)`
+annotation, and one § Errors row — not this Arguments cell — so filing to task 16 rather than editing
+here is deliberate. Owner: H8c task 16.
+
+### Minor 9 — the positional locator removed
+
+`docs/reference.md`'s new § Errors row said *"for the same reason as `study new`'s row above"*.
+Dropped "above" — the sibling is already named, which is the form `CLAUDE.md` asks for; the
+positional garnish added nothing and is the exact shape flagged twice before.
+
+### Gates and full suite after all of the above
+
+`uv run ruff check .` → clean. `uv run ruff format --check .` → 93 files (unchanged). `uv run mypy` →
+52 source files (unchanged). `uv run pytest` (foreground, full, unfiltered, `__pycache__`/
+`pytest-of-*` cleared first) → **2829 passed, 1 skipped, 2 xfailed** (2828 + 1 new escaping-regression
+test). `tests/test_diff.py` untouched (`git status --short -- tests/test_diff.py` empty) and green on
+its own (51 passed) — Arm D did not fire and was not edited.
+
+### Mutations re-run against the fixed code, full unfiltered suite
+
+**Mutation 1 (reviewer's non-degenerate arm, re-verified against the post-fix code):** capture
+`existed = path.exists()` before writing, write unconditionally, raise on `existed` after. Full suite
+→ **1 failed** (`test_generate_report_refuses_an_existing_file`, bytes-unchanged assertion),
+2828 passed. Property-preserving arm: a first, legitimate call (target does not yet exist) writes
+once and returns normally under both the honest code and this mutant — indistinguishable there, which
+is why only the pre-existing-file arm can discriminate, and it does. Reverted by writing the
+pre-mutation copy back; `diff` → identical; `-k generate_report` → 6 passed.
+
+**Mutation 2 (prescribed): drop `yield from super().sections(...)`.** Full suite → **1 failed**
+(`test_generate_report_writes_a_class_discovery_resolves_and_renders_all_four_sections`, the
+four-titles assertion goes to `[]`), 2828 passed. Property-preserving arm: an override that still
+composes `yield from super().sections(run, io)` and adds a section of its own renders all four
+standard sections plus the extra one, under both the honest code and this mutant — indistinguishable
+there; only an override that drops the `yield from` entirely (what the generated scaffold would
+become under this mutant) diverges, and the four-titles assertion is sized to exactly that
+divergence. Reverted by writing the pre-mutation copy back; `diff` → identical; `-k generate_report`
+→ 6 passed.
+
+### What was grepped in this round, and its scope
+
+- `grep -n "if kind == \"report\":" -A 12 src/publishable/cli.py` — located the one comment to
+  delete; confirmed by reading it is the only occurrence of that clause in the file.
+- Ran the reviewer's exact crafted values (`'ht"ml'`, the `os.system` payload) through
+  `generate_report` and `render_report` directly in a throwaway script before writing the permanent
+  test, to confirm the fix's behavior matches the review's own verification steps rather than a
+  weaker approximation of them.
+- `grep -n " $" ` (trailing whitespace) over the tail of `docs/superpowers/spec-defects.md` after
+  appending the three new entries — none found.
+- No new disagreements against the plan/design found in this round.

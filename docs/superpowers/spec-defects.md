@@ -7891,3 +7891,81 @@ fixture nesting. This closes the reachability gap the amendment names — the `r
 branch is now genuinely wired to what `run` writes — but it does **not** touch the substance of
 this entry: `basis: "repeats"` is still written nowhere, the disposition question above is
 unchanged, and the entry stays OPEN, Owner: unassigned.
+
+## OPEN — a user-supplied name or flag value is interpolated unescaped into a generated Python file, and `generate step` corrupts an existing file when it is — **Owner: whichever slice next touches `generators/step.py` or `generators/experiment.py`**
+
+Measured 2026-08-21 (H8c task 15's fix round, against `51fb7cb`/`37a8f68`), all through `main(...)`
+in scaffolded projects. **`generate report`**'s own instance (`generators/report.py`'s `REPORT_PY`
+template, `format = "{fmt}"` interpolated verbatim) is closed in this same fix round — `fmt` is now
+passed through `json.dumps` before it reaches the template, so the substituted text is already a
+quoted, escaped Python string-literal source rather than a raw value sitting between hand-written
+quotes, and every string `--format` can carry now writes a file that parses. **This entry is about
+what is still open: the identical root cause in `generators/step.py`, and the general absence of any
+name guard across the generator family except `generate template`'s `is_usable_name`.**
+
+`generate step cohort-pilot 'foo"bar'` exits `0`. The step file itself still compiles — the name
+lands inside a comment, `# TODO: implement foo"bar` — but `generators/step.py`'s rewrite of
+`src/cohort_pilot/experiment.py` interpolates the same raw name into an import line,
+`from .steps.step02_foo"bar import Step as Foo"bar`, and the result **does not parse**
+(`SyntaxError: unterminated string literal`). A name carrying a newline corrupts the same file
+differently (the import spans lines). **This is the worse half of the defect class, and worse than
+`generate report`'s own (now-closed) instance was**: `generate report` only ever writes ONE new file
+under a name the caller chose, so a bad value's damage is confined to a file nobody depended on yet
+and the caller can delete; `generate step` **rewrites `src/<pkg>/experiment.py`, a file it did not
+create**, that may already declare a working pipeline, and does so at exit `0` with no diagnostic —
+silently leaving a project non-importable until a human notices and repairs the rewrite by hand.
+
+`generators/experiment.py`'s own `name`/`package_name`/`class_name` reach the same absence of a
+guard (noted separately, "No name guard on `<experiment>`", verified with `../evil`, `a/b`, and
+`cohort pilot` — each reaches `E-EXPERIMENT-UNKNOWN` because `pkg_dir.is_dir()` bounds the blast
+radius to a directory that must already exist), but `generate experiment` never rewrites a file it
+did not just create, so it does not carry the corruption half of this entry — only the family's
+missing-guard half.
+
+**The check its owner must make.** A name reaching a Python *identifier* position (a class name, an
+import path segment) cannot be fixed by escaping the way `generate report`'s string-literal position
+was — `json.dumps` produces a valid string, never a valid identifier, for an arbitrary value. The fix
+has to be validation before any file is touched: extend `generators/template.py`'s `is_usable_name`
+— or an equivalent identifier check — to `generate step`'s `step_name` (checked before
+`experiment.py` is ever opened for writing, on the same "arity before anything reaches disk"
+precedent this slice's own `generate report` arm draws) and to `generate experiment`'s `name`. A
+one-line guard rejecting a non-identifier fixes `generate step`'s corruption outright; the
+`experiment`/`package_name` guard is lower-severity (bounded by `pkg_dir.is_dir()` today) but is the
+same root cause and should not ship separately from it.
+
+**Cost if wrong / if unclaimed:** the next reader of `generators/step.py` who adds a caller passing a
+name from anywhere other than a hand-typed CLI argument (a script, a UI, a plugin's own scaffolding)
+inherits a generator that silently corrupts an existing tracked file — the one class of failure
+`generate`'s own "greenfield only, refuses rather than overwrites" rule exists to prevent, reached
+here through a file the command did not classify as the thing it must not overwrite.
+
+## OPEN — § A report override's fenced block is labelled `— generated` and is no longer what `generate report` writes — **Owner: H8c task 16**
+
+`docs/reference.md` § A report override renders one experiment's own figures. Its fenced example's
+first line, `# src/cohort_pilot/report.py — generated`, is the exact line `REPORT_PY` emits — but the
+block also shows a second `yield self.section("Method agreement", body=render_scatter(io.read_condition(...)))`
+against an undefined `render_scatter`, and a different blank-line count before `class Report`, neither
+of which the generator writes. While § Generators' `report` row read `NOT BUILT`, the `— generated`
+label was aspirational scene-setting; H8c task 15 flipped that row to `built` (Decision 17), which
+makes the label a **build claim** about a file § A report override's own prose does not match byte
+for byte. Verified by running `generate report` and comparing the written text against the fenced
+block.
+
+**The check its owner must make.** Either the fenced block loses the `— generated` label (it becomes
+purely illustrative — "here is a subclass that composes a figure," never a claim about what the
+generator itself produces), or the extra `yield` and its undefined helper are marked as something a
+project adds beyond the generated body (a `# …and one you add:` comment or equivalent), so the block
+reads as generated-prefix-plus-example rather than as one seamless generated file.
+
+## OPEN — § Creation commands' `generate` Arguments cell does not name `--format` — **Owner: H8c task 16**
+
+`docs/reference.md`, § Creation commands' Command table, the `publishable generate` (`g`) row's
+Arguments cell: *"generator, name, generator args (`experiment` accepts `--plugin`)"*. `report` is
+now built (H8c task 15) and accepts `--format`, so the parenthetical enumerating which generators
+take which flag is no longer total over the generators that take one. Task 15's own brief scoped its
+document edits to § Generators' `report` row, § Creation commands' `generate` cell's inline
+`(NOT BUILT)` annotation, and one § Errors row — not this cell's Arguments column — so filing rather
+than fixing here is deliberate, not an oversight.
+
+**The check its owner must make.** Add `` `report` accepts `--format` `` (or equivalent) to the
+parenthetical, the same way `experiment`'s `--plugin` is already named there.

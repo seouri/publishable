@@ -896,6 +896,12 @@ def test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted(
     seeds `html` verbatim, and omitting the flag still writes a line, never
     an unset attribute — this generator's own default of `markdown`, not
     `BaseReport`'s, which stays undeclared.
+
+    Both arms are pinned SYMMETRICALLY (fix round 1, Minor 4): each
+    `exec`s the generated text and asserts the resulting class's `format`
+    attribute, not only a substring of the source text — Decision 2's
+    grounds are that every generated class can be OBSERVED to take a
+    value, and the earlier form only observed one of the two arms.
     """
     root = tmp_path / "proj"
     assert main(["new", str(root)]) == EXIT_OK
@@ -908,19 +914,85 @@ def test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted(
     )
     monkeypatch.chdir(root)
 
+    def _exec_report(text: str) -> Any:
+        namespace: dict[str, Any] = {}
+        exec(compile(text, str(root / GENERATED_REPORT), "exec"), namespace)  # noqa: S102
+        return namespace["Report"]
+
     assert main(["generate", "report", "cohort-pilot", "--format", "html"]) == EXIT_OK
     text = (root / GENERATED_REPORT).read_text()
     assert 'format = "html"' in text
-
-    namespace: dict[str, Any] = {}
-    exec(compile(text, str(root / GENERATED_REPORT), "exec"), namespace)  # noqa: S102
-    report_cls = namespace["Report"]
-    assert report_cls.format == "html"
+    assert _exec_report(text).format == "html"
 
     (root / GENERATED_REPORT).unlink()
     assert main(["generate", "report", "cohort-pilot"]) == EXIT_OK
     text = (root / GENERATED_REPORT).read_text()
     assert 'format = "markdown"' in text
+    assert _exec_report(text).format == "markdown"
+
+
+def test_generate_report_escapes_a_format_value_that_would_otherwise_break_the_literal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Fix round 1, Major 1 / Minor 1: `--format` used to be interpolated
+    verbatim between hand-written quotes, so a value carrying a `"` wrote a
+    file that did not parse, and a value crafted around that (a `"`,
+    a newline, then a statement) compiled and ran ARBITRARY CODE AT IMPORT
+    — reachable because the class body, not only the literal, was open to
+    the value. `json.dumps` now produces the quoted-and-escaped literal
+    text itself, so the value can never leave the string it's assigned to.
+
+    Two arms. The plain case a user might actually type, `ht"ml` — this is
+    also `report`'s own render-time refusal (`E-REPORT-FORMAT`) reaching a
+    code that PARSES rather than one it cannot import at all
+    (`E-REPORT-OVERRIDE-IMPORT`), which is what makes the generator
+    docstring's "declaring anything else is refused with `E-REPORT-FORMAT`"
+    true of every string again, not only the ones with no quote in them.
+    And the actual injection payload the review verified against the prior
+    form: a value that closes the literal, opens a fresh statement, and
+    calls `os.system(...)` — importing the generated module must not run
+    it, checked by asserting the payload's own marker text never reaches
+    the imported module's `__dict__` as anything but the inert string
+    `format` was assigned.
+    """
+    import importlib.util
+
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot", "--format", 'ht"ml']) == EXIT_OK
+    generated = root / GENERATED_REPORT
+    text = generated.read_text()
+    compile(text, str(generated), "exec")  # parses — the property this fix guarantees
+    namespace: dict[str, Any] = {}
+    exec(compile(text, str(generated), "exec"), namespace)  # noqa: S102
+    assert namespace["Report"].format == 'ht"ml'
+
+    from publishable.report import render_report
+
+    with pytest.raises(Exception) as exc_info:
+        render_report(namespace["Report"], {}, None)
+    assert getattr(exc_info.value, "code", None) == "E-REPORT-FORMAT"
+
+    generated.unlink()
+    payload = 'x"\n    import os\n    os.system("touch injected.marker")  # '
+    assert main(["generate", "report", "cohort-pilot", "--format", payload]) == EXIT_OK
+    text = generated.read_text()
+    compile(text, str(generated), "exec")  # still parses
+    spec = importlib.util.spec_from_file_location("cohort_pilot_report_probe", generated)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # importing must not execute the payload
+    assert not (root / "injected.marker").exists()
+    assert module.Report.format == payload
 
 
 def test_generate_report_refuses_an_existing_file(
@@ -953,11 +1025,14 @@ def test_generate_report_refuses_an_existing_file(
 def test_generate_report_takes_exactly_one_name_and_writes_nothing_otherwise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    """Arity before anything reaches disk — `template`'s own stated reason:
-    the CLI-table test probes every built generator with two junk
-    positionals inside this repository, and a generator that wrote first
-    would scaffold a report override into the working tree that a later
-    `report` run would then discover."""
+    """Arity is checked before anything reaches disk. (Fix round 1, Minor 2:
+    `generate template`'s own hazard for checking arity first — a probe
+    name that IS usable would otherwise get scaffolded into this repo's own
+    working tree before the arity check ran — does not transfer here:
+    `generate report`'s probe name, `_probe_a`, names no `src/_probe_a/`
+    package, so `generate_report` would refuse with `E-EXPERIMENT-UNKNOWN`
+    before writing regardless of arity. The check is still correct to make
+    first; only the borrowed justification was wrong.)"""
     root = tmp_path / "proj"
     assert main(["new", str(root)]) == EXIT_OK
     generate_experiment(
@@ -985,14 +1060,20 @@ def test_generate_report_on_a_missing_package_is_e_experiment_unknown(
 ):
     """Reused from `generate step` (Decision 17/task 15 step 1): the identical
     fault under the identical code, regardless of which generator hit it
-    first — no second "no package here" message invented for this one."""
+    first — no second "no package here" message invented for this one.
+
+    Also asserts nothing reached disk (fix round 1, Minor 5) — the same
+    half its three sibling refusal arms (arity, `E-REPORT-EXISTS`,
+    `generate template`'s own) all check, which this arm had omitted."""
     root = tmp_path / "proj"
     assert main(["new", str(root)]) == EXIT_OK
     monkeypatch.chdir(root)
+    before = sorted(p.name for p in (root / "src").iterdir())
 
     assert main(["generate", "report", "no-such-experiment"]) == EXIT_WRONG
     printed = capsys.readouterr().err
     assert "E-EXPERIMENT-UNKNOWN" in printed
+    assert sorted(p.name for p in (root / "src").iterdir()) == before
 
 
 def test_command_run_aggregate_resolves_a_project_local_template(
@@ -9378,12 +9459,18 @@ def test_reference_cli_tables_are_parsed_at_all():
     assertion used before H8c task 15 (§ Corrections, correction 3): once
     § Generators lost its only `NOT BUILT` row, that table's status set became
     `{"built"}` alone, which a `== {"built", "NOT BUILT"}` check would fail
-    even though nothing shrank. A row-presence pair per table — the same
-    device the Command table's two lines already were — is what keeps this
-    a real check rather than a subset test alone: a parser returning `[]` for
-    a table still satisfies "a subset of the valid statuses, non-empty" only
-    if it finds at least one row, and finding one row is not finding a
-    SPECIFIC one, so the named pairs are what a vacuous parse cannot fake."""
+    even though nothing shrank. `assert statuses, column` already fails on a
+    parser returning `[]` for a table — an empty set is falsy — so the
+    non-empty half alone rules out that particular vacuity. What it does
+    NOT rule out is a parser that finds SOME rows but not the SPECIFIC ones
+    this document actually carries — a subset-and-non-empty check is
+    satisfied by any one row of a valid status, found or not the row a
+    reader would look for. That is what the row-presence pairs are for: the
+    same device the Command table's two lines already were, added here for
+    Generator (fix round 1, Minor 6: this paragraph originally claimed the
+    row-presence pairs were needed to rule out the EMPTY-parse vacuity,
+    which the non-empty assertion already rules out on its own; corrected
+    to name what they actually add)."""
     tables = _status_tables()
     assert set(tables) == {"Command", "Generator"}
     for column, rows in tables.items():

@@ -3995,11 +3995,6 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
         generate_template(repo_root=repo_root, name=name)
         return EXIT_OK
     if kind == "report":
-        # Arity before anything reaches disk, on `template`'s own precedent
-        # just above: the CLI-table test probes every built generator with
-        # two junk positionals inside this repository, so a generator that
-        # wrote first would scaffold a report override into the working
-        # tree that a later `report` run would then discover.
         if len(positional) != 1:
             print(
                 "`generate report` takes one experiment name — see docs/reference.md § Generators",
