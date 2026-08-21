@@ -1,16 +1,17 @@
 # tests/test_report.py
-"""`BaseReport` and `Section`. docs/reference.md § A report override, § The
-importable surface. H8c task 1 — see
-`docs/superpowers/plans/2026-08-21-report-study.md` task 1 and
-`docs/superpowers/specs/2026-08-21-report-study-design.md` Decision 2.
+"""`BaseReport`, `Section`, and override discovery. docs/reference.md § A
+report override, § The importable surface. H8c tasks 1-3 — see
+`docs/superpowers/plans/2026-08-21-report-study.md` and
+`docs/superpowers/specs/2026-08-21-report-study-design.md` Decisions 2-3.
 
-Nothing here dispatches; `report.py` builds the API every override is
-written against, and there is no `run`/`io` construction yet.
+Nothing here dispatches `report` itself yet; `render_with_override` is
+exercised directly, never through `main([...])`.
 """
 
 import dataclasses
 import inspect
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -220,10 +221,13 @@ def test_report_io_resolves_the_same_artifacts_at_three_repeats_and_at_one(tmp_p
 # H8c task 3 — override discovery, alone in its batch because it is this
 # slice's proxy risk (docs/superpowers/specs/2026-08-21-report-study-design.md
 # Decision 3; docs/superpowers/plans/2026-08-21-report-study.md task 3).
-# Every fixture below runs a REAL project through `main(["run", ...])` —
-# never a hand-built record — because the whole point is that discovery
-# reads the run's own `environment/repo_root.txt` and `config.entrypoint`,
-# artifacts only a real run writes honestly.
+# The named FIXTURES (O, the M2 fixture, O2, V) each run a REAL project
+# through `main(["run", ...])`, because the property under test is what a
+# real `environment/repo_root.txt` and a real `config.entrypoint` say. The
+# shape-refusal tests immediately below build records and run directories
+# by hand — that is the point of THOSE tests, which exist to prove a
+# hand-edited record or a hand-edited artifact is refused rather than
+# silently read as "no override".
 # ---------------------------------------------------------------------------
 
 
@@ -329,6 +333,44 @@ def test_report_module_with_two_base_report_subclasses_is_e_report_override_clas
     assert exc_info.value.code == "E-REPORT-OVERRIDE-CLASS"
 
 
+def test_a_base_report_merely_imported_does_not_count_as_a_second_definition(tmp_path: Path):
+    """The `obj.__module__ == module.__name__` filter, pinned: it is what
+    stands in for H7a's "marker on the class" proxy, closing the same
+    question ("does THIS module own this class") on the direct fact
+    instead. `reference.md` § A report override documents "a renderer
+    several experiments share is an ordinary import from a plugin, called
+    by each one's override" as the supported route for sharing a base
+    class across report modules — this module imports one and ALSO
+    defines its own. Deleting the filter would count the imported name
+    too and wrongly refuse this legitimate module with
+    `E-REPORT-OVERRIDE-CLASS`, "defines 2, not exactly one".
+    """
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    (built["root"] / "src" / built["pkg"] / "shared_report.py").write_text(
+        "from publishable import BaseReport\n\n\n"
+        "class SharedReport(BaseReport):\n"
+        "    format = 'markdown'\n"
+    )
+    _write_report(
+        built["root"],
+        built["pkg"],
+        f"from {built['pkg']}.shared_report import SharedReport\n"
+        "from publishable import BaseReport\n\n\n"
+        "class Report(BaseReport):\n"
+        "    format = 'markdown'\n\n"
+        "    def sections(self, run, io):\n"
+        "        yield self.section('LOCAL', body=str(SharedReport))\n",
+    )
+
+    def render(cls):
+        assert cls is not None
+        assert cls.__name__ == "Report"
+        return list(cls().sections(built["record"], object()))[0].title
+
+    title = render_with_override(built["run_dir"], built["record"], render=render)
+    assert title == "LOCAL"
+
+
 def test_missing_repo_root_file_is_refused_with_a_remedy_not_a_fail_open(tmp_path: Path):
     run_dir = tmp_path / "run_dir"
     (run_dir / "environment").mkdir(parents=True)
@@ -395,13 +437,23 @@ def test_bad_entrypoint_shapes_are_refused_with_a_remedy_not_a_fail_open(
 
 def test_fixture_o_m1_two_packages_one_named_by_entrypoint(tmp_path: Path):
     """**M1**: discover by scanning `src/*/report.py` instead of from
-    `entrypoint`. Two packages sit side by side in the same `src/`, each
+    `entrypoint`. THREE packages sit side by side in the same `src/`, each
     with its own `BaseReport` override and its own titled section; only
-    one is named by this run's `entrypoint`. A scan finds both and must
-    pick one — any pick is observable, and the correct answer is the one
-    `entrypoint` names, not whichever a scan happens to prefer. On a
-    one-package project the two readings are byte-identical, which is why
-    this fixture has two.
+    one is named by this run's `entrypoint`. A scan finds all three and
+    must pick — the correct answer is the one `entrypoint` names, never
+    whichever a scan happens to prefer.
+
+    Two decoys, not one, and on PURPOSE: a single decoy only ever
+    distinguishes ONE ordering from the honest answer, so a decoy that
+    happens to sort on the same side as a scan's own bias (first, or last)
+    passes by coincidence rather than by the fixture actually ruling that
+    reading out — this is the exact shape of this task's own first draft,
+    which used one decoy sorting after the real package and so left a
+    scan-last mutation undetected (whole-branch review, Major 3). A decoy
+    on EACH side (`aaa_` sorting before, `zzz_` sorting after) rules out
+    scan-first AND scan-last at once; no alphabetical pick a scan can make
+    is the right one. On a one-package project every reading is
+    byte-identical, which is why this fixture needs more than one.
     """
     built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
     _write_report(
@@ -413,16 +465,17 @@ def test_fixture_o_m1_two_packages_one_named_by_entrypoint(tmp_path: Path):
         "    def sections(self, run, io):\n"
         "        yield self.section('ENTRYPOINT-NAMED', body='x')\n",
     )
-    aaa_decoy_pkg = built["root"] / "src" / "aaa_decoy_pkg"
-    aaa_decoy_pkg.mkdir(parents=True)
-    (aaa_decoy_pkg / "__init__.py").write_text("")
-    (aaa_decoy_pkg / "report.py").write_text(
-        "from publishable import BaseReport\n\n\n"
-        "class Report(BaseReport):\n"
-        "    format = 'markdown'\n\n"
-        "    def sections(self, run, io):\n"
-        "        yield self.section('DECOY', body='x')\n",
-    )
+    for decoy_name in ("aaa_decoy_pkg", "zzz_decoy_pkg"):
+        decoy_pkg = built["root"] / "src" / decoy_name
+        decoy_pkg.mkdir(parents=True)
+        (decoy_pkg / "__init__.py").write_text("")
+        (decoy_pkg / "report.py").write_text(
+            "from publishable import BaseReport\n\n\n"
+            "class Report(BaseReport):\n"
+            "    format = 'markdown'\n\n"
+            "    def sections(self, run, io):\n"
+            f"        yield self.section({decoy_name.upper()!r}, body='x')\n",
+        )
 
     def render(cls):
         assert cls is not None
@@ -565,3 +618,76 @@ def test_fixture_v_m11_render_happens_inside_the_sys_path_window(tmp_path: Path)
 
     result = render_with_override(built["run_dir"], built["record"], render=render)
     assert result == {"m": "pearson"}
+
+
+def test_sys_path_is_restored_after_a_successful_render(tmp_path: Path):
+    """Major 1 (whole-branch review): restoration was previously pinned by
+    nothing — replacing the `finally` body with `pass` left the full suite
+    green. `sys.path` must come back to exactly what it was, on the
+    ordinary success path.
+    """
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    before = list(sys.path)
+    result = render_with_override(built["run_dir"], built["record"], render=lambda cls: cls)
+    assert result is None  # no override written; the ordinary case
+    assert sys.path == before
+
+
+def test_sys_path_is_restored_after_render_raises(tmp_path: Path):
+    """The other half of Major 1: restoration on the REFUSAL/exception
+    path, not only the success path. `render` itself raising must not
+    leave `<repo_root>/src` on `sys.path` — the `finally` covers both.
+    """
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    before = list(sys.path)
+
+    def render(cls):
+        raise RuntimeError("boom, deliberately, inside render")
+
+    with pytest.raises(RuntimeError, match="boom, deliberately"):
+        render_with_override(built["run_dir"], built["record"], render=render)
+    assert sys.path == before
+
+
+def test_sys_path_entry_is_removed_by_identity_not_by_position(tmp_path: Path):
+    """Major 1's core finding: `sys.path.pop(0)` answers "which entry did
+    I insert" with a POSITION rather than with the fact. `sections()` runs
+    inside this window by design, and an override reaching for a vendored
+    directory via `sys.path.insert(0, ...)` — an ordinary Python idiom —
+    pushes THIS function's own entry to index 1. A positional pop would
+    then remove the override's freshly-inserted entry instead and leak
+    `<repo_root>/src` on `sys.path` permanently — Decision 3's own "render
+    one experiment's figures for another's run", reached by a route other
+    than a directory scan. Removing by the exact path STRING, wherever it
+    sits, is what this pins.
+    """
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    vendored = tmp_path / "vendored"
+    vendored.mkdir()
+    _write_report(
+        built["root"],
+        built["pkg"],
+        "import sys\n"
+        "from publishable import BaseReport\n\n\n"
+        "class Report(BaseReport):\n"
+        "    format = 'markdown'\n\n"
+        "    def sections(self, run, io):\n"
+        f"        sys.path.insert(0, {str(vendored)!r})\n"
+        "        yield self.section('X', body='x')\n",
+    )
+    src_entry = str(built["root"] / "src")
+    before = [p for p in sys.path if p != str(vendored)]
+
+    def render(cls):
+        assert cls is not None
+        return list(cls().sections({}, object()))
+
+    try:
+        render_with_override(built["run_dir"], built["record"], render=render)
+        assert src_entry not in sys.path
+    finally:
+        # The override's own leak, not this function's — clean it up so
+        # this test doesn't pollute any test that runs after it.
+        if str(vendored) in sys.path:
+            sys.path.remove(str(vendored))
+    assert sys.path == before

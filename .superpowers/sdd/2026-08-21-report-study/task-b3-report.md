@@ -44,7 +44,7 @@ override, never after.
 and the other two (`E-REPORT-OVERRIDE-IMPORT`, `E-REPORT-OVERRIDE-CLASS`) were already named in
 Decision 15's table but had no row here yet.
 
-`tests/test_report.py` (+21 tests, one parametrized ×8): the three ordinary refusals (no module,
+`tests/test_report.py` (+20 tests, one parametrized ×8): the three ordinary refusals (no module,
 raises on import — including the "missing dependency inside the override" sub-case — no subclass,
 two subclasses), three repo-root shape refusals, eight entrypoint-shape refusals (missing
 `config`, missing `entrypoint`, `None`, `""`, a list, no colon, empty module half, empty attribute
@@ -171,3 +171,110 @@ refusal tests + 3 repo-root-shape tests + 8 parametrized entrypoint-shape cases 
   still inserted, inside the same `try`, even though nothing was imported — harmless, but worth a
   reviewer's eye since it means `render(None)` always executes with the window open, not only when
   there is something to import from it.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-21-report-study/task-b3-review.md`. Spec compliance PASS;
+task quality PASS with findings — three Majors, three Minors, all closed below. Every mutation
+run against the **full, unfiltered** `uv run pytest -q`, in the foreground; reverted by copying a
+saved pre-mutation file back and confirming byte-identical by `diff` before the next one.
+
+### Major 1 — `sys.path` restoration pinned by nothing, and removed by position
+
+**Changed:** `render_with_override` now captures `src_entry = str(repo_root / "src")` once, and
+the `finally` removes it **by identity** (`if src_entry in sys.path: sys.path.remove(src_entry)`)
+rather than `sys.path.pop(0)`. The `if` guards a refusal raised *before* the insert (never
+reached) and an override that removed or cleared `sys.path` itself, so cleanup never raises a
+second, unhandled exception on top of whatever the window already failed on.
+
+**Pinned by three new tests:**
+`test_sys_path_is_restored_after_a_successful_render`, `test_sys_path_is_restored_after_render_
+raises` (captures `sys.path` before, calls with a `render` that raises `RuntimeError`, asserts
+`sys.path` unchanged after `pytest.raises`), and
+`test_sys_path_entry_is_removed_by_identity_not_by_position` — an override whose `sections()`
+does `sys.path.insert(0, <vendored>)` (the "ordinary idiom" the review's probe used), which pushes
+`src_entry` to index 1.
+
+**Verified by running, both directions:**
+- `finally: pass` (no restoration at all) → all three fail: the two "restored" tests find
+  `src_entry` still on `sys.path`, and the identity test fails the same way.
+- `sys.path.pop(0)` (positional, restored code's own predecessor) → only the identity test fails
+  (`src_entry` leaked, because the override's vendored entry sat at index 0 and got popped
+  instead); the two plain "restored" tests still pass, since neither of their overrides touches
+  `sys.path` itself — confirming the identity test is what actually distinguishes position from
+  identity, not the other two.
+- Reverted, full suite: 2689 passed, 1 skipped, 2 xfailed (2685 + 4 new tests this round).
+
+### Major 2 — the `obj.__module__ == module.__name__` filter, unpinned
+
+**Pinned by one new test:** `test_a_base_report_merely_imported_does_not_count_as_a_second_
+definition` — a `report.py` that does `from <pkg>.shared_report import SharedReport` (a separate
+module defining its own `BaseReport` subclass) **and** defines its own local `Report` subclass.
+Asserts the resolved class is `Report` and its section renders.
+
+**Verified by running:** deleted the `and obj.__module__ == module.__name__` clause — the new test
+fails with `ContractError: '...report' defines 2 \`BaseReport\` subclasses, not exactly one`,
+exactly the wrong refusal the review's own probe found, breaking the documented "an ordinary
+import from a plugin, called by each one's override" route. Reverted, re-ran: passes. No code
+change was needed here — the clause was already correct; only the pin was missing.
+
+### Major 3 — M1's fixture ruled out first-wins scans only
+
+**Changed:** `test_fixture_o_m1_two_packages_one_named_by_entrypoint` now writes **two** decoy
+packages, `aaa_decoy_pkg` (sorts before `cohort_pilot`) and `zzz_decoy_pkg` (sorts after), each
+with its own titled section, instead of one. The docstring states the reason in the words the
+review asked for: a single decoy only ever rules out ONE ordering, and a decoy that happens to
+sort on the scan's own biased side passes by coincidence rather than by the fixture ruling that
+reading out.
+
+**The reusable lesson, stated as such (also true of my own first draft):** what made the original
+`decoy_pkg` fixture blind to a scan-last mutation was not the element count but **the decoy's sort
+position agreeing with the bug** — `decoy_pkg` sorted after `cohort_pilot`, so "pick last" landed
+on the honest answer by accident. The identical shape closed the *disclosed* vacuous first draft
+(`decoy_pkg` sorting after, defeating a naive scan-first reading) and then reopened, unnoticed, as
+a scan-last blind spot in the very fixture built to close it — catching a sort-position coincidence
+once does not immunize the next fixture against the same coincidence recurring in the other
+direction.
+
+**Verified by running, both directions:** a scan-first mutation (`sorted(...)[0]`) fails with
+`'AAA_DECOY_PKG' == 'ENTRYPOINT-NAMED'`; a scan-last mutation (`sorted(...)[-1]`) fails with
+`'ZZZ_DECOY_PKG' == 'ENTRYPOINT-NAMED'`. Neither alphabetical pick a scan can make now resolves to
+the honest answer. Reverted, re-ran: passes. Left the design's own broader phrasing ("any pick is
+observable") as the design's — not this task's document to retro-edit — and closed the gap the
+cheaper way the review named: a third package, not a narrower claim.
+
+### Minor 4 — stale module docstring
+
+`src/publishable/report.py`'s module docstring no longer says override discovery "arrive[s] in
+later tasks" (deleted the clause rather than rewriting it, per `CLAUDE.md`); it now states the true
+fact instead — `render_with_override` is called by nothing outside this module's own tests, task 8
+wires it into `report`.
+
+### Minor 5 — stale/false test-file claims
+
+`tests/test_report.py`'s module docstring no longer claims "there is no `run`/`io` construction
+yet" (false since batch 2's `ReportIO`). The task-3 banner comment now names the four fixtures
+(O, the M2 fixture, O2, V) as the ones that run a real project, and says explicitly that the
+shape-refusal tests immediately below build records and run directories by hand **on purpose** —
+that is what those tests are for.
+
+### Minor 6 — test-count arithmetic
+
+Fixed in § What was built above: `tests/test_report.py` gained **20** tests in the original
+commit (5 + 3 + 8 + 4, matching the stated breakdown and the 2665 → 2685 delta), not 21. This fix
+round adds 4 more (33 tests in the file total; 2685 → 2689).
+
+### Not acted on, per the review's own adjudication
+
+- The extra-colon entrypoint: **leave, do not file** — no real record can hold one
+  (`E-ENTRYPOINT-IMPORT` fires at both `validate` and `run`), and `partition(":")`'s first-colon
+  split resolves the correct root package anyway even if one somehow existed.
+- Guard-pin arm D: did not fire, and could not have — this task's diff touches only
+  `docs/reference.md`, `src/publishable/report.py`, `tests/test_report.py` and this record; no
+  guard-pin file is among them.
+
+### Gates, confirmed by running (after all fixes)
+
+`uv run ruff check .` → all checks passed. `uv run ruff format --check .` → 90 files already
+formatted. `uv run mypy` → 50 source files, no issues. `uv run pytest -q` (full, unfiltered,
+foreground) → **2689 passed, 1 skipped, 2 xfailed**.

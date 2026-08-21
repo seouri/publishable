@@ -204,12 +204,13 @@ def render_with_override(
     repo_root = _read_repo_root(run_dir)
     root_pkg = _root_package(record)
     module_name = f"{root_pkg}.report"
+    src_entry = str(repo_root / "src")
 
     for cached in [
         name for name in sys.modules if name == root_pkg or name.startswith(root_pkg + ".")
     ]:
         del sys.modules[cached]
-    sys.path.insert(0, str(repo_root / "src"))
+    sys.path.insert(0, src_entry)
     try:
         try:
             module = importlib.import_module(module_name)
@@ -242,4 +243,16 @@ def render_with_override(
             )
         return render(subclasses[0])
     finally:
-        sys.path.pop(0)
+        # Removed by IDENTITY (the exact path string this call inserted),
+        # never by POSITION (`sys.path.pop(0)`). `sections()` runs inside
+        # this window by design, and an override reaching for a vendored
+        # directory via `sys.path.insert(0, ...)` — an ordinary idiom — is
+        # user code this window invites in; a positional pop would then
+        # remove THAT entry and leak `src_entry` on every path, success or
+        # refusal alike. `if` rather than an unguarded `remove` because a
+        # refusal raised before the insert never reaches this `finally`
+        # missing its own entry, but an override that removed our entry
+        # itself (or cleared `sys.path` outright) must not turn our own
+        # cleanup into a second, unhandled exception.
+        if src_entry in sys.path:
+            sys.path.remove(src_entry)
