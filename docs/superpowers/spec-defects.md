@@ -7957,7 +7957,9 @@ inherits a generator that silently corrupts an existing tracked file — the one
 `generate`'s own "greenfield only, refuses rather than overwrites" rule exists to prevent, reached
 here through a file the command did not classify as the thing it must not overwrite.
 
-## OPEN — § A report override's fenced block is labelled `— generated` and is no longer what `generate report` writes — **Owner: H8c task 16**
+## ~~OPEN~~ CLOSED — § A report override's fenced block is labelled `— generated` and is no longer what `generate report` writes — **Owner: H8c task 16**
+
+**CLOSED by H8c task 16 (fix round 1).** The fenced block now matches `REPORT_PY` byte for byte: two blank lines after the `import`, and the second `yield` and its undefined `render_scatter` are gone, replaced by the generator's own `# TODO: yield self.section("<title>", body=...) for a figure this experiment needs` comment. Verified by re-rendering `REPORT_PY.format(pkg="cohort_pilot", fmt=json.dumps("html"))` and diffing it against the fenced block — byte-identical.
 
 `docs/reference.md` § A report override renders one experiment's own figures. Its fenced example's
 first line, `# src/cohort_pilot/report.py — generated`, is the exact line `REPORT_PY` emits — but the
@@ -7975,7 +7977,9 @@ generator itself produces), or the extra `yield` and its undefined helper are ma
 project adds beyond the generated body (a `# …and one you add:` comment or equivalent), so the block
 reads as generated-prefix-plus-example rather than as one seamless generated file.
 
-## OPEN — § Creation commands' `generate` Arguments cell does not name `--format` — **Owner: H8c task 16**
+## ~~OPEN~~ CLOSED — § Creation commands' `generate` Arguments cell does not name `--format` — **Owner: H8c task 16**
+
+**CLOSED by H8c task 16 (fix round 1).** The Arguments cell now reads "generator, name, generator args (`experiment` accepts `--plugin`; `report` accepts `--format`)" — verified by reading the cell back out of `docs/reference.md` § Creation commands.
 
 `docs/reference.md`, § Creation commands' Command table, the `publishable generate` (`g`) row's
 Arguments cell: *"generator, name, generator args (`experiment` accepts `--plugin`)"*. `report` is
@@ -7987,3 +7991,38 @@ than fixing here is deliberate, not an oversight.
 
 **The check its owner must make.** Add `` `report` accepts `--format` `` (or equivalent) to the
 parenthetical, the same way `experiment`'s `--plugin` is already named there.
+
+## OPEN — `E-GIT-NO-REPO` is named in two normative § Errors cells for the first time on this branch, with no row of its own, and two call sites let it reach the user uncaught — **Owner: unassigned**
+
+**Found by:** H8c task-b9 review (Minor 7 / attack 7), on the batch's own concern in its task report
+that stopped one step short of a filing.
+
+`git show main:docs/reference.md | grep -c E-GIT-NO-REPO` → **0**. H8c task 16 is the first commit to
+name `E-GIT-NO-REPO` in a normative § Errors cell at all — twice, at `E-REPORT-OVERRIDE-REPO`'s row and
+`E-STUDY-IN-REPO`'s, the latter explaining at length that `provenance.find_repo_root` "raises
+`E-GIT-NO-REPO` rather than returning `None`." Naming a code in a normative row **is** a widening of what
+this document commits to describing: a reader who follows that name today finds no row that is *its own*
+— every mention is a cross-reference from a different code's row, never the thing itself.
+
+**And the gap is not merely documentary.** `find_repo_root` is called uncaught at `cli.py:1960`
+(`command_run`) and `cli.py:3948` (`_dispatch_generate`), so a `run` or a `generate` invoked outside any
+git repository reaches `main`'s bare `except PublishableError` printer under this code, with no row in
+either § Errors table describing that path for `new`, `validate`, `run`, or `generate` themselves —
+only `report`'s and `study new`'s own conversions of the identical raise are described.
+
+**Same shape, wider scope than one code.** `E-PROJECT-EXISTS`, `E-STEP-EXISTS`, and `E-TEMPLATE-EXISTS`
+are in an identical position: named only in § Exit codes' hand-written prose sentence
+(`docs/reference.md` § Exit codes and diagnostics, "one rule shared by every generator with something to
+protect"), with no § Errors row of their own — and that sentence's own claim about `E-PROJECT-EXISTS`
+("`publishable new` reports `E-PROJECT-EXISTS`") is itself narrower than the code, since
+`plugin_scaffold.py:169` also raises it for `plugin new`.
+
+**What its owner must do.** Decide whether this whole family (`E-GIT-NO-REPO`, `E-PROJECT-EXISTS`,
+`E-STEP-EXISTS`, `E-TEMPLATE-EXISTS`, and their siblings' own prose-only coverage) gets dedicated
+§ Errors rows, or whether the prose-sentence convention is deliberate and should say so explicitly
+enough that a future audit does not re-open it as a gap. Either way, `E-PROJECT-EXISTS`'s sentence
+should name `plugin new` alongside `publishable new`.
+
+**Cost if wrong / if unclaimed:** a reader following a normative code reference finds nothing at the
+destination, and `run`/`generate` outside a repository print a diagnostic this document never
+describes at its own source.

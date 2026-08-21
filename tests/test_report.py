@@ -36,6 +36,7 @@ from publishable.diagnostics import (
     EXIT_WRONG,
 )
 from publishable.errors import ContractError
+from publishable.generators.report import REPORT_PY
 from publishable.lineage import read_record_file
 from publishable.report import (
     Section,
@@ -51,6 +52,62 @@ from publishable.report import (
     render_with_override,
     report_form,
 )
+
+REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+
+
+def _reference_md_report_py_block() -> str:
+    """The fenced ```python block in § A report override renders one
+    experiment's own figures, from its own `# src/cohort_pilot/report.py —
+    generated` first line to the fence's closing ` ``` `, as raw text —
+    the identical raw-text-from-a-document-line approach `test_diff.py`'s
+    `_diff_block_raw_lines` / arm D uses, rather than a structured parse
+    that could normalize away a drift this pin exists to catch (spec-
+    defects.md's own closed filing: an earlier version of this block
+    carried an extra `yield` and an undefined `render_scatter` that no
+    test caught for a full slice)."""
+    lines = REFERENCE_MD.read_text().splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line == "# src/cohort_pilot/report.py — generated"
+    )
+    end = next(i for i in range(start, len(lines)) if lines[i] == "```")
+    return "\n".join(lines[start:end]) + "\n"
+
+
+def test_h8c_fix_round_1_reference_md_report_block_matches_report_py_generator(
+    tmp_path: Path,
+):
+    """spec-defects.md's closed filing, pinned rather than left to drift
+    again: § A report override's fenced block, labelled `— generated`,
+    must be the exact text `generate report` writes for the worked
+    example's own package (`cohort_pilot`) and format (`html`, the block's
+    own `format = "html"` line) — not merely "close," since the label is
+    now a build claim (`report`'s § Generators row reads `built`). Compares
+    against `REPORT_PY.format(...)` directly (the generator's own template
+    string) rather than against a freshly generated file's bytes, since a
+    generated file adds nothing `.format()` doesn't already produce and
+    the direct comparison needs no scaffolded project. A control confirms
+    this pin can fail: reintroducing the closed defect's own extra `yield`
+    fails the assertion below."""
+    import json
+
+    expected = REPORT_PY.format(pkg="cohort_pilot", fmt=json.dumps("html"))
+    assert _reference_md_report_py_block() == expected
+
+    # Control: the closed defect's own shape (an extra yield calling an
+    # undefined render_scatter) must make this comparison fail, or the
+    # pin above could be vacuously true regardless of content.
+    todo_line = (
+        '        # TODO: yield self.section("<title>", body=...) for a figure this experiment '
+        "needs\n"
+    )
+    drifted = expected.replace(
+        todo_line,
+        '        yield self.section("Method agreement",\n'
+        "                           body=render_scatter(io.read_condition(...)))\n",
+    )
+    assert drifted != expected
+    assert _reference_md_report_py_block() != drifted
 
 
 def test_section_is_frozen_and_carries_title_and_body():

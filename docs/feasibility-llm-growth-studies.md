@@ -1641,7 +1641,7 @@ sentence naming the current unbuilt CLI surface would read `dry-run`, `draft`, `
 does not retro-edit the 2026-08-15 entry's dated claim about what was true that day, which stands as
 written.
 
-### Measured on 2026-08-21 against commit `52612ed` — after H8c
+### Measured on 2026-08-21 against commit `ae71d2a` — after H8c
 
 **`report` and `study` dispatch.** `main(["report", "run.yaml"])` and `main(["study", "new", "path"])`
 both reach real argument handling now — `cli.NOT_BUILT_COMMANDS` holds neither `report`, `study new`,
@@ -1658,7 +1658,7 @@ for either command to render. Nothing this slice built is a state any of these n
 |---|---|---|
 | Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
 | Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
-| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8c touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
 | Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
 
 **No row moves for H8c either, and this entry's own table above is the H8a entry's, character for

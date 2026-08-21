@@ -145,3 +145,86 @@ or row order.
   task" wasn't as complete as the step-by-step brief made it feel — worth a second reviewer's own
   pass rather than trusting this report's "done" at face value, per the brief's own framing of
   why this task is reviewed at all.
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-21-report-study/task-b9-review.md`, against commit `c794029`.
+Spec compliance PASS with reservations; task quality FAILED on four Majors, all in the
+record-honesty steps (5, 8, 9). All four Majors and both Minors closed; one Minor left open with
+its reasoning, per below.
+
+**Major 1 — § Executability entry pinned to the wrong commit.** `52612ed` is this branch's
+*first* commit (task 17's guard pin), where `NOT_BUILT_COMMANDS` still holds `report`, `study
+new` and `study add` — the exact opposite of the entry's own headline claim. Re-pinned to
+`ae71d2a` (H8c task 15 fix round 1, the last **code** commit, matching the reviewer's own
+suggestion and the sibling convention of pinning to a commit where the slice's own claims are
+already true). **Verified by running**: `git show ae71d2a:src/publishable/cli.py |
+grep -A10 "NOT_BUILT_COMMANDS = "` shows exactly 7 keys (`demo, docs, draft, dry-run,
+list-templates, reproduce, resume`) and `NOT_BUILT_GENERATORS: dict[str, str] = {}` — `report`,
+`study new`, `study add`, and `generate report` are all absent, which is what the entry asserts.
+
+**Major 2 — `E-STEP-READ-CONDITION-UNKNOWN`/`-REPEAT-REQUIRED`'s row named only one of its two
+callers.** Widened the row to name both `StepIO.read_condition` and a report override's
+`ReportIO.read_condition`, and the shared `_resolve_condition_step_dir` both raises through —
+the identical widening already applied to `E-ARTIFACT-NAME`'s neighbouring row in the same
+commit, missed here. **Verified by reading** `artifacts.py:415/421` (the two raises),
+`:899` (`StepIO.read_condition`'s call), and `:1184` (`ReportIO.read_condition`'s call) — one
+shared function, two callers, now both named.
+
+**Major 3 — the `E-EXPERIMENT-UNKNOWN` row's added clause was false.** *"Both callers share the
+one `package_name` helper and its one raise"* — `package_name` (`generators/experiment.py:46`)
+is `experiment.replace("-", "_")` and raises nothing; the two raises are independent
+`ContractError`s in `generators/step.py:24` and `generators/report.py:78`. Deleted the clause
+rather than repairing it, per `CLAUDE.md`'s own remedy for this shape — the row's first sentence
+already carries what a reader needs. **Verified by reading** `generators/experiment.py:46-47`.
+
+**Major 4 — two `spec-defects.md` filings this same commit closed, left OPEN, immediately below
+the one filing this task did strike.** Struck both (`§ A report override's fenced block…` and
+`§ Creation commands'… does not name --format`), each with a `CLOSED by H8c task 16 (fix round
+1)` note stating what closed it. **Verified by running/reading**, matching the reviewer's own
+verification: re-rendered `REPORT_PY.format(pkg="cohort_pilot", fmt=json.dumps("html"))` and
+diffed it against the fenced block in `docs/reference.md` — byte-identical; and read the
+Arguments cell back out of § Creation commands, confirming it now names `--format`.
+
+**Minor 5 — "character for character" was false.** The `report_by`-under-`resample` row read
+`H8c touches none of this` where the H8a and H8b entries both read `H8a touches none of this`.
+Restored `H8a`, matching the precedent H8b itself set and making the claim true. **Verified by
+diffing** the three extracted four-row tables (`sed` ranges for each `| Figure | Count |
+Visible to \`validate\`? |` block) — byte-identical across all three, `diff` exit 0 both ways.
+
+**Minor 6 — the repaired `REPORT_PY` ↔ document agreement shipped unpinned.** Added
+`tests/test_report.py::test_h8c_fix_round_1_reference_md_report_block_matches_report_py_generator`,
+on `test_diff.py`'s own raw-text-from-a-document-line approach (`_diff_block_raw_lines` / arm D)
+rather than a structured parse that could normalize the drift away: it extracts the fenced block
+from its own `# src/cohort_pilot/report.py — generated` line to the closing fence as raw text,
+and compares it to `REPORT_PY.format(pkg="cohort_pilot", fmt=json.dumps("html"))`. Includes a
+control reproducing the closed defect's own shape (the extra `yield` calling an undefined
+`render_scatter`) and asserting the drifted text does not match — confirmed the control
+distinguishes (`drifted != expected`) and that the live document currently matches the
+generator, not the drifted text. **Verified by running**: the new test passes in isolation and
+in the full suite.
+
+**Minor 7 — `E-GIT-NO-REPO`'s widening.** The batch's own task report noted this as a "concern"
+rather than filing it, which `CLAUDE.md` names directly ("a ledger line saying 'filed' is not a
+filing"). Added a proper `spec-defects.md` OPEN entry, owner unassigned, stating both halves the
+reviewer verified: `git show main:docs/reference.md | grep -c E-GIT-NO-REPO` → `0` (first
+normative mention on this branch, in two cross-reference cells with no row of its own), and the
+two uncaught call sites (`cli.py:1960`, `cli.py:3948`) that let it reach `main`'s printer. Scoped
+the same gap onto `E-PROJECT-EXISTS`/`E-STEP-EXISTS`/`E-TEMPLATE-EXISTS` per the review's own
+note, including `E-PROJECT-EXISTS`'s sentence being narrower than the code (`plugin_scaffold.py`
+also raises it). **Left open** rather than fixed: deciding whether this whole family gets
+dedicated rows, or the prose-only convention is deliberate, is a design call for whoever owns it
+next — not a documents-audit task's to rule on unilaterally under a fix round.
+
+## Gates (fix round 1)
+
+- `uv run ruff check .` — all checks passed
+- `uv run ruff format --check .` — 93 files already formatted (unchanged)
+- `uv run mypy` — success, 52 source files (unchanged)
+- `uv run pytest -q` — **2833 passed, 1 skipped, 2 xfailed** (2832 baseline + 1 new pin test)
+
+## What I did not close
+
+- The `E-GIT-NO-REPO` / `E-PROJECT-EXISTS` family's own resolution (dedicated rows vs. documented
+  convention) — filed with an owner, not decided, since ruling on it was outside this task's
+  brief and the reviewer's own remedy was "a filing... not a row."
