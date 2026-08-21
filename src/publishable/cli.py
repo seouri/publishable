@@ -151,7 +151,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "list-templates": "Operation commands",
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
-    "study add": "What `study add` redacts",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
@@ -3795,22 +3794,26 @@ def _dispatch(command: str, rest: list[str]) -> int:
 
 
 def _dispatch_study(rest: list[str]) -> int:
-    """The `study` arm: `new` is real (task 11); `add` routes to the same
-    specified-but-unbuilt diagnostic it got before this arm existed, until
-    task 13 builds it. A missing or unrecognized subcommand answers the
-    way the whole group would without this arm at all — every subcommand
-    `NOT_BUILT_COMMANDS` still names is unbuilt, so `_report_not_built`
-    over `"Creation commands"` is still the honest answer. `_dispatch`'s
-    built branches precede the `NOT_BUILT_COMMANDS` lookup, so an arm that
-    swallowed `add` while its `Status` cell still read `NOT BUILT` would
-    fail the CLI-table test (§ Corrections, correction 5).
+    """The `study` arm: both `new` (task 11) and `add` (task 13) are real
+    now, so a missing or unrecognized subcommand is a usage error rather
+    than the specified-but-unbuilt diagnostic it used to be —
+    `_dispatch`'s `any(n.startswith("study "))` fallback matches nothing
+    once neither name is left in `NOT_BUILT_COMMANDS`, and printing
+    `unknown command` for a group `docs/reference.md` § Creation commands
+    still specifies would be the one wrong word (§ Corrections,
+    correction 4).
     """
     sub = rest[0] if rest else None
     if sub == "new":
         return _dispatch_study_new(rest[1:])
     if sub == "add":
-        return _report_not_built("study add", NOT_BUILT_COMMANDS["study add"])
-    return _report_not_built("study", "Creation commands")
+        return _dispatch_study_add(rest[1:])
+    print(
+        "`publishable study` needs a subcommand: `new` or `add` — see "
+        "docs/reference.md § Creation commands",
+        file=sys.stderr,
+    )
+    return EXIT_INVOCATION
 
 
 def _dispatch_study_new(rest: list[str]) -> int:
@@ -3855,6 +3858,56 @@ def _dispatch_study_new(rest: list[str]) -> int:
     from publishable.study import study_new
 
     study_new(Path(positional[0]), title)
+    return EXIT_OK
+
+
+def _dispatch_study_add(rest: list[str]) -> int:
+    """`study add <bundle> <run.yaml> --as <name>`. Same discipline as
+    `_dispatch_study_new`: an unrecognized option, a missing `--as`, or the
+    wrong number of positionals refuses at `EXIT_INVOCATION` before
+    `study_add` ever touches disk. `study_add`'s own `E-STUDY-NAME-EXISTS`
+    and every other `ContractError` it raises propagate to `main`'s own
+    `except PublishableError`, which prints and exits `1` — this function
+    only prints the `W-STUDY-COMMIT-MISMATCH` notice `study_add` returns,
+    the same `Collector`-rendered shape `report.py`'s bundle notices use.
+    """
+    positional: list[str] = []
+    name: str | None = None
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith("--"):
+            if token != "--as":
+                print(
+                    f"`study add` does not recognize `{token}` — see "
+                    "docs/reference.md § Creation commands",
+                    file=sys.stderr,
+                )
+                return EXIT_INVOCATION
+            if i + 1 >= len(rest):
+                print("`study add` needs a value for `--as`", file=sys.stderr)
+                return EXIT_INVOCATION
+            name = rest[i + 1]
+            i += 2
+        else:
+            positional.append(token)
+            i += 1
+    if len(positional) != 2 or name is None:
+        print(
+            "`study add` takes a bundle path, a run.yaml path, and "
+            "`--as <name>` — see docs/reference.md § Creation commands",
+            file=sys.stderr,
+        )
+        return EXIT_INVOCATION
+
+    from publishable.study import study_add
+
+    notices = study_add(Path(positional[0]), Path(positional[1]), name)
+    if notices:
+        notice_c = Collector()
+        for code, message in notices:
+            notice_c.warn(code, positional[0], message)
+        print(notice_c.render())
     return EXIT_OK
 
 

@@ -188,14 +188,31 @@ def study_add(bundle: Path, run_yaml: Path, name: str) -> list[tuple[str, str]]:
     record to `<bundle>/<name>.run.yaml`, redacts four host-identifying
     fields, updates `study.yaml`'s `runs` and `code` blocks, and returns any
     `(code, message)` notice pair (never raised — exit stays `0`).
+
+    `E-STUDY-NAME-EXISTS` is the load-bearing refusal, checked against BOTH
+    `study.yaml`'s `runs` keys and the file on disk — the two can disagree
+    (a hand-edited `study.yaml`, or a copy interrupted between the two
+    writes) and the FILE is the thing whose overwrite loses data — and
+    checked before the source record is even read. Adding the same
+    `run_id` twice under two different names is permitted: the refusal is
+    about the name, and a paper legitimately reports one run in two roles.
     """
     doc = _load_study_doc(bundle)
+    target = bundle / f"{name}.run.yaml"
+    if name in (doc.get("runs") or {}) or target.exists():
+        raise ContractError(
+            f"{name!r} is already in this bundle — study.yaml's runs, or the file "
+            f"at {target}, already holds a record; `main.run.yaml` silently becoming "
+            "a different run is exactly the overwrite this project forbids "
+            "everywhere. Re-add under a new name, or start a new bundle",
+            code="E-STUDY-NAME-EXISTS",
+        )
+
     record = read_record_file(run_yaml)
 
     redacted = _redact(record)
     notice = _apply_code_block(doc, record, name)
 
-    target = bundle / f"{name}.run.yaml"
     target.write_text(yaml.safe_dump(redacted, sort_keys=False))
     doc.setdefault("runs", {})[name] = {
         "file": target.name,

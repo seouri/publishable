@@ -114,16 +114,6 @@ def test_study_new_probe_arity_from_the_cli_table_test_writes_nothing_here():
     assert not Path("_probe_a").exists()
 
 
-def test_study_add_still_not_built_until_task_13(tmp_path: Path):
-    bundle = tmp_path / "study"
-    study_new(bundle, "Title")
-    assert main(["study", "add", str(bundle), "x", "--as", "main"]) == EXIT_INVOCATION
-
-
-def test_study_with_no_subcommand_still_answers_not_built_until_task_13():
-    assert main(["study"]) == EXIT_INVOCATION
-
-
 # --- Task 12: `study add` part 1 — the copy, the redaction, `code` --------
 
 
@@ -273,12 +263,15 @@ def test_apply_code_block_second_add_under_another_name_does_not_replace_and_not
 
 
 def test_apply_code_block_fixture_b_third_run_replaces_only_under_as_main(tmp_path: Path):
-    """Fixture B: three real runs, three distinct commits. `main`,
-    `sensitivity`, then `main` again (task 12 does not yet refuse a
-    re-added name — that is task 13's). The mutation this discriminates
-    (task 12 step 6, second mutation): recomputing `code.commit` as "the
-    commit all runs share" has no answer over three pairwise-different
-    commits, while the honest rule just keeps the latest `--as main` add."""
+    """Fixture B: three real runs, three distinct commits, three distinct
+    names (task 13's `E-STUDY-NAME-EXISTS` forbids reusing one). `aux`
+    (the bundle's first add, so it sets `code.commit` regardless of its
+    name), then `other` (neither the first add nor `--as main`, so it only
+    notices a mismatch), then `main` (replaces). The mutation this
+    discriminates (task 12 step 6, second mutation): recomputing
+    `code.commit` as "the commit all runs share" has no answer over three
+    pairwise-different commits, while the honest rule keeps exactly the
+    `--as main` add's."""
     bundle = tmp_path / "study"
     study_new(bundle, "Title")
     run1 = _real_run(tmp_path, "proj1")
@@ -290,8 +283,107 @@ def test_apply_code_block_fixture_b_third_run_replaces_only_under_as_main(tmp_pa
         run3["record"]["provenance"]["git"]["commit"],
     }
     assert len(commits) == 3
-    study_add(bundle, run1["run_dir"] / "run.yaml", "main")
-    study_add(bundle, run2["run_dir"] / "run.yaml", "sensitivity")
+    study_add(bundle, run1["run_dir"] / "run.yaml", "aux")
+    study_add(bundle, run2["run_dir"] / "run.yaml", "other")
     study_add(bundle, run3["run_dir"] / "run.yaml", "main")
     doc = yaml.safe_load((bundle / "study.yaml").read_text())
     assert doc["code"]["commit"] == run3["record"]["provenance"]["git"]["commit"]
+
+
+# --- Task 13: `study add` part 2 — the duplicate-name refusal ------------
+
+
+def test_study_add_refuses_a_name_already_in_study_yaml_before_any_write(tmp_path: Path):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run1 = _real_run(tmp_path, "proj1")
+    run2 = _real_run(tmp_path, "proj2")
+    study_add(bundle, run1["run_dir"] / "run.yaml", "main")
+    before = _snapshot(bundle)
+    with pytest.raises(ContractError) as exc_info:
+        study_add(bundle, run2["run_dir"] / "run.yaml", "main")
+    assert exc_info.value.code == "E-STUDY-NAME-EXISTS"
+    # M9's own arm: the file's bytes are unchanged — an overwrite of the
+    # same name would have replaced `main.run.yaml`'s content.
+    assert _snapshot(bundle) == before
+
+
+def test_study_add_refuses_a_name_whose_file_exists_even_if_study_yaml_was_hand_edited(
+    tmp_path: Path,
+):
+    """Second discriminating mutation (task 13 step 4): checking only
+    `study.yaml`'s keys, not the file, would miss this — the entry was
+    hand-edited away while the file remains."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run1 = _real_run(tmp_path, "proj1")
+    run2 = _real_run(tmp_path, "proj2")
+    study_add(bundle, run1["run_dir"] / "run.yaml", "main")
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    del doc["runs"]["main"]
+    (bundle / "study.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+    before = _snapshot(bundle)
+    with pytest.raises(ContractError) as exc_info:
+        study_add(bundle, run2["run_dir"] / "run.yaml", "main")
+    assert exc_info.value.code == "E-STUDY-NAME-EXISTS"
+    assert _snapshot(bundle) == before
+
+
+def test_study_add_permits_the_same_run_id_under_two_different_names(tmp_path: Path):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    study_add(bundle, run["run_dir"] / "run.yaml", "again")
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    assert (
+        doc["runs"]["main"]["run_id"] == doc["runs"]["again"]["run_id"] == run["record"]["run_id"]
+    )
+
+
+def test_study_add_through_main_end_to_end(tmp_path: Path):
+    bundle = tmp_path / "study"
+    run = _real_run(tmp_path, "proj1")
+    assert main(["study", "new", str(bundle), "--title", "Title"]) == EXIT_OK
+    assert main(
+        ["study", "add", str(bundle), str(run["run_dir"] / "run.yaml"), "--as", "main"]
+    ) == (EXIT_OK)
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    assert doc["runs"]["main"]["run_id"] == run["record"]["run_id"]
+
+
+def test_study_add_through_main_refuses_a_duplicate_name_at_exit_1(tmp_path: Path):
+    bundle = tmp_path / "study"
+    run = _real_run(tmp_path, "proj1")
+    main(["study", "new", str(bundle), "--title", "Title"])
+    main(["study", "add", str(bundle), str(run["run_dir"] / "run.yaml"), "--as", "main"])
+    before = _snapshot(bundle)
+    assert (
+        main(["study", "add", str(bundle), str(run["run_dir"] / "run.yaml"), "--as", "main"])
+        == EXIT_WRONG
+    )
+    assert _snapshot(bundle) == before
+
+
+def test_study_add_arity_probe_from_the_cli_table_test_writes_nothing():
+    """The exact invocation `test_reference_cli_tables_match_what_the_cli_does`
+    makes for a `built` row: two junk positionals, no `--as`, so the
+    arity/`--as` check must refuse before `study_add` ever reads a path."""
+    assert main(["study", "add", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
+    assert not Path("_probe_a").exists()
+
+
+def test_study_group_with_no_subcommand_names_both_subcommands_at_exit_2(capsys):
+    assert main(["study"]) == EXIT_INVOCATION
+    err = capsys.readouterr().err
+    assert "unknown command" not in err
+    assert "is specified but not built" not in err
+    assert "new" in err
+    assert "add" in err
+
+
+def test_study_group_with_an_unrecognized_subcommand_is_a_usage_error(capsys):
+    assert main(["study", "frobnicate"]) == EXIT_INVOCATION
+    err = capsys.readouterr().err
+    assert "unknown command" not in err
+    assert "is specified but not built" not in err

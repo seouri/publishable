@@ -9301,15 +9301,19 @@ def test_an_unspecified_name_still_reports_an_unknown_command(capsys):
     )
 
 
-def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
-    """`publishable study` names no subcommand, and every subcommand it could
-    name is unbuilt — so it is answered as unbuilt rather than as unknown, which
-    would be the one wrong word for a group the document specifies."""
+def test_a_command_group_with_no_subcommand_gets_a_usage_error_naming_both(capsys):
+    """`publishable study` names no subcommand. Both `new` and `add` are
+    built (H8c tasks 11 and 13), so this is a usage error rather than the
+    specified-but-unbuilt diagnostic the group used to get when every
+    subcommand it could name was still unbuilt (§ Corrections,
+    correction 4) — and `unknown command` would still be the one wrong
+    word for a group the document specifies."""
     assert main(["study"]) == EXIT_INVOCATION
-    assert capsys.readouterr().err == (
-        "`publishable study` is specified but not built in this version — "
-        "see docs/reference.md § Creation commands\n"
-    )
+    err = capsys.readouterr().err
+    assert "unknown command" not in err
+    assert "is specified but not built" not in err
+    assert "new" in err
+    assert "add" in err
 
 
 # --- Task 1 (resample-honoured): regression pin — the undeclared-`resample`
