@@ -15,7 +15,7 @@ from publishable.cli import main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.run_record import SCHEMA_VERSION
-from publishable.study import REDACTED, _redact, study_add, study_new
+from publishable.study import REDACTED, _redact, study_add, study_new, thin_metric_lines
 
 
 def _snapshot(root: Path) -> set[tuple[str, bytes]]:
@@ -387,3 +387,226 @@ def test_study_group_with_an_unrecognized_subcommand_is_a_usage_error(capsys):
     err = capsys.readouterr().err
     assert "unknown command" not in err
     assert "is specified but not built" not in err
+
+
+# --- Task 14: the `min_reported_n` prompt --------------------------------
+
+
+def _fixture_n_run(tmp_path: Path) -> dict:
+    """Fixture N: a real run with `statistics.report_by: [cohort]` over 12
+    units — the whole-condition metric completes all 12 (above the
+    default `min_reported_n: 10`), while each `cohort` level (`a`/`b`)
+    completes 6 (below it). Computed, not guessed: `run_a_project`'s
+    roster alternates `cohort` a/b, so 12 units split 6/6."""
+    built = run_a_project(
+        tmp_path,
+        unit_attributes=["cohort"],
+        units=12,
+        statistics={"report_by": ["cohort"]},
+        aggregate_returns="metric",
+    )
+    record = yaml.safe_load((built["run_dir"] / "run.yaml").read_text())
+    return {"run_dir": built["run_dir"], "record": record}
+
+
+def test_thin_metric_lines_is_empty_when_nothing_is_thin(tmp_path: Path):
+    run = _real_run(tmp_path, "proj1")
+    assert thin_metric_lines(run["record"], 10) == []
+
+
+def test_thin_metric_lines_fixture_n_lists_only_the_thin_strata_a_proper_subset(
+    tmp_path: Path,
+):
+    """M7's own discriminator: listing every metric would include the
+    whole-condition `pred`/`metric` entries (`n.completed: 12`, at or
+    above the floor); the honest rule lists only the `by[cohort=a]` and
+    `by[cohort=b]` entries (`n.completed: 6`, below it) — a PROPER subset
+    of "every metric", not all of them."""
+    run = _fixture_n_run(tmp_path)
+    lines = thin_metric_lines(run["record"], 10)
+    assert len(lines) == 4  # {pred, metric} x {a, b}
+    assert all("by[cohort=" in line for line in lines)
+    assert not any("condition 0.aggregated.step01_summarize_units.pred:" == line for line in lines)
+
+
+def test_thin_metric_lines_reported_estimate_with_no_n_is_listed_unconditionally():
+    record = _fixture_y_record()
+    record["results"] = {
+        "summary": {"site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": None}}
+    }
+    lines = thin_metric_lines(record, 10)
+    assert any("declares no n" in line for line in lines)
+
+
+def test_thin_metric_lines_reported_estimate_below_floor_is_listed():
+    record = _fixture_y_record()
+    record["results"] = {
+        "summary": {"site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": 4}}
+    }
+    lines = thin_metric_lines(record, 10)
+    assert any("reported n=4" in line for line in lines)
+
+
+def test_thin_metric_lines_basis_repeats_synthesized_is_compared_against_repeat_count():
+    """Nothing in this build writes `basis: "repeats"` (filed in
+    `docs/superpowers/spec-defects.md`) — exercised only over this
+    hand-built entry."""
+    record = _fixture_y_record()
+    record["results"] = {
+        "summary": {
+            "slow_metric": {
+                "value": 1.2,
+                "basis": "repeats",
+                "repeat_spread": {"std": 0.1, "n": 3, "kind": "seed"},
+            }
+        }
+    }
+    lines = thin_metric_lines(record, 10)
+    assert any("repeat count=3" in line for line in lines)
+
+
+def test_thin_metric_lines_vs_baseline_contrast_entry_is_not_silently_skipped(tmp_path: Path):
+    """The disclosure risk Decision 13's own *Cost if wrong* names: a
+    contrast entry has no `n` mapping at all (it carries `n_paired`, or
+    `n_of`/`n_against`), so a walker that only reads `entry["n"]["completed"]`
+    would silently skip every `vs_baseline` and declared-contrast entry."""
+    record = _fixture_y_record()
+    record["results"] = {
+        "conditions": [
+            {
+                "index": 0,
+                "label": "b",
+                "vs_baseline": {
+                    "step01": {
+                        "metric": {
+                            "delta": 0.1,
+                            "basis": "units",
+                            "paired": True,
+                            "n_paired": 3,
+                            "method": "paired_t_over_units",
+                            "ci95": [0.0, 0.2],
+                            "cohens_d": None,
+                            "correction": None,
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    lines = thin_metric_lines(record, 10)
+    assert any("n_paired=3" in line for line in lines)
+
+
+def test_thin_metric_lines_unpaired_contrast_either_side_below_floor(tmp_path: Path):
+    record = _fixture_y_record()
+    record["results"] = {
+        "contrasts": [
+            {
+                "id": "c1",
+                "of": "b",
+                "against": "a",
+                "step01": {
+                    "metric": {
+                        "delta": 0.1,
+                        "basis": "units",
+                        "paired": False,
+                        "n_of": 3,
+                        "n_against": 40,
+                        "method": "welch_t_over_units",
+                        "ci95": [0.0, 0.2],
+                        "cohens_ds": None,
+                        "correction": None,
+                    }
+                },
+            }
+        ]
+    }
+    lines = thin_metric_lines(record, 10)
+    assert any("n_of=3" in line for line in lines)
+    assert not any("n_against" in line for line in lines)
+
+
+def test_study_add_proceeds_when_confirmed_at_a_tty(tmp_path: Path, monkeypatch):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _fixture_n_run(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    notices = study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert notices == []
+    assert (bundle / "main.run.yaml").exists()
+
+
+def test_study_add_writes_nothing_when_quit_at_a_tty(tmp_path: Path, monkeypatch):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _fixture_n_run(tmp_path)
+    before = _snapshot(bundle)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    notices = study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert notices == []
+    assert _snapshot(bundle) == before
+    assert not (bundle / "main.run.yaml").exists()
+
+
+def test_study_add_refuses_with_no_tty_and_writes_nothing(tmp_path: Path, monkeypatch):
+    """M8's own discriminator: asserting only the raised code would pass a
+    build that refused AFTER copying — this asserts the bundle holds no
+    new file too."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _fixture_n_run(tmp_path)
+    before = _snapshot(bundle)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(ContractError) as exc_info:
+        study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert exc_info.value.code == "E-STUDY-CONFIRM-REQUIRED"
+    assert _snapshot(bundle) == before
+    assert not (bundle / "main.run.yaml").exists()
+
+
+def test_study_add_uses_the_bundled_records_own_floor_not_a_cwd_config(tmp_path: Path, monkeypatch):
+    """M12's own discriminator: a working-directory config declaring a
+    much LOWER floor (1, versus the record's own 10) must not change the
+    answer. With no TTY attached, the two floors give different verdicts
+    on the identical `by`-stratum data (6 units each): the record's floor
+    of 10 finds them thin and refuses; a wrongly-consulted cwd floor of 1
+    would find nothing thin and proceed to write. So this asserts the
+    REFUSAL — proceeding here would mean the cwd config won."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _fixture_n_run(tmp_path)
+    # A config in the CURRENT directory declaring a much lower floor —
+    # `study_add` must never consult it.
+    cwd_config = tmp_path / "cwd_config.yaml"
+    cwd_config.write_text(yaml.safe_dump({"limits": {"min_reported_n": 1}}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(ContractError) as exc_info:
+        study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert exc_info.value.code == "E-STUDY-CONFIRM-REQUIRED"
+    assert not (bundle / "main.run.yaml").exists()
+
+
+def test_study_new_add_report_join_through_main_end_to_end(tmp_path: Path):
+    """Task 14 step 7: the join no other batch owns. Task 10 renders
+    bundles Fixture B hand-builds; tasks 11-14 write bundles nothing
+    renders. This is the one end-to-end arm that closes the loop —
+    `study new`, `study add` twice, `report <study.yaml>`, all through
+    `main`."""
+    bundle = tmp_path / "study"
+    run1 = _real_run(tmp_path, "proj1")
+    run2 = _real_run(tmp_path, "proj2")
+    assert main(["study", "new", str(bundle), "--title", "Title"]) == EXIT_OK
+    assert (
+        main(["study", "add", str(bundle), str(run1["run_dir"] / "run.yaml"), "--as", "main"])
+        == EXIT_OK
+    )
+    assert (
+        main(
+            ["study", "add", str(bundle), str(run2["run_dir"] / "run.yaml"), "--as", "sensitivity"]
+        )
+        == EXIT_OK
+    )
+    assert main(["report", str(bundle / "study.yaml")]) == EXIT_OK

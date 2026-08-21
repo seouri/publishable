@@ -7834,3 +7834,48 @@ in this slice.
 **Cost if wrong/if unclaimed:** a reader of the design doc believes an override can make an
 expensive figure's slowness invisible by ordering it last; at the real command, it cannot — every
 section blocks the first byte of output.
+
+## OPEN — no build path writes a `basis: "repeats"` metric entry, so `study add`'s third prompt branch and five `reference.md` passages describe a shape core never produces — **Owner: unassigned**
+
+Measured 2026-08-21 against `ebf642a`: `grep -n '"basis"'` over `src/publishable/` returns five
+emit sites (`cli.py` ×3, `stats.py` ×2) and every one writes `"basis": "units"`. A step-returned
+scalar reaches `per_repeat` and gets no `aggregated` entry at all when a unit table is present
+(measured on a real run), and a run whose `data.units` is undeclared writes no `aggregated` key
+whatsoever. So the present-tense claim that such a metric "says `basis: repeats`, reports the
+spread, and omits `ci95`" — `reference.md` § The unit table is the inference base, and its four
+sibling passages under § Statistical reporting and the worked-example sections that repeat the
+same sentence — describes a shape this build does not produce anywhere. The shipped warning
+`W-HYPOTHESIS-INFERENCE-BASE` names the identical shape in its own message ("every metric will be
+`basis: repeats`"), so the same gap is asserted twice in the four documents and once in a warning's
+own text, and nowhere in the code that would have to write it.
+
+**H8c task 14 (the `min_reported_n` prompt) meets this directly.** Decision 13's own table names
+`basis: "repeats"` as one of three entry shapes the prompt must recognize, marks it "Producible
+today? No", and rules that the branch ships anyway — built from the document, pinned on a record
+synthesized by hand whose docstring says so, because a prompt whose entire job is catching a
+disclosure nobody else will should not silently under-report the day a producer lands. That
+ruling is implemented (`thin_metric_lines` in `src/publishable/study.py`), and its own docstring
+and the fixture exercising it both say the shape is not producible today — no test in this slice
+claims otherwise.
+
+**Why this is neither H8c's nor H4's to close.** Writing a metric into `results.conditions[].
+aggregated` (or omitting it there in favor of `per_repeat` alone) is `run`'s own work — H8c may
+read a record, never alter what `run` writes into one. And the H4 family, which built every other
+`statistics`/`aggregated` construction this project has, is complete as of H4d
+(`docs/superpowers/plans/2026-08-21-report-study.md`'s own ledger: "H4d ... merged on
+2026-08-19 — the last of the H4 family") — naming it here would point a live gap at a closed
+slice, the exact re-owning failure `CLAUDE.md` records against a prior entry in this same file.
+
+**The check its owner must make before dispositioning this.** Whether `W-HYPOTHESIS-INFERENCE-BASE`'s
+message can be true of any record this build writes — it cannot be, today, since nothing reaches
+the `aggregated` block under the conditions the warning describes. Two readings follow, and this
+entry states the question rather than pre-deciding it: either the documented shape is the intended
+one and `run` owes an emitter that writes `basis: "repeats"` (with its spread and no `ci95`) onto
+`aggregated` for a step-returned scalar under a declared unit table, **or** the design has moved to
+"a step-returned scalar lives in `per_repeat` and nowhere else," in which case `reference.md`'s five
+passages and `W-HYPOTHESIS-INFERENCE-BASE`'s own message owe a rewrite instead.
+
+**Cost if wrong / if unclaimed:** a reader who follows `reference.md`'s present tense into a real
+`run.yaml` and greps for `basis: "repeats"` finds nothing, in the same document family that treats
+an undated build claim as fact; and `study add`'s own third branch stays forever pinned only against
+a hand-built fixture, never against anything `run` produced.
