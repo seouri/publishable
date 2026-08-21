@@ -13,15 +13,23 @@ import inspect
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
+from tests.test_cli import run_a_project
 
 from publishable import BaseReport
 from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
 from publishable.errors import ContractError
 from publishable.lineage import read_record_file
-from publishable.report import Section, render_with_override, report_form
+from publishable.report import (
+    Section,
+    conditions_section,
+    deltas_section,
+    render_with_override,
+    report_form,
+)
 
 
 def test_section_is_frozen_and_carries_title_and_body():
@@ -60,18 +68,28 @@ def test_base_report_section_constructs_one():
     assert section == Section(title="Method agreement", body="markdown text")
 
 
-def test_base_report_sections_is_a_generator_yielding_nothing():
+def test_base_report_sections_is_a_generator_yielding_the_standard_sections_built_so_far():
+    """Task 5 gives the base two of the four standard sections — Conditions,
+    then Deltas — over an empty `run` (an empty record still yields both
+    sections, each with an empty `rows` list, since neither is refused for
+    lack of content). Task 6 appends the remaining two; this test moves with
+    that task rather than staying pinned to "nothing", which stopped being
+    true the moment a standard section existed.
+    """
     report = BaseReport()
     result = report.sections(run={}, io=object())
     assert inspect.isgenerator(result)
-    assert list(result) == []
+    sections = list(result)
+    assert [s.title for s in sections] == ["Conditions", "Deltas"]
+    assert all(s.body == {"rows": []} for s in sections)
 
 
 def test_an_override_composes_with_yield_from_super():
     """The documented composition shape: `yield from super().sections(run,
-    io)` then more. The base yields nothing yet (tasks 5 and 6 fill it), so
-    this pins that an override's own sections still arrive, in the order
-    yielded, alongside whatever the base contributes.
+    io)` then more. The base yields its two built-so-far standard sections
+    ahead of an override's own (task 6 will make it four), so this pins that
+    an override's own sections still arrive, in the order yielded, AFTER
+    whatever the base contributes.
     """
 
     class Report(BaseReport):
@@ -81,7 +99,7 @@ def test_an_override_composes_with_yield_from_super():
             yield self.section("Second", body="b")
 
     titles = [s.title for s in Report().sections(run={}, io=object())]
-    assert titles == ["First", "Second"]
+    assert titles == ["Conditions", "Deltas", "First", "Second"]
 
 
 def test_an_override_omitting_yield_from_yields_none_of_the_standard_sections():
@@ -785,3 +803,333 @@ def test_report_and_diff_would_read_the_same_run_directory_from_a_run_yaml_path(
     assert run_yaml_path.parent == doc["run_dir"]
     record = read_record_file(run_yaml_path)
     assert record["run_id"] == doc["record"]["run_id"]
+
+
+# ---------------------------------------------------------------------------
+# H8c task 5 — Conditions and Deltas, over Fixtures R and D
+# (docs/superpowers/plans/2026-08-21-report-study.md task 5;
+# docs/superpowers/specs/2026-08-21-report-study-design.md Decision 5).
+# Both fixtures are driven through a genuine `main(["run", ...])` — a
+# starter step recording a numeric "score" column and calling `io.skip` on
+# a subset, `statistics.report_by: [cohort]`, one confirmatory hypothesis,
+# and a `summary` step returning two `Estimate`s, one with `n: null` and one
+# with `n: 40` — so every field a section renders is read back from a record
+# core actually wrote, not asserted as a literal.
+# ---------------------------------------------------------------------------
+
+_SCORE_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        shift = {{"pearson": 0.0, "spearman": 1.0}}.get(cfg.parameters.analysis.method, 0.0)
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            if i % 8 == 0:
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            extra = 0.5 if i % 2 == 0 else -0.5
+            io.record(unit.key, {{"score": float(i) + shift + extra}})
+        return {{}}
+"""
+
+_TWO_ESTIMATE_SUMMARY_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{
+            "adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=None,
+                                  method="mixed model, REML"),
+            "power": Estimate(value=0.82, ci95=[0.75, 0.88], n=40,
+                               method="simulation"),
+        }}
+"""
+
+
+def _fixture_r_or_d(
+    tmp_path: Path, *, declare_contrast: bool, capsys: pytest.CaptureFixture[str]
+) -> dict[str, Any]:
+    """Fixture R (`declare_contrast=False`) and Fixture D (`True`, R plus one
+    declared `statistics.contrasts` entry — task 5's own seam: without it,
+    Decision 5's "read both `vs_baseline` and `results.contrasts`" ships
+    unpinned, since R's every delta is already in `vs_baseline`).
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    statistics: dict[str, Any] = {"report_by": ["cohort"]}
+    if declare_contrast:
+        statistics["contrasts"] = [
+            {"id": "spearman_vs_baseline", "of": "method=spearman", "against": "baseline"}
+        ]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(experiment_gen, "STARTER_STEP", _SCORE_STEP)
+        doc = run_a_project(
+            tmp_path,
+            capsys=capsys,
+            units=24,
+            unit_attributes=["cohort"],
+            replication={"repeats": [{"kind": "seed", "n": 3}]},
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+            statistics=statistics,
+            extra_steps=["summarize"],
+            extra_step_source=_TWO_ESTIMATE_SUMMARY_STEP,
+            hypotheses=[
+                {
+                    "id": "h1",
+                    "kind": "confirmatory",
+                    "statement": "spearman's score exceeds pearson's",
+                    "metric": "step01_summarize_units.score",
+                    "compare": {"condition": "method=spearman", "to": "baseline"},
+                    "direction": "greater",
+                    "threshold": 0.0,
+                    "evaluate_on": "observed",
+                }
+            ],
+        )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    doc["run"] = run
+    return doc
+
+
+@pytest.fixture
+def fixture_r(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
+    return _fixture_r_or_d(tmp_path, declare_contrast=False, capsys=capsys)
+
+
+@pytest.fixture
+def fixture_d(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
+    return _fixture_r_or_d(tmp_path, declare_contrast=True, capsys=capsys)
+
+
+def test_fixture_r_is_shaped_the_way_this_task_needs(fixture_r: dict[str, Any]):
+    """A fixture is a claim too: pin the shape task 5's sections depend on
+    before trusting any section built over it — two conditions, a `score`
+    metric, a `by.cohort` stratum, a `vs_baseline` block on the non-baseline
+    condition and none on the baseline, and no top-level `results.contrasts`
+    (R declares no contrast; that is what Fixture D adds)."""
+    run = fixture_r["run"]
+    conditions = run["results"]["conditions"]
+    assert len(conditions) == 2
+    baseline = next(c for c in conditions if c["is_baseline"])
+    other = next(c for c in conditions if not c["is_baseline"])
+    assert "vs_baseline" not in baseline
+    assert "vs_baseline" in other
+    assert "score" in baseline["aggregated"]["step01_summarize_units"]
+    assert "by" in baseline["aggregated"]["step01_summarize_units"]
+    assert "cohort" in baseline["aggregated"]["step01_summarize_units"]["by"]
+    assert "results" in run and "contrasts" not in run["results"]
+    assert run["results"]["hypotheses"][0]["id"] == "h1"
+
+
+def test_fixture_d_declares_one_contrast_beside_r_s_own_shape(fixture_d: dict[str, Any]):
+    run = fixture_d["run"]
+    assert len(run["results"]["contrasts"]) == 1
+    assert run["results"]["contrasts"][0]["id"] == "spearman_vs_baseline"
+
+
+# --- Conditions ---------------------------------------------------------
+
+
+def test_conditions_section_title(fixture_r: dict[str, Any]):
+    section = conditions_section(fixture_r["run"])
+    assert section.title == "Conditions"
+
+
+def test_conditions_section_carries_identity_for_every_condition(fixture_r: dict[str, Any]):
+    run = fixture_r["run"]
+    section = conditions_section(run)
+    rows = section.body["rows"]
+    seen = {(r["condition_index"], r["condition_label"], r["is_baseline"]) for r in rows}
+    expected = {(c["index"], c["label"], c["is_baseline"]) for c in run["results"]["conditions"]}
+    assert seen == expected
+    for row in rows:
+        condition = next(
+            c for c in run["results"]["conditions"] if c["index"] == row["condition_index"]
+        )
+        assert row["values"] == condition["values"]
+
+
+def test_conditions_section_metric_names_exclude_by_and_match_the_record_exactly(
+    fixture_r: dict[str, Any],
+):
+    """M13's discriminating assertion: the rendered metric set is EXACTLY
+    the record's real metric names — `by` excluded not because a literal
+    string is filtered out downstream, but because `stats.RESERVED_METRIC_
+    NAMES` never let it become a row's `metric` in the first place. Fixture
+    R declares `report_by: [cohort]`, so `aggregated[step01_summarize_
+    units]` genuinely holds a `by` key beside `score` — the arm this
+    fixture exists to give the exclusion something to bite on."""
+    run = fixture_r["run"]
+    rows = section_rows_for_step(run, "step01_summarize_units")
+    metrics = {r["metric"] for r in rows if r["by_attribute"] is None}
+    assert metrics == {"score"}
+    assert "by" not in metrics
+
+
+def section_rows_for_step(run: dict[str, Any], step: str) -> list[dict[str, Any]]:
+    return [r for r in conditions_section(run).body["rows"] if r["step"] == step]
+
+
+def test_conditions_section_top_level_metric_carries_the_named_fields(fixture_r: dict[str, Any]):
+    run = fixture_r["run"]
+    baseline = next(c for c in run["results"]["conditions"] if c["is_baseline"])
+    real_entry = baseline["aggregated"]["step01_summarize_units"]["score"]
+    row = next(
+        r
+        for r in section_rows_for_step(run, "step01_summarize_units")
+        if r["condition_index"] == baseline["index"] and r["by_attribute"] is None
+    )
+    for field in ("value", "ci95", "method", "n", "basis", "correction", "repeat_spread"):
+        assert field in real_entry, f"fixture no longer carries {field!r} — re-derive the fixture"
+        assert row[field] == real_entry[field]
+
+
+def test_conditions_by_stratum_carries_no_repeat_spread_and_the_renderer_does_not_require_one(
+    fixture_r: dict[str, Any],
+):
+    """Measured: a `by` stratum entry carries NO `repeat_spread` at all —
+    the renderer must not require one, so this reads a real stratum entry
+    and asserts the row simply omits the key rather than setting it to
+    `None`."""
+    run = fixture_r["run"]
+    baseline = next(c for c in run["results"]["conditions"] if c["is_baseline"])
+    by = baseline["aggregated"]["step01_summarize_units"]["by"]
+    attribute, levels = next(iter(by.items()))
+    level, level_metrics = next(iter(levels.items()))
+    real_entry = level_metrics["score"]
+    assert "repeat_spread" not in real_entry
+    row = next(
+        r
+        for r in section_rows_for_step(run, "step01_summarize_units")
+        if r["by_attribute"] == attribute and r["by_level"] == level
+    )
+    assert "repeat_spread" not in row
+    for field in ("value", "ci95", "method", "n", "basis", "correction"):
+        assert row[field] == real_entry[field]
+
+
+# --- Deltas --------------------------------------------------------------
+
+
+def test_deltas_section_title(fixture_r: dict[str, Any]):
+    assert deltas_section(fixture_r["run"]).title == "Deltas"
+
+
+def test_deltas_section_reads_vs_baseline(fixture_r: dict[str, Any]):
+    run = fixture_r["run"]
+    other = next(c for c in run["results"]["conditions"] if not c["is_baseline"])
+    real_entry = other["vs_baseline"]["step01_summarize_units"]["score"]
+    rows = deltas_section(run).body["rows"]
+    row = next(r for r in rows if r["comparison"] is None and r["step"] == "step01_summarize_units")
+    for field in (
+        "delta",
+        "method",
+        "paired",
+        "ci95",
+        "ci95_corrected",
+        "correction",
+        "correction_level",
+    ):
+        assert row[field] == real_entry[field]
+    # `n_paired` is ABSENT rather than `null` when the entry itself omits it
+    # — key presence decides what prints, never a `None` test.
+    assert ("n_paired" in row) == ("n_paired" in real_entry)
+
+
+def test_deltas_section_reads_results_contrasts_too(fixture_d: dict[str, Any]):
+    """Decision 5's own correction: § The two files' `run.yaml` example
+    shows only `vs_baseline`, and reading only it is the bug. Fixture D
+    declares one `statistics.contrasts` entry, and this asserts the
+    rendered rows carry it by its declared `id` — the seam M4 exists to
+    cut."""
+    run = fixture_d["run"]
+    contrast = run["results"]["contrasts"][0]
+    rows = deltas_section(run).body["rows"]
+    declared_rows = [r for r in rows if r["comparison"] == "spearman_vs_baseline"]
+    assert declared_rows, "the declared contrast never reached the Deltas section"
+    real_entry = contrast["step01_summarize_units"]["score"]
+    row = next(r for r in declared_rows if r["step"] == "step01_summarize_units")
+    assert row["of"] == contrast["of"]
+    assert row["against"] == contrast["against"]
+    assert row["delta"] == real_entry["delta"]
+
+
+def test_deltas_section_family_is_read_as_a_mapping_and_travels_with_each_row(
+    fixture_r: dict[str, Any],
+):
+    run = fixture_r["run"]
+    rows = deltas_section(run).body["rows"]
+    row = next(r for r in rows if r["step"] == "step01_summarize_units")
+    other = next(c for c in run["results"]["conditions"] if not c["is_baseline"])
+    real_entry = other["vs_baseline"]["step01_summarize_units"]["score"]
+    assert "family_size" in real_entry and "family" in real_entry
+    assert row["family_size"] == real_entry["family_size"]
+    assert row["family"] == real_entry["family"]
+    assert isinstance(row["family"], dict)
+
+
+def test_hypothesis_family_shape_differs_and_is_not_hardcoded_by_this_module(
+    fixture_r: dict[str, Any],
+):
+    """§ Corrections correction 9: a hypothesis family's `family` is
+    `{hypotheses: N}`, a different shape from a comparison family's
+    `{comparisons, metrics}`. This module reads `family` generically
+    (never by two literal keys) — pinned here against the record's OWN
+    hypothesis family, which task 6's Hypothesis-verdicts section reads
+    through the identical `_present_fields` helper.
+    """
+    run = fixture_r["run"]
+    verdict = run["results"]["hypotheses"][0]
+    assert "family" in verdict
+    assert set(verdict["family"]) == {"hypotheses"}
+
+
+# --- Mutations (run, then reverted; see task-b4 report for text/outcome) ---
+# M4, M13, the repeat_spread mutation, and M14's render-level arm are
+# exercised by hand against this module and reverted — see the task report
+# for each one's exact text and PASS/FAIL outcome. The tests above are what
+# each one is caught by.
+
+
+def test_m14_an_override_mutating_a_standard_sections_mapping_body_in_place_reaches_the_page(
+    fixture_r: dict[str, Any],
+):
+    """The carry from task 1: Decision 2 says an override "cannot obtain a
+    figure core did not already compute" — it says nothing about a mapping
+    `body`'s contents being protected from in-place mutation, and `Section`
+    being frozen (task 1) guarantees only that `title`/`body` cannot be
+    REBOUND. This is the render-level arm task 1 could not write because no
+    standard section with a mapping body existed yet: reach into the
+    Conditions section's `body["rows"]` and mutate a value in place, then
+    confirm what a reader ultimately sees (the row dict, read back after the
+    override's `sections` has run) is the mutated figure, not the record's.
+    """
+    run = fixture_r["run"]
+
+    class MutatingReport(BaseReport):
+        def sections(self, run, io):
+            for section in super().sections(run, io):
+                if section.title == "Conditions":
+                    section.body["rows"][0]["value"] = "MUTATED-BY-OVERRIDE"
+                yield section
+
+    sections = list(MutatingReport().sections(run, io=object()))
+    conditions = next(s for s in sections if s.title == "Conditions")
+    assert conditions.body["rows"][0]["value"] == "MUTATED-BY-OVERRIDE"
+    # And the frozen guarantee itself still holds: the override cannot
+    # rebind `body` to a different mapping entirely, only mutate the one
+    # object core handed it.
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        conditions.body = {"rows": []}  # type: ignore[misc]

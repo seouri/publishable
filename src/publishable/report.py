@@ -15,8 +15,115 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from publishable.errors import ContractError
+from publishable.stats import RESERVED_METRIC_NAMES
 
 T = TypeVar("T")
+
+# Decision 5's Conditions row, widened by § Corrections correction 8:
+# `basis`, `correction` and `repeat_spread` are in the record and not in the
+# design's own list — `repeat_spread` is `CLAUDE.md`'s designated home of
+# repeat dispersion, so a Conditions section that dropped it would drop the
+# only place a reader sees it. A `by` stratum entry carries no `repeat_spread`
+# (measured), which is why this is read with `if field in entry` rather than
+# a subscript that would raise `KeyError` on that entry.
+_CONDITION_METRIC_FIELDS = ("value", "ci95", "method", "n", "basis", "correction", "repeat_spread")
+
+# Decision 5's Deltas row, task 5 step 3: the fixed fields every `vs_baseline`
+# or `results.contrasts` entry carries.
+_DELTA_FIXED_FIELDS = (
+    "delta",
+    "method",
+    "paired",
+    "ci95",
+    "ci95_corrected",
+    "correction",
+    "correction_level",
+)
+# Whichever of these an entry carries — never all of them, and `n_paired` is
+# ABSENT rather than `null` on an unpaired entry (H4c's conditional write,
+# `0` already meaning "pairing failed"), so key PRESENCE decides what prints,
+# never a `None` test. `family_size`/`family` are in the record and not in
+# Decision 5's own list (§ Corrections correction 9) — `family` is read
+# generically as whatever mapping it holds, never by two literal keys,
+# because a *hypothesis* family's shape (`{hypotheses: N}`) differs from a
+# comparison family's (`{comparisons, metrics}`).
+_DELTA_OPTIONAL_FIELDS = (
+    "n_paired",
+    "n_of",
+    "n_against",
+    "n_paired_clusters",
+    "n_paired_effective",
+    "weighted_by",
+    "cohens_d",
+    "cohens_ds",
+    "p_value",
+    "p_value_corrected",
+    "family_size",
+    "family",
+)
+
+
+def _present_fields(entry: Mapping[str, Any], names: "tuple[str, ...]") -> dict[str, Any]:
+    """The named fields an entry actually carries, in the given order —
+    never a subscript, since some fields are legitimately absent on some
+    entries (a `by` stratum's `repeat_spread`, an unpaired delta's
+    `n_paired`) and a `KeyError` there would be this module's own fail-open
+    by a different route."""
+    return {name: entry[name] for name in names if name in entry}
+
+
+def _condition_metric_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """One row per metric in one condition's `aggregated` block, plus one row
+    per `by[attribute][level]` stratum metric when `statistics.report_by` was
+    declared. `by` is a SIBLING of the metric names in `aggregated[step]`,
+    never a metric itself — excluded via `stats.RESERVED_METRIC_NAMES`,
+    never a literal `"by"` (Decision 5), so a second reserved name minted
+    elsewhere is excluded here too without an edit.
+    """
+    rows: list[dict[str, Any]] = []
+    identity = {
+        "condition_index": condition.get("index"),
+        "condition_label": condition.get("label"),
+        "values": condition.get("values"),
+        "is_baseline": condition.get("is_baseline"),
+    }
+    aggregated = condition.get("aggregated")
+    if not isinstance(aggregated, Mapping):
+        return rows
+    for step, block in aggregated.items():
+        if not isinstance(block, Mapping):
+            continue
+        for metric, entry in block.items():
+            if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
+                continue
+            row = dict(identity)
+            row.update({"step": step, "metric": metric, "by_attribute": None, "by_level": None})
+            row.update(_present_fields(entry, _CONDITION_METRIC_FIELDS))
+            rows.append(row)
+        by = block.get("by")
+        if not isinstance(by, Mapping):
+            continue
+        for attribute, levels in by.items():
+            if not isinstance(levels, Mapping):
+                continue
+            for level, level_metrics in levels.items():
+                if not isinstance(level_metrics, Mapping):
+                    continue
+                for metric, entry in level_metrics.items():
+                    if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
+                        continue
+                    row = dict(identity)
+                    row.update(
+                        {
+                            "step": step,
+                            "metric": metric,
+                            "by_attribute": attribute,
+                            "by_level": level,
+                        }
+                    )
+                    row.update(_present_fields(entry, _CONDITION_METRIC_FIELDS))
+                    rows.append(row)
+    return rows
 
 
 @dataclass(frozen=True)
@@ -37,6 +144,99 @@ class Section:
 
     title: str
     body: "str | Mapping[str, Any]"
+
+
+def conditions_section(run: Mapping[str, Any]) -> Section:
+    """§ The four standard sections #1: `results.conditions[]` — identity,
+    then every metric `aggregated[step]` carries, then its `by` strata when
+    declared. A pure function of `run.yaml` alone — no standard section ever
+    opens a file under the run directory (Decision 5)."""
+    rows: list[dict[str, Any]] = []
+    conditions = ((run.get("results") or {}).get("conditions")) or []
+    for condition in conditions:
+        if isinstance(condition, Mapping):
+            rows.extend(_condition_metric_rows(condition))
+    return Section(title="Conditions", body={"rows": rows})
+
+
+def _delta_entry_row(
+    *,
+    comparison: "str | None",
+    of: "str | None",
+    against: "str | None",
+    step: str,
+    metric: str,
+    entry: Mapping[str, Any],
+) -> dict[str, Any]:
+    row = {"comparison": comparison, "of": of, "against": against, "step": step, "metric": metric}
+    row.update(_present_fields(entry, _DELTA_FIXED_FIELDS))
+    row.update(_present_fields(entry, _DELTA_OPTIONAL_FIELDS))
+    return row
+
+
+def _vs_baseline_rows(condition: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    vs_baseline = condition.get("vs_baseline")
+    if not isinstance(vs_baseline, Mapping):
+        return rows
+    for step, block in vs_baseline.items():
+        if not isinstance(block, Mapping):
+            continue
+        for metric, entry in block.items():
+            if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
+                continue
+            rows.append(
+                _delta_entry_row(
+                    comparison=None,
+                    of=condition.get("label"),
+                    against="baseline",
+                    step=step,
+                    metric=metric,
+                    entry=entry,
+                )
+            )
+    return rows
+
+
+def _declared_contrast_rows(contrast: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    comparison = contrast.get("id")
+    of = contrast.get("of")
+    against = contrast.get("against")
+    for step, block in contrast.items():
+        if step in ("id", "of", "against") or not isinstance(block, Mapping):
+            continue
+        for metric, entry in block.items():
+            if metric in RESERVED_METRIC_NAMES or not isinstance(entry, Mapping):
+                continue
+            rows.append(
+                _delta_entry_row(
+                    comparison=comparison,
+                    of=of,
+                    against=against,
+                    step=step,
+                    metric=metric,
+                    entry=entry,
+                )
+            )
+    return rows
+
+
+def deltas_section(run: Mapping[str, Any]) -> Section:
+    """§ The four standard sections #2: every condition's `vs_baseline` AS
+    WELL AS top-level `results.contrasts` (Decision 5's own correction to
+    § The two files' `run.yaml` example, which shows only `vs_baseline` and
+    is the reading that produces the bug of silently omitting every
+    declared contrast — this is the seam Fixture D exists for)."""
+    rows: list[dict[str, Any]] = []
+    results = run.get("results") or {}
+    for condition in results.get("conditions") or []:
+        if isinstance(condition, Mapping):
+            rows.extend(_vs_baseline_rows(condition))
+    for contrast in results.get("contrasts") or []:
+        if isinstance(contrast, Mapping):
+            rows.extend(_declared_contrast_rows(contrast))
+    return Section(title="Deltas", body={"rows": rows})
 
 
 class BaseReport:
@@ -65,11 +265,17 @@ class BaseReport:
         section first and an expensive figure last prints the cheap one
         first.
 
-        The base implementation yields nothing: the four standard sections
-        this composes with `yield from super().sections(run, io)` are built
-        elsewhere, over `run` and `io`, once the sections themselves exist.
+        Yields two of the four standard sections so far — Conditions, then
+        Deltas — in Decision 5's order; task 6 appends Hypothesis verdicts
+        and Attrition after them. Every standard section is a pure function
+        of `run` alone: `io` is accepted (an override's own `sections`
+        passes it straight through to `yield from super().sections(run,
+        io)`) but no standard section reads it, because Decision 5 rules
+        that none of the four ever opens a file under the run directory —
+        that is `ReportIO.read_condition`'s surface, for an override.
         """
-        yield from ()
+        yield conditions_section(run)
+        yield deltas_section(run)
 
 
 def report_form(path: Path) -> str:
