@@ -133,7 +133,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "run"}
+OPERATION_COMMANDS = {"validate", "run", "freeze"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -149,7 +149,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "docs": "Operation commands",
     "draft": "Draft runs",
     "dry-run": "Operation commands",
-    "freeze": "Operation commands",
     "list-templates": "Operation commands",
     "report": "Operation commands",
     "reproduce": "Reproducing on another device",
@@ -3729,8 +3728,21 @@ def _dispatch(command: str, rest: list[str]) -> int:
         if len(rest) != 1 or rest[0].startswith("-"):
             print(f"`{command}` takes exactly one path and no flags", file=sys.stderr)
             return EXIT_INVOCATION
-        path = Path(rest[0])
-        return command_validate(path) if command == "validate" else command_run(path)
+        # `freeze` joins the existing one-path arm rather than getting a
+        # second enforcer of the same rule (`_nest_repeat`'s own docstring
+        # argues against two enforcers of one rule). A function-local import:
+        # `freeze.py` imports `cli.declared_credential_names` at module
+        # scope, so `cli.py` importing `freeze` there too would close a
+        # cycle — this is the escape hatch, and it costs nothing since
+        # `_dispatch` is called once per invocation, not once per import.
+        from publishable.freeze import command_freeze
+
+        handlers: dict[str, Callable[[Path], int]] = {
+            "validate": command_validate,
+            "run": command_run,
+            "freeze": command_freeze,
+        }
+        return handlers[command](Path(rest[0]))
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION

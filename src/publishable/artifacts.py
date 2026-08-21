@@ -267,12 +267,11 @@ def build_allocation_document(
     "read rather than re-drawn" on resume — a fact about which units landed
     in which arm should not be re-computable to a different answer just
     because the run is being continued. **That rule has no reader in this
-    build**: `OPERATION_COMMANDS = {"validate", "run"}` in `cli.py`, there is
-    no `resume` command yet, so nothing here calls this function a second
-    time against an existing `allocation.json`. This paragraph is the
-    contract a future `resume` must honour — read the existing file rather
-    than calling `build_allocation_document` again — not a description of
-    behavior this build has or tests.
+    build**: `cli.py` has no `resume` command yet, so nothing here calls
+    this function a second time against an existing `allocation.json`. This
+    paragraph is the contract a future `resume` must honour — read the
+    existing file rather than calling `build_allocation_document` again —
+    not a description of behavior this build has or tests.
 
     **That gap stopped being harmless when the draw was built.** While
     `by_attribute` was the only method that executed, a `resume` that

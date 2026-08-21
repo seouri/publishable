@@ -681,6 +681,7 @@ class Observer:
         cfgs: Mapping[int, Any],
         run_dir: Path,
         credentials: Mapping[str, str],
+        observations: "Observations | None" = None,
     ) -> None:
         self.probe_name = probe_name
         self.probe = probe
@@ -689,7 +690,18 @@ class Observer:
         self.cfgs = cfgs
         self.run_dir = run_dir
         self.credentials = credentials
-        self.observations = Observations()
+        # H8b task 6: `freeze` is the first caller that must NOT start from
+        # an empty accumulator — it needs the run's own baseline
+        # (`replay_ledger`'s result) so an incoming fact is compared against
+        # what the RUN first answered, never against itself. Every shipped
+        # caller (`command_run`'s run-start and per-execution rounds) omits
+        # this and gets a fresh `Observations`, exactly as before — this
+        # keyword adds one parameter and one `or Observations()`, on
+        # `execute_plan`'s own defaulted-keyword precedent
+        # (`observer=`/`stop=`), rather than assigning
+        # `observer.observations = ...` from outside the class after
+        # construction.
+        self.observations = observations if observations is not None else Observations()
 
     def observe_round(self, *, phase: str, condition_index: int | None) -> None:
         """The phase-independent entry point every caller uses (Decision 2,

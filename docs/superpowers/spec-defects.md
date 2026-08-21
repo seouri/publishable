@@ -7530,3 +7530,53 @@ which is already canonical under pytest, so no shipped test is affected either w
 against the function itself, for the next caller that does not route through `find_repo_root`.
 
 **Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
+
+## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: unassigned**
+
+`src/publishable/templates/discovery.py`'s `_import_file` builds its spec through
+`importlib.util.spec_from_file_location`, which hands back an ordinary `SourceFileLoader` — the
+loader that consults `__pycache__/<stem>.<tag>.pyc` and treats a cached entry as valid whenever the
+source file's `(mtime, size)` matches what the `.pyc` recorded. `mtime` on the filesystems this was
+measured against (macOS APFS, a Linux tmpfs) carries whole-second resolution, so two writes to the
+same `templates/*.py` path inside one process, one second apart or less, can leave the SECOND
+import serving the FIRST write's compiled bytecode — silently, with no exception and no diagnostic.
+
+**Verified by running**, 2026-08-20, against a `_claims(root)` call pair with no test harness
+involved: write a template file declaring `apparatus_probe = "f_probe"`, resolve it, overwrite the
+same path with a template declaring `apparatus_probe = "g_probe"`, resolve again — the second
+resolution answers `"f_probe"`, the FIRST file's value. Inserting a `time.sleep(1.2)` between the
+two writes makes the second resolution answer correctly (`"g_probe"`); inserting an unrelated
+`print()` call between them was independently observed to change the outcome too, which is exactly
+the shape a caller would misdiagnose as flakiness rather than a caching defect, since nothing about
+the *code being tested* changed — only how much wall-clock time elapsed around it.
+
+**Why this is `freeze`'s problem too, not only `discover_local`'s.** H8b's `freeze` resolves the
+run's template `_claims(repo_root)` fresh at invocation, exactly so an edit to `templates/**` made
+while a run executes is seen — `E-FREEZE-PROBE-MISMATCH`'s whole premise is that `freeze` re-reads
+the tree rather than trusting what the run captured. A `templates/*.py` edited and a `freeze`
+invoked inside the same wall-clock second as an EARLIER resolution in the same process (another
+`freeze`, or a `validate`/`run` that resolved the same repo moments before) can silently see the
+stale file. This is unlikely to matter for two separate CLI invocations, each its own process with
+a cold `sys.modules`/no relevant in-memory state — but it is real within one long-lived process
+(a test suite, a notebook, a future daemon wrapping `freeze`) and was reproduced with no test
+harness at all, so it is a property of `_import_file`, not an artifact of how a test happened to
+call it.
+
+**Not a batch defect.** H8b's own tests avoid it by writing a template's edited content under a
+NEW filename rather than overwriting the path a prior resolution already read in the same process
+— worked around, not fixed, and noted at each call site in `tests/test_freeze.py`. No shipped
+test in this repo overwrites a `templates/*.py` path and re-resolves within the same process, so
+nothing already green depends on the stale answer.
+
+**The check its owner must make.** Either (a) pass `check=False` is not an option — the cache
+still gets consulted — so the fix is more likely `importlib.util.spec_from_file_location(...,
+loader=importlib.machinery.SourceFileLoader(module_name, str(path)))`, forcing recompilation, or a
+belt-and-suspenders `sys.dont_write_bytecode = True` scoped around the import (module-global,
+audited for side effects on concurrent imports elsewhere in the process); or (b) document that
+`discover_local` is resolved fresh per **process**, never guaranteed fresh per **call**, which
+would make `freeze`'s own "resolves the template NOW" claim (`reference.md` § Operation commands)
+imprecise and in need of its own correction.
+
+**Found by:** H8b task 4/6, while building a fixture for `E-FREEZE-PROBE-MISMATCH` (`tests/
+test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
+resolved the pre-edit class.

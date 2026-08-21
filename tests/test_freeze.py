@@ -9,6 +9,7 @@ distribution registering a probe, a project-local template declaring
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 from tests.test_cli import run_a_project
 
@@ -507,3 +508,388 @@ def test_ready_carries_cfgs_keyed_by_condition_index(installed, registries, tmp_
             result.cfgs[condition.index].parameters.instrument.model
             == (condition.values["instrument.model"])
         )
+
+
+# --- Task 6: the probe round, its verdicts, exit codes, and the CLI arm ----
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    """`{relative path: bytes}` over every file under `root`, excluding
+    `apparatus/probes.jsonl` — the one thing `freeze` is allowed to change.
+    Naming that exclusion explicitly is what makes the rest of the
+    comparison mean something (Fixture F1's own requirement)."""
+    out: dict[str, bytes] = {}
+    for path in root.rglob("*"):
+        if path.is_file():
+            rel = path.relative_to(root).as_posix()
+            if rel == "apparatus/probes.jsonl":
+                continue
+            out[rel] = path.read_bytes()
+    return out
+
+
+_MOVING_PROBE_TEMPLATE = """\
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+ANSWER_FILE = {answer_file!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    return Apparatus(facts={{"model_revision": Path(ANSWER_FILE).read_text().strip()}})
+"""
+
+
+def _fixture_p_moving(installed, tmp_path, capsys, answer_file: Path, **overrides):
+    """Fixture P's shape with a probe whose answer comes from a file the
+    test writes, so a fact can be moved between the run and a later
+    `freeze` — the design's own Fixture P/F2 shape."""
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    (site / f"{mod}.py").write_text(_MOVING_PROBE_TEMPLATE.format(answer_file=str(answer_file)))
+    overrides.setdefault("experiment_type", "f_assay")
+    overrides.setdefault("parameters", {"instrument": {"model": "m1"}})
+    overrides.setdefault("sweep", {})
+    overrides.setdefault("_local_template", _F_TEMPLATE)
+    return run_a_project(tmp_path, capsys=capsys, **overrides)
+
+
+def test_f1_freeze_end_to_end_on_a_constructed_mid_run_directory(
+    installed, registries, tmp_path, capsys
+):
+    from publishable.diagnostics import EXIT_OK
+    from publishable.freeze import command_freeze
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before_lines = _ledger_lines(run_dir)
+    before_snapshot = _snapshot(run_dir)
+    n_conditions = 2
+
+    code = command_freeze(run_dir)
+    assert code == EXIT_OK
+
+    after_lines = _ledger_lines(run_dir)
+    assert len(after_lines) == len(before_lines) + n_conditions
+    new_lines = after_lines[len(before_lines) :]
+    assert all(line["phase"] == "freeze" for line in new_lines)
+    assert not (run_dir / "run.yaml").exists()
+
+    # Byte-identical over everything else, `lock` included — the assertion
+    # that catches a `freeze` taking or clearing the lock (M10).
+    after_snapshot = _snapshot(run_dir)
+    assert after_snapshot == before_snapshot
+
+
+def test_f2_freeze_sees_a_moved_fact(installed, registries, tmp_path, capsys):
+    from publishable.diagnostics import EXIT_WRONG
+    from publishable.freeze import command_freeze
+
+    answer_file = tmp_path / "answer.txt"
+    answer_file.write_text("rev1")
+    doc = _fixture_p_moving(installed, tmp_path, capsys, answer_file)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before_lines = _ledger_lines(run_dir)
+
+    answer_file.write_text("rev2")
+    code = command_freeze(run_dir)
+    assert code == EXIT_WRONG
+
+    after_lines = _ledger_lines(run_dir)
+    # The ledger holds the moving observation — appended before the gate
+    # fires, per H7d Part A's ruling, so the stop is legible from the
+    # artifacts.
+    assert len(after_lines) == len(before_lines) + 1
+    moved = after_lines[-1]
+    assert moved["phase"] == "freeze"
+    assert moved["facts"]["model_revision"] == "rev2"
+
+
+def test_f5_arm_one_a_probe_raising_with_a_credential_is_redacted_end_to_end(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture F5's first arm, completed end to end through `command_freeze`
+    now that the probe round exists: the credential's absence from stderr
+    AND `E-APPARATUS-RAISED`'s presence at exit `EXIT_EXTERNAL` — the pair,
+    since asserting only the absence passes identically if nothing ran."""
+    from publishable.diagnostics import EXIT_EXTERNAL
+    from publishable.freeze import command_freeze
+
+    # The probe must succeed during the run (so the run itself completes)
+    # and only raise once `freeze` calls it — a `TRIGGER_FILE` whose
+    # presence flips the behaviour, checked at call time on the SAME module
+    # object rather than by rewriting the file on disk (which `load_
+    # entry_point`'s ordinary `importlib` caching would not re-import).
+    trigger_file = tmp_path / "trigger"
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    site_and_probe = f"""\
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+TRIGGER_FILE = {str(trigger_file)!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    if Path(TRIGGER_FILE).exists():
+        token = os.environ["F_CRED_TOKEN"]
+        raise RuntimeError(f"could not reach the instrument, token was {{token}}")
+    return Apparatus(facts={{"model_revision": cfg.parameters.instrument.model}})
+"""
+    (site / f"{mod}.py").write_text(site_and_probe)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="f_cred_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={},
+        _local_template=_F_CRED_TEMPLATE,
+        _env_file="F_CRED_TOKEN=shh\n",
+    )
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before_lines = _ledger_lines(run_dir)
+    trigger_file.write_text("go")
+
+    code = command_freeze(run_dir)
+    output = capsys.readouterr().err
+    assert code == EXIT_EXTERNAL
+    assert "shh" not in output
+    assert "E-APPARATUS-RAISED" in output
+    # No line for the raising probe call — `observe_once` raises before
+    # `append_observation` ever runs for that condition.
+    assert _ledger_lines(run_dir) == before_lines
+
+
+def test_m8_two_exit_codes_through_main_before_and_after_admitting_freeze_lines(
+    installed, registries, tmp_path, capsys, monkeypatch
+):
+    """Task 1's own M8, completed at the command level: a fact that is
+    `null` everywhere in the run, then answered at the first `freeze`, then
+    answered DIFFERENTLY at a second `freeze` — two `0`s under the shipped
+    filter, and exit `1` for the second once `phase == "freeze"` lines are
+    (wrongly) admitted to the baseline."""
+    from publishable.cli import main
+
+    answer_file = tmp_path / "answer.txt"
+    answer_file.write_text("")  # empty -> stripped to "" -> falsy, not null though
+
+    # A probe returning `None` when the file is empty, a real value otherwise.
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    probe_src = f"""\
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+ANSWER_FILE = {str(answer_file)!r}
+
+
+@register_probe("f_probe")
+def probe(cfg):
+    text = Path(ANSWER_FILE).read_text().strip()
+    return Apparatus(facts={{"model_revision": text or None}})
+"""
+    (site / f"{mod}.py").write_text(probe_src)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="f_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={},
+        _local_template=_F_TEMPLATE,
+    )
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+
+    answer_file.write_text("rev1")
+    assert main(["freeze", str(run_dir)]) == 0
+
+    answer_file.write_text("rev2")
+    # Under the SHIPPED filter, `replay_ledger` excludes `phase == "freeze"`
+    # lines, so this second call's baseline is still all-null — "rev2" is
+    # answered for the first time within this round, exactly as "rev1" was
+    # in the first, and both exit 0. M8 (admitting `freeze` lines to the
+    # baseline) is what makes the second one 1 — run manually, reported
+    # rather than persisted as a second mutant of this same fixture.
+    assert main(["freeze", str(run_dir)]) == 0
+
+    lines = _ledger_lines(run_dir)
+    freeze_facts = [line["facts"]["model_revision"] for line in lines if line["phase"] == "freeze"]
+    assert freeze_facts == ["rev1", "rev2"]
+
+
+def test_m11_command_freeze_refuses_a_run_that_has_ended(installed, registries, tmp_path, capsys):
+    """M11's own discriminator at the `command_freeze` level (task 6 step
+    13): `run.yaml` present must refuse with NO new ledger line — the
+    discriminating half, since a code assertion alone would pass a build
+    that reported the code after appending."""
+    from publishable.freeze import command_freeze
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    assert (run_dir / "run.yaml").exists()
+    before_lines = _ledger_lines(run_dir)
+    code = command_freeze(run_dir)
+    assert code == EXIT_WRONG
+    assert _ledger_lines(run_dir) == before_lines
+
+
+def test_f3_freeze_against_a_genuinely_held_lock_in_a_second_process(
+    installed, registries, tmp_path, capsys
+):
+    """The one H8b surface that needs concurrency, and the only test given
+    a handshake: a run blocks INSIDE A STEP (not inside the probe — by then
+    every run-start line has already landed, so `freeze` has a real
+    baseline to compare against, which is the actual situation the command
+    exists for) while the parent process calls `freeze` against the same,
+    genuinely locked directory. `freeze` must exit 0 and append its lines
+    despite the live lock — proving a lock is not what stops it.
+
+    The synthetic probe distribution `installed` writes is on THIS
+    process's `sys.path` only (`monkeypatch.syspath_prepend`), so the
+    child process that runs the project needs the same site directory on
+    its own `PYTHONPATH` to resolve the plugin — passed through `env=`
+    rather than relying on inheritance, since the two must resolve to the
+    identical registration for `freeze`'s own in-process `_probe_for` call
+    to see the same probe the child ran with.
+    """
+    import os
+    import subprocess
+    import sys
+    import time
+
+    sentinel = tmp_path / "sentinel"
+    release = tmp_path / "release"
+    step_source = f"""\
+# src/{{pkg}}/steps/step01_load_cohort.py — generated, blocks for the handshake
+import time
+from pathlib import Path
+
+from publishable import BaseStep
+
+SENTINEL = {str(sentinel)!r}
+RELEASE = {str(release)!r}
+
+
+class Step(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        Path(SENTINEL).write_text("here")
+        deadline = time.monotonic() + 20
+        while not Path(RELEASE).exists():
+            if time.monotonic() > deadline:
+                raise TimeoutError("F3's release file never appeared")
+            time.sleep(0.05)
+        return {{{{}}}}
+"""
+    global _fixture_p_counter
+    _fixture_p_counter += 1
+    mod = f"f9_probe_mod_{_fixture_p_counter}"
+    dist = f"dist-f9-{_fixture_p_counter}"
+    site = installed(dist, "1.0", {"publishable.probes": {"f_probe": f"{mod}:probe"}})
+    (site / f"{mod}.py").write_text(_F_PROBE_MODULE)
+
+    # Scaffolded WITHOUT running: `run_a_project` calls `main(["run", ...])`
+    # synchronously in THIS process, which would block on `sentinel` right
+    # here with nothing to release it. The scaffold below is the same
+    # sequence `run_a_project` runs up to (and excluding) that call.
+    import subprocess as _sp
+
+    import yaml as _yaml
+
+    from publishable.cli import main as _main
+    from publishable.generators.experiment import generate_experiment as _generate_experiment
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text(
+        "patient_id,cohort,arm\n" + "\n".join(f"p{i},a,x" for i in range(1, 11)) + "\n"
+    )
+    assert _main(["new", str(root)]) == 0
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "cred_assay.py").write_text(_F_TEMPLATE)
+    with pytest.MonkeyPatch.context() as mp:
+        import publishable.generators.experiment as _experiment_gen
+
+        mp.setattr(_experiment_gen, "STARTER_STEP", step_source)
+        cfg = _generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(results_dir),
+        )
+        cfg_doc = _yaml.safe_load(cfg.read_text())
+        cfg_doc["metadata"]["description"] = "F3's blocking helper run"
+        cfg_doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+        cfg_doc["experiment_type"] = "f_assay"
+        cfg_doc["parameters"] = {"instrument": {"model": "m1"}}
+        cfg_doc["sweep"] = {"grid": {"instrument.model": ["m1", "m2"]}}
+        cfg.write_text(_yaml.safe_dump(cfg_doc))
+        for args in (
+            ["add", "."],
+            ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        ):
+            _sp.run(["git", *args], cwd=root, check=True)
+
+    run_dir_glob = results_dir
+
+    child_env = dict(os.environ)
+    existing = child_env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = str(site) + (os.pathsep + existing if existing else "")
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; "
+            "sys.exit(main(['run', " + repr(str(cfg)) + "]))",
+        ],
+        env=child_env,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not sentinel.exists():
+            if time.monotonic() > deadline:
+                proc.kill()
+                raise TimeoutError("the run never reached the blocking step")
+            time.sleep(0.05)
+
+        run_dir = next(run_dir_glob.glob("run_*"))
+        deadline = time.monotonic() + 20
+        while not (run_dir / "apparatus" / "probes.jsonl").exists():
+            if time.monotonic() > deadline:
+                proc.kill()
+                raise TimeoutError("the run-start probe round never landed")
+            time.sleep(0.05)
+        assert (run_dir / "lock").exists(), "the lock must be genuinely held for this fixture"
+        before_lines = _ledger_lines(run_dir)
+
+        from publishable.freeze import command_freeze
+
+        code = command_freeze(run_dir)
+        assert code == 0
+        assert len(_ledger_lines(run_dir)) == len(before_lines) + 2
+    finally:
+        release.write_text("go")
+        proc.wait(timeout=20)

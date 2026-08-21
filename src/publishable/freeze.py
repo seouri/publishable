@@ -19,6 +19,7 @@ reverse (this module built without that import, `cli.py` importing it at
 module scope) would have.
 """
 
+import hashlib
 import json
 import sys
 from collections.abc import Mapping
@@ -30,7 +31,7 @@ import yaml
 from publishable import apparatus
 from publishable.cli import declared_credential_names
 from publishable.config import Config
-from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
+from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
 from publishable.errors import ContractError, PublishableError
 from publishable.runner import resolve_condition_cfg
 from publishable.secrets import credential_values, load_env, missing_env
@@ -40,6 +41,7 @@ from publishable.templates.registry import (
     installed_template_message,
     unknown_template_message,
 )
+from publishable.uv_support import uv_lock_info
 from publishable.validate import declared_credential_names_for, load_document
 
 
@@ -389,10 +391,122 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
     )
 
 
+def _hash_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _warn_lock_moved(ready: "_Ready", run_dir: Path) -> None:
+    """`W-FREEZE-LOCK-MOVED` (Decision 10): a warning, never a code change —
+    nothing mid-run re-checks the lockfile, so an exit `1` here would tell a
+    scheduler to act on something that will not stop the run. Computed
+    against the captured copy's own bytes, never a captured hash, since
+    `uv_lock_info` only ever hashes a real file on disk and the captured
+    copy is the one artifact that answers "what did the run start with".
+
+    **Absent on either side is not a move.** A captured copy that does not
+    exist means nothing was captured at run start — the `not captured`
+    case `diff` also uses — so there is nothing to warn about regardless of
+    what the repo holds now; a project with no lockfile then and none now
+    must not warn on every scaffolded run.
+    """
+    captured = run_dir / "environment" / "uv.lock"
+    if not captured.is_file():
+        return
+    captured_hash = _hash_bytes(captured.read_bytes())
+    _, current_hash = uv_lock_info(ready.repo_root)
+    if current_hash != captured_hash:
+        warn_c = Collector()
+        warn_c.warn(
+            "W-FREEZE-LOCK-MOVED",
+            str(captured),
+            "the repo's uv.lock no longer hashes to the copy captured at run "
+            "start — nothing on disk changes because of this; it is reported "
+            "so a reader knows the environment moved",
+        )
+        print(warn_c.render(), file=sys.stderr)
+
+
 def command_freeze(run_dir: Path) -> int:
-    """`freeze`, end to end. Task 6 fills in the probe round; until then
-    this only runs the refusal gate `_precheck` builds."""
+    """`freeze`, end to end (§ Operation commands, § The apparatus core can
+    only observe). Re-probes the apparatus once per resolved condition and
+    reports what it finds; it never decides anything — the next execution's
+    own gate is what stops a run.
+
+    **Reuses `apparatus.Observer` rather than calling `check_facts`/
+    `append_observation`/`Observations.record`/`check_changed` directly**
+    (task 6 step 1's ruling): the probe round's order — `check_facts` before
+    `append_observation`, both before the gate — is H7d Part A's, and
+    restating it here is exactly the drift Decision 9 exists to prevent.
+    The one addition `Observer` needed for this caller is the
+    `observations=` keyword `apparatus.py` now carries: without seeding it
+    from `apparatus.replay_ledger`'s baseline, every incoming fact would
+    establish its OWN first-answered entry and then compare against
+    itself, so `freeze` would report `unchanged` on every run, including
+    one whose fact moved.
+    """
     result = _precheck(run_dir)
     if isinstance(result, _Refused):
         return result.exit_code
-    raise NotImplementedError("task 6 builds the probe round")
+    ready = result
+
+    # (l) — the probe call. `_probe_for` is the same three-step dispatch
+    # `command_run` uses at run start; a dispatch fault here (the plugin
+    # was uninstalled after the run started, say) is neither one of the
+    # seven `E-FREEZE-*` codes nor a member of `apparatus.APPARATUS_CODES`
+    # — `command_run`'s own dispatch wrapper routes it the same way, to
+    # `EXIT_WRONG`, and this reuses that routing rather than inventing an
+    # eighth code.
+    try:
+        probe_fn = apparatus._probe_for(ready.probe_name)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
+        c = Collector()
+        c.credentials = ready.credentials
+        c.error(code, "experiment_type", str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    baseline = apparatus.replay_ledger(run_dir)
+    observer = apparatus.Observer(
+        probe_name=ready.probe_name,
+        probe=probe_fn,
+        declared_facts=ready.declared_facts,
+        conditions=ready.conditions,
+        cfgs=ready.cfgs,
+        run_dir=run_dir,
+        credentials=ready.credentials,
+        observations=baseline,
+    )
+    try:
+        observer.observe_round(phase=apparatus.PHASE_FREEZE, condition_index=None)
+    except ContractError as exc:
+        c = Collector()
+        c.credentials = ready.credentials
+        c.error(exc.code, "experiment_type", str(exc))
+        print(c.render(), file=sys.stderr)
+        # Decision 10's split, inherited from `command_run`'s own shipped
+        # containment rather than re-decided: `E-APPARATUS-RAISED` alone
+        # earns `EXIT_EXTERNAL` (the apparatus itself is unreachable — "the
+        # class you retry"); every other code this round can raise —
+        # `E-APPARATUS-CHANGED` (a moved fact, § Operation commands: "freeze
+        # reports a moved apparatus as a failure") and the remaining four of
+        # `APPARATUS_CODES` — keeps `EXIT_WRONG`.
+        if exc.code == "E-APPARATUS-RAISED":
+            return EXIT_EXTERNAL
+        return EXIT_WRONG
+
+    for condition in ready.conditions:
+        key = apparatus.condition_key(condition.index, condition.label)
+        print(f"  {key}  unchanged")
+
+    warn_c = Collector()
+    warn_c.credentials = ready.credentials
+    observer.warn_unanswered(warn_c)
+    if warn_c.findings:
+        print(warn_c.render())
+
+    _warn_lock_moved(ready, run_dir)
+
+    return EXIT_OK
