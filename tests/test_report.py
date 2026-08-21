@@ -26,6 +26,7 @@ import yaml
 from tests.test_cli import run_a_project
 
 from publishable import BaseReport
+from publishable.apparatus import apparatus_hash
 from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
 from publishable.cli import main
 from publishable.diagnostics import (
@@ -42,6 +43,8 @@ from publishable.report import (
     conditions_section,
     deltas_section,
     hypotheses_section,
+    read_bundle,
+    render_bundle,
     render_html,
     render_markdown,
     render_report,
@@ -2148,15 +2151,23 @@ def test_major_1_report_of_a_bundle_path_is_report_s_own_refusal_not_a_false_cla
     `` `publishable report` is specified but not built `` at exit 2 —
     false as of the very commit that flipped the `Status` cell to
     `built`, and 2 is reserved for an invocation fault Decision 6 says is
-    decided BEFORE this function is ever called. Now `report`'s own
-    refusal: exit 1, naming the FORM rather than the command."""
+    decided BEFORE this function is ever called. `report`'s own refusal
+    was `E-REPORT-BUNDLE-UNSUPPORTED` at exit 1, naming the FORM rather
+    than the command; task 10 retires that code wholesale (`CLAUDE.md`'s
+    "-UNSUPPORTED suffix... retired wholesale, absent from the
+    registry") and builds the real bundle render. This test now pins the
+    SAME property — `report`'s own coded refusal, never the CLI's
+    generic diagnostic, never exit 2 — over the bundle DOCUMENT'S own
+    shape fault instead: `runs: []` is not a mapping, `E-STUDY-
+    UNREADABLE`'s own trigger."""
     bundle = tmp_path / "study.yaml"
     bundle.write_text("runs: []\n")
     capsys.readouterr()
     code = main(["report", str(bundle)])
     err = capsys.readouterr().err
     assert code == EXIT_WRONG
-    assert "E-REPORT-BUNDLE-UNSUPPORTED" in err
+    assert "E-STUDY-UNREADABLE" in err
+    assert "E-REPORT-BUNDLE-UNSUPPORTED" not in err
     assert "is specified but not built" not in err
 
 
@@ -2186,3 +2197,483 @@ def test_major_2_a_record_missing_a_needed_key_is_refused_not_a_traceback(
     assert code == EXIT_WRONG
     assert "E-REPORT-RECORD-INCOMPLETE" in err
     assert "Traceback" not in err
+
+
+# ---------------------------------------------------------------------------
+# H8c task 10 — the bundle render, and its two cross-checks
+# (docs/superpowers/plans/2026-08-21-report-study.md task 10; design
+# Decisions 1, 7, 8; § Corrections correction 17). `study new`/`study add`
+# (tasks 11/13) do not exist yet in this build, so every bundle fixture
+# below writes `study.yaml` and its bare `<name>.run.yaml` members BY HAND
+# — the exact bytes reference.md § Building one already commits to, and
+# what `study add` will eventually produce.
+# ---------------------------------------------------------------------------
+
+
+def _write_bundle(bundle_dir: Path, members: list[tuple[str, dict[str, Any]]]) -> Path:
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    runs: dict[str, Any] = {}
+    for name, record in members:
+        (bundle_dir / f"{name}.run.yaml").write_text(yaml.safe_dump(record))
+        runs[name] = {"file": f"{name}.run.yaml", "run_id": record.get("run_id")}
+    study_doc = {
+        "title": "H8c task 10 bundle fixture",
+        "authors": ["Kyungjoon Lee"],
+        "runs": runs,
+    }
+    (bundle_dir / "study.yaml").write_text(yaml.safe_dump(study_doc, sort_keys=False))
+    return bundle_dir / "study.yaml"
+
+
+def _build_bundle_source_project(tmp_path: Path, *, name: str = "cohort-pilot") -> dict[str, Any]:
+    """A minimal, real, committed project with no override and no extra
+    step — used only to produce multiple run records sharing one
+    `provenance.git.commit`/`code_hash` (Fixture B's own shape) by calling
+    `main(["run", str(cfg)])` more than once against the identical
+    committed tree, and to produce a second, DIFFERENT commit by editing
+    and recommitting `src/**` between runs.
+    """
+    from publishable.generators.experiment import generate_experiment
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir(parents=True)
+    rows = "\n".join(f"p{i}" for i in range(10))
+    (data / "index.csv").write_text(f"patient_id\n{rows}\n")
+    assert main(["new", str(root)]) == 0
+    cfg = generate_experiment(
+        repo_root=root,
+        name=name,
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "H8c task 10 bundle fixtures"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "bundle source"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    return {"root": root, "cfg": cfg, "results": results, "pkg": name.replace("-", "_")}
+
+
+def _run_once(proj: dict[str, Any]) -> dict[str, Any]:
+    before = {p.name for p in proj["results"].glob("run_*")}
+    assert main(["run", str(proj["cfg"])]) == 0
+    (run_dir,) = [p for p in proj["results"].glob("run_*") if p.name not in before]
+    record = yaml.safe_load((run_dir / "run.yaml").read_text())
+    return {"run_dir": run_dir, "record": record}
+
+
+def _recommit_a_trivial_code_change(root: Path, pkg: str) -> None:
+    """Edits `src/**` (never `configs/**`) so the NEXT run gets a genuinely
+    different `code_hash` and `provenance.git.commit` — `code_hash` covers
+    `src/**`/`templates/**` only, so a config-only edit would not move it.
+    """
+    starter = next((root / "src" / pkg / "steps").glob("step01_*.py"))
+    starter.write_text(starter.read_text() + "\n# a trivial, harmless edit\n")
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "trivial recommit"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+
+def test_read_bundle_missing_study_yaml_is_e_study_unreadable(tmp_path: Path):
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(tmp_path / "study.yaml")
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_invalid_yaml_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("runs: [unterminated\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("- just\n- a\n- list\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_runs_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("title: x\nauthors: []\nruns: []\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_entry_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("runs:\n  main: not-a-mapping\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_file_field_missing_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("runs:\n  main: {run_id: r1}\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_file_not_in_the_bundle_is_e_study_unreadable(tmp_path: Path):
+    path = tmp_path / "study.yaml"
+    path.write_text("runs:\n  main: {file: main.run.yaml, run_id: r1}\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_file_escaping_the_bundle_is_e_study_unreadable(tmp_path: Path):
+    """'every reference is resolved relative to the bundle directory and
+    nothing resolves outside it' (task 10's brief, step 2) — a `..`
+    escape is refused with the SAME code as a missing file, never
+    silently followed."""
+    outside = tmp_path / "outside.yaml"
+    outside.write_text(yaml.safe_dump({"run_id": "r1", "schema_version": "1.0"}))
+    path = tmp_path / "bundle" / "study.yaml"
+    path.parent.mkdir()
+    path.write_text("runs:\n  main: {file: ../outside.yaml, run_id: r1}\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_file_absolute_path_is_e_study_unreadable(tmp_path: Path):
+    """An absolute `file` value is a second escape shape `..` does not
+    cover: `Path.__truediv__` with an absolute right operand discards the
+    left one entirely (measured: `Path("/bundle") / "/etc/passwd"` is
+    `Path("/etc/passwd")`), so the join alone would silently step outside
+    the bundle. Caught anyway by the SAME `relative_to` containment check
+    that catches `..`, because the joined result still fails to sit under
+    the bundle directory once resolved — not by a separate `is_absolute`
+    guard, which would be a second, driftable rule for one property."""
+    outside = tmp_path / "outside.yaml"
+    outside.write_text(yaml.safe_dump({"run_id": "r1", "schema_version": "1.0"}))
+    path = tmp_path / "bundle" / "study.yaml"
+    path.parent.mkdir()
+    path.write_text(f"runs:\n  main: {{file: {outside}, run_id: r1}}\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-STUDY-UNREADABLE"
+
+
+def test_read_bundle_member_present_but_corrupt_is_e_upstream_record_unreadable(tmp_path: Path):
+    """The adjacent-but-distinguishable fault task 10's brief step 1 names
+    by hand: a `runs` entry whose `file` IS in the bundle but does not
+    parse is `E-UPSTREAM-RECORD-UNREADABLE`, `read_record_file`'s own
+    code — never `E-STUDY-UNREADABLE`, which is for the bundle DOCUMENT'S
+    own shape."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "main.run.yaml").write_text("not: a-run-record\n")
+    path = bundle_dir / "study.yaml"
+    path.write_text("runs:\n  main: {file: main.run.yaml, run_id: r1}\n")
+    with pytest.raises(ContractError) as excinfo:
+        read_bundle(path)
+    assert excinfo.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+
+
+def test_read_bundle_reads_members_in_declared_order(fixture_r: dict[str, Any]):
+    record = fixture_r["run"]
+    bundle_path = _write_bundle(
+        fixture_r["run_dir"].parent / "bundle",
+        [("second", record), ("first", record)],
+    )
+    _doc, members = read_bundle(bundle_path)
+    assert [name for name, _ in members] == ["second", "first"]
+
+
+def test_bundle_render_through_main_shows_every_members_standard_sections_and_hypotheses(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    bundle_path = _write_bundle(
+        fixture_r["run_dir"].parent / "bundle",
+        [("main", fixture_r["run"])],
+    )
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "## main" in out
+    assert "## Conditions" in out
+    assert "## Deltas" in out
+    assert "## Hypothesis verdicts" in out
+    assert "## Attrition" in out
+    assert "## Hypotheses" in out
+    assert "h1" in out  # fixture_r's own declared hypothesis id, in the combined table
+
+
+def test_bundle_hypotheses_table_tags_each_row_with_its_run_name(fixture_r: dict[str, Any]):
+    """Two members, same underlying record (`fixture_r` and `fixture_d`
+    each build their OWN scaffolded project onto the same `tmp_path`, so
+    the two fixtures cannot share one test — the second copy under a
+    different bundle name is enough to prove the `run` column tags each
+    row rather than a single global label)."""
+    bundle_path = _write_bundle(
+        fixture_r["run_dir"].parent / "bundle",
+        [("baseline_run", fixture_r["run"]), ("second_run", fixture_r["run"])],
+    )
+    _doc, members = read_bundle(bundle_path)
+    text = render_bundle(bundle_path.parent, members)
+    assert "baseline_run" in text
+    assert "second_run" in text
+
+
+# --- Fixture T's bundle arm (carried from task 9 by name) ---
+
+
+def test_fixture_t_bundle_flags_a_draft_member_at_exit_0(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Fixture T's SECOND arm, over the bundle render that did not exist
+    when task 9 ran: `report <run.yaml>` refuses a draft (pinned already,
+    task 9); `report <study.yaml>` FLAGS one instead (Decision 7's own
+    asymmetry — "a bundle is a set, and refusing the whole render because
+    one of five runs was a draft would throw away four legitimate
+    renders"). `draft: true` is hand-edited onto a real, completed
+    record — the shipped key, never the unbuilt `draft` COMMAND — exactly
+    as task 9's own Fixture T states."""
+    draft_record = dict(fixture_r["run"])
+    assert draft_record["draft"] is False  # the fixture's own claim
+    draft_record["draft"] = True
+    bundle_path = _write_bundle(
+        fixture_r["run_dir"].parent / "bundle",
+        [("draft_run", draft_record), ("clean_run", fixture_r["run"])],
+    )
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "draft" in out
+    assert "## clean_run" in out
+    assert "## Conditions" in out  # the clean run's own sections still render
+
+
+# --- No override discovery happens on the bundle path, ever ---
+
+
+def test_bundle_render_never_calls_render_with_override(
+    fixture_r: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+):
+    """The batch's own negative, proven DIRECTLY: `render_with_override` is
+    the run form's one entry point into override discovery, and this
+    monkeypatches it to fail loudly if anything on the bundle path ever
+    calls it. A passing bundle render through the SAME `render_bundle`
+    `command_report` calls is the proof — not an inference from "no extra
+    section appeared", which a discovery call that happened to import
+    nothing could also produce."""
+    import publishable.report as report_module
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("render_with_override was called on the bundle path")
+
+    monkeypatch.setattr(report_module, "render_with_override", _fail_if_called)
+    bundle_path = _write_bundle(
+        fixture_r["run_dir"].parent / "bundle",
+        [("main", fixture_r["run"])],
+    )
+    _doc, members = report_module.read_bundle(bundle_path)
+    text = report_module.render_bundle(bundle_path.parent, members)
+    assert "## Conditions" in text
+
+
+def test_m_discovery_bundle_beside_a_report_py_shows_no_extra_section(tmp_path: Path):
+    """The design's own Fixture: "an arm whose bundle sits beside a
+    directory holding a `report.py`, asserting no extra section appears."
+    `_build_project` builds a real, committed project; `_write_report`
+    gives it a `report.py` with a distinctly-titled extra section. The
+    bundle sits in a SIBLING directory and its one member's `entrypoint`
+    still names that project's own package — the shape a wrongly-wired
+    discovery call would need to succeed. Under shipped code the extra
+    title never appears, because nothing on the bundle path ever imports
+    `<pkg>.report`."""
+    built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    _write_report(
+        built["root"],
+        built["pkg"],
+        "from publishable import BaseReport\n\n\n"
+        "class Report(BaseReport):\n"
+        '    format = "markdown"\n\n'
+        "    def sections(self, run, io):\n"
+        "        yield from super().sections(run, io)\n"
+        "        yield self.section('DECOY OVERRIDE SECTION', body='should never render')\n",
+    )
+    bundle_path = _write_bundle(tmp_path / "bundle", [("main", built["record"])])
+
+    _doc, members = read_bundle(bundle_path)
+    text = render_bundle(bundle_path.parent, members)
+    assert "DECOY OVERRIDE SECTION" not in text
+    assert "## Conditions" in text
+
+
+# --- Decision 8's two cross-checks: recorded figures compared, neither computed ---
+
+
+def _apparatus_block(facts: dict[str, Any]) -> dict[str, Any]:
+    """A hand-built `provenance.apparatus` block, over a hand-chosen
+    `facts` mapping and its OWN, honestly-computed `apparatus_hash` —
+    Fixture A's shape without the full probe/plugin machinery H7d's
+    original Fixture P needed, because `report` never calls
+    `apparatus_hash` at all: only the two fields it reads (`hash`,
+    implicitly `facts`) matter to the code under test here."""
+    return {
+        "probe": "test_probe",
+        "ledger": "apparatus/probes.jsonl",
+        "hash": apparatus_hash(facts),
+        "facts": facts,
+        "unobserved": [],
+    }
+
+
+def _with_apparatus(record: dict[str, Any], apparatus: "dict[str, Any] | None") -> dict[str, Any]:
+    copy = dict(record)
+    provenance = dict(copy["provenance"])
+    provenance["apparatus"] = apparatus
+    copy["provenance"] = provenance
+    return copy
+
+
+def test_bundle_two_runs_same_commit_same_code_hash_no_notice(fixture_r: dict[str, Any]):
+    proj = _build_bundle_source_project(fixture_r["run_dir"].parent.parent / "src2")
+    a = _run_once(proj)
+    b = _run_once(proj)
+    assert a["record"]["provenance"]["git"]["commit"] == b["record"]["provenance"]["git"]["commit"]
+    assert a["record"]["code_hash"] == b["record"]["code_hash"]
+    bundle_path = _write_bundle(
+        proj["results"] / "bundle", [("a", a["record"]), ("b", b["record"])]
+    )
+    code = main(["report", str(bundle_path)])
+    assert code == EXIT_OK
+
+
+def test_bundle_notice_code_hash_mismatch_under_one_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Two runs recording the SAME `provenance.git.commit` but a
+    hand-edited, differing `code_hash` — the case Decision 8 exists for,
+    unreachable from two honest runs of one committed tree, so the
+    docstring says this one was edited."""
+    proj = _build_bundle_source_project(tmp_path)
+    a = _run_once(proj)
+    b = _run_once(proj)
+    b["record"]["code_hash"] = "sha256:" + "0" * 64  # hand-edited to disagree
+    assert a["record"]["code_hash"] != b["record"]["code_hash"]
+    bundle_path = _write_bundle(
+        proj["results"] / "bundle", [("a", a["record"]), ("b", b["record"])]
+    )
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK  # a notice, never a refusal
+    assert "W-STUDY-CODE-HASH-MISMATCH" in out
+
+
+def test_bundle_no_code_hash_notice_across_two_different_commits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """A sensitivity rerun at a later commit is ordinary (Decision 11's own
+    precedent) — two runs at DIFFERENT commits are never grouped for the
+    `code_hash` comparison at all, so a genuinely different `code_hash`
+    between them is not a finding."""
+    proj = _build_bundle_source_project(tmp_path)
+    a = _run_once(proj)
+    _recommit_a_trivial_code_change(proj["root"], proj["pkg"])
+    b = _run_once(proj)
+    assert a["record"]["provenance"]["git"]["commit"] != b["record"]["provenance"]["git"]["commit"]
+    assert a["record"]["code_hash"] != b["record"]["code_hash"]
+    bundle_path = _write_bundle(
+        proj["results"] / "bundle", [("a", a["record"]), ("b", b["record"])]
+    )
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
+
+
+def test_bundle_apparatus_hashes_agree_no_notice(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    facts = {"gpu": "A100"}
+    a = _with_apparatus(fixture_r["run"], _apparatus_block(facts))
+    b = _with_apparatus(fixture_r["run"], _apparatus_block(facts))
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-APPARATUS-MISMATCH" not in out
+
+
+def test_bundle_apparatus_hashes_differ_under_one_commit_is_a_notice(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    a = _with_apparatus(fixture_r["run"], _apparatus_block({"gpu": "A100"}))
+    b = _with_apparatus(fixture_r["run"], _apparatus_block({"gpu": "H100"}))
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-APPARATUS-MISMATCH" in out
+
+
+def test_bundle_apparatus_hand_edited_hash_disagrees_with_recomputation(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """M3's own fixture: a record whose recorded `provenance.apparatus.hash`
+    has been hand-edited to disagree with a recomputation over its OWN
+    `facts` — the only record on which "compare the recorded string" and
+    "recompute from `facts`" give different answers, because on every
+    honest record the two already agree (H8b's own
+    `test_the_apparatus_hash_is_recomputable_from_the_recorded_facts`
+    pin). Both members share identical facts (so a RECOMPUTATION would
+    find them equal); one's RECORDED `hash` is edited to a different
+    string, so shipped code (comparing recorded strings) fires the
+    notice."""
+    facts = {"gpu": "A100"}
+    honest = _apparatus_block(facts)
+    tampered = dict(honest)
+    tampered["hash"] = "sha256:" + "f" * 64
+    assert tampered["hash"] != apparatus_hash(facts)  # the fixture's own claim: it disagrees
+    a = _with_apparatus(fixture_r["run"], honest)
+    b = _with_apparatus(fixture_r["run"], tampered)
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-APPARATUS-MISMATCH" in out
+
+
+def test_bundle_null_apparatus_excluded_not_counted_a_mismatch(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Decision 8's exclusion rule, over its own named fixture: one run
+    with `provenance.apparatus: null` beside one with a real block, under
+    the SAME commit. "This experiment declares no probe" is not a
+    deployment claim, so this must NOT fire — which the other three arms
+    (agree / differ / hand-edited) cannot see, since each of them has two
+    non-null members already."""
+    a = _with_apparatus(fixture_r["run"], None)
+    b = _with_apparatus(fixture_r["run"], _apparatus_block({"gpu": "A100"}))
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-APPARATUS-MISMATCH" not in out

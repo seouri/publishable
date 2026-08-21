@@ -4,8 +4,10 @@ docs/reference.md § A report override renders one experiment's own
 figures, § The importable surface, § Operation commands' `report` row.
 `cli._dispatch` imports `command_report` inside its own function body,
 joining `OPERATION_COMMANDS`'s existing one-path arm — this module
-imports nothing from `cli` at all (the bundle-form arm below is this
-module's own coded refusal, not a call into `cli._report_not_built`).
+imports nothing from `cli` at all. The bundle form (`report study.yaml`)
+renders here too — `read_bundle`, `_bundle_cross_checks`, `render_bundle`
+— entirely through this module's own coded refusals, never through
+`cli._report_not_built`.
 """
 
 import importlib
@@ -14,6 +16,8 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
+
+import yaml
 
 from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
 from publishable.diagnostics import EXIT_OK, EXIT_WRONG, Collector
@@ -949,6 +953,265 @@ def _report_io_from_record(run_dir: Path, record: Mapping[str, Any]) -> ReportIO
     )
 
 
+# ---------------------------------------------------------------------------
+# The bundle form: `report <study.yaml>` (Decisions 1, 7, 8; task 10).
+#
+# **No override discovery happens anywhere below.** Every function here
+# builds `Section` values directly from a parsed `study.yaml` and its
+# members' parsed records — never through `render_with_override`, which is
+# the run form's own machinery for importing `<root_pkg>.report`. A bundle
+# member carries no `environment/repo_root.txt` (§ Building one's tree is
+# bare `<name>.run.yaml` files beside `study.yaml`, nothing else), so this
+# module structurally cannot reach a sibling `report.py` from here — there
+# is no call site that would even attempt to resolve one.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_bundle_member(bundle_dir: Path, name: str, file_value: Any) -> Path:
+    """`study.yaml`'s `runs.<name>.file`, resolved **relative to the bundle
+    directory** and refused if it is absent, malformed, escapes the bundle,
+    or names something not there — all `E-STUDY-UNREADABLE` (task 10's own
+    brief, step 1): "a `runs` entry whose `file` is not in the bundle." A
+    member that IS in the bundle but corrupt once read is a different,
+    adjacent fault (`E-UPSTREAM-RECORD-*`, raised by `read_record_file`
+    itself) — this function's only job is locating the file, never parsing
+    it.
+
+    Containment (`..`, an absolute path, a symlink leading outside) is
+    checked the same way `artifacts.StepIO._contained` checks it for an
+    artifact read — "every reference is resolved relative to the bundle
+    directory and nothing resolves outside it" (task 10's brief, step 2) —
+    restated here rather than imported, because that predicate is scoped to
+    a run directory's own step layout and this is a different base entirely.
+    """
+    if not isinstance(file_value, str) or not file_value:
+        raise ContractError(
+            f"study.yaml's runs.{name!r}.file is {file_value!r}, not a non-empty string",
+            code="E-STUDY-UNREADABLE",
+        )
+    base = bundle_dir.resolve()
+    candidate = (bundle_dir / file_value).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        raise ContractError(
+            f"study.yaml's runs.{name!r}.file ({file_value!r}) resolves "
+            "outside the bundle directory — every reference in a bundle "
+            "must resolve inside it",
+            code="E-STUDY-UNREADABLE",
+        ) from None
+    if not candidate.is_file():
+        raise ContractError(
+            f"study.yaml names runs.{name!r}.file = {file_value!r}, which "
+            "is not a file in the bundle",
+            code="E-STUDY-UNREADABLE",
+        )
+    return candidate
+
+
+def read_bundle(path: Path) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]]]:
+    """Parse `study.yaml` at `path` and every member it names, in the order
+    `runs` declares them. Returns `(bundle_doc, members)`, `members` a list
+    of `(name, record)` pairs — a list rather than a dict because a bundle's
+    own render walks it in declared order, and `dict` would silently keep
+    that guarantee only as long as nobody re-sorted it.
+
+    `E-STUDY-UNREADABLE`: `path` is absent, not valid YAML, does not parse
+    to a mapping, or its `runs` key is not a mapping — the study.yaml-level
+    faults task 10's brief step 1 names. A `runs` entry that is not itself a
+    mapping is the identical fault one level down. Each member's `file` is
+    resolved through `_resolve_bundle_member` (same code, an adjacent
+    reason), then read through `read_record_file` (task 4) — whose OWN three
+    refusals (`E-UPSTREAM-RECORD-MISSING/-UNREADABLE/-VERSION`) are left to
+    propagate unwrapped, because a member that IS in the bundle and corrupt
+    is a distinguishable fault from one that is not there at all.
+    """
+    if not path.exists():
+        raise ContractError(f"no study.yaml at {path}", code="E-STUDY-UNREADABLE")
+    try:
+        doc = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise ContractError(f"{path} is not valid YAML: {exc}", code="E-STUDY-UNREADABLE") from exc
+    if not isinstance(doc, dict):
+        raise ContractError(
+            f"{path} did not parse to a mapping — it was edited or truncated",
+            code="E-STUDY-UNREADABLE",
+        )
+    runs = doc.get("runs")
+    if not isinstance(runs, Mapping):
+        raise ContractError(
+            f"{path}'s `runs` is {runs!r}, not a mapping",
+            code="E-STUDY-UNREADABLE",
+        )
+    bundle_dir = path.parent
+    members: list[tuple[str, dict[str, Any]]] = []
+    for name, entry in runs.items():
+        if not isinstance(entry, Mapping):
+            raise ContractError(
+                f"{path}'s runs.{name!r} is {entry!r}, not a mapping",
+                code="E-STUDY-UNREADABLE",
+            )
+        member_path = _resolve_bundle_member(bundle_dir, str(name), entry.get("file"))
+        members.append((str(name), read_record_file(member_path)))
+    return doc, members
+
+
+def _bundle_cross_checks(
+    members: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, str]]:
+    """Decision 8's two cross-checks, over bundled members already grouped
+    by `provenance.git.commit`. **Compares recorded figures and computes
+    neither** — never `hashes.code_hash`, never `apparatus.apparatus_hash`
+    — because a second answer computed here could disagree with the one
+    `diff` reports over the same field, "the one figure this project treats
+    as authoritative" (`diff`'s own Decision 2).
+
+    Two runs sharing a commit must share a `code_hash` (same commit, same
+    two trees); when they do not, that is a real finding about the bundle,
+    named `W-STUDY-CODE-HASH-MISMATCH`. The identical shape one column over
+    for `provenance.apparatus.hash`, `W-STUDY-APPARATUS-MISMATCH`, with one
+    difference task 10's brief step 4 states explicitly: a member whose
+    `provenance.apparatus` is `null` is EXCLUDED from that comparison rather
+    than counted a mismatch — "this experiment declares no probe" is not a
+    deployment claim, and refusing on it would make every bundle of
+    `generic` runs print a notice about a deployment nobody claimed.
+
+    Returns `(code, message)` pairs. **The message states what was found
+    and diagnoses no cause** — task 10's brief step 4: a dirty tree, an
+    uncommitted `templates/**` edit, and another experiment's package
+    moving inside the two hashed trees are three candidates among others,
+    and naming one as fact would be the comment-claiming-a-guarantee habit
+    one layer out.
+    """
+    by_commit: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for name, record in members:
+        provenance = record.get("provenance")
+        git = provenance.get("git") if isinstance(provenance, Mapping) else None
+        commit = git.get("commit") if isinstance(git, Mapping) else None
+        if isinstance(commit, str) and commit:
+            by_commit.setdefault(commit, []).append((name, record))
+
+    notices: list[tuple[str, str]] = []
+    for commit, group in sorted(by_commit.items()):
+        if len(group) < 2:
+            continue
+
+        code_hashes = {record.get("code_hash") for _, record in group}
+        if len(code_hashes) > 1:
+            names = ", ".join(sorted(name for name, _ in group))
+            notices.append(
+                (
+                    "W-STUDY-CODE-HASH-MISMATCH",
+                    f"runs {names} all record commit {commit} and their "
+                    f"code_hash differs ({sorted(str(h) for h in code_hashes)})",
+                )
+            )
+
+        apparatus_present: list[tuple[str, Mapping[str, Any]]] = []
+        for name, record in group:
+            provenance = record.get("provenance")
+            app = provenance.get("apparatus") if isinstance(provenance, Mapping) else None
+            if isinstance(app, Mapping):
+                apparatus_present.append((name, app))
+        apparatus_hashes = {app.get("hash") for _, app in apparatus_present}
+        if len(apparatus_present) > 1 and len(apparatus_hashes) > 1:
+            names = ", ".join(sorted(name for name, _ in apparatus_present))
+            notices.append(
+                (
+                    "W-STUDY-APPARATUS-MISMATCH",
+                    f"runs {names} all record commit {commit} and their "
+                    f"provenance.apparatus.hash differs "
+                    f"({sorted(str(h) for h in apparatus_hashes)})",
+                )
+            )
+    return notices
+
+
+def _bundle_header_section(name: str, record: Mapping[str, Any]) -> Section:
+    """One member's identity line — `run_id`, `status`, and a `draft` label
+    when the record carries `draft: true`. Decision 7's asymmetry: a
+    bundle FLAGS a draft member rather than refusing the whole render, "a
+    bundle is a set, and refusing the whole render because one of five runs
+    was a draft would throw away four legitimate renders." The flag lives
+    here, in prose text a reader cannot miss, rather than as a fifth column
+    threaded through every one of the four standard sections' tables.
+    """
+    lines = [f"run_id: {record.get('run_id')}", f"status: {record.get('status')}"]
+    if record.get("draft") is True:
+        lines.append(
+            "**draft** — this run's code state is not reachable from any "
+            "commit; it is included here but is not a citable result on "
+            "its own"
+        )
+    return Section(title=name, body="\n".join(lines))
+
+
+def _bundle_hypotheses_rows(
+    members: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Every member's `results.hypotheses[]`, tagged with the bundle's own
+    name for that run — "collecting every declared hypothesis into one
+    table" (`reference.md` § Building one), read through the identical
+    field set `hypotheses_section` reads for a single run, so the two never
+    drift about what a hypothesis entry carries.
+    """
+    rows: list[dict[str, Any]] = []
+    for name, record in members:
+        for verdict in (record.get("results") or {}).get("hypotheses") or []:
+            if not isinstance(verdict, Mapping):
+                continue
+            row: dict[str, Any] = {"run": name}
+            row.update(_present_fields(verdict, _HYPOTHESIS_FIELDS))
+            row.update(_present_fields(verdict, _HYPOTHESIS_OPTIONAL_FIELDS))
+            rows.append(row)
+    return rows
+
+
+def render_bundle(bundle_dir: Path, members: list[tuple[str, dict[str, Any]]]) -> str:
+    """The bundle render: every member's identity line and its four
+    standard sections, in declared order, plus one combined Hypotheses
+    table over the whole bundle — "and nothing else" (task 10's brief step
+    2). Always markdown: a bundle has no override to declare `format`
+    (Decision 16's `report_cls is None` case, over every member alike), and
+    HTML being self-contained and offline is a run-form override's own
+    property, never a bundle's.
+
+    Each member's four standard sections come from `BaseReport().sections`
+    directly — **never** `render_with_override`, which is the run form's
+    own discovery entry point and is not called anywhere in this function
+    or by anything it calls. `ReportIO` is still constructed (§ Corrections,
+    correction 13: "a bundle render still has to hand `sections` an `io`,
+    and the design rules none... no override runs on a bundle and no
+    standard section touches `io`, so the object is unreachable in that
+    form"), over `bundle_dir` — a bundle holds bare record files, not run
+    directories, so there is no other directory to build it from.
+
+    `KeyError`/`TypeError` while building a member's `ReportIO` is the
+    identical fault the run form's `E-REPORT-RECORD-INCOMPLETE` names — a
+    record that parsed clean but is missing or malformed at `execution`,
+    `results.conditions`, or `config.data.input_dir` — reused rather than
+    reminted, on Decision 15's own "the row widens" precedent for a fault
+    with more than one caller.
+    """
+    sections: list[Section] = []
+    for name, record in members:
+        sections.append(_bundle_header_section(name, record))
+        try:
+            io = _report_io_from_record(bundle_dir, record)
+        except (KeyError, TypeError) as exc:
+            raise ContractError(
+                f"bundle member {name!r} parses and has a `run_id`, but is "
+                f"missing or malformed at {exc!r} — `report` needs "
+                "`execution`, `results.conditions` and "
+                "`config.data.input_dir` to build the read-only artifact "
+                "accessor the four standard sections read",
+                code="E-REPORT-RECORD-INCOMPLETE",
+            ) from exc
+        sections.extend(BaseReport().sections(record, io))
+    sections.append(Section(title="Hypotheses", body={"rows": _bundle_hypotheses_rows(members)}))
+    return render_markdown(iter(sections))
+
+
 def command_report(path: Path) -> int:
     """`report <run.yaml>`, end to end (docs/reference.md § Operation
     commands' `report` row; design Decisions 1, 6, 7; plan § Corrections
@@ -963,25 +1226,36 @@ def command_report(path: Path) -> int:
     resolves them), a corrupt, unreadable, or record `report` cannot use
     (the shipped `E-UPSTREAM-RECORD-*` family, or this function's own
     `E-REPORT-RECORD-INCOMPLETE`), a draft run (`E-REPORT-DRAFT`,
-    Decision 7), the bundle form (`E-REPORT-BUNDLE-UNSUPPORTED`), or an
-    override fault (`E-REPORT-OVERRIDE-*`, `E-REPORT-FORMAT`,
-    `E-REPORT-BODY`). `0` for every STATUS a record can hold once it
-    renders — `completed`, `partial` and `failed` alike, because a read
-    command's exit code reports whether it could read, never what it
-    read: the record's own `status` and its failed executions are
-    rendered by the Attrition section, not folded into this function's
-    return value. `diff`'s Decision 4 rules the identical thing for the
-    identical reason, and the two now agree in both directions. `2` is
-    `main`'s own invocation-arity refusal, decided before this function
-    is ever called — this function itself never returns `2`.
+    Decision 7), the bundle form's own faults (`E-STUDY-UNREADABLE`, or the
+    same `E-UPSTREAM-RECORD-*`/`E-REPORT-RECORD-INCOMPLETE` a run-form
+    render can raise, one per corrupt or incomplete member), or an
+    override fault reachable only on the run form (`E-REPORT-OVERRIDE-*`,
+    `E-REPORT-FORMAT`, `E-REPORT-BODY`). `0` for every STATUS a record can
+    hold once it renders — `completed`, `partial` and `failed` alike,
+    because a read command's exit code reports whether it could read,
+    never what it read: the record's own `status` and its failed
+    executions are rendered by the Attrition section, not folded into
+    this function's return value. `diff`'s Decision 4 rules the identical
+    thing for the identical reason, and the two now agree in both
+    directions. A bundle's two cross-check notices (`W-STUDY-CODE-HASH-
+    MISMATCH`, `W-STUDY-APPARATUS-MISMATCH`) never change this function's
+    exit code either, on the same warning-never-changes-exit-code
+    precedent `W-APPARATUS-UNANSWERED` already sets. `2` is `main`'s own
+    invocation-arity refusal, decided before this function is ever
+    called — this function itself never returns `2`.
 
-    **`report <study.yaml>` is not this function's to render.** The
-    bundle form is refused with its OWN code, `E-REPORT-BUNDLE-
-    UNSUPPORTED`, at exit `1` — never `cli._report_not_built`'s "command
-    is not built" diagnostic at exit `2`, which as of THIS commit's
-    `Status`-cell flip would be a false claim about a command that IS
-    built (whole-branch review, Major 1). Task 10 replaces this one
-    branch outright with the real bundle render.
+    **`report <study.yaml>` renders the real bundle (task 10).** Every
+    member's four standard sections, in `study.yaml`'s own declared order,
+    plus one combined Hypotheses table, and Decision 8's two cross-checks
+    printed as notices before the render — never `cli._report_not_built`'s
+    "command is not built" diagnostic at exit `2`, which would be a false
+    claim about a command that is built, and never `E-REPORT-BUNDLE-
+    UNSUPPORTED`, the interim-build-family code this task retires
+    wholesale rather than narrows (`CLAUDE.md`'s "-UNSUPPORTED suffix" —
+    the undocumented build family, absent from the registry once retired).
+    **No override discovery happens on this path at all**: `render_bundle`
+    calls `BaseReport().sections` directly for every member and never
+    `render_with_override`, which stays the run form's own entry point.
 
     **Decision 7: a draft run (`config.yaml`'s `draft: true`, § Draft
     runs) is refused, not watermarked.** § Draft runs' own verb is
@@ -1041,27 +1315,38 @@ def command_report(path: Path) -> int:
         return EXIT_WRONG
 
     if form == "bundle":
-        # Major 1 (whole-branch review): the bundle FORM is not built —
-        # the RUN form is, as of this same commit's `Status` cell flip —
-        # so routing here to `cli._report_not_built` printed a false
-        # claim ("`publishable report` is specified but not built") at
-        # exit 2, an invocation-fault code Decision 6 reserves for a
-        # fault decided before this function is ever called. This is
-        # `report`'s own refusal instead: exit 1, and a message naming
-        # the FORM rather than the command. `E-REPORT-BUNDLE-UNSUPPORTED`
-        # is the interim-build-family shape (`CLAUDE.md`'s "-UNSUPPORTED
-        # suffix"), retired wholesale — not narrowed — the day task 10
-        # builds the bundle render.
-        c = Collector()
-        c.error(
-            "E-REPORT-BUNDLE-UNSUPPORTED",
-            str(path),
-            "the BUNDLE form of `report` — `report <study.yaml>` — is "
-            "not yet built in this version; `report <run.yaml>` is. See "
-            "docs/reference.md § Building one",
-        )
-        print(c.render(), file=sys.stderr)
-        return EXIT_WRONG
+        # Task 10: the real bundle render. `read_bundle` and `render_bundle`
+        # both raise only `ContractError` — `E-STUDY-UNREADABLE`, the
+        # shipped `E-UPSTREAM-RECORD-*` family for a corrupt member, or
+        # `E-REPORT-RECORD-INCOMPLETE` for one missing/malformed downstream
+        # of a clean parse — so one `except` covers every bundle-side
+        # refusal, exactly as the run form's own phases do below. No
+        # `Collector.credentials` is populated here: the bundle form runs
+        # no user code (no override discovery, ever, on this path) and
+        # needs none to redact (§ Corrections, correction 7).
+        bundle_dir = path.parent
+        try:
+            _bundle_doc, members = read_bundle(path)
+            text = render_bundle(bundle_dir, members)
+        except ContractError as exc:
+            c = Collector()
+            c.error(exc.code, str(path), str(exc))
+            print(c.render(), file=sys.stderr)
+            return EXIT_WRONG
+
+        # Decision 8: two notices, never a refusal — exit stays `0`
+        # regardless of what they find. Printed before the render, on
+        # `command_validate`'s own precedent for a finding a build command
+        # reports rather than raises.
+        notices = _bundle_cross_checks(members)
+        if notices:
+            notice_c = Collector()
+            for code, message in notices:
+                notice_c.warn(code, str(path), message)
+            print(notice_c.render())
+
+        print(text)
+        return EXIT_OK
 
     run_dir = path.parent
     try:
