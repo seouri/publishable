@@ -7729,7 +7729,25 @@ the probe step § Operation commands describes, and if so, whether `replay_ledge
 a `dry-run` immediately before a `run` starts would otherwise report a baseline `freeze` cannot see
 answered any differently than a run that never `dry-run`'d at all. Not decided here.
 
-## OPEN — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+## ~~OPEN~~ CLOSED — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+
+**CLOSED by H8c task 16.** Each of the three blocks gained the two header lines its own
+concreteness calls for, inserted directly above its `code_hash` row and nothing else: `reference.md`
+§ The apparatus core can only observe now opens with the worked example's own two real run IDs, each
+`completed`; `README.md` § The loop you'll actually live in now opens with `run_A`/`run_B`, each
+`completed`; `docs/design-principles.md` § Same code, different parameters now opens with
+`<run_a>`/`<run_b>`, each `completed`. No hash prefix, run ID, delta line, row label, or row order
+moved, and the two-space separator is unchanged — verified by task 17's arm D
+(`test_h8c_arm_d_*_worked_diff_block_rows`), which locates each block by its own `code_hash` line and
+pins everything from there to the end of the fence as raw text: those three pins needed no editor for
+this task and passed unedited, which is itself the proof nothing at or below `code_hash` moved.
+Extended `tests/test_diff.py`'s document-row-label reader (`_document_row_labels`) with a sibling,
+`_document_header_lines`, rather than a second parser over the same three files, and pinned the header
+lines' label set, order, two-space separator, and no-blank-line-before-the-first-row property against
+`command_diff`'s own real output for a genuine run pair (Fixture H). The one clause this filing's own
+last paragraph carried — "the one `reference.md` sentence closing the `diff`-versus-gate ruling" — was
+already stale before this task touched the file: H8b task 12 landed that sentence while editing the
+same section, and this closing note does not re-land it.
 
 **Found by** H8b's whole-branch review; **left open deliberately by both the implementing task and the
 controller**, with the reasoning below, because the cheap fix is in the **shared worked example** and this

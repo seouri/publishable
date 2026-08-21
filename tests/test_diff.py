@@ -647,6 +647,135 @@ def test_h8b_row_labels_agree_with_reference_now_that_apparatus_has_landed():
 
 
 # ---------------------------------------------------------------------------
+# Fixture H (H8c task 16 step 7): the three worked `diff` blocks' per-side
+# HEADER lines, read by extending `_document_row_labels`'s own reading
+# rather than a second parser over the same three files. `_header_line`
+# joins its parts with exactly two spaces (`"  ".join(parts)`), so the
+# shape checked here is: the leading letter field (`A`/`B`), the form
+# (`run record` for all three worked blocks — none needs the config-side
+# shape, since all three pairs are run-vs-run and `completed`), the
+# identity column, and the status, each separated by the same two spaces
+# `_document_row_labels` already anchors on.
+#
+# This parser reads INTO fenced code blocks ON PURPOSE. The mechanical
+# consistency pass in `CLAUDE.md` skips fenced blocks throughout, because
+# these documents contain markdown INSIDE markdown and a `##`/`|` inside a
+# fence is content, not structure to be checked as document structure —
+# but this parser's whole job is to check what a fence's own CONTENT says
+# against `diff`'s real output, which is a different question than the
+# mechanical pass asks. A later reader must not "fix" this parser to skip
+# fences to match that unrelated policy; doing so would make it blind to
+# the one thing it exists to catch.
+# ---------------------------------------------------------------------------
+
+
+def _document_header_lines(path: Path) -> list[str]:
+    """Every per-side `diff` header line (`A  run record  <id>  <status>`,
+    or the config-side `A  config  <path>` shape, though none of the three
+    worked blocks uses it) in this document's fenced output blocks.
+    Anchored at the line's start on the leading letter field so an indented
+    detail line or a row line is never mistaken for a header — a header
+    line starts with `A` or `B` followed by two-or-more spaces; a row line
+    starts with its own label (`code_hash`, `apparatus`, ...); a detail
+    line starts with whitespace."""
+    lines = []
+    for line in path.read_text().splitlines():
+        if re.match(r"^[AB]\s{2,}(run record|config)\b", line):
+            lines.append(line)
+    return lines
+
+
+def _header_shape(line: str) -> tuple[str, ...]:
+    """Split a header line on its two-or-more-space column separator, the
+    same shape `_header_line` produces and `_document_header_lines` reads
+    back."""
+    return tuple(re.split(r"\s{2,}", line))
+
+
+def test_h8c_header_lines_are_parsed_from_the_documents_at_all():
+    """The control: each document must yield at least one header line, or
+    the shape and order pins below would pass vacuously. Proven able to
+    fail by `test_h8b_row_labels_agree_with_readme_and_design_principles`'s
+    own sibling below: the row-label regex requires `identical|DIFFERS` as
+    its second field, so it can never match a header line, and the header
+    regex here requires `run record`/`config` as ITS second field, so it
+    can never match a row line — the two parsers are provably looking at
+    different lines, not the same lines read twice."""
+    assert _document_header_lines(README_MD)
+    assert _document_header_lines(DESIGN_PRINCIPLES_MD)
+    assert _document_header_lines(REFERENCE_MD)
+
+
+def test_h8c_fixture_h_document_headers_match_real_diffs_shape(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Fixture H: a genuine run pair, diffed for real through
+    `command_diff`, supplies the header shape the three worked blocks must
+    match — leading letter, form `run record`, an identity column, a
+    status column, each joined by exactly two spaces. The three documents'
+    own identity strings (`run_A`/`run_B`, `<run_a>`/`<run_b>`, a full
+    `run_<timestamp>_<code_hash>` id) are deliberately not compared against
+    this fixture's real IDs — Decision 20 keeps each block at its OWN level
+    of concreteness — so the comparison is over shape, never over the
+    literal identity string."""
+    doc = run_a_project(tmp_path, units=8)
+    run_a = doc["run_dir"]
+
+    def edit(config: dict) -> None:
+        config["parameters"]["analysis"]["min_samples"] += 1
+
+    run_b = _second_run_after_edit(doc, edit)
+
+    capsys.readouterr()
+    assert command_diff(run_a, run_b) == EXIT_OK
+    out = capsys.readouterr().out
+    real_headers = [line for line in out.splitlines()[:2]]
+    assert len(real_headers) == 2
+    real_shapes = [_header_shape(line) for line in real_headers]
+    for letter, shape in zip(("A", "B"), real_shapes, strict=True):
+        assert shape[0] == letter
+        assert shape[1] == "run record"
+        assert len(shape) == 4  # letter, form, run_id, status — no draft here
+
+    for path in (README_MD, DESIGN_PRINCIPLES_MD, REFERENCE_MD):
+        headers = _document_header_lines(path)
+        # Label set and label order: exactly A then B, matching the real
+        # output's own order — never B then A, and never both A.
+        shapes = [_header_shape(line) for line in headers[:2]]
+        assert [shape[0] for shape in shapes] == ["A", "B"], path
+        for shape in shapes:
+            assert shape[1] == "run record", path
+            assert len(shape) == len(real_shapes[0]), path
+            # The two-space separator itself: re-joining the parsed fields
+            # with "  " must reproduce the original line exactly, which is
+            # false the moment a document uses one space, three spaces, or
+            # a tab instead.
+            assert "  ".join(shape) == headers[shapes.index(shape)]
+
+
+def test_h8c_no_blank_line_between_header_and_first_row():
+    """Decision 20, measured through the real console script: `command_diff`
+    prints its two header lines and then the rows, with no blank line
+    between them. Checked directly against each document's raw lines
+    rather than through the header parser, so a blank line inserted between
+    the second header and the first row is caught even though both
+    parsers would still match their own lines correctly on either side of
+    it."""
+    for path in (README_MD, DESIGN_PRINCIPLES_MD, REFERENCE_MD):
+        lines = path.read_text().splitlines()
+        header_idxs = [
+            i for i, line in enumerate(lines) if re.match(r"^[AB]\s{2,}(run record|config)\b", line)
+        ]
+        assert len(header_idxs) == 2, path
+        first_idx, second_idx = header_idxs
+        assert second_idx == first_idx + 1, f"header lines not consecutive in {path}"
+        next_line = lines[second_idx + 1]
+        assert re.match(r"^[A-Za-z][A-Za-z0-9_.]*\s{2,}(identical|DIFFERS)\b", next_line), (
+            f"a blank or non-row line follows the header in {path}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Batch 5 review, Minor 4: with both operands unreadable, both are reported
 # in one run rather than one at a time.
 # ---------------------------------------------------------------------------

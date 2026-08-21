@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H8c, H9, and H3c-3's remaining 14 — the H4 and H7 families
-are complete, and H8a and H8b are.** Amended twice on 2026-08-14
+**Order of the slices that remain: H9, and H3c-3's remaining 14 — the H4 and H7 families
+are complete, and H8a, H8b and H8c are.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -181,6 +181,31 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H8c (`report` and `study`) merged on 2026-08-21 — the last of H8's three.** `report` renders a run's
+or a bundle's standard sections — the condition table, deltas, hypothesis verdicts, attrition — from
+any `run.yaml`, with a project's own `src/<pkg>/report.py` override free to add or reorder sections and
+never to change a number; `study new`/`study add` assemble a self-contained, redacted bundle of run
+records outside any repo, and `report study.yaml` cross-checks a bundle's own recorded
+`code_hash`/`apparatus.hash` figures against each other rather than recomputing either, flagging a
+draft member rather than refusing the whole render. **It retires no refusal and unblocks ZERO
+configs** — neither command runs at `validate` or from a step, and none of the nine configs in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) declares a `study`, so its four-row
+table stays exactly where H8a left it, repeated character for character rather than restated.
+
+Four things worth carrying. **A bundle never carries `allocation.json`, ruled rather than left open**:
+`study add` takes a run's `run.yaml` **path**, not a run directory, so the one run-directory artifact
+that is a list of unit identities is not reachable from the argument the command takes — the route for
+a reader who wants to verify the split is `allocation_hash`, attached the same way `input_manifest_hash`
+already travels without the manifest itself. **A report override's `io` sentence was false of the code
+and is now named for what it is**: a `summary`-scope `StepIO` is not read-only, so `ReportIO` —
+`conditions`, `repeats`, `read_condition`, `read_input` — is documented as the read half of one rather
+than as the same accessor. **A generated override's own worked block had drifted from what the
+generator writes**, labelled `— generated` while shipping an extra `yield` and an undefined
+`render_scatter`; the block now matches the generator's own output. And **the three worked `diff`
+blocks predating the per-side header, filed OPEN against this slice by name, are closed**: each gained
+the two header lines its own concreteness calls for, inserted only above `code_hash`, and the guard pin
+proving nothing below it moved needed no editor to pass.
 
 **H8a (lineage and `io.reuse_from`) merged on 2026-08-20 — the first of H8's three.** `io.reuse_from`
 exists: a step reads a named artifact out of a **prior run**, addressed either as `<output_dir>/<run_id>/`
