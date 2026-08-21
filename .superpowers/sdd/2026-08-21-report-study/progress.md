@@ -141,3 +141,35 @@ untracked review file under a message written for work that had not landed. **Th
 and the diffstat was the fact**, which is this project's own rule about comments, arriving in a commit
 message. Corrected by a follow-up commit that says what happened rather than by rewriting a pushed
 commit.
+
+## Batch 4 — tasks 4-7 — record in, text out
+
+Commits `556565b` (`report_form`, `read_record_file`), `9a3202c` (Conditions, Deltas), `6c642b0`
+(Verdicts, Attrition, the `nondeterministic` filing), `eebbe2a` (both renderers), `ca4e47a`, `2092594`,
+`d73303f` (fix round). Suite 2689 → 2737 → **2738**. **Spec compliance PASS; three Majors, eleven
+Minors.**
+
+**The carried mutation was routed correctly and was still vacuous, which is the lesson.** M14's whole
+history is routing: it could not be built when task 1 ran, batch 2 named it forward, and **I carried it in
+the dispatch myself** because a report cannot reach a brief. It got built — and the test named
+`..._reaches_the_page` **rendered nothing**, mutating a dict and asserting the same dict. Gutting
+`render_markdown` to `return "GUTTED"` left it green. **Getting a mutation routed to the right task is
+necessary and not sufficient; it then has to test the thing.** Rebuilt to render through both renderers
+and assert on emitted text, with the gutted-renderer mutation confirmed failing.
+
+**A design defect, and the fifth instance of one move.** A recorded column named `by` was **silently
+dropped from the render**, because the Conditions filter excluded a `report_by` stratum by **the string
+`by`.** Decision 5's ground — *"the record `report` reads can never hold a metric called `by`"* — is
+**false against a real run**, where that column is a genuine metric entry with value, `ci95`, method and
+`repeat_spread`, and `cli.py` says in writing the column *"keeps its value"*. **Ruling: exclude by
+structure, not by name** — a stratum is identifiable by **where it sits in the record**, not by what it is
+called. Now `_is_metric_entry`/`_is_strata_block`, with *"never identified by name"* in the docstring, and
+`stats.RESERVED_METRIC_NAMES` left alone because its own site guards a **derived-key collision**, a
+different question.
+
+**The tally of that move on this project is now: a module-name prefix, a class marker, state read at the
+wrong moment, a one-spelling grep, `pop(0)`, and a reserved name.** Six.
+
+**And the third Major was the same shape one level down** — two of three `execution` nesting branches were
+exercised by nothing, because **Fixture R's `shared` block was empty while the test's own name claimed
+it.** A fixture that does not instantiate the branch its name claims is a name standing in for a fact.
