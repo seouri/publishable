@@ -451,11 +451,12 @@ PHASES: frozenset[str] = frozenset(
 )
 """The closed vocabulary `append_observation`'s `phase` argument accepts
 (Decision 13). **The named constants carry this property, not the assert
-below**: a core call site written against `PHASE_RUN_START` and friends
-cannot misspell a phase, where the assert only converts an already-
-committed typo into a crash — and under `python -O` the assert is stripped
-entirely, so an optimized build loses even that. Say it once: the
-constants are the guarantee, the assert only backs them up.
+in `append_observation`**: a core call site written against
+`PHASE_RUN_START` and friends cannot misspell a phase, where the assert
+only converts an already-committed typo into a crash — and under
+`python -O` the assert is stripped entirely, so an optimized build loses
+even that. Say it once: the constants are the guarantee, the assert only
+backs them up.
 
 `PHASE_DRY_RUN` is named here and called by NOTHING at this commit — no
 build appends a `dry_run` line. Where one should is filed to H9 rather
@@ -465,21 +466,19 @@ the four phases, and both cannot hold until that gap is closed.
 
 **Measured cost when `append_observation`'s assert fires**, 2026-08-20, by
 patching it to raise and driving a real `run` through `main(["run", …])`
-twice: on the run-start round (before any execution), the `AssertionError`
+twice. On the run-start round (before any execution), the `AssertionError`
 traceback is UNCAUGHT — `main` catches only `PublishableError` and
-`OSError` — the run directory holds `apparatus/`, `environment/`,
-`manifest/`, `sweep.yaml`, `lock` is REMOVED (`RunLock.__exit__` runs as
-the exception propagates), and `run.yaml`/`executions.jsonl` are both
-ABSENT. On a LATER `pre_execution` round the same uncaught traceback fires
-with one execution ALREADY PAID FOR: `executions.jsonl` holds that one
-line and `run.yaml` is still absent. The reason is that `execute_plan`'s
-per-execution round is wrapped in `except ContractError`, and
-`AssertionError` deliberately is not one — a core-call-site fault is not a
-fault in what the caller asked for — so `CLAUDE.md`'s own phrase applies
-exactly as measured: every execution paid for, the record lost. At
-`freeze` the cost is smaller: nothing is caught there either, but the
-assert is that function's first statement, so nothing has been appended
-yet."""
+`OSError` — `lock` is REMOVED (`RunLock.__exit__` runs as the exception
+propagates), and `run.yaml`/`executions.jsonl` are both ABSENT. On a LATER
+`pre_execution` round the same uncaught traceback fires with one execution
+ALREADY PAID FOR: `executions.jsonl` holds that one line and `run.yaml` is
+still absent. The reason is that `execute_plan`'s per-execution round is
+wrapped in `except ContractError`, and `AssertionError` deliberately is
+not one — a core-call-site fault is not a fault in what the caller asked
+for — so `CLAUDE.md`'s own phrase applies exactly as measured: every
+execution paid for, the record lost. At `freeze` the cost is smaller:
+nothing is caught there either, but the assert is that function's first
+statement, so nothing has been appended yet."""
 
 
 def append_observation(

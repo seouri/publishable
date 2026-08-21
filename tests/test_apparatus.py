@@ -1290,22 +1290,33 @@ def test_phases_is_exactly_the_four_named_constants():
 
 def test_append_observation_accepts_each_of_the_four_named_phases(tmp_path):
     """Mutation M7's non-mutated arm: one call per name, each landing its own
-    line carrying its own `phase`. Removing any one name from `PHASES`
-    turns this into an `AssertionError` fired at that name — run once per
-    name removed, exercised by hand and reported in the task report rather
-    than shipped as a mutated permanent test."""
+    line carrying its own `phase`. **Iterates the four LITERAL spellings,
+    never `PHASES` itself** (batch B2 review, Major 1: the first version of
+    this test looped over `sorted(PHASES)`, so a removed name was never
+    passed to `append_observation` at all — the expectation and the actual
+    moved together, all four removals failed on one arithmetic assertion
+    identically, and none through the guard being tested). Removing any one
+    of the four literal spellings from `PHASES` now turns THAT SPELLING's
+    own call into an `AssertionError`, fired at the removed name — run once
+    per name removed, exercised by hand and reported in the task report
+    rather than shipped as a mutated permanent test."""
     import json
 
-    from publishable.apparatus import PHASES, append_observation
+    from publishable.apparatus import append_observation
 
-    for phase in sorted(PHASES):
+    for phase in ("run_start", "pre_execution", "dry_run", "freeze"):
         append_observation(tmp_path, phase=phase, condition="00_x", probe="p", facts={})
     lines = [
         json.loads(line)
         for line in (tmp_path / "apparatus" / "probes.jsonl").read_text().splitlines()
     ]
     assert len(lines) == 4
-    assert {line["phase"] for line in lines} == set(PHASES)
+    assert [line["phase"] for line in lines] == [
+        "run_start",
+        "pre_execution",
+        "dry_run",
+        "freeze",
+    ]
 
 
 def test_append_observation_refuses_a_fifth_spelling_before_writing_anything(tmp_path):
@@ -1340,8 +1351,16 @@ def test_cli_and_runner_call_sites_pass_the_named_constants():
     sites pass a phase at all — `cli.command_run`'s run-start round and
     `runner.execute_plan`'s per-execution round — and both now read a
     constant rather than a literal, checked here by source inspection so a
-    reversion back to a bare string fails this test rather than only
-    failing silently under `python -O`."""
+    reversion of EITHER OF THESE TWO SITES back to a bare string fails
+    this test rather than only failing silently under `python -O`.
+
+    **This pin's own scope is exactly these two function bodies** (batch
+    B2 review, Minor 3) — it inspects `command_run` and `execute_plan` and
+    nothing else, so a hypothetical THIRD literal call site added
+    elsewhere in `src/publishable/` would not be caught by this test; the
+    completeness claim ("there is no third site") rests on the
+    reading-then-grep enumeration in the task report, not on this
+    assertion alone."""
     import inspect
 
     from publishable import cli as cli_mod
@@ -1354,3 +1373,109 @@ def test_cli_and_runner_call_sites_pass_the_named_constants():
     runner_source = inspect.getsource(runner_mod.execute_plan)
     assert "phase=apparatus.PHASE_PRE_EXECUTION" in runner_source
     assert 'phase="pre_execution"' not in runner_source
+
+
+# --- Fix round 1, Major 2: the surviving shape of `append_observation`'s
+# assert firing, pinned by a real run rather than left only in a docstring
+
+
+def test_the_run_start_fire_leaves_no_run_yaml_no_executions_and_no_lock(
+    installed, registries, tmp_path, monkeypatch
+):
+    """The docstring's run-start half, re-measured for this fix round rather
+    than carried a second time: `append_observation`'s assert is the
+    function's FIRST statement, above the `mkdir`, so `apparatus/` cannot
+    exist when it fires on the run-start round — the earlier docstring's
+    claim that it did was carried from a differently-labelled measurement
+    (batch B2 review, Major 2) and has since been deleted rather than
+    rewritten. What is pinned here is only what was independently
+    re-measured: the traceback is uncaught, `run.yaml` and
+    `executions.jsonl` are both absent, and `lock` is gone."""
+    from tests.test_cli import run_a_project
+
+    import publishable.apparatus as apparatus_mod
+
+    site = installed(
+        "dist-fix1-a", "1.0", {"publishable.probes": {"h8b_t1_probe": "fix1a_probe_mod:probe"}}
+    )
+    (site / "fix1a_probe_mod.py").write_text(_H8B_T1_PROBE_MODULE)
+
+    real_append = apparatus_mod.append_observation
+    calls = {"n": 0}
+
+    def patched(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise AssertionError("fix-round-1 probe: forced run-start fire")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(apparatus_mod, "append_observation", patched)
+
+    with pytest.raises(AssertionError, match="forced run-start fire"):
+        run_a_project(
+            tmp_path,
+            experiment_type="h8b_t1_assay",
+            parameters={"instrument": {"model": "m1"}},
+            sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+            _local_template=_H8B_T1_TEMPLATE,
+            expect_exit=1,
+        )
+
+    run_dirs = list((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+    assert not (run_dir / "lock").exists()
+
+
+def test_a_later_pre_execution_fire_leaves_one_paid_execution_and_no_run_yaml(
+    installed, registries, tmp_path, monkeypatch
+):
+    """The docstring's later-`pre_execution`-fire half: one execution already
+    paid for, `run.yaml` absent, `lock` gone — `CLAUDE.md`'s own phrase,
+    measured rather than quoted. The fourth `append_observation` call (two
+    run-start calls, then the first execution's `pre_execution` call) is
+    where the fire lands under this template's two-condition sweep."""
+    from tests.test_cli import run_a_project
+
+    import publishable.apparatus as apparatus_mod
+
+    site = installed(
+        "dist-fix1-b", "1.0", {"publishable.probes": {"fix1b_probe": "fix1b_probe_mod:probe"}}
+    )
+    (site / "fix1b_probe_mod.py").write_text(
+        _H8B_T1_PROBE_MODULE.replace("h8b_t1_probe", "fix1b_probe")
+    )
+    template = _H8B_T1_TEMPLATE.replace("h8b_t1_probe", "fix1b_probe").replace(
+        "h8b_t1_assay", "fix1b_assay"
+    )
+
+    real_append = apparatus_mod.append_observation
+    calls = {"n": 0}
+
+    def patched(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 4:
+            raise AssertionError("fix-round-1 probe: forced later pre_execution fire")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(apparatus_mod, "append_observation", patched)
+
+    with pytest.raises(AssertionError, match="forced later pre_execution fire"):
+        run_a_project(
+            tmp_path,
+            experiment_type="fix1b_assay",
+            parameters={"instrument": {"model": "m1"}},
+            sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+            _local_template=template,
+            expect_exit=1,
+        )
+
+    run_dirs = list((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "lock").exists()
+    executions = (run_dir / "executions.jsonl").read_text().splitlines()
+    assert len(executions) == 1

@@ -1124,6 +1124,21 @@ checkboxes below are this task's work items, and the two are deliberately not th
         probing now would pin a fact the run's own gate never adopted. Task 1 returns an empty
         `Observations` for both an absent file and a file with no qualifying line; **this code covers
         both**, because the remedy is identical.
+      - **Carried forward from task 1's batch review (Major 3), not closed there and not this task's
+        to skip.** `replay_ledger`'s `E-FREEZE-LEDGER-UNREADABLE` guard checks key PRESENCE only, not
+        shape: a line whose `facts` value is present but not a mapping (`null`, a list) raises a bare
+        `AttributeError` out of `Observations.record` rather than being refused, and a line whose
+        `condition` value is present but not a `str` (an `int`, say) is accepted silently and yields
+        an int-keyed baseline that reads as "never answered" — a quieter fail-open, since it lets
+        `freeze` adopt a pin it should have refused to compute at all. Both are exactly the
+        edited-or-truncated-file class this refusal exists for, and the § Errors row task 12 writes
+        for `E-FREEZE-LEDGER-UNREADABLE` gives the cause as "the file was edited or truncated" — a
+        cause this task's own gate cannot currently honour for these two shapes. Once this task wires
+        `freeze`, `main` catches only `PublishableError`/`OSError`, so an `AttributeError` here becomes
+        an uncaught traceback rather than a diagnostic. **Repair, under code that already exists**:
+        extend `replay_ledger`'s guard to also require `isinstance(doc["facts"], Mapping)` and
+        `isinstance(doc["condition"], str)` before calling `Observations.record`, reported as the same
+        one code.
       - **`E-FREEZE-PROBE-MISMATCH`** is the one that is easy to miss. `templates/**` is hashed but
         freely **editable while a run executes**, and `freeze` resolves the template **now**. Probing a
         different apparatus than the run measures through, and then reporting `unchanged`, is worse
