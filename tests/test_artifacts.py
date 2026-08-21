@@ -9,7 +9,14 @@ import pytest
 import yaml
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
-from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
+from publishable.artifacts import (
+    ReportIO,
+    StepIO,
+    allocation_hash,
+    build_allocation_document,
+    derive_step_scopes_and_repeats,
+    write_atomic,
+)
 from publishable.lineage import UpstreamLedger, UpstreamResolver
 from publishable.run_record import SCHEMA_VERSION
 from publishable.units import ArmPlan, HoldoutPlan, Unit, UnitList, assignment_for
@@ -1255,6 +1262,231 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
     target.mkdir(parents=True)
     (target / "scores.json").write_text('{"s": 1}\n')
     assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
+
+
+# ---------------------------------------------------------------------------
+# H8c task 2 — `derive_step_scopes_and_repeats`, the derivation
+# `lineage.resolve_step` does NOT perform (§ Corrections, correction 2), and
+# `ReportIO`, the read half a `summary`-scope `StepIO` carries and nothing
+# else (Decision 4). `ReportIO.read_condition` shares its traversal with
+# `StepIO.read_condition` through the module-level `_resolve_condition_step_dir`
+# / `_nest_repeat_segment` this task extracts — proved by the load-bearing
+# mutation below, which fails a test of each.
+# ---------------------------------------------------------------------------
+
+
+def test_derive_step_scopes_and_repeats_reads_the_three_way_split(tmp_path: Path):
+    """Every branch `run_record._execution_block` can write: a `run`-scoped
+    step (`shared`), a `summary`-scoped one, a `condition`-scoped entry that
+    holds `status` directly, and a `repeat`-scoped entry whose keys are
+    repeat labels. Constructed by hand rather than through a real run — this
+    pins the derivation in isolation from everything a real `execute_plan`
+    would also produce.
+    """
+    execution = {
+        "shared": {"load": {"status": "completed"}},
+        "summary": {"compare": {"status": "completed"}},
+        "conditions": [
+            {
+                "index": 0,
+                "label": "baseline",
+                "steps": {
+                    "fit": {"status": "completed"},
+                    "analyze": {
+                        "seed1": {"status": "completed"},
+                        "seed2": {"status": "completed"},
+                    },
+                },
+            }
+        ],
+    }
+    step_scopes, repeats = derive_step_scopes_and_repeats(execution)
+    assert step_scopes == {
+        "load": "run",
+        "compare": "summary",
+        "fit": "condition",
+        "analyze": "repeat",
+    }
+    assert repeats == ["seed1", "seed2"]
+
+
+def test_derive_step_scopes_and_repeats_at_one_repeat_still_reports_the_label(tmp_path: Path):
+    """Measured (§ Corrections, correction 2): a repeat-scoped step's
+    `execution` entry nests labels even when the run resolved exactly one —
+    the record nests, the directory collapses. So `repeats` still comes back
+    non-empty, and it is `len(repeats) > 1` — never the entry's own presence
+    or absence of nesting — that later decides whether a path nests.
+    """
+    execution = {
+        "shared": {},
+        "summary": {},
+        "conditions": [
+            {
+                "index": 0,
+                "label": "baseline",
+                "steps": {"analyze": {"seed1": {"status": "completed"}}},
+            }
+        ],
+    }
+    step_scopes, repeats = derive_step_scopes_and_repeats(execution)
+    assert step_scopes == {"analyze": "repeat"}
+    assert repeats == ["seed1"]
+
+
+def test_derive_step_scopes_and_repeats_across_several_conditions_dedupes_labels(
+    tmp_path: Path,
+):
+    """Two conditions, the same repeat-scoped step, the same labels — the
+    labels are collected once, in first-seen order, not once per condition.
+    """
+    execution = {
+        "shared": {},
+        "summary": {},
+        "conditions": [
+            {
+                "index": 0,
+                "label": "baseline",
+                "steps": {"analyze": {"seed1": {"status": "completed"}}},
+            },
+            {
+                "index": 1,
+                "label": "method=spearman",
+                "steps": {"analyze": {"seed1": {"status": "completed"}}},
+            },
+        ],
+    }
+    _, repeats = derive_step_scopes_and_repeats(execution)
+    assert repeats == ["seed1"]
+
+
+def make_report_io(
+    tmp_path: Path,
+    *,
+    conditions: list[tuple[int, str | None]],
+    repeats: list[str] | None = None,
+    step_scopes: dict[str, str] | None = None,
+) -> ReportIO:
+    (tmp_path / "run").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(exist_ok=True)
+    return ReportIO(
+        run_dir=tmp_path / "run",
+        input_dir=tmp_path / "input",
+        conditions=conditions,
+        repeats=repeats or [],
+        step_scopes=step_scopes or {},
+    )
+
+
+def test_report_io_conditions_and_repeats_are_plain_properties(tmp_path: Path):
+    """No `_summary_only` gate: a report has no scope, so both are always
+    readable — unlike `StepIO`'s same-named properties, which refuse outside
+    `summary` scope (`test_conditions_and_read_condition_are_summary_only`).
+    """
+    io = make_report_io(
+        tmp_path, conditions=[(0, "baseline"), (1, "method=spearman")], repeats=["seed1", "seed2"]
+    )
+    assert io.conditions == [(0, "baseline"), (1, "method=spearman")]
+    assert io.repeats == ["seed1", "seed2"]
+
+
+def test_report_io_read_condition_resolves_a_null_label_condition(tmp_path: Path):
+    io = make_report_io(tmp_path, conditions=[(0, None)], step_scopes={"fit": "run"})
+    target = io.run_dir / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    assert io.read_condition(0, "fit", "model.json") == {"m": 1}
+
+
+def test_report_io_read_condition_accepts_the_element_conditions_yields(tmp_path: Path):
+    """The documented pattern, byte-identical to `StepIO`'s:
+    `for condition in io.conditions: io.read_condition(condition, ...)`."""
+    io = make_report_io(
+        tmp_path,
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"fit": "condition"},
+    )
+    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    results = {}
+    for condition in io.conditions:
+        if condition[0] == 1:
+            results[condition] = io.read_condition(condition, "fit", "model.json")
+    assert results[(1, "method=spearman")] == {"m": 1}
+
+
+def test_report_io_read_condition_resolves_a_named_repeat_when_the_run_has_several(
+    tmp_path: Path,
+):
+    io = make_report_io(
+        tmp_path,
+        conditions=[(0, "baseline")],
+        repeats=["seed1", "seed2"],
+        step_scopes={"analyze": "repeat"},
+    )
+    target = io.run_dir / "conditions" / "00_baseline" / "seed2" / "analyze"
+    target.mkdir(parents=True)
+    (target / "scores.json").write_text('{"s": 2}\n')
+    assert io.read_condition(0, "analyze", "scores.json", repeat="seed2") == {"s": 2}
+
+
+def test_report_io_read_condition_collapses_the_repeat_directory_at_one_repeat(
+    tmp_path: Path,
+):
+    """The discriminating case (§ Corrections, correction 2): one resolved
+    repeat, so the directory carries no repeat-label segment even though the
+    record's own entry would have nested one. Mirrors
+    `test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one`
+    on the `StepIO` side, over the SAME shared traversal function."""
+    io = make_report_io(
+        tmp_path,
+        conditions=[(0, "baseline")],
+        repeats=["seed1"],
+        step_scopes={"analyze": "repeat"},
+    )
+    target = io.run_dir / "conditions" / "00_baseline" / "analyze"
+    target.mkdir(parents=True)
+    (target / "scores.json").write_text('{"s": 1}\n')
+    assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
+
+
+def test_report_io_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
+    io = make_report_io(tmp_path, conditions=[(0, "baseline")], step_scopes={"analyze": "repeat"})
+    with pytest.raises(ContractError) as e:
+        io.read_condition(0, "analyze", "units.parquet")
+    assert e.value.code == "E-STEP-READ-REPEAT-REQUIRED"
+
+
+def test_report_io_read_condition_rejects_an_unresolved_condition_index(tmp_path: Path):
+    io = make_report_io(tmp_path, conditions=[(0, "baseline")])
+    with pytest.raises(ContractError) as e:
+        io.read_condition(7, "s", "a.json")
+    assert e.value.code == "E-STEP-READ-CONDITION-UNKNOWN"
+
+
+def test_report_io_read_condition_name_containment_refuses_traversal(tmp_path: Path):
+    io = make_report_io(tmp_path, conditions=[(0, "baseline")], step_scopes={"fit": "condition"})
+    target = io.run_dir / "conditions" / "00_baseline" / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    with pytest.raises(ArtifactError) as e:
+        io.read_condition(0, "fit", "../../escape.json")
+    assert e.value.code == "E-ARTIFACT-NAME"
+
+
+def test_report_io_read_input_reads_from_input_dir(tmp_path: Path):
+    io = make_report_io(tmp_path, conditions=[(0, "baseline")])
+    (io.input_dir / "roster.json").write_text('{"n": 10}\n')
+    assert io.read_input("roster.json") == {"n": 10}
+
+
+def test_report_io_has_no_write_half(tmp_path: Path):
+    """The withheld half, asserted by name (task 2 step 4) — a positive arm
+    cannot see this, which is *the control asserting only absences* run
+    backwards: pair it with the tests above, where all four members work."""
+    io = make_report_io(tmp_path, conditions=[(0, None)])
+    for name in ("write", "record", "append", "finalize", "skip"):
+        assert not hasattr(io, name)
 
 
 # ---------------------------------------------------------------------------

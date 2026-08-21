@@ -355,6 +355,125 @@ def allocation_hash(document: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _nest_repeat_segment(
+    base: Path, target: str | None, repeat: str | None, repeats: list[str]
+) -> Path:
+    """The repeat-label segment a `repeat`-scoped target's directory carries.
+
+    Module-level and called by both `StepIO` (`read_condition`'s traversal and
+    `read_upstream`, through `StepIO._nest_repeat`) and `ReportIO.read_condition`
+    (H8c task 2, § Corrections correction 2, design Decision 4) — one rule
+    shared by both readers of the same artifact tree, rather than copied, on
+    `_nest_repeat`'s own original precedent: "One rule, two callers … Writing
+    it twice is how the two drift — which is exactly what had happened."
+
+    A degenerate repeat level collapses — `runner.step_dir_for` adds no
+    segment when the run resolved one repeat — so the segment appears exactly
+    when there is more than one, which is also why the omission this
+    docstring's precedent describes was invisible until a design had a second
+    seed. Measured (H8c): a repeat-scoped step's `execution` entry nests
+    repeat labels even when the run resolved exactly one, while the directory
+    it names has already collapsed — so `len(repeats) > 1` is the only
+    correct read of "did this run's directory nest," and the entry's own key
+    count cannot be substituted for it.
+    """
+    if target == "repeat" and repeat and len(repeats) > 1:
+        return base / repeat
+    return base
+
+
+def _resolve_condition_step_dir(
+    *,
+    run_dir: Path,
+    conditions: list[tuple[int, str | None]],
+    step_scopes: dict[str, str],
+    repeats: list[str],
+    condition: "int | tuple[int, str | None]",
+    step: str,
+    repeat: str | None,
+) -> Path:
+    """The read half of `read_condition`'s traversal, module-level so
+    `StepIO` and `ReportIO` call the same function rather than each growing
+    their own copy (H8c task 2, § Corrections correction 2).
+
+    `condition` accepts either a bare index or the `(index, label)` element
+    `io.conditions` yields, so the documented `for condition in io.conditions:
+    io.read_condition(condition, ...)` pattern and a literal index both work.
+
+    A resolved condition's label can itself be `None` — the no-`sweep` case,
+    where there is no `conditions/` level to nest under — so membership is
+    checked against the resolved *indices*, never by testing the label for
+    `None`: that would make a legitimately unlabeled condition indistinguishable
+    from an index this run never resolved.
+    """
+    index = condition[0] if isinstance(condition, tuple) else condition
+    target = step_scopes.get(step)
+    if target == "repeat" and repeat is None:
+        raise ContractError(
+            f"`{step}` is repeat-scoped, so `read_condition` needs a `repeat=` naming "
+            "which repeat's copy to read",
+            code="E-STEP-READ-REPEAT-REQUIRED",
+        )
+    by_index = dict(conditions)
+    if index not in by_index:
+        raise ContractError(
+            f"condition {index} is not among this run's resolved conditions",
+            code="E-STEP-READ-CONDITION-UNKNOWN",
+        )
+    label = by_index[index]
+    base = run_dir if label is None else (run_dir / "conditions" / condition_dir_name(index, label))
+    return _nest_repeat_segment(base, target, repeat, repeats) / step
+
+
+def derive_step_scopes_and_repeats(execution: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """`step_scopes` and `repeats`, derived from a run record's `execution`
+    block — never from `lineage.resolve_step`, which resolves a *location*
+    for `shared`/`summary` and *refuses* anything under `conditions[]`
+    (`E-UPSTREAM-STEP-SCOPED`), never distinguishing `condition` from
+    `repeat` (§ Corrections, correction 2; design Decision 4 named
+    `resolve_step` as the source, which is false of the code).
+
+    The measured discriminator: a step in `execution["shared"]` is
+    `"run"`-scoped; one in `execution["summary"]` is `"summary"`-scoped; a
+    step under a `execution["conditions"][i]["steps"]` entry that itself
+    holds `"status"` is `"condition"`-scoped (`run_record._execution_block`
+    writes that entry directly, from one `ExecutionResult`); one whose entry
+    is instead a mapping of repeat labels to such entries is
+    `"repeat"`-scoped.
+
+    `repeats` is read off those same repeat-scoped entries' keys — the labels
+    `run_record._execution_block` nested them under, in the order they were
+    inserted, which is EXECUTION order, not necessarily a `summary` step's
+    plan order under `order: randomized` (§ Corrections, correction 10). A
+    condition's `results.conditions[i]["per_repeat"]` carries the identical
+    labels, a separate part of the record that agrees with this one rather
+    than a second source this function reads. **Claim no ordering identity
+    beyond that: only `len(repeats) > 1` is load-bearing**, since that length
+    alone is what `_nest_repeat_segment` uses to decide whether a repeat
+    level nests at all — the measured one-repeat case (the record nests, the
+    directory collapses) is exactly why an entry's key *count* can never
+    substitute for it.
+    """
+    step_scopes: dict[str, str] = {}
+    repeats: list[str] = []
+    seen: set[str] = set()
+    for step in execution.get("shared") or {}:
+        step_scopes[step] = "run"
+    for step in execution.get("summary") or {}:
+        step_scopes[step] = "summary"
+    for cond in execution.get("conditions") or []:
+        for step, entry in (cond.get("steps") or {}).items():
+            if isinstance(entry, dict) and "status" in entry:
+                step_scopes[step] = "condition"
+            else:
+                step_scopes[step] = "repeat"
+                for label in entry or {}:
+                    if label not in seen:
+                        seen.add(label)
+                        repeats.append(label)
+    return step_scopes, repeats
+
+
 class StepIO:
     def __init__(
         self,
@@ -771,52 +890,30 @@ class StepIO:
         `io.conditions` yields, so the documented `for condition in io.conditions:
         io.read_condition(condition, ...)` pattern and a literal index both work.
 
-        A resolved condition's label can itself be `None` — the no-`sweep` case,
-        where there is no `conditions/` level to nest under — so membership is
-        checked against the resolved *indices*, never by testing the label for
-        `None`: that would make a legitimately unlabeled condition indistinguishable
-        from an index this run never resolved.
+        The traversal itself — resolving `condition`/`step`/`repeat` to a
+        directory — is module-level (`_resolve_condition_step_dir`,
+        `_nest_repeat_segment`), shared with `ReportIO.read_condition` (H8c
+        task 2), so this method is now the `_summary_only` gate plus a call.
         """
         self._summary_only("read_condition")
-        index = condition[0] if isinstance(condition, tuple) else condition
-        target = (self._step_scopes or {}).get(step)
-        if target == "repeat" and repeat is None:
-            raise ContractError(
-                f"`{step}` is repeat-scoped, so `read_condition` needs a `repeat=` naming "
-                "which repeat's copy to read",
-                code="E-STEP-READ-REPEAT-REQUIRED",
-            )
-        by_index = dict(self._conditions or [])
-        if index not in by_index:
-            raise ContractError(
-                f"condition {index} is not among this run's resolved conditions",
-                code="E-STEP-READ-CONDITION-UNKNOWN",
-            )
-        label = by_index[index]
-        base = (
-            self.run_dir
-            if label is None
-            else (self.run_dir / "conditions" / condition_dir_name(index, label))
+        step_dir = _resolve_condition_step_dir(
+            run_dir=self.run_dir,
+            conditions=self._conditions or [],
+            step_scopes=self._step_scopes or {},
+            repeats=self._repeats or [],
+            condition=condition,
+            step=step,
+            repeat=repeat,
         )
-        step_dir = self._nest_repeat(base, target, repeat) / step
         return self._read(self._contained(step_dir, name, code="E-ARTIFACT-NAME"))
 
     def _nest_repeat(self, base: Path, target: str | None, repeat: str | None) -> Path:
-        """The repeat-label segment a `repeat`-scoped target's directory carries.
-
-        One rule, two callers: `read_condition` takes the repeat as an argument and
-        `read_upstream` uses this execution's own. Writing it twice is how the two
-        drift — which is exactly what had happened, `read_upstream` omitting the
-        segment entirely and resolving to a path nothing writes.
-
-        A degenerate repeat level collapses — `runner.step_dir_for` adds no segment
-        when the run resolved one repeat — so the segment appears exactly when there
-        is more than one, which is also why the omission was invisible until a
-        design had a second seed.
+        """`read_upstream`'s own call onto the module-level
+        `_nest_repeat_segment` — kept as a method because `read_upstream`
+        (unlike `read_condition`) has no other reason to reach outside
+        `self`, and this is the one line that needs `self._repeats`.
         """
-        if target == "repeat" and repeat and len(self._repeats or []) > 1:
-            return base / repeat
-        return base
+        return _nest_repeat_segment(base, target, repeat, self._repeats or [])
 
     def read_upstream(self, step: str, name: str) -> Any:
         target = (self._step_scopes or {}).get(step)
@@ -1006,6 +1103,97 @@ class StepIO:
                 code="E-ARTIFACT-UNREADABLE",
             )
         return reader(path.read_bytes())
+
+
+class ReportIO:
+    """The read half a `summary`-scope `StepIO` carries, and nothing else —
+    handed to `BaseReport.sections` so an override can reach any condition's
+    artifacts (docs/reference.md § A report override; design Decision 4).
+
+    Measured (§ Corrections, correction 4): a `summary`-scope `StepIO` is
+    NOT read-only — it carries `record`, `write`, `append`, `skip` and
+    `finalize`. Handing one to a renderer would let presentation code write
+    into a finished run directory, which is the opposite of what `report`
+    is. So `ReportIO` does **not** subclass `StepIO` — that would inherit
+    the write half it exists to withhold — and `StepIO` does not subclass
+    `ReportIO` either. The four bodies below are the same shape a `summary`
+    step's `io.conditions` / `io.repeats` / `io.read_condition` /
+    `io.read_input` have, byte for byte, sharing the read traversal with
+    `StepIO` through the module-level functions above rather than through
+    inheritance in either direction — so a change to the artifact-tree
+    layout cannot move for a step and hold still for a report.
+
+    Every field is handed in already derived from a run record: `conditions`
+    from `results.conditions`' `index`/`label`, `run_dir` from the record
+    path's parent, `input_dir` from the embedded `config.data.input_dir`,
+    and `step_scopes`/`repeats` from `derive_step_scopes_and_repeats(
+    record["execution"])` above — the derivation `lineage.resolve_step`
+    does NOT perform (§ Corrections, correction 2). `ReportIO` itself does
+    no record-reading; it holds what was already derived, exactly as
+    `StepIO`'s constructor does for a `summary` step.
+
+    A report has no scope, so unlike `StepIO`'s `conditions`/`repeats`/
+    `read_condition`, none of the four is gated by `_summary_only` — every
+    report is, in effect, already at the widest scope there is.
+    """
+
+    def __init__(
+        self,
+        *,
+        run_dir: Path,
+        input_dir: Path,
+        conditions: list[tuple[int, str | None]],
+        repeats: list[str],
+        step_scopes: dict[str, str],
+    ) -> None:
+        self.run_dir = run_dir
+        self.input_dir = input_dir
+        self._conditions = conditions
+        self._repeats = repeats
+        self._step_scopes = step_scopes
+
+    @property
+    def conditions(self) -> list[tuple[int, str | None]]:
+        return list(self._conditions)
+
+    @property
+    def repeats(self) -> list[str]:
+        """The record's own repeat labels, in EXECUTION order — never a
+        `summary` step's plan order under `order: randomized` (§
+        Corrections, correction 10). **Claims no ordering identity beyond
+        that**: only `len() > 1` is load-bearing, because that length alone
+        is what decides whether a repeat-scoped artifact's path nests under
+        a label at all (`_nest_repeat_segment`).
+        """
+        return list(self._repeats)
+
+    def read_condition(
+        self,
+        condition: "int | tuple[int, str | None]",
+        step: str,
+        name: str,
+        repeat: str | None = None,
+    ) -> Any:
+        """Same signature, same containment check on `name`
+        (`E-ARTIFACT-NAME`), same refusals as `StepIO.read_condition` — the
+        documented `for condition in io.conditions: io.read_condition(condition,
+        ...)` pattern is byte-identical in an override and in a `summary`
+        step. No `_summary_only` gate: a report has no scope to be narrower
+        than.
+        """
+        step_dir = _resolve_condition_step_dir(
+            run_dir=self.run_dir,
+            conditions=self._conditions,
+            step_scopes=self._step_scopes,
+            repeats=self._repeats,
+            condition=condition,
+            step=step,
+            repeat=repeat,
+        )
+        return StepIO._read(StepIO._contained(step_dir, name, code="E-ARTIFACT-NAME"))
+
+    def read_input(self, relpath: str) -> Any:
+        return StepIO._read(self.input_dir / relpath)
 
 
 class ResolverIO:
