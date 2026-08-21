@@ -52,3 +52,260 @@ documents task and **three of its four whole-branch Majors lived in that commit.
 **every code's § Errors row in the commit that raises it**, because *a row narrower than its code* was the
 whole-branch Major on **both** preceding sub-slices — the second time in the very task that went
 unreviewed.
+
+## Batch 1 — task 17 — the guard pin, four arms
+
+Commits `52612ed` (the pin), `2610ef4` (report). Suite 2636 → **2643**. Four gates clean.
+
+**The implementing agent stalled waiting on a monitor** — the sixth instance across these slices, and its
+instructions said in bold not to construct one. **I verified the true state rather than assuming it:**
+455 insertions across three test files, **zero deletions**, so no mutation was left applied — established
+from the diffstat, not from the agent's account. Gates run, work committed by me, and the agent then wrote
+only its report, with the stall recorded in it. **One of the previous five stalls left a mutation applied**,
+which is why the diffstat check comes before anything else.
+
+**Arm D is the arm worth understanding, because it enforces § The worked example without being trusted.**
+It pins the three worked `diff` blocks' rows as **raw text, located by the `code_hash` line each block
+contains** rather than by position — and task 16 inserts its two header lines **above** `code_hash`, so
+**a passing arm D is itself the proof** that no hash prefix, run ID, delta line, row label, row order or
+separator moved. **It deliberately has no authorized editor**: if it fires, that is a finding. Arm B, by
+contrast, names **task 1** as sole editor with the post-edit state stated in advance — the fourth clean
+cycle of that mechanism.
+
+## Batch 2 — tasks 1, 2 — `BaseReport` and `ReportIO`, nothing dispatched
+
+Commits `6b0bd04` (`BaseReport`, frozen `Section`, the one new export), `56e6dc1` (`ReportIO` and one
+traversal two classes call), `0140715` (report). Suite 2643 → 2651 → **2665**; mypy 49 → **50**,
+formatter 88 → **90**.
+
+**The authorized-editor mechanism completed a fourth clean cycle**, and this one inverted a negative the
+right way: arm B's `assert "BaseReport" not in publishable.__all__` is **gone**, replaced by the name
+entering the **full sorted list equality** — which asserts presence *and* position, so it is strictly
+stronger than the negative it replaced. Same shape as H8a's `not in` → `== []`.
+
+**A carry-forward was made correctly and I am carrying it myself, because a report cannot reach a brief.**
+Task 1's render-level mutation arm — an override reaching into a **standard** section's mapping body —
+could not be written yet, because no standard section with a mapping body exists until task 5. The batch
+named it forward to task 5 **explicitly citing the routing failures on H8a and H8b**. But briefs are
+extracted from the plan, and **that is exactly how H8a lost a finding between a review and the brief
+written from it** — so **the carry travels in B4's dispatch**, not only in the report.
+
+**One structural note the batch disclosed rather than hid:** `ReportIO` calls `StepIO._read` and
+`StepIO._contained` directly — both stateless static methods, reuse rather than inheritance — so
+`ReportIO`'s module still names `StepIO`. Disclosed as a symmetry question for a later reviewer rather
+than resolved unilaterally, which is the right disposition for a shape that is correct but arguably
+misplaced.
+
+## Batch 3 — task 3 alone — override discovery, the slice's proxy risk
+
+Commits `cbd1461` (override discovery, four codes with their § Errors rows), `12f853d` (report). Suite
+2665 → **2685**. **Spec compliance PASS; three Majors, three Minors.**
+
+**Isolating this batch paid for itself: the proxy class recurred in a new costume and the review caught
+it.** `sys.path` restoration was **pinned by nothing** — replacing the `finally` body with `pass` left the
+full suite green — **and `pop(0)` answers *which entry did I add?* with a POSITION rather than with the
+entry.** It is reachable, because **user code runs inside that window by design**: an override doing its
+own `sys.path.insert(0, …)` makes the pop remove the wrong entry, and a second project's override then
+rendered **from the first project's `src/`.** That is Decision 3's own cost-if-wrong by a route other
+than a scan.
+
+**And the defence cited for it is where the reasoning slipped, which is the transferable part.** The
+docstring justified `pop(0)` because `load_experiment` pops by index too — **accurate about the mechanism
+and wrong about the exposure**: only an *import* runs inside that window, and a whole *render* runs inside
+this one. **A precedent that matches the code and not the risk is not a precedent.** Now a `CLAUDE.md`
+entry: *removing by position is a fifth proxy.*
+
+**The core of the task was certified the right way**, by showing both facts **steer** the answer rather
+than merely get read: repointing only `entrypoint` yields the decoy; rewriting only `repo_root.txt` yields
+the other project. And **M15 — the mutation the design and the scoping both missed — reproduced in both
+forms**, with a single-project probe passing identically on shipped code **and under both mutated forms**,
+which is what makes the blindness real rather than asserted.
+
+**A decoy whose sort position agrees with the bug — twice in one task**, the second time after the first
+had been caught and disclosed. M1's fixture ruled out only *first*-wins; **scan-last passed** because the
+decoy sorted before the real package. **Catching it once did not immunize the next fixture.** Now a
+`CLAUDE.md` row: put a decoy on **each side**.
+
+### Two controller errors of mine, same root cause
+
+**I ran `git add -A` while a fix-round agent held this worktree**, and committed its in-progress
+`report.py` docstring fix under a message that did not describe it. Nothing was lost — I checked whether
+I had captured a **fix or a live mutation** before doing anything else, and it was a fix — but that is
+the second instance of one root cause: **treating the worktree as mine while an agent holds it.** The
+first was running a review and an implementation concurrently, which polluted the reviewer's baseline.
+**Do not stage broadly while an agent is writing; name the paths.**
+
+**And a commit message described edits the commit did not contain.** A heredoc asserted on its second
+anchor *after* replacing the first, so `write_text` never ran — and `git add -A` then committed an
+untracked review file under a message written for work that had not landed. **The message was the claim
+and the diffstat was the fact**, which is this project's own rule about comments, arriving in a commit
+message. Corrected by a follow-up commit that says what happened rather than by rewriting a pushed
+commit.
+
+## Batch 4 — tasks 4-7 — record in, text out
+
+Commits `556565b` (`report_form`, `read_record_file`), `9a3202c` (Conditions, Deltas), `6c642b0`
+(Verdicts, Attrition, the `nondeterministic` filing), `eebbe2a` (both renderers), `ca4e47a`, `2092594`,
+`d73303f` (fix round). Suite 2689 → 2737 → **2738**. **Spec compliance PASS; three Majors, eleven
+Minors.**
+
+**The carried mutation was routed correctly and was still vacuous, which is the lesson.** M14's whole
+history is routing: it could not be built when task 1 ran, batch 2 named it forward, and **I carried it in
+the dispatch myself** because a report cannot reach a brief. It got built — and the test named
+`..._reaches_the_page` **rendered nothing**, mutating a dict and asserting the same dict. Gutting
+`render_markdown` to `return "GUTTED"` left it green. **Getting a mutation routed to the right task is
+necessary and not sufficient; it then has to test the thing.** Rebuilt to render through both renderers
+and assert on emitted text, with the gutted-renderer mutation confirmed failing.
+
+**A design defect, and the fifth instance of one move.** A recorded column named `by` was **silently
+dropped from the render**, because the Conditions filter excluded a `report_by` stratum by **the string
+`by`.** Decision 5's ground — *"the record `report` reads can never hold a metric called `by`"* — is
+**false against a real run**, where that column is a genuine metric entry with value, `ci95`, method and
+`repeat_spread`, and `cli.py` says in writing the column *"keeps its value"*. **Ruling: exclude by
+structure, not by name** — a stratum is identifiable by **where it sits in the record**, not by what it is
+called. Now `_is_metric_entry`/`_is_strata_block`, with *"never identified by name"* in the docstring, and
+`stats.RESERVED_METRIC_NAMES` left alone because its own site guards a **derived-key collision**, a
+different question.
+
+**The tally of that move on this project is now: a module-name prefix, a class marker, state read at the
+wrong moment, a one-spelling grep, `pop(0)`, and a reserved name.** Six.
+
+**And the third Major was the same shape one level down** — two of three `execution` nesting branches were
+exercised by nothing, because **Fixture R's `shared` block was empty while the test's own name claimed
+it.** A fixture that does not instantiate the branch its name claims is a name standing in for a fact.
+
+## Batch 5 — tasks 8, 9 — `report` becomes a real command
+
+Commits `65207c1` (task 8), `f54c3e7` (task 9), `96b7060` (report), `fd3f843` (fix round). Suite 2738 →
+2746 → **2753**. **Both verdicts FAILED on review: one Critical, three Majors, six Minors — all closed.**
+
+**The Critical is the sixth credential leak of this class, and its cause is the most transferable yet.**
+`get_template` and `declared_credential_names_for` ran **outside every `try`** and **before `credentials`
+existed**, so a project-local template raising at import escaped to `main`'s un-redacted printer.
+Verified with a positive control: **`validate` over the identical project prints `<redacted:…>` while
+`report` printed the sentinel** — and § Secrets explicitly promises redaction for a post-registration
+raise.
+
+**`freeze` — the recipe cited as the precedent — already had it right.** The calls were lifted; **the
+`try` they sit inside was not.** Now a `CLAUDE.md` entry: **a recipe is its calls PLUS where they sit.**
+The fix mirrors `freeze._precheck`'s own `except BaseException`, with the reasoning written beside it and
+the reason `command_run` gets away with an unguarded call (it validates first; `command_report` does not).
+
+**My scrutiny question about the placeholder was the right one to ask.** `report <study.yaml>` printed
+*"specified but not built"* and **exited 2** — false as of the commit that flipped the `Status` cell to
+`built`, and **Decision 6 reserves 2 for invocation faults.** The CLI-table test forbids that sentence for
+a built row **and cannot reach it**, while the batch's own test **pinned the sentence as present.** **A
+placeholder that lies about build state is not a placeholder**; it is now a coded refusal at a permitted
+exit code.
+
+**A judgement I endorsed rather than overruled.** A credential an override renders **into a body** reaches
+stdout, and the reviewer **declined to grade it Critical** because § Secrets' documented limit covers only
+an execution's `error` and a diagnostic's message. That is correct — the specification permits it, and
+grading it Critical against a blanket instruction would have been wrong. **The remedy is the sentence, not
+the behaviour:** the limit now names a rendered report body, so the next reader need not re-derive it.
+
+**And a fix that was correct and unpinned, again.** Mutating `raise KeyboardInterrupt from None` to a bare
+`raise` left the **full suite unchanged** while the probe leaked the sentinel — the row `CLAUDE.md` counts
+five times in three slices, now six.
+
+## Batches 6 and 7 — `report <study.yaml>`, then `study new`/`study add`
+
+Batch 6: `a828ee9`, `f3ec269`, `6fee3fe` (fix round). Batch 7: `c84a820`, `35586e8`, `3b24652`,
+`30b69df`, `7e5f9b9`, `02bcaa2` (fix round). Suite 2753 → 2776 → 2783 → 2821 → **2823**; mypy 50 → **51**,
+formatter 90 → **92**. **Batch 6 failed task quality; batch 7 failed both verdicts.**
+
+**Batch 6's isolation delivered what it was for.** The negative it existed to certify — **no override
+discovery on the bundle path** — holds, verified independently three ways: the bundle arm returns before
+both call sites, the four section functions take `run` only so the `io` is **unreachable by
+construction**, and there is no `hashes`/`apparatus` import at all. The prescribed discovery mutation
+reproduced at exactly **12 failed / 102 passed**.
+
+**But four of its pins could not fail, and three were one shape — now a `CLAUDE.md` row: an assertion
+satisfied by NEIGHBOURING OUTPUT.** `assert "draft" in out` passed because the member was named
+**`draft_run`**; a `run`-tag pin passed on the bundle header's `##` heading; and a no-notice control took
+**no `capsys`** and asserted only an exit code the notice never changes. All three stayed green with the
+behaviour neutered. **When you assert a substring, ask what else in the output could produce it.**
+
+### Batch 7's Critical: a branch dead on every real record
+
+**`results.summary` is nested by step name** — the producer writes `summary[e.step_name] = …` — so the
+thin-metric walk inspected a mapping carrying neither `basis` nor `reported` and **silently returned
+nothing.** A real run with two `Estimate`s against a floor of 10 gave `[]`.
+
+Three things compounded it. **The design's own table asserted that branch was "measured in r3's
+`results.summary`"** — a reachability the code could not deliver. **All three of its pins were built at
+the nesting `run` never produces** — fixtures agreeing with the bug. And **a correction that re-read
+`W-STEP-ESTIMATE-N` judged it "still true on that basis"** — the right verdict from a wrong premise, which
+is the subtlest way a re-read can fail.
+
+**And it was the fourth defect in this slice fixable by reading a sibling that already had it right** —
+now a `CLAUDE.md` rule. The others: `freeze`'s credential containment **copied as calls without its
+`try`**; a reserved name where a **structural** test existed; `pop(0)` where **identity** removal existed.
+Here `report.py` already walked `results.summary` correctly, forty lines from the code that invented a
+shallower walk.
+
+**Also batch 7: a § Errors row narrower than its code — the whole-branch Major on BOTH preceding
+sub-slices — appearing as a CONTEXT LINE in all four of the batch's own commit diffs.** It was in front of
+the implementer four times.
+
+**What held on stronger evidence than claimed:** the duplicate-name refusal, snapshotted as
+`(size, mtime_ns, bytes)` rather than bytes alone, identical on **both** halves with the check preceding
+the record read; and the redaction, verified by a **full leaf-path diff** — exactly four paths change,
+**all six hash paths unchanged**, where the shipped test asserted three.
+
+## Batches 8 and 9 — `generate report`, then the documents
+
+Batch 8: `51fb7cb`, `37a8f68`, `ae71d2a` (fix round). Batch 9: `c794029`, `c10aa44` (fix round).
+Suite 2823 → 2828 → 2829 → 2832 → **2833**; mypy 51 → **52**, formatter 92 → **93**.
+
+**Batch 8's Major was pre-existing and family-wide, and its severity is worth stating precisely.** An
+unescaped user string is interpolated into generated Python, so `--format 'ht"ml'` exits `0` and writes a
+file that does not parse. **This is not a privilege boundary** — the user types the argument in their own
+shell against their own repo — so it is a **robustness** defect. **The serious half is the sibling:
+`generate step` with a crafted name exits `0` while leaving an existing `experiment.py` NON-PARSING**,
+corrupting a file it did not create. Fixed here for `--format`; filed family-wide.
+
+**The deferral that produced it is a shape this slice kept hitting:** the batch adjudicated *"let render
+catch it"* from the `--input-dir` precedent **without running it** — and the precedent does not hold,
+because **`--input-dir` seeds YAML while this seeds a Python literal.** Same class as the `pop(0)`
+defence: **a precedent that matches the mechanism but not the exposure.**
+
+### Batch 9 was reviewed, and reviewing it was the right call
+
+**Four Majors, all in the steps whose job was checking the record's own honesty** — the code audit
+produced two, the filing strike one, the dated entry one. That is the `CLAUDE.md` row I added after H8b,
+confirmed by measurement.
+
+**A dated build fact was pinned to the commit that most contradicts it** — the § Executability entry
+pinned to the branch's **first** commit, where all three commands were still unbuilt. **Worse than an
+undated claim**, because it invites a reader to verify and be misled. **A row narrower than its code
+shipped for the third slice running** — and this time **the same commit correctly widened the sibling row
+for the identical second caller and missed its neighbour**, both raised from one shared helper. **The
+lesson is not "audit harder": finding one instance of a shape is the moment to grep for the rest of it.**
+And **two filings this commit fixed were left unstruck**, sitting immediately below the one it did strike.
+
+**Arm D did what it was built three batches earlier to do.** The gate proved it **fires** on a mutated
+delta line and on a mutated hash prefix, and `git log -L` confirms **arm B has exactly its one authorized
+edit and arm D only its creating commit.** § The worked example is therefore **provably** untouched rather
+than asserted untouched — the strongest form that claim has taken here.
+
+## Independent whole-branch review: MERGE — no Critical, no Major, ten Minors
+
+**The gate looked hardest for the shape that was the whole-branch Major on both preceding sub-slices and
+did not find it**: it enumerated every raise reachable through the shared helpers and **every row covers
+every site**.
+
+**The sharpest Minor is the sibling rule running in reverse.** **`sys.path.pop(0)` is still live one file
+from where this branch replaced it with identity removal and wrote the rule down** — demonstrated as a
+discriminating pair, `validate` leaking the project's `src` while `report` removes correctly. **We found
+the shape, fixed it, recorded it, and left the neighbour holding it.**
+
+**And a routed question was closed with a reason rather than a change**: batch 2's symmetry question about
+`ReportIO` calling `StepIO._read`/`_contained` by class needs **no** change, recorded explicitly so it does
+not read as missed. **A routed question closed with a reason is worth as much as one closed with a
+change.**
+
+**The proxy tally is reconciled** — `CLAUDE.md` and this ledger had disagreed on the sixth. The reserved-
+name instance now has its own entry, and the positional-removal one is named as **the same fault as the
+one-spelling grep in a different currency** rather than a separate number, because inventing ordinals for
+one recurring mistake obscures that it is one mistake.

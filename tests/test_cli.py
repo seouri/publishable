@@ -844,6 +844,238 @@ def test_generate_template_takes_exactly_one_name_and_writes_nothing_otherwise(
     assert sorted(p.name for p in templates.iterdir()) == before
 
 
+GENERATED_REPORT = "src/cohort_pilot/report.py"
+
+
+def test_generate_report_writes_a_class_discovery_resolves_and_renders_all_four_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The round trip, not a file-existence check — the same shape
+    `test_generate_template_writes_a_template_that_resolves_by_name` uses.
+
+    `render_with_override` is called directly, with a `render` callback that
+    receives the RESOLVED CLASS, so this asserts two things a substring check
+    on the CLI's stdout could not tell apart (M6, the vacuity this slice's
+    own `CLAUDE.md` names against a neighbouring rendering): first, that
+    discovery genuinely found `cohort_pilot.report.Report` rather than
+    falling back to `render(None)` — the no-override path renders the exact
+    same four sections, so a test that only inspected rendered text could
+    not distinguish "the generated override ran" from "no override exists
+    at all"; second, that calling `.sections(record, io)` on that resolved
+    class yields all four standard titles, in Decision 5's order, because
+    the generated body is nothing but `yield from super().sections(run, io)`
+    and a `TODO` comment.
+    """
+    from publishable.report import render_with_override
+
+    built = run_a_project(tmp_path)
+    root = built["root"]
+    monkeypatch.chdir(root)
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_OK
+    generated = root / GENERATED_REPORT
+    assert generated.is_file()
+
+    record = yaml.safe_load((built["run_dir"] / "run.yaml").read_text())
+
+    def render(cls: Any) -> Any:
+        assert cls is not None, "discovery fell back to no-override"
+        assert cls.__module__ == "cohort_pilot.report"
+        assert cls.__name__ == "Report"
+        return [section.title for section in cls().sections(record, object())]
+
+    titles = render_with_override(built["run_dir"], record, render=render)
+    assert titles == ["Conditions", "Deltas", "Hypothesis verdicts", "Attrition"]
+
+
+def test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Decision 2: `BaseReport.format` has no base default, because
+    `generate report` ALWAYS writes the line — this is the test that makes
+    that claim true rather than aspirational. Two arms: `--format html`
+    seeds `html` verbatim, and omitting the flag still writes a line, never
+    an unset attribute — this generator's own default of `markdown`, not
+    `BaseReport`'s, which stays undeclared.
+
+    Both arms are pinned SYMMETRICALLY (fix round 1, Minor 4): each
+    `exec`s the generated text and asserts the resulting class's `format`
+    attribute, not only a substring of the source text — Decision 2's
+    grounds are that every generated class can be OBSERVED to take a
+    value, and the earlier form only observed one of the two arms.
+    """
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    def _exec_report(text: str) -> Any:
+        namespace: dict[str, Any] = {}
+        exec(compile(text, str(root / GENERATED_REPORT), "exec"), namespace)  # noqa: S102
+        return namespace["Report"]
+
+    assert main(["generate", "report", "cohort-pilot", "--format", "html"]) == EXIT_OK
+    text = (root / GENERATED_REPORT).read_text()
+    assert 'format = "html"' in text
+    assert _exec_report(text).format == "html"
+
+    (root / GENERATED_REPORT).unlink()
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_OK
+    text = (root / GENERATED_REPORT).read_text()
+    assert 'format = "markdown"' in text
+    assert _exec_report(text).format == "markdown"
+
+
+def test_generate_report_escapes_a_format_value_that_would_otherwise_break_the_literal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Fix round 1, Major 1 / Minor 1: `--format` used to be interpolated
+    verbatim between hand-written quotes, so a value carrying a `"` wrote a
+    file that did not parse, and a value crafted around that (a `"`,
+    a newline, then a statement) compiled and ran ARBITRARY CODE AT IMPORT
+    — reachable because the class body, not only the literal, was open to
+    the value. `json.dumps` now produces the quoted-and-escaped literal
+    text itself, so the value can never leave the string it's assigned to.
+
+    Two arms. The plain case a user might actually type, `ht"ml` — this is
+    also `report`'s own render-time refusal (`E-REPORT-FORMAT`) reaching a
+    code that PARSES rather than one it cannot import at all
+    (`E-REPORT-OVERRIDE-IMPORT`), which is what makes the generator
+    docstring's "declaring anything else is refused with `E-REPORT-FORMAT`"
+    true of every string again, not only the ones with no quote in them.
+    And the actual injection payload the review verified against the prior
+    form: a value that closes the literal, opens a fresh statement, and
+    calls `os.system(...)` — importing the generated module must not run
+    it, checked by asserting the payload's own marker text never reaches
+    the imported module's `__dict__` as anything but the inert string
+    `format` was assigned.
+    """
+    import importlib.util
+
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot", "--format", 'ht"ml']) == EXIT_OK
+    generated = root / GENERATED_REPORT
+    text = generated.read_text()
+    compile(text, str(generated), "exec")  # parses — the property this fix guarantees
+    namespace: dict[str, Any] = {}
+    exec(compile(text, str(generated), "exec"), namespace)  # noqa: S102
+    assert namespace["Report"].format == 'ht"ml'
+
+    from publishable.report import render_report
+
+    with pytest.raises(Exception) as exc_info:
+        render_report(namespace["Report"], {}, None)
+    assert getattr(exc_info.value, "code", None) == "E-REPORT-FORMAT"
+
+    generated.unlink()
+    payload = 'x"\n    import os\n    os.system("touch injected.marker")  # '
+    assert main(["generate", "report", "cohort-pilot", "--format", payload]) == EXIT_OK
+    text = generated.read_text()
+    compile(text, str(generated), "exec")  # still parses
+    spec = importlib.util.spec_from_file_location("cohort_pilot_report_probe", generated)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # importing must not execute the payload
+    assert not (root / "injected.marker").exists()
+    assert module.Report.format == payload
+
+
+def test_generate_report_refuses_an_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Greenfield only, the same line every other generator draws
+    (Decision 17, joining the `E-*-EXISTS` family `study new`'s does).
+    The file's whole text is asserted, so a generator that wrote the stub
+    anyway fails here even though the refusal printed."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    mine = root / GENERATED_REPORT
+    mine.write_text("# hand-written, and worth more than a stub\n")
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot"]) == EXIT_WRONG
+    printed = capsys.readouterr().err
+    assert "E-REPORT-EXISTS" in printed
+    assert "src/cohort_pilot/report.py" in printed
+    assert mine.read_text() == "# hand-written, and worth more than a stub\n"
+
+
+def test_generate_report_takes_exactly_one_name_and_writes_nothing_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Arity is checked before anything reaches disk. (Fix round 1, Minor 2:
+    `generate template`'s own hazard for checking arity first — a probe
+    name that IS usable would otherwise get scaffolded into this repo's own
+    working tree before the arity check ran — does not transfer here:
+    `generate report`'s probe name, `_probe_a`, names no `src/_probe_a/`
+    package, so `generate_report` would refuse with `E-EXPERIMENT-UNKNOWN`
+    before writing regardless of arity. The check is still correct to make
+    first; only the borrowed justification was wrong.)"""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "report", "cohort-pilot", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate report` takes one experiment name — see docs/reference.md § Generators\n"
+    )
+    assert main(["generate", "report"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate report` takes one experiment name — see docs/reference.md § Generators\n"
+    )
+    assert not (root / GENERATED_REPORT).exists()
+
+
+def test_generate_report_on_a_missing_package_is_e_experiment_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Reused from `generate step` (Decision 17/task 15 step 1): the identical
+    fault under the identical code, regardless of which generator hit it
+    first — no second "no package here" message invented for this one.
+
+    Also asserts nothing reached disk (fix round 1, Minor 5) — the same
+    half its three sibling refusal arms (arity, `E-REPORT-EXISTS`,
+    `generate template`'s own) all check, which this arm had omitted."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+    before = sorted(p.name for p in (root / "src").iterdir())
+
+    assert main(["generate", "report", "no-such-experiment"]) == EXIT_WRONG
+    printed = capsys.readouterr().err
+    assert "E-EXPERIMENT-UNKNOWN" in printed
+    assert sorted(p.name for p in (root / "src").iterdir()) == before
+
+
 def test_command_run_aggregate_resolves_a_project_local_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -9221,15 +9453,34 @@ def test_a_contrast_draw_that_cannot_vary_is_documented_as_reporting_no_interval
 def test_reference_cli_tables_are_parsed_at_all():
     """The control for the two checks below: a parser that found nothing would
     make both of them pass vacuously, which is the shape of the bug they exist to
-    catch. Both statuses must be present in both tables — a document that stopped
-    marking anything, or marked everything, fails here rather than silently."""
+    catch. Every status found must be one this document defines, and a table
+    that found no rows at all is the same vacuity by a different route — so
+    both are checked, per table, rather than the single set-equality this
+    assertion used before H8c task 15 (§ Corrections, correction 3): once
+    § Generators lost its only `NOT BUILT` row, that table's status set became
+    `{"built"}` alone, which a `== {"built", "NOT BUILT"}` check would fail
+    even though nothing shrank. `assert statuses, column` already fails on a
+    parser returning `[]` for a table — an empty set is falsy — so the
+    non-empty half alone rules out that particular vacuity. What it does
+    NOT rule out is a parser that finds SOME rows but not the SPECIFIC ones
+    this document actually carries — a subset-and-non-empty check is
+    satisfied by any one row of a valid status, found or not the row a
+    reader would look for. That is what the row-presence pairs are for: the
+    same device the Command table's two lines already were, added here for
+    Generator (fix round 1, Minor 6: this paragraph originally claimed the
+    row-presence pairs were needed to rule out the EMPTY-parse vacuity,
+    which the non-empty assertion already rules out on its own; corrected
+    to name what they actually add)."""
     tables = _status_tables()
     assert set(tables) == {"Command", "Generator"}
     for column, rows in tables.items():
         statuses = {status for _, status in rows}
-        assert statuses == {"built", "NOT BUILT"}, column
+        assert statuses, column
+        assert statuses <= {"built", "NOT BUILT"}, column
     assert ("dry-run", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
+    assert ("report", "built") in tables["Generator"]
+    assert ("template", "built") in tables["Generator"]
     # Set equality against the CLI's own mapping, which the behavioural check
     # below cannot see: a whole table losing its `Status` column, or a marked row
     # being deleted, would quietly shrink what that check covers rather than fail
@@ -9301,14 +9552,20 @@ def test_an_unspecified_name_still_reports_an_unknown_command(capsys):
     )
 
 
-def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
-    """`publishable study` names no subcommand, and every subcommand it could
-    name is unbuilt — so it is answered as unbuilt rather than as unknown, which
-    would be the one wrong word for a group the document specifies."""
+def test_a_command_group_with_no_subcommand_gets_a_usage_error_naming_both(capsys):
+    """`publishable study` names no subcommand. Both `new` and `add` are
+    built (H8c tasks 11 and 13), so this is a usage error rather than the
+    specified-but-unbuilt diagnostic the group used to get when every
+    subcommand it could name was still unbuilt (§ Corrections,
+    correction 4) — and `unknown command` would still be the one wrong
+    word for a group the document specifies. Pinned to the exact message
+    (fix round 1's Minor 5) rather than to bare substrings of `"new"`/
+    `"add"`, which barely discriminate on their own."""
     assert main(["study"]) == EXIT_INVOCATION
-    assert capsys.readouterr().err == (
-        "`publishable study` is specified but not built in this version — "
-        "see docs/reference.md § Creation commands\n"
+    err = capsys.readouterr().err
+    assert err == (
+        "`publishable study` needs a subcommand: `new` or `add` — see "
+        "docs/reference.md § Creation commands\n"
     )
 
 
@@ -16143,3 +16400,281 @@ def test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root(
 
     repo_root_txt = (run_dir / "environment" / "repo_root.txt").read_text()
     assert repo_root_txt == f"{root.resolve()}\n"
+
+
+# ---------------------------------------------------------------------------
+# H8c task 17: the guard pin — the record's field-level shape (arm A) and
+# `publishable.__all__` (arm B). Captured by running, at `7f04755`
+# (`main`, clean tree, before H8c's own first task). See
+# `docs/superpowers/plans/2026-08-21-report-study.md` task 17 and
+# `docs/superpowers/specs/2026-08-21-report-study-design.md`.
+#
+# What this does NOT re-capture, and what was grepped to decide that:
+# `run.yaml`'s TOP-LEVEL key list and its `provenance` key list are already
+# pinned, in this exact order, by `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`,
+# `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty`, and
+# `test_h8b_arm_c_the_records_key_lists_status_and_exit` above (grep for
+# `keys()) ==` over this file: nine hits, of which those three plus two
+# `sweep.yaml`/allocation-document assertions are the only full-key-list
+# pins that exist, and none of the remaining four touches `results`,
+# `conditions[]`, `aggregated[step]`, a metric entry, a `by` stratum, `vs_
+# baseline`, `contrasts[0]`, `hypotheses[0]`, `results.summary`, or
+# `provenance.units` — every one of those is new coverage here). One more
+# copy of the top-level/`provenance` lists would be one more place to edit
+# for no new discriminating power, so arm A below never touches either.
+# ---------------------------------------------------------------------------
+
+_ARM17_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        shift = {{"pearson": 0, "spearman": 1}}.get(
+            cfg.parameters.analysis.method, 0
+        )
+        for i, unit in enumerate(units):
+            if i == 0:
+                # The one `io.skip` call the brief asks for: unit 0 is
+                # ineligible in every condition, so `n.ineligible == 1`
+                # everywhere and `n.completed == 39` of 40.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            extra = 0.5 if (i + shift) % 2 == 1 else 0.0
+            io.record(unit.key, {{"pred": float(i) + float(shift) + extra}})
+        return {{"n_units": len(units)}}
+"""
+
+_ARM17_CONDITION_STEP_SOURCE = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        # Exists only to put a CONDITION-scoped step entry in `execution`,
+        # beside the repeat-scoped starter's — the discriminator arm A's
+        # last row reads back.
+        return {{}}
+"""
+
+
+def test_h8c_arm_a_the_records_field_level_shape(tmp_path: Path):
+    """Arm A — THE RECORD'S FIELD-LEVEL SHAPE. NEVER MOVES IN THIS SLICE.
+
+    H8c changes no run record and no run artifact, so every key list below is
+    a never-moves detector over exactly the surface `report`'s four standard
+    sections read (design Decision 5, plan corrections 8 and 9). Full key
+    LISTS, never membership: a key added by accident is exactly what a list
+    assertion catches and `"x" in mapping` cannot. Every value below is read
+    back from a real run or recomputed from what was read back — the only
+    literals are key NAMES, per the brief.
+
+    Driven once, with every property task 17's brief names in one run: a
+    `cohort` attribute, two conditions (`baseline` vs `method=spearman`),
+    three `seed` repeats, `statistics.report_by: [cohort]`, one declared
+    `statistics.contrasts` entry, one `confirmatory` hypothesis, and one
+    `io.skip` call. A second, condition-scoped generated step exists for the
+    sole purpose of the last row: an execution entry that carries `status`
+    directly, standing beside the repeat-scoped starter's, whose entry
+    nests the repeat labels instead.
+    """
+    doc = run_a_project(
+        tmp_path,
+        units=40,
+        unit_attributes=["cohort"],
+        replication={"repeats": [{"kind": "seed", "n": 3}]},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "report_by": ["cohort"],
+            "contrasts": [
+                {"id": "spearman_vs_baseline", "of": "method=spearman", "against": "baseline"}
+            ],
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "spearman exceeds pearson",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "observed",
+            }
+        ],
+        extra_steps=["fit"],
+        extra_step_source=_ARM17_CONDITION_STEP_SOURCE,
+        _starter_step=_ARM17_STARTER_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    results = run["results"]
+    conditions = results["conditions"]
+    step = "step01_summarize_units"
+
+    assert list(results.keys()) == ["conditions", "summary", "contrasts", "hypotheses"]
+
+    # baseline: no `vs_baseline`; non-baseline: `vs_baseline` present.
+    assert list(conditions[0].keys()) == [
+        "index",
+        "label",
+        "values",
+        "per_repeat",
+        "aggregated",
+        "is_baseline",
+    ]
+    assert "vs_baseline" not in conditions[0]
+    assert list(conditions[1].keys()) == [
+        "index",
+        "label",
+        "values",
+        "per_repeat",
+        "aggregated",
+        "vs_baseline",
+        "is_baseline",
+    ]
+
+    aggregated_step = conditions[0]["aggregated"][step]
+    recorded_metric_names = {
+        k for k in aggregated_step if k != "by" and isinstance(aggregated_step[k], dict)
+    }
+    assert set(aggregated_step.keys()) == recorded_metric_names | {"by"}
+    assert recorded_metric_names == {"pred"}
+
+    metric_entry = aggregated_step["pred"]
+    assert list(metric_entry.keys()) == [
+        "value",
+        "basis",
+        "n",
+        "ci95",
+        "method",
+        "correction",
+        "repeat_spread",
+    ]
+
+    by_levels = aggregated_step["by"]["cohort"]
+    assert set(by_levels) == {"a", "b"}
+    by_entry = by_levels["a"]["pred"]
+    assert list(by_entry.keys()) == ["value", "basis", "n", "ci95", "method", "correction"]
+    assert "repeat_spread" not in by_entry
+
+    vs_baseline_entry = conditions[1]["vs_baseline"][step]["pred"]
+    assert list(vs_baseline_entry.keys()) == [
+        "delta",
+        "basis",
+        "paired",
+        "method",
+        "n_paired",
+        "ci95",
+        "cohens_d",
+        "correction",
+        "ci95_corrected",
+        "correction_level",
+        "family_size",
+        "family",
+    ]
+
+    contrast_entry = results["contrasts"][0]
+    assert list(contrast_entry.keys()) == ["id", "of", "against", step]
+    assert contrast_entry["of"] == "01_method=spearman"
+    assert contrast_entry["against"] == "00_baseline"
+
+    verdict = results["hypotheses"][0]
+    assert list(verdict.keys()) == [
+        "id",
+        "kind",
+        "declared_in",
+        "observed",
+        "verdict_evaluated_on",
+        "supported",
+        "verdict_rests_on",
+        "family_size",
+        "family",
+    ]
+    assert list(verdict["family"].keys()) == ["hypotheses"]
+
+    assert list(run["provenance"]["units"].keys()) == ["n", "key"]
+
+    execution = run["execution"]
+    assert list(execution.keys()) == ["shared", "conditions", "summary"]
+    assert isinstance(execution["conditions"], list)
+
+    condition_scoped_entry = execution["conditions"][0]["steps"]["step02_fit"]
+    assert "status" in condition_scoped_entry
+
+    repeat_scoped_entry = execution["conditions"][0]["steps"][step]
+    assert "status" not in repeat_scoped_entry
+    # The run's repeat labels, read back from a second, independent block of
+    # the SAME record — `per_repeat`, which `command_run` fills from the
+    # execution ledger rather than from `execution` itself — never a literal
+    # such as `"seed08"`.
+    per_repeat_labels = set(conditions[0]["per_repeat"][step].keys())
+    assert per_repeat_labels
+    assert set(repeat_scoped_entry.keys()) == per_repeat_labels
+
+
+def test_h8c_arm_a_the_summary_estimate_with_no_n(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Arm A, continued — `results.summary[step][key]`'s key list, and `n`
+    read back as `None` for a `summary`-scoped `Estimate` declared with a
+    `ci95` and no `n`. A separate, minimal run: the shape does not depend on
+    `report_by`/contrasts/hypotheses, and reusing `_ESTIMATE_SUMMARY_STEP`
+    (already in this module, exercised by
+    `test_an_estimate_with_an_interval_and_no_n_warns` above) is the
+    fixture, not a new one invented for this pin.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert list(entry.keys()) == ["value", "reported", "ci95", "n", "method"]
+    assert entry["n"] is None
+
+
+def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
+    """Arm B — `publishable.__all__`, as a full sorted list. THE ONE ARM AN
+    AUTHORIZED TASK MAY EDIT — task 1, per the design's Decision 2 and § The
+    importable surface. Post-edit state, stated in advance: `'BaseReport'`
+    is appended and the list RE-SORTED, and the `'BaseReport' not in`
+    assertion below is DELETED — nothing else changes. Task 1's report must
+    show that one-name diff, with nothing else reordered. Every other task
+    that finds this arm failing has found a finding to report, not an
+    assertion to edit.
+    """
+    import publishable
+
+    assert list(publishable.__all__) == [
+        "Apparatus",
+        "ArtifactError",
+        "ArtifactExistsError",
+        "BaseExperiment",
+        "BaseReport",
+        "BaseStep",
+        "BaseTemplate",
+        "ContractError",
+        "Estimate",
+        "Param",
+        "PublishableError",
+        "Unit",
+        "register_probe",
+        "register_reader",
+        "register_resolver",
+        "register_template",
+        "register_writer",
+    ]
+    assert list(publishable.__all__) == sorted(publishable.__all__)

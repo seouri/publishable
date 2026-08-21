@@ -2567,7 +2567,7 @@ Pinned by `test_an_estimate_is_refused_at_every_other_scope` and
 `test_an_estimate_with_an_n_does_not_warn`, and `test_an_estimate_with_no_interval_does_not_warn`
 (`-N`, `tests/test_cli.py`, all three through `main(["run", ...])`).
 
-## ~~The importable surface names five things `publishable/__init__.py` does not export~~ — MOSTLY CLOSED; only `BaseReport` remains
+## ~~The importable surface names five things `publishable/__init__.py` does not export~~ — CLOSED
 
 **Corrected 2026-08-20, measured at `993aeec`.** Five of the six names this entry lists are now
 exported from `publishable/__init__.py`: `Unit`, `Apparatus`, `register_template`,
@@ -2666,6 +2666,12 @@ therefore names **five** absent things, not six: `Apparatus`, `BaseReport`, `reg
 `register_resolver`/`register_writer`, `register_probe` and `Apparatus` are **H7b/H7d** — H7a shipped
 none of entry-point resolution, the other three registries, probes, the `Apparatus`, or the change
 gate — and `BaseReport` is still shared with **H8**.
+
+**CLOSED 2026-08-21 (H8c task 1).** `BaseReport` is now defined at
+`src/publishable/report.py` and exported: `__all__` holds `"BaseReport"` in sorted
+position, checked directly by `test_h8c_arm_b_publishable_all_is_a_full_sorted_list`. The
+last of the six names this entry ever named has a home. Struck rather than deleted, per
+this file's own rule for a closed gap.
 
 ## Carried out of S5a for S5b: `Estimate.ci95` has no length or ordering rule
 
@@ -6349,6 +6355,24 @@ patch, per the routing brief.
 path was closed in the same slice) but structural — any future `PublishableError` raised with a
 credential in its text, outside a collector, reaches stderr unredacted.
 
+**AMENDED 2026-08-21 (H8c whole-branch review, Minor 1): a fourth shape, this one INSIDE a
+command's own collector rather than past it.** `report <run.yaml>` and `study add` both read a run
+record through `lineage.read_record_file`, and a `run.yaml` corrupt enough that PyYAML's own
+`MarkedYAMLError` embeds the offending source line (`f"{path} is not valid YAML: {exc}"`,
+`lineage.py:71`) carries that line — credential and all, if the corrupt edit happened to land on
+one — into `command_report`'s `Collector()`, constructed **with no `credentials`** because the
+record has not parsed yet and there is nothing to derive a credential set from. Verified by
+running: a `run.yaml` rewritten to `run_id: x\nbad: [unclosed <SENTINEL>` prints the sentinel
+verbatim at exit `1`, while the same project's override-raise arm (a positive control proving the
+same collector redacts when it IS populated) prints `<redacted:…>` for the identical value. Same
+probe against `diff` — untouched by H8c, shipped on `main` — leaks identically, so this is
+pre-existing and structurally forced by the same ordering this entry already names for `main`'s
+own handler: the credential set can only be known once the record parses, and a YAML syntax fault
+is exactly the failure that happens before it does. Not re-scored: still Minor, for the reason the
+entry above already gives — `docs/reference.md` § Secrets & credentials scopes `report`'s own
+redaction commitment to *user-code* faults, so this is an honest gap rather than a broken promise,
+and it is one instance of the ordering problem this entry is about rather than a second one.**
+
 ## OPEN — the constraint table documents `min_items`/`max_items` in the rendered comment; `Param.comment()` doesn't render them
 
 `reference.md` § Templates: where parameters are defined documents the `list` row's constraint
@@ -7723,7 +7747,25 @@ the probe step § Operation commands describes, and if so, whether `replay_ledge
 a `dry-run` immediately before a `run` starts would otherwise report a baseline `freeze` cannot see
 answered any differently than a run that never `dry-run`'d at all. Not decided here.
 
-## OPEN — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+## ~~OPEN~~ CLOSED — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+
+**CLOSED by H8c task 16.** Each of the three blocks gained the two header lines its own
+concreteness calls for, inserted directly above its `code_hash` row and nothing else: `reference.md`
+§ The apparatus core can only observe now opens with the worked example's own two real run IDs, each
+`completed`; `README.md` § The loop you'll actually live in now opens with `run_A`/`run_B`, each
+`completed`; `docs/design-principles.md` § Same code, different parameters now opens with
+`<run_a>`/`<run_b>`, each `completed`. No hash prefix, run ID, delta line, row label, or row order
+moved, and the two-space separator is unchanged — verified by task 17's arm D
+(`test_h8c_arm_d_*_worked_diff_block_rows`), which locates each block by its own `code_hash` line and
+pins everything from there to the end of the fence as raw text: those three pins needed no editor for
+this task and passed unedited, which is itself the proof nothing at or below `code_hash` moved.
+Extended `tests/test_diff.py`'s document-row-label reader (`_document_row_labels`) with a sibling,
+`_document_header_lines`, rather than a second parser over the same three files, and pinned the header
+lines' label set, order, two-space separator, and no-blank-line-before-the-first-row property against
+`command_diff`'s own real output for a genuine run pair (Fixture H). The one clause this filing's own
+last paragraph carried — "the one `reference.md` sentence closing the `diff`-versus-gate ruling" — was
+already stale before this task touched the file: H8b task 12 landed that sentence while editing the
+same section, and this closing note does not re-land it.
 
 **Found by** H8b's whole-branch review; **left open deliberately by both the implementing task and the
 controller**, with the reasoning below, because the cheap fix is in the **shared worked example** and this
@@ -7757,3 +7799,323 @@ documents open and a review pass of its own.
 
 **Cost if wrong / if unclaimed:** three normative documents show `diff` output missing its first two lines.
 Nothing computes from them, and every value they do show is correct.
+
+## OPEN — `nondeterministic` is documented as a `run.yaml` field and a thing `report` notes, and nothing writes it or reads it back — **Owner: unassigned**
+
+**Found by:** H8c task 6, building the Attrition section, which is where § The two files' `run.yaml`
+example says a reader would see it.
+
+**The measurement.** Measured 2026-08-21, at `ebf642a`: `nondeterministic` appears **zero** times
+in a real project's `run.yaml` and **zero** times in its `executions.jsonl`, over a run whose steps
+include a
+repeat-scoped one — grepped over both files after a genuine `main(["run", ...])`. It exists in
+`src/` only as a `BaseStep` class **attribute** (a step author's own declaration) and as what
+`W-REPL-DETERMINISTIC` reads off the step classes at `validate` — never as a value copied onto an
+execution record.
+
+**The two document passages this leaves stranded.** § The two files' `run.yaml` example shows
+`nondeterministic: false`/`true` on every repeat-scoped execution entry, as if `run` wrote it
+per-execution. `design-principles.md` § Not bit-identical reruns says core "records that in
+`run.yaml` and notes it in `report`" — two documented obligations (`run` writes it, `report` notes
+it) with no code behind either.
+
+**Why H8c task 6 built the Attrition section without it.** A section printing
+`nondeterministic: false` for every execution would be reporting a default nothing measured — the
+exact shape of a fail-open this repo has closed before by asking whether a field is actually written
+rather than assuming a documented shape has code behind it. `test_attrition_section_does_not_mention_
+nondeterministic` (`tests/test_report.py`) pins the absence directly against a real run's `execution`
+block, so a future build that starts writing the field breaks that test first rather than silently
+becoming true underneath an untouched doc passage.
+
+**Why neither H8c nor H4 is the right owner.** H8c's whole remit is read-and-render: nothing in this
+slice may alter a run, and writing `nondeterministic` onto an execution record is exactly that. H4 is
+the complete family (`docs/superpowers/plans/2026-08-21-report-study.md`'s own CLAUDE.md entry: "H4d
+merged on 2026-08-19 — the last of the H4 family") — naming it here would point a live gap at a
+slice that will not claim it.
+
+**The check its owner must make.** Whether `run` owes an emitter — copying each executed step's own
+`nondeterministic` class attribute onto its `executions.jsonl`/`execution` entry, the way § The two
+files' example already shows it — **or** whether `design-principles.md`'s "notes it in `report`" is
+the sentence that should go, on the grounds that a step-level declaration a reader can already see in
+`src/<pkg>/steps/*.py` needs no execution-level echo. Not decided here.
+
+**Which section it lands in on the day the field is written.** If `run` starts writing it onto an
+execution entry, `report`'s Attrition section is where it belongs — `_execution_rows` in
+`src/publishable/report.py` already builds one row per execution across `shared`, `conditions[]`
+(with the repeat nesting) and `summary`, and a written field would simply be one more key `**entry`
+spreads onto that row, needing no new traversal.
+
+**Cost if wrong / if unclaimed:** two documents describe a run-level fact no run carries and a report
+section no build renders, and a reader who goes looking for it in a real `run.yaml` finds nothing.
+
+## OPEN — Decision 2's "prints the cheap one first" is not delivered at the real command — **Owner: unassigned**
+
+`docs/superpowers/specs/2026-08-21-report-study-design.md` Decision 2 (line ~124-125): "an override
+that yields a cheap section first and an expensive figure last should print the cheap one first."
+That claim was unverifiable while `render_with_override`/`render_report` were exercised only by
+direct call; H8c task 8's own `command_report` is what makes it checkable at the surface that
+actually prints, and it is false there. `command_report` does `text = render_with_override(...)`
+then `print(text)` once — nothing reaches stdout until the whole render finishes — and both
+renderers (`render_markdown`, `render_html`) join every section's text into one returned `str`
+before `command_report` ever sees it. `BaseReport.sections`'s own docstring in
+`src/publishable/report.py` was sized down in H8c's fix round to say only what is true: the lazy
+generator saves a LATER section's construction cost when an earlier one raises, never a print-order
+guarantee.
+
+**Not fixed here.** Streaming output section-by-section would need `command_report` to iterate and
+print each section as `render_markdown`/`render_html` produce it, which is a real behavior change to
+a shipped command, not a wording fix — out of a review's fix-round scope and not owned by any task
+in this slice.
+
+**Cost if wrong/if unclaimed:** a reader of the design doc believes an override can make an
+expensive figure's slowness invisible by ordering it last; at the real command, it cannot — every
+section blocks the first byte of output.
+
+## OPEN — no build path writes a `basis: "repeats"` metric entry, so `study add`'s third prompt branch and five `reference.md` passages describe a shape core never produces — **Owner: unassigned**
+
+Measured 2026-08-21 against `ebf642a`: `grep -n '"basis"'` over `src/publishable/` returns five
+emit sites (`cli.py` ×3, `stats.py` ×2) and every one writes `"basis": "units"`. A step-returned
+scalar reaches `per_repeat` and gets no `aggregated` entry at all when a unit table is present
+(measured on a real run), and a run whose `data.units` is undeclared writes no `aggregated` key
+whatsoever. So the present-tense claim that such a metric "says `basis: repeats`, reports the
+spread, and omits `ci95`" — `reference.md` § The unit table is the inference base, and its four
+sibling passages under § Statistical reporting and the worked-example sections that repeat the
+same sentence — describes a shape this build does not produce anywhere. The shipped warning
+`W-HYPOTHESIS-INFERENCE-BASE` names the identical shape in its own message ("every metric will be
+`basis: repeats`"), so the same gap is asserted twice in the four documents and once in a warning's
+own text, and nowhere in the code that would have to write it.
+
+**H8c task 14 (the `min_reported_n` prompt) meets this directly.** Decision 13's own table names
+`basis: "repeats"` as one of three entry shapes the prompt must recognize, marks it "Producible
+today? No", and rules that the branch ships anyway — built from the document, pinned on a record
+synthesized by hand whose docstring says so, because a prompt whose entire job is catching a
+disclosure nobody else will should not silently under-report the day a producer lands. That
+ruling is implemented (`thin_metric_lines` in `src/publishable/study.py`), and its own docstring
+and the fixture exercising it both say the shape is not producible today — no test in this slice
+claims otherwise.
+
+**Why this is neither H8c's nor H4's to close.** Writing a metric into `results.conditions[].
+aggregated` (or omitting it there in favor of `per_repeat` alone) is `run`'s own work — H8c may
+read a record, never alter what `run` writes into one. And the H4 family, which built every other
+`statistics`/`aggregated` construction this project has, is complete as of H4d
+(`docs/superpowers/plans/2026-08-21-report-study.md`'s own ledger: "H4d ... merged on
+2026-08-19 — the last of the H4 family") — naming it here would point a live gap at a closed
+slice, the exact re-owning failure `CLAUDE.md` records against a prior entry in this same file.
+
+**The check its owner must make before dispositioning this.** Whether `W-HYPOTHESIS-INFERENCE-BASE`'s
+message can be true of any record this build writes — it cannot be, today, since nothing reaches
+the `aggregated` block under the conditions the warning describes. Two readings follow, and this
+entry states the question rather than pre-deciding it: either the documented shape is the intended
+one and `run` owes an emitter that writes `basis: "repeats"` (with its spread and no `ci95`) onto
+`aggregated` for a step-returned scalar under a declared unit table, **or** the design has moved to
+"a step-returned scalar lives in `per_repeat` and nowhere else," in which case `reference.md`'s five
+passages and `W-HYPOTHESIS-INFERENCE-BASE`'s own message owe a rewrite instead.
+
+**Cost if wrong / if unclaimed:** a reader who follows `reference.md`'s present tense into a real
+`run.yaml` and greps for `basis: "repeats"` finds nothing, in the same document family that treats
+an undated build claim as fact; and `study add`'s own third branch stays forever pinned only against
+a hand-built fixture, never against anything `run` produced.
+
+**AMENDED 2026-08-21 (H8c batch 7, fix round 1): the pin itself was at the wrong nesting, so
+"reachable the day a producer lands" did not follow as written.** The batch 7 review found
+`thin_metric_lines`'s `results.summary` walk read one level too shallow — `run_record.py`'s own
+producer writes `summary[e.step_name] = summary_values(r.returned)`, nested by STEP NAME, while the
+walker (and all three of this branch's pins, including the `basis: "repeats"` one this entry is
+about) treated `summary` as keyed directly by metric name. Fixed in the same commit, with a
+real-run pin (a genuine `summary` step returning two `Estimate`s) added alongside the corrected
+fixture nesting. This closes the reachability gap the amendment names — the `reported: true`
+branch is now genuinely wired to what `run` writes — but it does **not** touch the substance of
+this entry: `basis: "repeats"` is still written nowhere, the disposition question above is
+unchanged, and the entry stays OPEN, Owner: unassigned.
+
+## OPEN — a user-supplied name or flag value is interpolated unescaped into a generated Python file, and `generate step` corrupts an existing file when it is — **Owner: whichever slice next touches `generators/step.py` or `generators/experiment.py`**
+
+Measured 2026-08-21 (H8c task 15's fix round, against `51fb7cb`/`37a8f68`), all through `main(...)`
+in scaffolded projects. **`generate report`**'s own instance (`generators/report.py`'s `REPORT_PY`
+template, `format = "{fmt}"` interpolated verbatim) is closed in this same fix round — `fmt` is now
+passed through `json.dumps` before it reaches the template, so the substituted text is already a
+quoted, escaped Python string-literal source rather than a raw value sitting between hand-written
+quotes, and every string `--format` can carry now writes a file that parses. **This entry is about
+what is still open: the identical root cause in `generators/step.py`, and the general absence of any
+name guard across the generator family except `generate template`'s `is_usable_name`.**
+
+`generate step cohort-pilot 'foo"bar'` exits `0`. The step file itself still compiles — the name
+lands inside a comment, `# TODO: implement foo"bar` — but `generators/step.py`'s rewrite of
+`src/cohort_pilot/experiment.py` interpolates the same raw name into an import line,
+`from .steps.step02_foo"bar import Step as Foo"bar`, and the result **does not parse**
+(`SyntaxError: unterminated string literal`). A name carrying a newline corrupts the same file
+differently (the import spans lines). **This is the worse half of the defect class, and worse than
+`generate report`'s own (now-closed) instance was**: `generate report` only ever writes ONE new file
+under a name the caller chose, so a bad value's damage is confined to a file nobody depended on yet
+and the caller can delete; `generate step` **rewrites `src/<pkg>/experiment.py`, a file it did not
+create**, that may already declare a working pipeline, and does so at exit `0` with no diagnostic —
+silently leaving a project non-importable until a human notices and repairs the rewrite by hand.
+
+`generators/experiment.py`'s own `name`/`package_name`/`class_name` reach the same absence of a
+guard (noted separately, "No name guard on `<experiment>`", verified with `../evil`, `a/b`, and
+`cohort pilot` — each reaches `E-EXPERIMENT-UNKNOWN` because `pkg_dir.is_dir()` bounds the blast
+radius to a directory that must already exist), but `generate experiment` never rewrites a file it
+did not just create, so it does not carry the corruption half of this entry — only the family's
+missing-guard half.
+
+**The check its owner must make.** A name reaching a Python *identifier* position (a class name, an
+import path segment) cannot be fixed by escaping the way `generate report`'s string-literal position
+was — `json.dumps` produces a valid string, never a valid identifier, for an arbitrary value. The fix
+has to be validation before any file is touched: extend `generators/template.py`'s `is_usable_name`
+— or an equivalent identifier check — to `generate step`'s `step_name` (checked before
+`experiment.py` is ever opened for writing, on the same "arity before anything reaches disk"
+precedent this slice's own `generate report` arm draws) and to `generate experiment`'s `name`. A
+one-line guard rejecting a non-identifier fixes `generate step`'s corruption outright; the
+`experiment`/`package_name` guard is lower-severity (bounded by `pkg_dir.is_dir()` today) but is the
+same root cause and should not ship separately from it.
+
+**Cost if wrong / if unclaimed:** the next reader of `generators/step.py` who adds a caller passing a
+name from anywhere other than a hand-typed CLI argument (a script, a UI, a plugin's own scaffolding)
+inherits a generator that silently corrupts an existing tracked file — the one class of failure
+`generate`'s own "greenfield only, refuses rather than overwrites" rule exists to prevent, reached
+here through a file the command did not classify as the thing it must not overwrite.
+
+## ~~OPEN~~ CLOSED — § A report override's fenced block is labelled `— generated` and is no longer what `generate report` writes — **Owner: H8c task 16**
+
+**CLOSED by H8c task 16 (fix round 1).** The fenced block now matches `REPORT_PY` byte for byte: two blank lines after the `import`, and the second `yield` and its undefined `render_scatter` are gone, replaced by the generator's own `# TODO: yield self.section("<title>", body=...) for a figure this experiment needs` comment. Verified by re-rendering `REPORT_PY.format(pkg="cohort_pilot", fmt=json.dumps("html"))` and diffing it against the fenced block — byte-identical.
+
+`docs/reference.md` § A report override renders one experiment's own figures. Its fenced example's
+first line, `# src/cohort_pilot/report.py — generated`, is the exact line `REPORT_PY` emits — but the
+block also shows a second `yield self.section("Method agreement", body=render_scatter(io.read_condition(...)))`
+against an undefined `render_scatter`, and a different blank-line count before `class Report`, neither
+of which the generator writes. While § Generators' `report` row read `NOT BUILT`, the `— generated`
+label was aspirational scene-setting; H8c task 15 flipped that row to `built` (Decision 17), which
+makes the label a **build claim** about a file § A report override's own prose does not match byte
+for byte. Verified by running `generate report` and comparing the written text against the fenced
+block.
+
+**The check its owner must make.** Either the fenced block loses the `— generated` label (it becomes
+purely illustrative — "here is a subclass that composes a figure," never a claim about what the
+generator itself produces), or the extra `yield` and its undefined helper are marked as something a
+project adds beyond the generated body (a `# …and one you add:` comment or equivalent), so the block
+reads as generated-prefix-plus-example rather than as one seamless generated file.
+
+## ~~OPEN~~ CLOSED — § Creation commands' `generate` Arguments cell does not name `--format` — **Owner: H8c task 16**
+
+**CLOSED by H8c task 16 (fix round 1).** The Arguments cell now reads "generator, name, generator args (`experiment` accepts `--plugin`; `report` accepts `--format`)" — verified by reading the cell back out of `docs/reference.md` § Creation commands.
+
+`docs/reference.md`, § Creation commands' Command table, the `publishable generate` (`g`) row's
+Arguments cell: *"generator, name, generator args (`experiment` accepts `--plugin`)"*. `report` is
+now built (H8c task 15) and accepts `--format`, so the parenthetical enumerating which generators
+take which flag is no longer total over the generators that take one. Task 15's own brief scoped its
+document edits to § Generators' `report` row, § Creation commands' `generate` cell's inline
+`(NOT BUILT)` annotation, and one § Errors row — not this cell's Arguments column — so filing rather
+than fixing here is deliberate, not an oversight.
+
+**The check its owner must make.** Add `` `report` accepts `--format` `` (or equivalent) to the
+parenthetical, the same way `experiment`'s `--plugin` is already named there.
+
+## OPEN — `E-GIT-NO-REPO` is named in two normative § Errors cells for the first time on this branch, with no row of its own, and two call sites let it reach the user uncaught — **Owner: unassigned**
+
+**Found by:** H8c task-b9 review (Minor 7 / attack 7), on the batch's own concern in its task report
+that stopped one step short of a filing.
+
+`git show main:docs/reference.md | grep -c E-GIT-NO-REPO` → **0**. H8c task 16 is the first commit to
+name `E-GIT-NO-REPO` in a normative § Errors cell at all — twice, at `E-REPORT-OVERRIDE-REPO`'s row and
+`E-STUDY-IN-REPO`'s, the latter explaining at length that `provenance.find_repo_root` "raises
+`E-GIT-NO-REPO` rather than returning `None`." Naming a code in a normative row **is** a widening of what
+this document commits to describing: a reader who follows that name today finds no row that is *its own*
+— every mention is a cross-reference from a different code's row, never the thing itself.
+
+**And the gap is not merely documentary.** `find_repo_root` is called uncaught at `cli.py:1960`
+(`command_run`) and `cli.py:3948` (`_dispatch_generate`), so a `run` or a `generate` invoked outside any
+git repository reaches `main`'s bare `except PublishableError` printer under this code, with no row in
+either § Errors table describing that path for `new`, `validate`, `run`, or `generate` themselves —
+only `report`'s and `study new`'s own conversions of the identical raise are described.
+
+**Same shape, wider scope than one code.** `E-PROJECT-EXISTS`, `E-STEP-EXISTS`, and `E-TEMPLATE-EXISTS`
+are in an identical position: named only in § Exit codes' hand-written prose sentence
+(`docs/reference.md` § Exit codes and diagnostics, "one rule shared by every generator with something to
+protect"), with no § Errors row of their own — and that sentence's own claim about `E-PROJECT-EXISTS`
+("`publishable new` reports `E-PROJECT-EXISTS`") is itself narrower than the code, since
+`plugin_scaffold.py:169` also raises it for `plugin new`.
+
+**What its owner must do.** Decide whether this whole family (`E-GIT-NO-REPO`, `E-PROJECT-EXISTS`,
+`E-STEP-EXISTS`, `E-TEMPLATE-EXISTS`, and their siblings' own prose-only coverage) gets dedicated
+§ Errors rows, or whether the prose-sentence convention is deliberate and should say so explicitly
+enough that a future audit does not re-open it as a gap. Either way, `E-PROJECT-EXISTS`'s sentence
+should name `plugin new` alongside `publishable new`.
+
+**Cost if wrong / if unclaimed:** a reader following a normative code reference finds nothing at the
+destination, and `run`/`generate` outside a repository print a diagnostic this document never
+describes at its own source.
+
+## OPEN — a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0` — **Owner: H9**
+
+**Found by:** H8c whole-branch review, Minor 9, verified by running.
+
+**The sibling of the entry immediately above** (`discover_local`'s bytecode cache serving a STALE
+`templates/*.py`), reached through a third call site: `report.py`'s `render_with_override` and
+`base_experiment.py`'s `load_experiment` both `del sys.modules[...]` for the entrypoint's root
+package and re-`importlib.import_module` it, exactly as `discover_local` re-imports a template —
+and CPython's `SourceFileLoader` validates its `__pycache__/*.pyc` against source `(mtime, size)`,
+with `mtime` at whole-second resolution on the filesystems this was measured against.
+
+**Verified by running:** render an override whose section body is `MARKER_AAA`, then rewrite the
+identical file with `MARKER_BBB` — **byte-identical in length**, within the same wall-clock
+second — and render again. The second render prints **`MARKER_AAA`**, at exit `0`, with no
+diagnostic: `sys.modules` was correctly purged (both call sites do this right), but the `.pyc`
+cache validated against `(mtime, size)` was not invalidated, so the stale bytecode served the old
+body anyway. A rewrite that changes the file's *length* (`MARKER_CCCCCCCC`) is picked up
+correctly, which is what isolates the cause to the cache rather than to the module purge.
+
+**Why this one is worse than the entry above's shape.** `discover_local`'s staleness surfaces as a
+wrong *value* inside a validation the reader already treats with some suspicion (a config's own
+declarations). This one surfaces as `report`'s entire rendered artifact — the thing a paper cites —
+being silently the PREVIOUS version of an override the author just edited, at exit `0`, with
+nothing to distinguish it from a correct render. `report` is also the one command in this build a
+user is expected to iterate an override against repeatedly inside one process (rerun after each
+edit while writing a figure), which is exactly the access pattern that reaches this.
+
+**Not this branch's invention.** `base_experiment.load_experiment` (`validate`/`run`) has the
+identical exposure and predates H8c; neither site calls `importlib.invalidate_caches()` or sets
+`sys.dont_write_bytecode`, and grepping both names finds neither anywhere in `src/`.
+
+**The check its owner must make.** Same two options the entry above already names: (a) force
+recompilation at these two additional call sites the way its own remedy is decided for
+`discover_local`, or (b) document the weaker property — a render inside a long-lived process is
+fresh per **process**, never guaranteed fresh per **call** — at both `report`'s and `run`'s own
+descriptions of override/entrypoint resolution. Whichever option this owner picks for the entry
+above should be picked for both `report.py`'s and `base_experiment.py`'s sites in the same pass,
+since it is one root cause with three call sites, not three separate defects.
+
+**Cost if wrong / if unclaimed:** a user iterating a `report.py` override inside one long-lived
+process (a notebook, a script driving several renders, this repo's own test suite) can ship a
+figure one edit stale, with no diagnostic distinguishing it from a correct render.
+
+## OPEN — a bundle render's heading levels are flat, so a member boundary reads like a section — **Owner: unassigned**
+
+**Found by:** H8c whole-branch review, Minor 7, verified by running.
+
+`render_bundle` (`report.py`) and `_render_markdown_section` (which emits `## ` for every
+`Section` regardless of caller) together produce, for a two-member bundle: `## alpha`,
+`## Conditions`, `## Deltas`, `## Hypothesis verdicts`, `## Attrition`, `## beta`, `## Conditions`,
+… , `## Hypotheses`. A member's own name and its own four sections are siblings at the same
+heading depth, so nothing in the rendered artifact marks where one run's block ends and the next
+begins, or that "Conditions" under `## beta` belongs to a different run than the "Conditions"
+under `## alpha` three headings above it.
+
+**Not a spec violation.** Decision 16 does not rule heading depth, and `Section` (the value class
+`self.section(title, body=...)` returns and the four standard sections build) carries no `level`
+field at all — so this is a consequence of a design that never needed two heading depths until the
+bundle render introduced them, not a document a reviewer can cite against the code.
+
+**The check its owner must make.** The bundle render is the one place two genuine levels exist: a
+member (an `## alpha`-shaped boundary) and that member's own sections (nested under it). Options,
+cheapest first: (a) bump every section heading to `###` inside `render_bundle` specifically, with
+`##` reserved for the member boundary — no `Section` change, a `render_bundle`-local decision; (b)
+give `Section` an optional `level` field, defaulted so every existing caller (the four standard
+sections, an override's own `self.section(...)`) is unaffected, and have `render_bundle` pass a
+deeper one. (a) costs nothing outside `report.py`; (b) is more general and is the one to prefer if
+a future renderer ever needs a third level.
+
+**Cost if wrong / if unclaimed:** a bundle rendered to markdown or HTML and skimmed by heading
+alone reads as one long flat document; a reader has to track member boundaries by the plain-text
+name rather than by structure, which is a paper's own citable rendering of several runs at once —
+exactly the artifact this section's own load-bearing property (member boundaries stay legible) is
+about.

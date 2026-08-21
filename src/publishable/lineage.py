@@ -22,17 +22,31 @@ from publishable.provenance import resolves_inside_repo
 from publishable.run_record import SCHEMA_VERSION
 
 
-def read_run_record(path: Path) -> dict[str, Any]:
-    """Read and parse a `run.yaml` at `path` (the run directory, not the file itself).
+def read_record_file(path: Path) -> dict[str, Any]:
+    """Read and parse a run record at `path` — the record FILE itself, never a
+    directory. `read_run_record` below is this function applied to a run
+    directory's own `run.yaml`; this one exists separately because a bundle
+    member is not `<dir>/run.yaml` — § Building one's bundle tree holds bare
+    files, `main.run.yaml`, `sensitivity.run.yaml` — so a reader keyed to a
+    directory cannot address one at all (measured at `ebf642a`,
+    `docs/superpowers/plans/2026-08-21-report-study.md` § Corrections,
+    correction 1). One refusal set, two entries, on `_nest_repeat`'s own
+    "one rule, two callers" precedent — `report` and `study add` are the two
+    new callers of this entry, `io.reuse_from` and `diff` the two existing
+    callers of `read_run_record`'s.
 
     Three refusals, each with a distinguishable fault and a distinct remedy — the shape
     H4d's `null_test` closed by splitting a single "return for many reasons" code:
 
-    - No `run.yaml` at `path`: `E-UPSTREAM-RECORD-MISSING`. The run never finished, or
-      `path` is not a run directory.
-    - `run.yaml` present but unreadable — invalid YAML, not a mapping once parsed, or a
+    - No record at `path`: `E-UPSTREAM-RECORD-MISSING`.
+    - Present but unreadable — invalid YAML, not a mapping once parsed, or a
       mapping with no `run_id`: `E-UPSTREAM-RECORD-UNREADABLE`. The file was edited or
-      truncated by hand.
+      truncated by hand. Invalid YAML and a document that parses clean to
+      something other than a mapping (a list, say) are two different faults
+      under the one code, and stay distinguishable by MESSAGE, not only by
+      code — "not valid YAML" versus "did not parse to a mapping" — since a
+      single assertion catching both would be the same defect as one code
+      covering two faults (H8a's batch-1 review).
     - A `schema_version` this build does not read: `E-UPSTREAM-RECORD-VERSION`. The
       remedy is pinning the `publishable` version that wrote it.
 
@@ -46,38 +60,47 @@ def read_run_record(path: Path) -> dict[str, Any]:
     nothing to do with it — the named step's own recorded status is `resolve_step`'s
     check, not this one's.
     """
-    run_yaml = path / "run.yaml"
-    if not run_yaml.exists():
+    if not path.exists():
         raise ContractError(
-            f"no run.yaml at {path} — the run never finished, or this is not a run directory",
+            f"no run record at {path} — the run never finished, or the path is wrong",
             code="E-UPSTREAM-RECORD-MISSING",
         )
     try:
-        doc = yaml.safe_load(run_yaml.read_text())
+        doc = yaml.safe_load(path.read_text())
     except yaml.YAMLError as exc:
         raise ContractError(
-            f"{run_yaml} is not valid YAML: {exc}",
+            f"{path} is not valid YAML: {exc}",
             code="E-UPSTREAM-RECORD-UNREADABLE",
         ) from exc
     if not isinstance(doc, dict):
         raise ContractError(
-            f"{run_yaml} did not parse to a mapping — it was edited or truncated",
+            f"{path} did not parse to a mapping — it was edited or truncated",
             code="E-UPSTREAM-RECORD-UNREADABLE",
         )
     if "run_id" not in doc:
         raise ContractError(
-            f"{run_yaml} has no `run_id` — it was edited or truncated",
+            f"{path} has no `run_id` — it was edited or truncated",
             code="E-UPSTREAM-RECORD-UNREADABLE",
         )
     version = doc.get("schema_version")
     if version != SCHEMA_VERSION:
         raise ContractError(
-            f"{run_yaml} declares schema_version {version!r}, which this build does "
+            f"{path} declares schema_version {version!r}, which this build does "
             f"not read (it reads {SCHEMA_VERSION!r}) — pin the `publishable` version "
             "that wrote it",
             code="E-UPSTREAM-RECORD-VERSION",
         )
     return doc
+
+
+def read_run_record(path: Path) -> dict[str, Any]:
+    """Read and parse the `run.yaml` inside the run directory `path` (the
+    directory, not the file itself) — `read_record_file(path / "run.yaml")`,
+    delegating rather than duplicating the parse-and-refuse body so the one
+    refusal set stays defined once (see `read_record_file` above for the
+    three codes and their remedies).
+    """
+    return read_record_file(path / "run.yaml")
 
 
 def resolve_run(locator: str, *, output_dir: Path, repo_root: Path) -> tuple[Path, dict[str, Any]]:

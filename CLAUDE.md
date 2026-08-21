@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H8c, H9, and H3c-3's remaining 14 — the H4 and H7 families
-are complete, and H8a and H8b are.** Amended twice on 2026-08-14
+**Order of the slices that remain: H9, then H3c-3's remaining 14 — the H4, H7 and H8 families are
+all complete.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -181,6 +181,31 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H8c (`report` and `study`) merged on 2026-08-21 — the last of H8's three.** `report` renders a run's
+or a bundle's standard sections — the condition table, deltas, hypothesis verdicts, attrition — from
+any `run.yaml`, with a project's own `src/<pkg>/report.py` override free to add or reorder sections and
+never to change a number; `study new`/`study add` assemble a self-contained, redacted bundle of run
+records outside any repo, and `report study.yaml` cross-checks a bundle's own recorded
+`code_hash`/`apparatus.hash` figures against each other rather than recomputing either, flagging a
+draft member rather than refusing the whole render. **It retires no refusal and unblocks ZERO
+configs** — neither command runs at `validate` or from a step, and none of the nine configs in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) declares a `study`, so its four-row
+table stays exactly where H8a left it, repeated character for character rather than restated.
+
+Four things worth carrying. **A bundle never carries `allocation.json`, ruled rather than left open**:
+`study add` takes a run's `run.yaml` **path**, not a run directory, so the one run-directory artifact
+that is a list of unit identities is not reachable from the argument the command takes — the route for
+a reader who wants to verify the split is `allocation_hash`, attached the same way `input_manifest_hash`
+already travels without the manifest itself. **A report override's `io` sentence was false of the code
+and is now named for what it is**: a `summary`-scope `StepIO` is not read-only, so `ReportIO` —
+`conditions`, `repeats`, `read_condition`, `read_input` — is documented as the read half of one rather
+than as the same accessor. **A generated override's own worked block had drifted from what the
+generator writes**, labelled `— generated` while shipping an extra `yield` and an undefined
+`render_scatter`; the block now matches the generator's own output. And **the three worked `diff`
+blocks predating the per-side header, filed OPEN against this slice by name, are closed**: each gained
+the two header lines its own concreteness calls for, inserted only above `code_hash`, and the guard pin
+proving nothing below it moved needed no editor to pass.
 
 **H8a (lineage and `io.reuse_from`) merged on 2026-08-20 — the first of H8's three.** `io.reuse_from`
 exists: a step reads a named artifact out of a **prior run**, addressed either as `<output_dir>/<run_id>/`
@@ -397,6 +422,8 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | Varying config **shape** when the property is about roster **content** | Nineteen adversary configs over one roster made every refusal roster-incidental. **A refusal that happens to fire must be attributed before it is counted** |
 | A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
 | A test that **iterates the thing under test** | A vocabulary test looped over `sorted(PHASES)` — the very frozenset under test — so removing a member changed the expectation and the actual together: all four removals failed on `assert 3 == 4` rather than through the guard, and the test's second assertion went **vacuous** under every mutation. **Enumerate the literals the set should contain**, or the test measures only that the set equals itself |
+| An assertion satisfied by **neighbouring output** | `assert "draft" in out` passed because the member was named `draft_run`; a `run` tag's pin passed on the bundle header's `##` heading; and a no-notice control took no `capsys` and asserted only an exit code the notice never changes. Three in one batch, all green with the behaviour neutered. **When you assert a substring, ask what else in the output could produce it** — and when you assert an absence, assert it on the stream the thing writes to |
+| A decoy whose **sort position agrees with the bug** | Twice in one task a scan-versus-lookup fixture ruled out only *first*-wins: the decoy sorted before the real package, so scan-first failed and **scan-last passed**. The second instance came after the first had been caught and disclosed — **catching it once does not immunize the next fixture.** Put a decoy on **each side** (`aaa_`/`zzz_`), or the fixture tests the ordering it happens to have |
 | A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 | A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
@@ -418,6 +445,27 @@ closed by asking the direct question — does this class's defining file sit und
 A corollary that cost its own round: **state read at the wrong moment is a third proxy.** The first fix
 was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
 class's module is gone, while an external one is still cached.
+
+**A reserved NAME standing in for a structural fact is another.** A `report_by` stratum was excluded
+from a render by testing the string `by` — and a recorded column legitimately named `by` was silently
+dropped, its value, interval, method and `repeat_spread` all present in the record. The design's ground
+— *"the record `report` reads can never hold a metric called `by`"* — was false against a real run.
+A stratum is identifiable by **where it sits**, not by what it is called.
+
+**Copying a recipe's calls without its containment is a fifth.** `freeze`'s credential wiring was
+cited as the precedent for `report`'s, and the calls were lifted while **the `try` they sit inside was
+not** — so a project-local template raising at import escaped to `main`'s un-redacted printer and a
+declared credential reached stderr verbatim, in a case § Secrets explicitly promises to redact. The
+same file already had it right. **A recipe is its calls PLUS where they sit**; the reviewer's positive
+control was `validate` over the identical project printing `<redacted:…>`.
+
+**Removing by position is a fourth-and-a-half — the same fault as the grep, in a different currency.** A `sys.path` entry inserted at index 0 was removed with `pop(0)` —
+which answers *which entry did I add?* with a **position** rather than with the entry. User code runs
+inside that window by design, so an override doing its own `sys.path.insert(0, …)` made the pop remove
+the wrong entry and leak one project's `src/` into the next render. The precedent cited in its defence —
+`load_experiment` pops by index too — **held for the mechanism and not for the exposure**: only an import
+runs inside that window, and a whole render runs inside this one. Remove by identity, and pin the
+restoration on the failure path.
 
 **A grep for one spelling is a fourth**, and it shipped a credential leak. H7c's redaction was sited by
 measuring every place an exception reaches a stream with `grep 'type(exc).__name__'` — which answers
@@ -460,6 +508,13 @@ made by the author of the rule forbidding it, while measuring for it.
   it — so the brief extracted from that plan still said *delete*, and the task deleted. **The ledger
   reaches the controller and the reviewers; it reaches no implementer.** Append the correction to
   the plan when the ruling is made, or restate every live overruling in the dispatch.
+- **The sibling that already got it right is the first place to look.** Four defects in one slice were
+  each fixable by reading a file that already had the answer: `freeze`'s credential containment (copied
+  as calls without its `try`), a structural metric test rather than a reserved name, identity-based
+  `sys.path` removal rather than `pop(0)`, and `report`'s own `results.summary` walk while `study`
+  invented a shallower one that was **dead on every real record**. **Before writing a walk, a guard or
+  a containment, grep for one that already exists** — and if you cite it as precedent, copy where it
+  sits, not only what it calls.
 - **Carrying a finding into a brief is necessary and not sufficient.** On one slice a finding routed
   to a task **fell out of the chain** between the review that raised it and the brief written from it.
   On the next it was **in the brief, measured, named** — and still not built, while the report claimed

@@ -1765,6 +1765,21 @@ the module now holds a second (task 16).
 `ruff format --check` 88 → **90** (task 1) → **92** (task 11) → **93** (task 15). Every task states a
 **delta** on the test count and computes its absolute from its own previous run.
 
+**17. `report`'s own two bundle-level notices need identifiers, and neither the design nor
+Decision 15's table names them.** Decision 15 mints `W-STUDY-COMMIT-MISMATCH` for `study add`'s
+own commit notice (a single run's `provenance.git.commit` against `code.commit`, at add time) —
+a different notice from the two `report study.yaml` prints (a bundle-wide comparison among
+runs that already share a commit). § Exit codes' rule — "each diagnostic carries a stable
+identifier" — and task 16's audit of every `E-`/`W-` identifier **raised or reported** reach a
+bare print exactly as they reach a raise; leaving these two unidentified is the row-narrower-
+than-its-code shape both preceding sub-slices shipped as their whole-branch Major, one step
+earlier than where it would have been found again here. **Ruling: mint two `W-` codes,**
+`W-STUDY-CODE-HASH-MISMATCH` and `W-STUDY-APPARATUS-MISMATCH`, with their § Warnings rows
+landing in task 10's own commit (correction 6's rule applies to a `W-` notice exactly as it
+does to an `E-` refusal). Both stay warnings — they never raise, and a bundle render's exit
+stays `0` regardless of what they find, on `W-APPARATUS-UNANSWERED`'s own precedent for a
+notice that changes nothing about the command's own success.
+
 ---
 
 ## What could not be measured

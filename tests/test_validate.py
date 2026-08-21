@@ -8,6 +8,7 @@ import pytest
 import yaml
 from tests.conftest import write_experiment_module
 
+from publishable.base_experiment import load_experiment
 from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList, assignment_for
@@ -5526,6 +5527,48 @@ def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(wr
     ]
     assert "is not `<module>:<attribute>`" in message
     assert "could not be imported" not in message
+
+
+def test_load_experiment_removes_its_own_sys_path_entry_by_identity_not_position(
+    git_repo: Path, tmp_path: Path
+):
+    """Whole-branch review, Minor 10: `sys.path.pop(0)` answers "which entry
+    did I insert" with a POSITION, not with the fact. The entrypoint's own
+    module runs inside this window by import, and a project vendoring a
+    sibling directory via `sys.path.insert(0, ...)` at module scope — an
+    ordinary idiom — pushes this function's own `<repo_root>/src` entry to
+    index 1. A positional pop then removes the vendored entry instead and
+    leaks `<repo_root>/src` on `sys.path` permanently, which is the
+    discriminating pair the whole-branch review ran: `load_experiment`
+    (this function) showed the inversion, `report.py`'s
+    `render_with_override` — fixed the identical way at batch 3's review —
+    did not. Removing by the exact path STRING, wherever it sits, is what
+    this pins."""
+    vendored = tmp_path / "vendored"
+    vendored.mkdir()
+    write_experiment_module(
+        git_repo,
+        "import sys\n"
+        f"sys.path.insert(0, {str(vendored)!r})\n"
+        "from publishable import BaseExperiment, BaseStep\n\n\n"
+        "class Step01Measure(BaseStep):\n"
+        "    scope = 'repeat'\n\n"
+        "    def run(self, cfg, io):\n"
+        "        return {}\n\n\n"
+        "class CohortPilotExperiment(BaseExperiment):\n"
+        "    steps = [Step01Measure]\n",
+    )
+    src_entry = str(git_repo / "src")
+    before = [p for p in sys.path if p != str(vendored)]
+    try:
+        load_experiment(git_repo, "cohort_pilot.experiment:CohortPilotExperiment")
+        assert src_entry not in sys.path
+    finally:
+        # The entrypoint's own leak, not `load_experiment`'s — clean it up
+        # so this test doesn't pollute any test that runs after it.
+        if str(vendored) in sys.path:
+            sys.path.remove(str(vendored))
+    assert sys.path == before
 
 
 _TWO_CONDITIONS = {

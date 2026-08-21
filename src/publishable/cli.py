@@ -39,6 +39,7 @@ from publishable.diagnostics import (
 from publishable.errors import ContractError, PublishableError
 from publishable.estimate import Estimate
 from publishable.generators.experiment import generate_experiment
+from publishable.generators.report import generate_report
 from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
@@ -133,7 +134,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "run", "freeze"}
+OPERATION_COMMANDS = {"validate", "run", "freeze", "report"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -149,18 +150,14 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "draft": "Draft runs",
     "dry-run": "Operation commands",
     "list-templates": "Operation commands",
-    "report": "Operation commands",
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
-    "study add": "What `study add` redacts",
-    "study new": "Building one",
 }
 
-# The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
-# and this build materializes three.
-NOT_BUILT_GENERATORS: dict[str, str] = {
-    "report": "A report override renders one experiment's own figures",
-}
+# The same, for `generate`'s kinds: `docs/reference.md` § Generators names
+# four and this build materializes all four (H8c task 15 built `report`,
+# the last of them).
+NOT_BUILT_GENERATORS: dict[str, str] = {}
 
 
 def _report_not_built(what: str, section: str) -> int:
@@ -3727,19 +3724,25 @@ def _dispatch(command: str, rest: list[str]) -> int:
         if len(rest) != 1 or rest[0].startswith("-"):
             print(f"`{command}` takes exactly one path and no flags", file=sys.stderr)
             return EXIT_INVOCATION
-        # `freeze` joins the existing one-path arm rather than getting a
-        # second enforcer of the same rule (`_nest_repeat`'s own docstring
-        # argues against two enforcers of one rule). A function-local import:
-        # `freeze.py` imports `cli.declared_credential_names` at module
-        # scope, so `cli.py` importing `freeze` there too would close a
-        # cycle — this is the escape hatch, and it costs nothing since
+        # `freeze` and `report` join the existing one-path arm rather than
+        # getting a second enforcer of the same rule (`_nest_repeat`'s own
+        # docstring argues against two enforcers of one rule). Function-local
+        # import: `freeze.py` imports `cli.declared_credential_names` at
+        # module scope, so `cli.py` importing `freeze` there too would close
+        # a cycle — this is the escape hatch, and it costs nothing since
         # `_dispatch` is called once per invocation, not once per import.
+        # `report.py` imports nothing from `cli` at all (its bundle-form arm
+        # is its own coded refusal), so `command_report` is function-local
+        # here for symmetry with `command_freeze` rather than out of any
+        # cycle of its own.
         from publishable.freeze import command_freeze
+        from publishable.report import command_report
 
         handlers: dict[str, Callable[[Path], int]] = {
             "validate": command_validate,
             "run": command_run,
             "freeze": command_freeze,
+            "report": command_report,
         }
         return handlers[command](Path(rest[0]))
     if command == "diff":
@@ -3769,6 +3772,8 @@ def _dispatch(command: str, rest: list[str]) -> int:
             return EXIT_INVOCATION
         scaffold_plugin(Path(rest[1]))
         return EXIT_OK
+    if command == "study":
+        return _dispatch_study(rest)
     # Everything built is handled above, so what reaches here is either specified
     # and unbuilt or not specified at all. The built branches come first on
     # purpose: a name that appeared in both places would keep working, and the
@@ -3786,6 +3791,135 @@ def _dispatch(command: str, rest: list[str]) -> int:
         return _report_not_built(command, "Creation commands")
     print(f"unknown command `{command}`", file=sys.stderr)
     return EXIT_INVOCATION
+
+
+def _dispatch_study(rest: list[str]) -> int:
+    """The `study` arm: both `new` (task 11) and `add` (task 13) are real
+    now, so a missing or unrecognized subcommand is a usage error rather
+    than the specified-but-unbuilt diagnostic it used to be —
+    `_dispatch`'s `any(n.startswith("study "))` fallback matches nothing
+    once neither name is left in `NOT_BUILT_COMMANDS`, and printing
+    `unknown command` for a group `docs/reference.md` § Creation commands
+    still specifies would be the one wrong word (§ Corrections,
+    correction 4).
+    """
+    sub = rest[0] if rest else None
+    if sub == "new":
+        return _dispatch_study_new(rest[1:])
+    if sub == "add":
+        return _dispatch_study_add(rest[1:])
+    print(
+        "`publishable study` needs a subcommand: `new` or `add` — see "
+        "docs/reference.md § Creation commands",
+        file=sys.stderr,
+    )
+    return EXIT_INVOCATION
+
+
+def _dispatch_study_new(rest: list[str]) -> int:
+    """Parses `--title` explicitly and refuses BEFORE anything reaches
+    disk: an unrecognized option or a missing/absent `--title` is
+    `EXIT_INVOCATION`, never silently dropped the way `_dispatch_generate`
+    drops one — a typo'd `--titel` would otherwise write a bundle carrying
+    the wrong title, and `E-STUDY-EXISTS` then refuses to let anyone
+    correct it.
+
+    `test_reference_cli_tables_match_what_the_cli_does` DOES probe this
+    arm from inside this very repository with two junk positionals and no
+    `--title` (`main(["study", "new", "_probe_a", "_probe_b"])`), but — a
+    docstring claim checked and found overreaching in fix round 1 — that
+    test's own `built`-row branch asserts only that stderr carries neither
+    `unknown command` nor `is specified but not built`; it checks no exit
+    code and touches no disk. Removing the arity/`--title` check leaves it
+    passing, because the invocation then falls through to
+    `_refuse_if_in_repo` instead — `_probe_a` resolves inside THIS repo,
+    so `E-STUDY-IN-REPO` fires and neither forbidden phrase appears
+    either way. What actually pins this check is
+    `tests/test_study.py`'s own direct `main(...)` calls, which assert the
+    exit code and (separately) that nothing reached disk.
+    """
+    positional: list[str] = []
+    title: str | None = None
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith("--"):
+            if token != "--title":
+                print(
+                    f"`study new` does not recognize `{token}` — see "
+                    "docs/reference.md § Creation commands",
+                    file=sys.stderr,
+                )
+                return EXIT_INVOCATION
+            if i + 1 >= len(rest):
+                print("`study new` needs a value for `--title`", file=sys.stderr)
+                return EXIT_INVOCATION
+            title = rest[i + 1]
+            i += 2
+        else:
+            positional.append(token)
+            i += 1
+    if len(positional) != 1 or title is None:
+        print(
+            '`study new` takes a bundle path and `--title "..."` — see '
+            "docs/reference.md § Creation commands",
+            file=sys.stderr,
+        )
+        return EXIT_INVOCATION
+    from publishable.study import study_new
+
+    study_new(Path(positional[0]), title)
+    return EXIT_OK
+
+
+def _dispatch_study_add(rest: list[str]) -> int:
+    """`study add <bundle> <run.yaml> --as <name>`. Same discipline as
+    `_dispatch_study_new`: an unrecognized option, a missing `--as`, or the
+    wrong number of positionals refuses at `EXIT_INVOCATION` before
+    `study_add` ever touches disk. `study_add`'s own `E-STUDY-NAME-EXISTS`
+    and every other `ContractError` it raises propagate to `main`'s own
+    `except PublishableError`, which prints and exits `1` — this function
+    only prints the `W-STUDY-COMMIT-MISMATCH` notice `study_add` returns,
+    the same `Collector`-rendered shape `report.py`'s bundle notices use.
+    """
+    positional: list[str] = []
+    name: str | None = None
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith("--"):
+            if token != "--as":
+                print(
+                    f"`study add` does not recognize `{token}` — see "
+                    "docs/reference.md § Creation commands",
+                    file=sys.stderr,
+                )
+                return EXIT_INVOCATION
+            if i + 1 >= len(rest):
+                print("`study add` needs a value for `--as`", file=sys.stderr)
+                return EXIT_INVOCATION
+            name = rest[i + 1]
+            i += 2
+        else:
+            positional.append(token)
+            i += 1
+    if len(positional) != 2 or name is None:
+        print(
+            "`study add` takes a bundle path, a run.yaml path, and "
+            "`--as <name>` — see docs/reference.md § Creation commands",
+            file=sys.stderr,
+        )
+        return EXIT_INVOCATION
+
+    from publishable.study import study_add
+
+    notices = study_add(Path(positional[0]), Path(positional[1]), name)
+    if notices:
+        notice_c = Collector()
+        for code, message in notices:
+            notice_c.warn(code, positional[0], message)
+        print(notice_c.render())
+    return EXIT_OK
 
 
 def _dispatch_generate(command: str, rest: list[str]) -> int:
@@ -3859,6 +3993,15 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
             )
             return EXIT_INVOCATION
         generate_template(repo_root=repo_root, name=name)
+        return EXIT_OK
+    if kind == "report":
+        if len(positional) != 1:
+            print(
+                "`generate report` takes one experiment name — see docs/reference.md § Generators",
+                file=sys.stderr,
+            )
+            return EXIT_INVOCATION
+        generate_report(repo_root=repo_root, experiment=positional[0], fmt=opts.get("format"))
         return EXIT_OK
     if kind in NOT_BUILT_GENERATORS:
         return _report_not_built(f"generate {kind}", NOT_BUILT_GENERATORS[kind])
