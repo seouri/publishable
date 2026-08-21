@@ -420,6 +420,13 @@ A corollary that cost its own round: **state read at the wrong moment is a third
 was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
 class's module is gone, while an external one is still cached.
 
+**Copying a recipe's calls without its containment is a sixth.** `freeze`'s credential wiring was
+cited as the precedent for `report`'s, and the calls were lifted while **the `try` they sit inside was
+not** — so a project-local template raising at import escaped to `main`'s un-redacted printer and a
+declared credential reached stderr verbatim, in a case § Secrets explicitly promises to redact. The
+same file already had it right. **A recipe is its calls PLUS where they sit**; the reviewer's positive
+control was `validate` over the identical project printing `<redacted:…>`.
+
 **Removing by position is a fifth.** A `sys.path` entry inserted at index 0 was removed with `pop(0)` —
 which answers *which entry did I add?* with a **position** rather than with the entry. User code runs
 inside that window by design, so an override doing its own `sys.path.insert(0, …)` made the pop remove
