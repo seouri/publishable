@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from publishable.hashes import code_hash, design_digest, parameters_hash, short
+from publishable.hashes import code_hash, covered_config, design_digest, parameters_hash, short
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -401,3 +401,59 @@ def test_h8b_arm_g_max_failed_fraction_change_differs():
     }
     changed = {**base, "limits": {"max_failed_fraction": 0.9}}
     assert parameters_hash(base) != parameters_hash(changed)
+
+
+def test_h8b_covered_config_is_the_exact_projection_parameters_hash_hashes():
+    """H8b task 7, Decision 3: `covered_config` is the extraction of
+    `parameters_hash`'s own inline projection — every top-level key except
+    `metadata`, with `data` narrowed to everything but `input_dir` and
+    `output_dir`. This is the pin that `parameters_hash` now calls
+    `covered_config` rather than reimplementing it: hashing `covered_config`'s
+    own return must equal `parameters_hash`'s output, for a config carrying
+    every excluded field at once so the projection is exercised on all three
+    exclusions in one fixture."""
+    import hashlib
+    import json
+
+    config = {
+        "experiment_type": "generic",
+        "metadata": {"name": "a", "description": "one", "authors": ["x"]},
+        "data": {
+            "input_dir": "/x",
+            "output_dir": "/y",
+            "input_manifest_policy": "hash_all",
+            "units": {"key": "patient_id"},
+        },
+        "parameters": {"analysis": {"method": "pearson"}},
+        "limits": {"max_failed_fraction": 0.1},
+    }
+    covered = covered_config(config)
+    assert "metadata" not in covered
+    assert "input_dir" not in covered["data"]
+    assert "output_dir" not in covered["data"]
+    assert covered["data"]["input_manifest_policy"] == "hash_all"
+    assert covered["data"]["units"] == {"key": "patient_id"}
+    assert covered["parameters"] == {"analysis": {"method": "pearson"}}
+    assert covered["limits"] == {"max_failed_fraction": 0.1}
+    canonical = json.dumps(covered, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    expected = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    assert parameters_hash(config) == expected
+
+
+def test_h8b_covered_config_does_not_mutate_input():
+    """The same non-mutation property `test_parameters_hash_does_not_mutate_input`
+    pins for `parameters_hash`, restated directly against the extracted
+    function — `covered_config` builds new dicts rather than editing the
+    caller's."""
+    config = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    before = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    covered_config(config)
+    assert config == before
