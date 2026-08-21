@@ -16049,13 +16049,16 @@ def test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root(
 ):
     """Decision 7: `run` starts writing `<run_dir>/config.yaml` (a byte copy of
     the config file) and `<run_dir>/environment/repo_root.txt` (the absolute
-    repo root `command_run` already computed). Two assertions, neither alone
-    sufficient: byte equality (catches a re-dump — M12) and a parsed-mapping
-    equality against `run.yaml`'s own embedded `config` (catches a copy taken
-    from a different object). A control — `b"#" in cfg.read_bytes()` — makes
-    the byte-equality assertion non-vacuous: without it, a fixture that lost
-    its comments for an unrelated reason would still pass the byte arm for
-    free.
+    repo root `command_run` already computed). Neither the byte-equality
+    assertion nor the parsed-mapping equality against `run.yaml`'s own
+    embedded `config` is alone sufficient: the first catches a re-dump
+    (M12), the second catches a copy taken from a different object. A
+    control — `b"#" in cfg.read_bytes()` — makes the byte-equality assertion
+    non-vacuous: without it, a fixture that lost its comments for an
+    unrelated reason would still pass the byte arm for free. A third
+    assertion pins `repo_root.txt`'s exact content, including its trailing
+    newline — the acceptance arm `.strip()`s that text, so this is the only
+    place the newline is pinned at all.
     """
     from publishable.generators.experiment import generate_experiment
     from publishable.validate import load_document

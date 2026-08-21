@@ -160,16 +160,70 @@ lists, still pass unedited).
 
 ## What I grepped, not a count
 
-Grepped `tests/test_cli.py` for `_files_under(` and traced every call site to its enclosing test
-function (list above — 8 functions, all run and reported green). Grepped `src/publishable/cli.py`
-for `config.yaml` and `repo_root.txt` before and after the edit to confirm no other site in `src/`
-references either new name. Did not grep for or claim zero disagreements elsewhere in the suite;
-the only evidence offered for "additive only" is the measured suite delta above and the two named
-pins (task 13 arm C/D, H8a arm A/B) that still pass unedited.
+Re-grepped, repo-wide this time: `grep -rn "_files_under" tests/ src/` finds the definition at
+`tests/test_cli.py:11122` and exactly the same 8 call sites (11192, 11225, 11290, 11357, 13166,
+13204, 13244, 13541), all in that one file, none elsewhere in `tests/` or `src/`. My earlier claim
+was correct in substance but scoped to `tests/test_cli.py` alone when stated — this repeat confirms
+there is no ninth caller, rather than merely not ruling one out.
+
+Re-grepped, repo-wide this time: `grep -rn "config.yaml" src/publishable/` finds three sites, not
+one — beside `cli.py:2351`'s write, `materialize.py:108` (`f"# configs/{name}/config.yaml"`, the
+header comment `init` writes) and `generators/experiment.py:145`
+(`repo_root / "configs" / name / "config.yaml"`, the path `generate experiment` builds). Read both:
+neither resolves a name relative to a run directory, so the inertness conclusion still holds, but
+my earlier claim — "no other site in `src/` references either new name" — was false as worded,
+because the grep behind it was scoped to `cli.py` alone. `grep -rn "repo_root.txt"
+src/publishable/` finds only `cli.py:2352`. Did not grep for or claim zero disagreements elsewhere
+in the suite; the only evidence offered for "additive only" is the measured suite delta above and
+the two named pins (task 13 arm C/D, H8a arm A/B) that still pass unedited.
 
 ## Concerns
 
-None found. Both requirement-3 diffs are exactly one entry each, in sorted position, nothing
-reordered. Fixture C's mutation is asymmetric exactly as the plan predicted, ruling out the
-blind-mutation failure mode the brief warned about. The scope-widening pin (`_files_under`) was run
-by name rather than reasoned about only.
+Both requirement-3 diffs are exactly one entry each, in sorted position, nothing reordered.
+Fixture C's mutation is asymmetric exactly as the plan predicted, ruling out the blind-mutation
+failure mode the brief warned about. The scope-widening pin (`_files_under`) was run by name rather
+than reasoned about only. See Fix round 1 below: the section above originally scoped two grep
+claims narrower than it stated them, both now corrected and re-run at the wider scope.
+
+## Fix round 1
+
+Four Minors from `.superpowers/sdd/2026-08-20-diff-freeze/task-b3-review.md`, all in this report's
+own evidence plus one shipped docstring count. No code defect; both verdicts PASS. Gates unchanged
+(prose-only): `uv run ruff check .` → All checks passed; `uv run ruff format --check .` → 84 files;
+`uv run mypy` → 47 source files; `uv run pytest` → 2542 passed, 1 skipped, 2 xfailed.
+
+**Minor 1 — the `src/` claim was scoped to `cli.py` alone.** Changed: re-ran the grep repo-wide,
+`grep -rn "config.yaml" src/publishable/`, which found two sites the `cli.py`-only grep missed —
+`materialize.py:108` and `generators/experiment.py:145` — and read both. Verified by: reading each
+site's context (a header-comment string and a `configs/<name>/config.yaml` path builder), confirming
+neither resolves a name relative to a run directory, so the "additive" conclusion still holds; the
+report's § *What I grepped* now states the repo-wide grep and its two hits rather than the
+single-file grep it previously overstated as covering `src/`.
+
+**Minor 2 — the `_files_under` enumeration claim was scoped to `test_cli.py` alone.** Changed:
+re-ran the grep repo-wide, `grep -rn "_files_under" tests/ src/`. Verified by: the output — the
+definition plus the same 8 call sites, all in `tests/test_cli.py`, none elsewhere in `tests/` or
+`src/` — which is what the report now states, replacing the earlier claim that only searched one
+file.
+
+**Minor 3 — Fixture C's docstring said "Two assertions" when the test makes three.** Changed:
+`tests/test_cli.py`, the docstring of
+`test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root`. Dropped the count
+phrase ("Two assertions, neither alone sufficient") and named the third assertion explicitly — it
+pins `repo_root.txt`'s exact content including its trailing newline, which the docstring now says
+is pinned only there because the acceptance arm `.strip()`s that text. Verified by: re-reading the
+test body to confirm there are exactly three claim assertions (byte equality, mapping equality,
+`repo_root_txt == f"{root.resolve()}\\n"`) and that the acceptance arm at
+`tests/test_acceptance.py` does call `.strip()` on that read; ran
+`uv run ruff format tests/test_cli.py` (1 file left unchanged) and
+`uv run pytest tests/test_cli.py -k h8b -q` (7 passed) after the docstring-only edit.
+
+**Minor 4 — "Concerns: None found" sat above two mis-scoped grep claims.** Changed: replaced the
+bare "None found" opening with a pointer to this Fix round 1 section, now that Minors 1 and 2 are
+closed above rather than left as live mis-scoped claims. Verified by: re-reading § *What I grepped*
+and § *Concerns* together after the edit to confirm no remaining sentence in either section claims
+a scope wider than the grep actually run.
+
+**Findings not closed:** none. All four Minors were prose-only (one docstring count phrase, three
+report claims); no code or test-assertion changed, no behavior changed, and gates were re-run and
+match the stated baseline exactly.
