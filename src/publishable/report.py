@@ -72,6 +72,56 @@ class BaseReport:
         yield from ()
 
 
+def report_form(path: Path) -> str:
+    """Decide whether `path` names a run record or a bundle, from its file
+    NAME alone — `"run"` for `run.yaml`, `"bundle"` for `study.yaml`, and
+    anything else (including a directory) refused with `E-REPORT-FORM`
+    (docs/superpowers/specs/2026-08-21-report-study-design.md Decision 1).
+
+    Not by parsing the document and looking for a discriminating key — a
+    truncated `run.yaml` must still read as a run, never silently as a
+    bundle — and not by `path.is_dir()` succeeding.
+
+    `diff._form` is **not** reused here even though it looks like the same
+    question: it answers "config or run record" over two operands of the
+    *same* document family, while this answers "run record or bundle",
+    over two *different* document families with two distinct renderers.
+    Reusing a predicate that answers a different question is the proxy
+    substitution `CLAUDE.md`'s "Answering a question with a proxy" is
+    about. What *is* reused, in substance rather than by import, is
+    `diff._record_dir`'s rule that a `run.yaml` path's run directory is
+    its parent — the same fact, restated where `report` needs it
+    (`path.parent` once the form is known to be `"run"`).
+
+    A **directory** argument is refused rather than accepted, unlike
+    `diff`'s run-record operand: `diff` accepts one because a run
+    directory is one of two things a *run record* operand can be, while
+    `report`'s two forms are two file names, and admitting a directory
+    would make "which of the two did you mean" a question core answers by
+    guessing.
+
+    Nothing here checks whether `path` exists. A missing operand stays
+    whatever the read that follows makes of it — `E-IO-FAILED` at exit `1`
+    through `main`'s `OSError` handler, exactly as `diff`'s config operand
+    does — never caught here.
+    """
+    if path.is_dir():
+        raise ContractError(
+            f"{path} is a directory — `report` takes a `run.yaml` or a "
+            "`study.yaml` FILE, never a directory",
+            code="E-REPORT-FORM",
+        )
+    if path.name == "run.yaml":
+        return "run"
+    if path.name == "study.yaml":
+        return "bundle"
+    raise ContractError(
+        f"{path} is named {path.name!r}, neither `run.yaml` nor `study.yaml` — "
+        "`report` takes one of those two file names and nothing else",
+        code="E-REPORT-FORM",
+    )
+
+
 def _read_repo_root(run_dir: Path) -> Path:
     """`environment/repo_root.txt`, checked for shape, never walked up to.
 

@@ -18,6 +18,7 @@ from publishable.errors import ContractError
 from publishable.lineage import (
     UpstreamLedger,
     UpstreamResolver,
+    read_record_file,
     read_run_record,
     resolve_run,
     resolve_step,
@@ -778,3 +779,102 @@ def test_fixture_o_both_locator_forms_for_one_upstream_merge_into_one_entry(tmp_
     assert len(entries) == 1
     assert entries[0]["run_id"] == run_id
     assert entries[0]["used"] == ["step01/x.json", "step01/y.json"]
+
+
+# ---------------------------------------------------------------------------
+# H8c task 4 — `read_record_file`, extracted because a bundle member is not
+# `<dir>/run.yaml` (docs/superpowers/plans/2026-08-21-report-study.md
+# § Corrections, correction 1; task-4-brief.md). `read_run_record` above is
+# now `read_record_file(run_dir / "run.yaml")` — these tests exercise the
+# extracted entry directly, over a path shaped like a bundle member: a bare
+# file, `main.run.yaml`, with no `run.yaml`-named sibling and no directory
+# of its own. One refusal set, two entries — the same three codes must stay
+# reachable from THIS entry too.
+# ---------------------------------------------------------------------------
+
+
+def test_read_record_file_reads_a_bundle_member_shaped_file_directly(tmp_path: Path):
+    """A bare file named `main.run.yaml` — never `<dir>/run.yaml` — is
+    exactly § Building one's bundle tree shape. `read_record_file` must
+    read it directly, with no directory to append `run.yaml` onto.
+
+    This is also the mutation-discriminating arm for "make `read_record_file`
+    accept a directory (append `run.yaml` unconditionally)": a bundle member
+    is a FILE, so a mutant that appends `run.yaml` looks for
+    `main.run.yaml/run.yaml`, which does not exist, and raises
+    `E-UPSTREAM-RECORD-MISSING` where the honest code reads the file clean.
+    """
+    member = tmp_path / "main.run.yaml"
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": "run_2020-01-01T00-00-00Z_bbbbbb1",
+        "status": "completed",
+    }
+    member.write_text(yaml.safe_dump(doc))
+    assert read_record_file(member) == doc
+
+
+def test_read_run_record_delegates_to_read_record_file(tmp_path: Path):
+    """`read_run_record(run_dir)` is `read_record_file(run_dir / "run.yaml")`
+    — one refusal set, two entries, on `_nest_repeat`'s own precedent. Pinned
+    by reading the SAME record through both entries and asserting equality,
+    rather than by inspecting source text.
+    """
+    run_dir = tmp_path / "run_x"
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": "run_2020-01-01T00-00-00Z_cccccc1",
+        "status": "completed",
+    }
+    _write_run_yaml(run_dir, doc)
+    assert read_run_record(run_dir) == read_record_file(run_dir / "run.yaml")
+
+
+def test_read_record_file_missing_is_still_record_missing_on_a_bare_file_path(
+    tmp_path: Path,
+):
+    with pytest.raises(ContractError) as e:
+        read_record_file(tmp_path / "main.run.yaml")
+    assert e.value.code == "E-UPSTREAM-RECORD-MISSING"
+    # The reworded message must be true of a bundle member too — a bare
+    # file, never a directory — so it must not claim "this is not a run
+    # directory", which is false of a file operand (§ Corrections,
+    # correction 1; task 4 step 3: "prefer deleting the false half to
+    # inventing a new claim").
+    assert "run directory" not in str(e.value)
+
+
+def test_read_record_file_invalid_yaml_on_a_bare_file_path_is_record_unreadable(
+    tmp_path: Path,
+):
+    member = tmp_path / "sensitivity.run.yaml"
+    member.write_text("schema_version: 1.0\nrun_id: [unterminated\n")
+    with pytest.raises(ContractError) as e:
+        read_record_file(member)
+    assert e.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+    assert "not valid YAML" in str(e.value)
+
+
+def test_read_record_file_not_a_mapping_on_a_bare_file_path_is_distinguishable_by_message(
+    tmp_path: Path,
+):
+    """Shares its code with the invalid-YAML case above; the message is
+    what tells the two faults apart, exactly as `test_a_yaml_document_that_
+    is_not_a_mapping_is_record_unreadable` already pins for the directory
+    entry."""
+    member = tmp_path / "sensitivity.run.yaml"
+    member.write_text("- just\n- a\n- list\n")
+    with pytest.raises(ContractError) as e:
+        read_record_file(member)
+    assert e.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+    assert "did not parse to a mapping" in str(e.value)
+
+
+def test_read_record_file_version_mismatch_on_a_bare_file_path(tmp_path: Path):
+    member = tmp_path / "sensitivity.run.yaml"
+    member.write_text(
+        yaml.safe_dump({"schema_version": "99.9", "run_id": "run_2020-01-01T00-00-00Z_ddddddd"})
+    )
+    with pytest.raises(ContractError) as e:
+        read_record_file(member)
+    assert e.value.code == "E-UPSTREAM-RECORD-VERSION"

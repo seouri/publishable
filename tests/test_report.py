@@ -20,7 +20,8 @@ import yaml
 from publishable import BaseReport
 from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
 from publishable.errors import ContractError
-from publishable.report import Section, render_with_override
+from publishable.lineage import read_record_file
+from publishable.report import Section, render_with_override, report_form
 
 
 def test_section_is_frozen_and_carries_title_and_body():
@@ -691,3 +692,96 @@ def test_sys_path_entry_is_removed_by_identity_not_by_position(tmp_path: Path):
         if str(vendored) in sys.path:
             sys.path.remove(str(vendored))
     assert sys.path == before
+
+
+# ---------------------------------------------------------------------------
+# H8c task 4 — `report_form`, deciding a run from a bundle by the argument's
+# file NAME alone (docs/superpowers/specs/2026-08-21-report-study-design.md
+# Decision 1), and `lineage.read_record_file`, which `report` reads a bundle
+# member through (tests for `read_record_file` itself live in
+# tests/test_lineage.py — these pin only that `report_form` and a real
+# `run.yaml` compose the way `report` will need).
+# ---------------------------------------------------------------------------
+
+
+def test_report_form_run_yaml_is_a_run(tmp_path: Path):
+    assert report_form(tmp_path / "run.yaml") == "run"
+
+
+def test_report_form_study_yaml_is_a_bundle(tmp_path: Path):
+    assert report_form(tmp_path / "study.yaml") == "bundle"
+
+
+def test_report_form_any_other_name_is_e_report_form(tmp_path: Path):
+    with pytest.raises(ContractError) as e:
+        report_form(tmp_path / "sensitivity.run.yaml")
+    assert e.value.code == "E-REPORT-FORM"
+
+
+def test_report_form_run_yaml_shaped_but_nested_is_still_a_run(tmp_path: Path):
+    """The rule is the file's own NAME, not its position — a `run.yaml`
+    three directories deep is still a run, the same way `study add`'s
+    bundle members sit under a `runs/` directory of their own."""
+    nested = tmp_path / "a" / "b" / "run.yaml"
+    assert report_form(nested) == "run"
+
+
+def test_report_form_refuses_a_directory_even_though_diff_accepts_one(tmp_path: Path):
+    """Decision 1: `report`'s two forms are two file names, and a directory
+    admits neither — unlike `diff._form`, which treats a directory as a run
+    record because that operand family has a run DIRECTORY as one of its two
+    shapes. Reusing `diff._form` here would be exactly the proxy substitution
+    Decision 1's own grounds forbid, so this is asserted directly against
+    `report_form` rather than by importing `diff._form` and finding it
+    disagrees."""
+    directory = tmp_path / "some_run_dir"
+    directory.mkdir()
+    with pytest.raises(ContractError) as e:
+        report_form(directory)
+    assert e.value.code == "E-REPORT-FORM"
+
+
+def test_report_form_a_directory_named_run_yaml_is_still_refused(tmp_path: Path):
+    """The one arm that separates "decide by name" from "decide by
+    `is_dir()`": a directory literally named `run.yaml` reads as a run under
+    `is_dir()` (which would return the wrong-for-Decision-1 answer, "run
+    record", since it never reaches the name check at all) and is refused
+    under the name rule, since `path.is_dir()` is checked FIRST and wins
+    regardless of the name. This is the arm that would pass under a
+    by-`is_dir()` mutant alongside `test_report_form_refuses_a_directory_
+    even_though_diff_accepts_one` above (which alone would pass under a
+    wrong-direction mutant too) — together they rule out both readings a
+    mutant swap could produce.
+    """
+    directory = tmp_path / "run.yaml"
+    directory.mkdir()
+    with pytest.raises(ContractError) as e:
+        report_form(directory)
+    assert e.value.code == "E-REPORT-FORM"
+
+
+def test_report_form_does_not_touch_a_missing_path(tmp_path: Path):
+    """A path that does not exist at all is decided from its name alone,
+    exactly like one that does — `report_form` performs no existence
+    check, and a missing operand is left for whatever reads the file next
+    (`E-IO-FAILED` through `main`'s `OSError` handler, once `report` is
+    wired in task 8) rather than caught here."""
+    missing = tmp_path / "run.yaml"
+    assert not missing.exists()
+    assert report_form(missing) == "run"
+
+
+def test_report_and_diff_would_read_the_same_run_directory_from_a_run_yaml_path(
+    tmp_path: Path,
+):
+    """`_record_dir`'s RULE is reused in substance, not by import: a
+    `run.yaml` path's run directory is its own parent. Exercised end to end
+    over a real run rather than asserted as a one-liner, so a future change
+    to where `run.yaml` sits would fail this rather than a restatement of
+    the same line."""
+    doc = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
+    run_yaml_path = doc["run_dir"] / "run.yaml"
+    assert report_form(run_yaml_path) == "run"
+    assert run_yaml_path.parent == doc["run_dir"]
+    record = read_record_file(run_yaml_path)
+    assert record["run_id"] == doc["record"]["run_id"]
