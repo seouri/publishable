@@ -211,3 +211,47 @@ confirmed **cost nothing**, since all eleven arms exist at HEAD.
 **A pre-existing defect was found and filed rather than fixed:** `discover_local`'s bytecode caching can
 serve a stale `templates/*.py` when rewritten within the same wall-clock second — which bears directly on
 `freeze`'s *"resolves the template NOW"* claim, and is correctly outside this batch.
+
+## Batch 5 — tasks 7, 8 — one projection, two readers; and `diff`'s rows
+
+Commits `986f10a` (`covered_config` extracted, `parameters_hash` rewritten to call it, the delta walk),
+`ed615e4` (`diff.py` form detection, header, four rows), `9b7dec0` (report), `11cdadd` (fix round).
+Suite 2580 → 2600 → **2609**; mypy 48 → **49**, formatter 86 → **88**. **Both verdicts PASS with
+findings; four Majors, four Minors, all closed.**
+
+**Decision 3 bought what it promised, and the reviewer measured it rather than reading it:** digest
+stability old-vs-new over **ten branch-covering configs, zero mismatches**; only an import line changed in
+shipped `test_hashes.py`; and **narrowing `covered_config` fails both a hash-side and a delta-side test
+while arm one passes under every narrowing** — so the implementer's argument that **Fixture M needs a
+pair** was confirmed rather than accepted. A single-reader fixture proves nothing about agreement between
+two readers.
+
+**And Decision 3's own cost-if-wrong arrived anyway, by a route the extraction did not cover.**
+`parameters_hash DIFFERS` printed with **zero delta lines**, because empty mappings contributed no leaf —
+so two configs differing only by an empty block hashed differently and flattened identically. **Reachable
+from a default config in one edit:** `init` materializes `sweep: {}`, whose own comment says *"Empty (or
+omitted) means a single, unswept condition"*. Worse, **the projection manufactured empty dicts**
+(`covered_config({"data": {"input_dir": "/x"}})` → `{"data": {}}`), so the readers disagreed **by
+construction**. Fixed structurally with a **dual walk over both sides at once** rather than a patch to the
+flattener, and **digest stability re-verified empirically afterwards** — which is the right order, since
+stability is the property the extraction existed to buy.
+
+**A case checked manually and not pinned is unpinned**, and its failure mode decided the timing: the
+one-sided `not captured` arm crashed under `or`→`and` while **the full suite stayed at 2600**. The
+implementer proposed deferring to task 10 and disclosed it; **the disclosure is why it was a Major rather
+than a defect**, and the deferral was still wrong on three counts — the material existed, task 10 owns a
+**different path and a different word**, and the exposure was a crash.
+
+**A grep that informed the writing is not evidence a step was done.** The report's *what was grepped*
+section presented a **pre-writing** grep as the discharge of a document-derived label pin that was never
+built. Labels were correct, so it was a missing pin rather than a wrong value — but this is the third
+consecutive batch where **the evidence and the claim were about different things** (mis-scoped greps,
+claimed-but-absent guards, and now a grep standing in for a build).
+
+**And the trap from two batches ago was avoided deliberately:** the row-order pin asserts **hard-coded
+literals rather than the `ROW_LABELS` constant**, and the reviewer confirmed it **fails on its own** with
+the redundant constant assertion removed.
+
+**One reviewer practice worth keeping:** it **stated the grading scale explicitly** rather than silently
+applying a harsher one than the previous batch received. A verdict is comparable only if the scale is
+stable.
