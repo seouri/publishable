@@ -3544,6 +3544,19 @@ These take paths and nothing else.
 
 **`freeze` reports a moved apparatus; it doesn't decide.** It executes nothing, so it has no execution to fail and no business changing a run's status — it appends the probe to the ledger and reports the difference as a failure rather than a note. Appending that one line is the only thing it writes: `environment/` was captured at run start and is [never rewritten](#one-execution-at-a-time-and-what-holds-the-run-directory), so a moved lockfile is reported too and changes nothing on disk. That's also what makes it the one command safe to point at a run [holding its own lock](#one-execution-at-a-time-and-what-holds-the-run-directory), which is the only situation it's for. The next execution's [gate](#the-apparatus-core-can-only-observe) is what stops the run, and it will. What `freeze` buys is *when* you find out: on a run scheduled over days, between blocks is the natural moment to look, and learning that a revision moved an hour before the next batch is worth more than learning it as that batch dies. A read command that warned quietly would waste the only thing it's good for.
 
+**`diff` takes two config or run paths, the mixed form included, and a config side cannot supply four
+of its five rows.** `parameters_hash` is a pure function of the file — the config declares it — and is
+computed against either operand, config or run. The other four — `code_hash`, `input_manifest`,
+`uv.lock`, `apparatus` — print `not comparable` with a reason rather than being computed from the
+config's own repo, which would answer the tree or the environment **now**, not the one a run used:
+[`reproduce`](#reproducing-on-another-device) refuses `code_hash` for the identical reason, and a probe
+answering `apparatus` is not something `diff` is one of [the four places](#the-apparatus-core-can-only-observe)
+that call one. Config-vs-config and config-vs-run are therefore the same rule, computing the one row
+either can supply and refusing the other four the identical way. A row's verdict is one of four words:
+`identical`, `DIFFERS`, `not captured` (the figure is `null` on a side that could have held one, over
+a run-vs-run pair — a scaffolded project's `uv.lock` row, say), or `not comparable` (a config side
+cannot supply the figure at all).
+
 ### Exit codes and diagnostics
 
 Every command is scriptable, so what it returns is part of the interface:

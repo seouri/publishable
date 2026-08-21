@@ -7,14 +7,18 @@ docs/superpowers/specs/2026-08-20-diff-freeze-design.md Decisions 1-6 and
 docs/superpowers/plans/2026-08-20-diff-freeze.md tasks 7-11.
 
 **This module is built in slices.** Tasks 7-8 delivered `covered_config`'s
-delta walk and the four rows that do not need H7d's apparatus —
-`code_hash`, `input_manifest`, `uv.lock`, `parameters_hash` — over a
-RUN-VS-RUN pair, plus form detection and the per-side header. This task
-(H8b task 9) adds the `apparatus` row, fourth in `ROW_LABELS`, over the
-same run-vs-run pair. A config side's `not comparable` rows and the
-command's exit-code ruling (task 10), the upstream block and the CLI arm
-(task 11) are later tasks' own diffs. `diff` does **not** dispatch through
-`cli.main` until task 11 — every call here is direct, on `command_diff`.
+delta walk and the four rows that do not need H7d's apparatus, plus form
+detection and the per-side header. Task 9 added the `apparatus` row. This
+task (H8b task 10) adds a CONFIG side: exactly one of the five rows
+(`parameters_hash`) is computed against it, and the other four print
+`not comparable` with a reason (Decision 5) — the same rule whether the
+other side is a config or a run. Decision 4's exit-code ruling (`diff`
+exits `0` on every comparison it renders, `1` only when it cannot render
+one) was already the shape `command_diff`'s `return EXIT_OK` gave tasks
+7-9; this task adds the mutation that pins it. The upstream block and the
+CLI arm (task 11) are the last task's own diff. `diff` does **not**
+dispatch through `cli.main` until task 11 — every call here is direct, on
+`command_diff`.
 """
 
 from pathlib import Path
@@ -25,6 +29,7 @@ import yaml
 from publishable.diagnostics import EXIT_OK, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.hashes import covered_config
+from publishable.hashes import parameters_hash as _compute_parameters_hash
 from publishable.lineage import read_run_record
 
 # Task 9 was the only task permitted to insert `'apparatus'` here, in fourth
@@ -360,13 +365,94 @@ def _render_row(row: str, record_a: dict[str, Any], record_b: dict[str, Any]) ->
     ]
 
 
+# Decision 5 part 4: a config side supplies exactly ONE of the five rows —
+# `parameters_hash`, a pure function of the file — and the other four are
+# refused as one rule rather than four separate judgements. Each reason is
+# the row's whole content, verbatim from the design (Decision 5's table);
+# computing any of these four from the config's OWN repo would answer the
+# tree/environment NOW rather than the one a run used, which is the exact
+# proxy substitution CLAUDE.md's "answering a question with a proxy" is
+# about — reproduce's own `code_hash` refusal is the shipped precedent.
+_NOT_COMPARABLE_REASONS = {
+    "code_hash": (
+        "a config records no code_hash; the tree it would hash is the tree "
+        "now, not the tree a run used"
+    ),
+    "input_manifest": (
+        "a config records no input manifest; building one resolves the "
+        "roster and may run a plugin resolver"
+    ),
+    "uv.lock": (
+        "a config records no lockfile hash; the repo's lockfile is the environment now, not a run's"
+    ),
+    "apparatus": (
+        "an apparatus fact is observed by a probe, and diff is not one of the places a probe runs"
+    ),
+}
+
+
+def _not_comparable_lines(row: str) -> list[str]:
+    return [f"{row:<{_LABEL_WIDTH}}not comparable  {_NOT_COMPARABLE_REASONS[row]}"]
+
+
+def _config_doc_for(side: _Side) -> dict[str, Any]:
+    """The document `parameters_hash`/`covered_config` read for one side,
+    whichever form it is: a config side's own parsed document, or a run
+    side's embedded `config` (exactly what `parameter_deltas` already reads
+    for a run-vs-run `parameters_hash` row — task 7's own projection, not a
+    second one)."""
+    if side.form == "config":
+        assert side.config is not None
+        return side.config
+    assert side.record is not None
+    doc: dict[str, Any] = side.record["config"]
+    return doc
+
+
+def _parameters_hash_for(side: _Side) -> str:
+    """A run side's stored top-level `parameters_hash` — recorded once at
+    run time — versus a config side's, which does not exist on disk at all
+    and is computed fresh, over the SAME function `run` used to write it
+    (`hashes.parameters_hash`), so a config-vs-run row cannot disagree with
+    the run's own figure over anything but an actual edit to the file."""
+    if side.form == "config":
+        assert side.config is not None
+        return _compute_parameters_hash(side.config)
+    assert side.record is not None
+    figure: str = side.record["parameters_hash"]
+    return figure
+
+
+def _render_parameters_hash_mixed(side_a: _Side, side_b: _Side) -> list[str]:
+    """The `parameters_hash` row when at least one side is a config —
+    Decision 5's one computable row. Never `not captured`: a config side's
+    figure is always freshly computed (never `null`), and a run's
+    `parameters_hash` is written unconditionally at run time (never
+    `null` either) — the `not captured` guard `_render_row` uses for a
+    run-vs-run pair has no reachable case here."""
+    hash_a = _parameters_hash_for(side_a)
+    hash_b = _parameters_hash_for(side_b)
+    if hash_a == hash_b:
+        verdict = f"{'identical':<{_VERDICT_WIDTH}}{_truncated(hash_a)}"
+        return [f"{'parameters_hash':<{_LABEL_WIDTH}}{verdict}"]
+    deltas = parameter_deltas(_config_doc_for(side_a), _config_doc_for(side_b))
+    return [f"{'parameters_hash':<{_LABEL_WIDTH}}DIFFERS", *deltas]
+
+
 def command_diff(a: Path, b: Path) -> int:
-    """`diff a b`, end to end for the surface this task builds: form
-    detection, the per-side header, and the four rows that need no
-    apparatus, over a run-record pair. A config side's rows and the
-    apparatus row are later tasks' (9, 10); this function's job is not to
-    guess ahead of them.
-    """
+    """`diff a b`, end to end: form detection, the per-side header, and all
+    five rows over any combination of a run record and a config (Decision
+    5 part 4 — config-vs-config and config-vs-run are the same rule).
+    The upstream block and the CLI arm (task 11) are the last piece.
+
+    **Exit code (Decision 4):** `0` whenever a comparison is RENDERED —
+    every row `identical`, every row `DIFFERS`, any mix, `not captured`,
+    `not comparable`, all the same. `1` only when a side could not be
+    loaded at all, below. There is no third path: once both sides load,
+    every row prints something and the function returns `EXIT_OK`
+    unconditionally at the bottom — a row's own verdict never reaches this
+    function's return value, which is what keeps the documented payoff
+    (`parameters_hash DIFFERS`, the comparison to aim for) exit-`0`."""
     # Both sides are loaded before either failure is reported (batch 5
     # review, Minor 4): loading them in two unconditional `try` blocks,
     # rather than returning on the first `ContractError`, is what lets a
@@ -398,5 +484,18 @@ def command_diff(a: Path, b: Path) -> int:
         for row in ROW_LABELS:
             for line in _render_row(row, side_a.record, side_b.record):
                 print(line)
+    else:
+        # At least one side is a config. Decision 5 part 4: config-vs-config
+        # and config-vs-run are the SAME rule, so this branch does not
+        # distinguish them — `parameters_hash` is computed either way (task
+        # 10 helpers above), and the other four rows are refused as one rule
+        # regardless of which side, or both, is a config.
+        for row in ROW_LABELS:
+            if row == "parameters_hash":
+                for line in _render_parameters_hash_mixed(side_a, side_b):
+                    print(line)
+            else:
+                for line in _not_comparable_lines(row):
+                    print(line)
 
     return EXIT_OK

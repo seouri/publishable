@@ -16,6 +16,7 @@ from tests.test_cli import run_a_project
 from publishable.cli import main
 from publishable.diagnostics import EXIT_OK, EXIT_WRONG
 from publishable.diff import (
+    _NOT_COMPARABLE_REASONS,
     ROW_LABELS,
     _form,
     _header_line,
@@ -807,3 +808,99 @@ def test_h8b_apparatus_identical_survives_a_facts_key_reorder(
 
     lines = _render_row("apparatus", run_a, run_b)
     assert re.match(r"^apparatus\s+identical", lines[0]), lines
+
+
+# ---------------------------------------------------------------------------
+# Task 10: the config side's `not comparable` rows (Decision 5 part 4), and
+# Decision 4's exit-code ruling.
+# ---------------------------------------------------------------------------
+
+
+def _minimal_config(tmp_path: Path, name: str, method: str = "pearson") -> Path:
+    p = tmp_path / name
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "experiment_type": "generic",
+                "metadata": {"description": "x", "authors": []},
+                "data": {
+                    "input_dir": "/x",
+                    "output_dir": "/y",
+                    "input_manifest_policy": "hash_all",
+                },
+                "parameters": {"analysis": {"method": method}},
+            }
+        )
+    )
+    return p
+
+
+def test_h8b_config_vs_run_one_row_computed_four_not_comparable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Config-vs-run: `parameters_hash` is the one computed row; the other
+    four print `not comparable` with their reason text, verbatim."""
+    doc = run_a_project(tmp_path / "proj", units=8, capsys=capsys)
+    run_dir = doc["run_dir"]
+    config_path = _minimal_config(tmp_path, "other.yaml")
+
+    capsys.readouterr()
+    code = command_diff(run_dir, config_path)
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^parameters_hash\s+(identical|DIFFERS)", out, re.M)
+    for row, reason in _NOT_COMPARABLE_REASONS.items():
+        assert re.search(rf"^{re.escape(row)}\s+not comparable\s+{re.escape(reason)}$", out, re.M)
+
+
+def test_h8b_config_vs_config_same_shape(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """Config-vs-config: the identical shape as config-vs-run — Decision 5's
+    'the same rule' claim, checked rather than assumed."""
+    a = _minimal_config(tmp_path, "a.yaml", method="pearson")
+    b = _minimal_config(tmp_path, "b.yaml", method="spearman")
+
+    capsys.readouterr()
+    code = command_diff(a, b)
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^parameters_hash\s+DIFFERS$", out, re.M)
+    assert "parameters.analysis.method  pearson → spearman" in out
+    for row, reason in _NOT_COMPARABLE_REASONS.items():
+        assert re.search(rf"^{re.escape(row)}\s+not comparable\s+{re.escape(reason)}$", out, re.M)
+
+
+def test_h8b_run_vs_run_control_never_prints_not_comparable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The control (design's own Fixture, third arm): a run-vs-run pair
+    computes all applicable rows and prints `not comparable` for NONE of
+    them. Without this control, a build that printed `not comparable`
+    unconditionally would pass the two tests above."""
+    doc_a = run_a_project(tmp_path / "proj_a", units=8, capsys=capsys)
+    doc_b = run_a_project(tmp_path / "proj_b", units=8, capsys=capsys)
+    capsys.readouterr()
+    command_diff(doc_a["run_dir"], doc_b["run_dir"])
+    out = capsys.readouterr().out
+    assert "not comparable" not in out
+
+
+def test_h8b_a_config_that_is_not_a_mapping_still_yields_no_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """`not captured` and `not comparable` are different words on different
+    paths: `not captured` is a run-vs-run row whose figure is `null` on a
+    side that COULD have held one (Fixture R2/L's territory); `not
+    comparable` is a config side that can never supply the figure at all.
+    A config that fails to parse to a mapping is a THIRD path entirely —
+    it never reaches either word, because nothing renders."""
+    a = tmp_path / "a.yaml"
+    a.write_text("- one\n- two\n")
+    b = tmp_path / "b.yaml"
+    b.write_text("experiment_type: generic\n")
+    capsys.readouterr()
+    code = command_diff(a, b)
+    out = capsys.readouterr().out
+    assert code == EXIT_WRONG
+    assert "not captured" not in out
+    assert "not comparable" not in out
+    assert "E-DIFF-CONFIG-UNREADABLE" in out
