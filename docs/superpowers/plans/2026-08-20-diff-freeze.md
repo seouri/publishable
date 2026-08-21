@@ -2324,3 +2324,24 @@ eleventh entry about one.
 - **Three filings are named as NOT to be struck** (H6's normalization, H9's upstream hash, the
   unassigned truncation), because a plan that renders a gap correctly and strikes it has closed
   someone else's work by accident.
+
+---
+
+## Correction appended 2026-08-21 — § Corrections against the code, item 4 was overruled and this plan did not say so
+
+**Correction 4 claimed `CLAUDE.md`'s `EXIT_EXTERNAL` clause was "already false" and self-contradicting,
+and instructed its deletion. The controller overruled it as itself false** when the plan landed: the
+clause reads *"`EXIT_EXTERNAL` **was** the same fault outside `BaseTemplate` **until** H7d Part B task 8
+gave it its reader"* — past tense, and consistent with the sentence naming `field_convention` as the sole
+remaining example. **Deleting it removes the row's own evidence that it retires entries as readers land**,
+which is the property that makes the row self-maintaining.
+
+**The overruling was recorded in the slice ledger and NOT here — so task 12's brief, extracted from this
+plan, still carried correction 4, and task 12 deleted the clause exactly as instructed.** The clause has
+been restored with its reason attached.
+
+**The process lesson, which is the symmetric twin of one already recorded:** a finding carried *into* a
+brief still has to be verified as built. **A ruling that OVERRULES a brief has to reach the brief** —
+recording it in the ledger reaches the controller and the reviewers, and reaches no implementer, because
+briefs are extracted from the plan. Either append the correction to the plan when the ruling is made, or
+restate every live overruling in the dispatch itself.
