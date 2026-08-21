@@ -948,14 +948,15 @@ def _report_io_from_record(run_dir: Path, record: Mapping[str, Any]) -> ReportIO
 
 def command_report(path: Path) -> int:
     """`report <run.yaml>`, end to end (docs/reference.md § Operation
-    commands' `report` row; design Decisions 1, 6; plan § Corrections
+    commands' `report` row; design Decisions 1, 6, 7; plan § Corrections
     correction 7). Dispatched from `cli._dispatch`'s `OPERATION_COMMANDS`
     arm, joining `validate`/`run`/`freeze`'s existing one-path enforcement
     rather than adding a second one.
 
     **Exit codes (Decision 6).** `1` for `report`'s OWN refusals — a
     malformed operand (`E-REPORT-FORM`), a corrupt or unreadable record
-    (the shipped `E-UPSTREAM-RECORD-*` family), or an override fault
+    (the shipped `E-UPSTREAM-RECORD-*` family), a draft run
+    (`E-REPORT-DRAFT`, Decision 7), or an override fault
     (`E-REPORT-OVERRIDE-*`, `E-REPORT-FORMAT`, `E-REPORT-BODY`). `0` for
     every STATUS a record can
     hold once it renders — `completed`, `partial` and `failed` alike,
@@ -972,6 +973,21 @@ def command_report(path: Path) -> int:
     "specified but not built" diagnostic `study add` takes in
     § Corrections correction 5's own words, until task 10 builds the
     bundle render and replaces this branch outright.
+
+    **Decision 7: a draft run (`config.yaml`'s `draft: true`, § Draft
+    runs) is refused, not watermarked.** § Draft runs' own verb is
+    "refuses" — a report that rendered a draft with a banner would be
+    citable, which is the sentence the whole `draft`-versus-`--allow-
+    dirty` argument rests on. Checked BEFORE the credential lookup and
+    the override import below, on `freeze`'s own "cheap objection first"
+    precedent: a draft is refused for reasons that cost nothing to check
+    and have nothing to do with what an override might do. **This is a
+    single RUN's refusal only** — `report <study.yaml>` FLAGS a draft
+    member instead of refusing the whole bundle (§ Building one: "flag
+    any draft runs"), because a bundle is a set and one draft member
+    should not cost the other legitimate ones their render. That flagging
+    arm is task 10's, over code that does not exist yet; this function
+    owns only the single-run refusal.
 
     **User code runs here** (an override's import, and its `sections()`
     body), so every diagnostic THIS function prints for such a fault goes
@@ -1026,6 +1042,24 @@ def command_report(path: Path) -> int:
     except ContractError as exc:
         c = Collector()
         c.error(exc.code, str(path), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    # Decision 7: a refusal, not a watermark — checked before anything
+    # else this function does that costs a credential lookup or an
+    # import, on `freeze`'s own "cheap objection first" precedent. No
+    # credentials are at stake in this message: nothing rendered, and the
+    # record's own `draft` flag carries no secret.
+    if record.get("draft") is True:
+        c = Collector()
+        c.error(
+            "E-REPORT-DRAFT",
+            str(path),
+            "this run's record carries `draft: true` — its code state "
+            "isn't reachable from any commit, so `report` refuses to "
+            "render it as a final result; `publishable run` a committed "
+            "tree, or read the record directly if you must",
+        )
         print(c.render(), file=sys.stderr)
         return EXIT_WRONG
 

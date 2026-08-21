@@ -1940,3 +1940,43 @@ def test_an_override_raise_carrying_a_declared_credential_is_redacted(
     assert _REPORT_CRED_SENTINEL not in captured.out
     assert "E-REPORT-OVERRIDE-RAISED" in captured.err
     assert "<redacted:PUBLISHABLE_TEST_REPORT_CRED>" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# H8c task 9 — the draft refusal, and the bundle's flag-not-refuse
+# asymmetry (docs/superpowers/plans/2026-08-21-report-study.md task 9;
+# design Decision 7). **The bundle-flag arm is carried forward to task 10
+# by name** — a bundle render does not exist yet, so it cannot be pinned
+# here; task 10's own brief owns building it, over Fixture T's record
+# placed inside a bundle.
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_t_a_draft_run_is_refused_not_rendered(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Fixture T: `draft: true` is a SHIPPED key — `run` writes `draft:
+    false` on every record it writes, measured just below — while the
+    `draft` COMMAND is H9's and NOT BUILT. So this hand-edits a real,
+    completed run's own record to the one key a genuine draft run would
+    carry, and says so here rather than leaving a future reader to
+    mistake it for one.
+
+    M6's own assertion PAIR: exit 1 AND empty stdout. The exit code alone
+    would already catch "render a draft with a banner instead of
+    refusing" (that arm exits 0), but pairing it with emptiness also
+    catches a refusal that printed something to stdout before failing —
+    § Draft runs' verb is "refuses", not "refuses after printing".
+    """
+    run_path = fixture_r["run_dir"] / "run.yaml"
+    doc = yaml.safe_load(run_path.read_text())
+    assert doc["draft"] is False  # the fixture's own claim: `run` wrote this
+    doc["draft"] = True
+    run_path.write_text(yaml.safe_dump(doc))
+
+    capsys.readouterr()
+    code = main(["report", str(run_path)])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert captured.out == ""
+    assert "E-REPORT-DRAFT" in captured.err
