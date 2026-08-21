@@ -152,7 +152,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
     "study add": "What `study add` redacts",
-    "study new": "Building one",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
@@ -3774,6 +3773,8 @@ def _dispatch(command: str, rest: list[str]) -> int:
             return EXIT_INVOCATION
         scaffold_plugin(Path(rest[1]))
         return EXIT_OK
+    if command == "study":
+        return _dispatch_study(rest)
     # Everything built is handled above, so what reaches here is either specified
     # and unbuilt or not specified at all. The built branches come first on
     # purpose: a name that appeared in both places would keep working, and the
@@ -3791,6 +3792,70 @@ def _dispatch(command: str, rest: list[str]) -> int:
         return _report_not_built(command, "Creation commands")
     print(f"unknown command `{command}`", file=sys.stderr)
     return EXIT_INVOCATION
+
+
+def _dispatch_study(rest: list[str]) -> int:
+    """The `study` arm: `new` is real (task 11); `add` routes to the same
+    specified-but-unbuilt diagnostic it got before this arm existed, until
+    task 13 builds it. A missing or unrecognized subcommand answers the
+    way the whole group would without this arm at all — every subcommand
+    `NOT_BUILT_COMMANDS` still names is unbuilt, so `_report_not_built`
+    over `"Creation commands"` is still the honest answer. `_dispatch`'s
+    built branches precede the `NOT_BUILT_COMMANDS` lookup, so an arm that
+    swallowed `add` while its `Status` cell still read `NOT BUILT` would
+    fail the CLI-table test (§ Corrections, correction 5).
+    """
+    sub = rest[0] if rest else None
+    if sub == "new":
+        return _dispatch_study_new(rest[1:])
+    if sub == "add":
+        return _report_not_built("study add", NOT_BUILT_COMMANDS["study add"])
+    return _report_not_built("study", "Creation commands")
+
+
+def _dispatch_study_new(rest: list[str]) -> int:
+    """Parses `--title` explicitly and refuses BEFORE anything reaches
+    disk: an unrecognized option or a missing/absent `--title` is
+    `EXIT_INVOCATION`, never silently dropped the way `_dispatch_generate`
+    drops one — a typo'd `--titel` would otherwise write a bundle carrying
+    the wrong title, and `E-STUDY-EXISTS` then refuses to let anyone
+    correct it. `test_reference_cli_tables_match_what_the_cli_does` probes
+    this arm from inside this very repository with two junk positionals
+    and no `--title`, so the arity/`--title` check must fire before
+    `study_new` ever touches disk.
+    """
+    positional: list[str] = []
+    title: str | None = None
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith("--"):
+            if token != "--title":
+                print(
+                    f"`study new` does not recognize `{token}` — see "
+                    "docs/reference.md § Creation commands",
+                    file=sys.stderr,
+                )
+                return EXIT_INVOCATION
+            if i + 1 >= len(rest):
+                print("`study new` needs a value for `--title`", file=sys.stderr)
+                return EXIT_INVOCATION
+            title = rest[i + 1]
+            i += 2
+        else:
+            positional.append(token)
+            i += 1
+    if len(positional) != 1 or title is None:
+        print(
+            '`study new` takes a bundle path and `--title "..."` — see '
+            "docs/reference.md § Creation commands",
+            file=sys.stderr,
+        )
+        return EXIT_INVOCATION
+    from publishable.study import study_new
+
+    study_new(Path(positional[0]), title)
+    return EXIT_OK
 
 
 def _dispatch_generate(command: str, rest: list[str]) -> int:
