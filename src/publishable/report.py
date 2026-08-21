@@ -1,10 +1,16 @@
 # src/publishable/report.py
-"""`BaseReport`, `Section`, and override discovery. docs/reference.md § A report
-override renders one experiment's own figures, § The importable surface.
+"""`BaseReport`, `Section`, override discovery, and `command_report`.
+docs/reference.md § A report override renders one experiment's own
+figures, § The importable surface, § Operation commands' `report` row.
 
-Nothing here dispatches: the real `report` command and the standard sections
-arrive in later tasks. `render_with_override` is called by nothing outside
-this module's own tests yet — task 8 wires it into the `report` command.
+**Import direction, measured** (`freeze.py`'s own docstring states the
+identical shape for `cli.declared_credential_names`): this module imports
+`cli._report_not_built` at module scope, for the one `report <study.yaml>`
+arm that routes to the interim "specified but not built" diagnostic until
+task 10 builds the bundle render. `cli.py`'s own module-level imports do
+not import this module — `cli._dispatch` imports `command_report` inside
+its own function body, joining `OPERATION_COMMANDS`'s existing one-path
+arm — so this direction closes no cycle; the reverse would.
 """
 
 import importlib
@@ -14,8 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from publishable.errors import ContractError
+from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
+from publishable.diagnostics import EXIT_OK, EXIT_WRONG, Collector
+from publishable.errors import ContractError, PublishableError
+from publishable.lineage import read_record_file
+from publishable.secrets import credential_values
 from publishable.stats import RESERVED_METRIC_NAMES
+from publishable.templates.registry import get_template
+from publishable.validate import declared_credential_names_for
 
 T = TypeVar("T")
 
@@ -551,9 +563,29 @@ def _as_rows(body: "str | Mapping[str, Any]") -> "list[Mapping[str, Any]] | None
     own shape; a one-row `{key, value}` table over an arbitrary mapping an
     override handed `self.section(..., body=...)`, so a renderer never has
     to special-case a shape this module did not itself construct; `None`
-    for a `str` body, which is a block rather than a table."""
+    for a `str` body, which is a block rather than a table.
+
+    A `body` that is neither `str` nor a mapping — an override's own
+    `self.section(..., body=...)` handed something else entirely, an
+    `int` or a `list` say — is refused with `E-REPORT-BODY` rather than
+    reaching `.get` and raising a bare `AttributeError` out of a renderer
+    (batch 4 review, m10 — `report` runs user code, and this module
+    already refuses a bad `format` with a coded diagnostic, so leaving
+    exactly this shape to a traceback was the one asymmetry). **Scoped to
+    exactly this fault**: a `sections()` that yields something other than
+    a `Section` entirely — bypassing `self.section()` itself — fails on
+    `.title`/`.body` before this function is ever reached, is a
+    different fault, and no decision or brief assigns it a guard.
+    """
     if isinstance(body, str):
         return None
+    if not isinstance(body, Mapping):
+        raise ContractError(
+            f"a Section's body is {type(body).__name__}, not `str` or a "
+            "mapping — an override's `self.section(..., body=...)` handed "
+            "this module something it cannot render",
+            code="E-REPORT-BODY",
+        )
     rows = body.get("rows")
     if isinstance(rows, list):
         return rows
@@ -890,3 +922,158 @@ def render_with_override(
         # cleanup into a second, unhandled exception.
         if src_entry in sys.path:
             sys.path.remove(src_entry)
+
+
+def _report_io_from_record(run_dir: Path, record: Mapping[str, Any]) -> ReportIO:
+    """`ReportIO`, built from a run record alone — the identical
+    construction `tests/test_report.py`'s own `_report_io_from_record`
+    helper performs directly, now the production path `command_report`
+    calls for every run-form render (Decision 4). Built unconditionally,
+    whether or not the resolved override's `sections()` ever touches
+    `io` — no standard section does (Decision 5) — the same posture
+    § Corrections correction 13 rules for a bundle's construction one
+    file over.
+    """
+    execution = record["execution"]
+    step_scopes, repeats = derive_step_scopes_and_repeats(execution)
+    conditions = [(c["index"], c["label"]) for c in record["results"]["conditions"]]
+    return ReportIO(
+        run_dir=run_dir,
+        input_dir=Path(record["config"]["data"]["input_dir"]),
+        conditions=conditions,
+        repeats=repeats,
+        step_scopes=step_scopes,
+    )
+
+
+def command_report(path: Path) -> int:
+    """`report <run.yaml>`, end to end (docs/reference.md § Operation
+    commands' `report` row; design Decisions 1, 6; plan § Corrections
+    correction 7). Dispatched from `cli._dispatch`'s `OPERATION_COMMANDS`
+    arm, joining `validate`/`run`/`freeze`'s existing one-path enforcement
+    rather than adding a second one.
+
+    **Exit codes (Decision 6).** `1` for `report`'s OWN refusals — a
+    malformed operand (`E-REPORT-FORM`), a corrupt or unreadable record
+    (the shipped `E-UPSTREAM-RECORD-*` family), or an override fault
+    (`E-REPORT-OVERRIDE-*`, `E-REPORT-FORMAT`, `E-REPORT-BODY`). `0` for
+    every STATUS a record can
+    hold once it renders — `completed`, `partial` and `failed` alike,
+    because a read command's exit code reports whether it could read,
+    never what it read: the record's own `status` and its failed
+    executions are rendered by the Attrition section, not folded into
+    this function's return value. `diff`'s Decision 4 rules the identical
+    thing for the identical reason, and the two now agree in both
+    directions. `2` is `main`'s own invocation-arity refusal, decided
+    before this function is ever called.
+
+    **`report <study.yaml>` is not this function's to render.** The
+    bundle form is routed to `cli._report_not_built` — the interim
+    "specified but not built" diagnostic `study add` takes in
+    § Corrections correction 5's own words, until task 10 builds the
+    bundle render and replaces this branch outright.
+
+    **User code runs here** (an override's import, and its `sections()`
+    body), so every diagnostic THIS function prints for such a fault goes
+    through a fresh `Collector` carrying `credentials` — never `main`'s
+    own bare `except PublishableError` handler, which has no collector in
+    scope at all (`spec-defects.md`'s filing). The set is populated by
+    `freeze`'s own shipped recipe:
+    `validate.declared_credential_names_for(doc, template)` over the
+    record's embedded `config`, with `template` resolved through
+    `templates.registry.get_template(name, repo_root)`, then
+    `secrets.credential_values(names)`. **This command never calls
+    `secrets.load_env`**: it executes nothing metered and needs no
+    credential of its own, so the set it can redact is exactly what the
+    process environment already held, for a declared name, when this
+    process started — a value core never read cannot be redacted by
+    name-matching, and this claims no more than that.
+
+    `repo_root` for that resolution is read the same tolerant way
+    `_read_repo_root` reads it for override discovery, EXCEPT that a
+    missing or malformed `environment/repo_root.txt` here is not a
+    refusal: credential resolution is best-effort safety, not a
+    prerequisite for rendering a record that carries no override at all.
+    Falling back to `None` costs exactly what `command_run`'s own
+    identical fallback costs: a project-LOCAL template then resolves to
+    `None` (`registry._merged` never runs `discover_local` without a
+    repo root), so a local template's declared credential is silently
+    excluded from this set. Stated rather than hidden, because a silently
+    empty credential set is a redaction no-op — the leak shape this repo
+    has shipped five times.
+
+    `KeyboardInterrupt` is re-raised fresh and argument-less, `from None`
+    — H7b Part B's resolver path's own precedent — so Ctrl-C still stops
+    the command carrying no message a probe or an override could have
+    constructed to smuggle a credential through Python's own printer.
+    """
+    try:
+        form = report_form(path)
+    except ContractError as exc:
+        c = Collector()
+        c.error(exc.code, str(path), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    if form == "bundle":
+        from publishable.cli import _report_not_built
+
+        return _report_not_built("report", "Building one")
+
+    run_dir = path.parent
+    try:
+        record = read_record_file(path)
+    except ContractError as exc:
+        c = Collector()
+        c.error(exc.code, str(path), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    doc = record.get("config")
+    doc = doc if isinstance(doc, Mapping) else {}
+    name = doc.get("experiment_type", "")
+    name = name if isinstance(name, str) else ""
+    try:
+        repo_root = _read_repo_root(run_dir)
+    except ContractError:
+        repo_root = None
+    template = get_template(name, repo_root)
+    credentials = credential_values(declared_credential_names_for(dict(doc), template))
+
+    io = _report_io_from_record(run_dir, record)
+
+    def _render(report_cls: "type[BaseReport] | None") -> str:
+        return render_report(report_cls, record, io)
+
+    try:
+        text = render_with_override(run_dir, record, _render)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        # `render_with_override` wraps every DISCOVERY fault (a bad
+        # `entrypoint`, a raising import, the wrong number of `BaseReport`
+        # subclasses, a missing `repo_root.txt`) in a `ContractError` with
+        # its own code — but `test_sys_path_is_restored_after_render_raises`
+        # pins that a RENDER-time raise (the resolved override's own
+        # `sections()` body) propagates UNWRAPPED, on purpose, so that
+        # test can assert `sys.path` is still restored around a raw
+        # exception. That render-time raise is exactly the user-code fault
+        # this function's own docstring commits to redacting, so it is
+        # caught HERE instead — one level up, where `credentials` is
+        # already in hand — rather than inside `render_with_override`,
+        # which stays exactly as that pinned test requires. A `ContractError`
+        # (`E-REPORT-FORMAT`, `E-REPORT-BODY`, or one of `render_with_
+        # override`'s own OVERRIDE-* codes) keeps its own code; anything
+        # else an override's `sections()` raised — a plain `RuntimeError`,
+        # say — is `E-REPORT-OVERRIDE-RAISED`, on `freeze`'s own `except
+        # BaseException as exc: code = exc.code if isinstance(exc,
+        # PublishableError) else "..."` recipe.
+        code = exc.code if isinstance(exc, PublishableError) else "E-REPORT-OVERRIDE-RAISED"
+        c = Collector()
+        c.credentials = credentials
+        c.error(code, str(path), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    print(text)
+    return EXIT_OK

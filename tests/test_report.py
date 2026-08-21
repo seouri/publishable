@@ -1,11 +1,17 @@
 # tests/test_report.py
-"""`BaseReport`, `Section`, and override discovery. docs/reference.md § A
-report override, § The importable surface. H8c tasks 1-3 — see
+"""`BaseReport`, `Section`, override discovery, and `command_report`.
+docs/reference.md § A report override, § The importable surface, §
+Operation commands' `report` row. H8c tasks 1-3 built `BaseReport` and
+discovery; task 8 wires `report <run.yaml>` into `main` end to end — see
 `docs/superpowers/plans/2026-08-21-report-study.md` and
-`docs/superpowers/specs/2026-08-21-report-study-design.md` Decisions 2-3.
+`docs/superpowers/specs/2026-08-21-report-study-design.md` Decisions 1-3,
+6-7.
 
-Nothing here dispatches `report` itself yet; `render_with_override` is
-exercised directly, never through `main([...])`.
+Task 8's own brief: "No assertion in this task may be made by calling
+`command_report` directly" — every test below task 8's own section header
+goes through `main(["report", ...])`, never through `command_report` or
+`render_with_override` in isolation, on H7d Part A's own precedent (its
+only Critical was invisible to every direct-call probe).
 """
 
 import dataclasses
@@ -21,6 +27,14 @@ from tests.test_cli import run_a_project
 
 from publishable import BaseReport
 from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
+from publishable.cli import main
+from publishable.diagnostics import (
+    EXIT_FAILED,
+    EXIT_INVOCATION,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    EXIT_WRONG,
+)
 from publishable.errors import ContractError
 from publishable.lineage import read_record_file
 from publishable.report import (
@@ -1674,3 +1688,255 @@ def test_m10_a_report_class_genuinely_declaring_no_format_is_refused_not_default
     with pytest.raises(ContractError) as exc_info:
         render_report(NoFormatReport, {"results": {}}, io=object())
     assert exc_info.value.code == "E-REPORT-FORMAT"
+
+
+# ---------------------------------------------------------------------------
+# H8c task 8 — `report <run.yaml>` end to end, through `main`, never
+# `command_report` directly (docs/superpowers/plans/2026-08-21-report-
+# study.md task 8; design Decisions 1, 6, § Corrections correction 7).
+# ---------------------------------------------------------------------------
+
+
+def test_a_non_mapping_body_is_e_report_body_not_an_attributeerror():
+    """m10 (batch 4 review): `body=42`, a `list`, and `None` all raised a
+    bare `AttributeError` out of `_as_rows` before this guard existed —
+    verified for BOTH renderers, since each calls `_as_rows` on its own.
+    """
+    for renderer in (render_markdown, render_html):
+        for body in (42, [1, 2, 3], None):
+            with pytest.raises(ContractError) as exc_info:
+                list(renderer(iter([Section(title="t", body=body)])))
+            assert exc_info.value.code == "E-REPORT-BODY", (renderer, body)
+
+
+def test_report_of_a_completed_run_through_main_renders_all_four_sections(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Decision 6's `completed` arm, through the real command. Fixture R
+    writes no `report.py`, so this is also the no-override path exercised
+    through `main` rather than through `render_with_override` directly.
+    """
+    capsys.readouterr()
+    code = main(["report", str(fixture_r["run_dir"] / "run.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert fixture_r["run"]["status"] == "completed"
+    for title in ("Conditions", "Deltas", "Hypothesis verdicts", "Attrition"):
+        assert f"## {title}" in out
+
+
+_FAILS_EVERY_REPEAT_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("Fixture P/F: deliberately fails, every repeat")
+"""
+
+_SWEPT_ANALYSIS_METHOD = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def test_fixture_p_a_partial_run_renders_at_exit_0_with_the_failures_shown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Decision 6's `partial` arm: `report` exits 0 with the failed
+    executions shown by their OWN condition and repeat labels, read back
+    from the record — Fixture P asserts the pair, not a bare code (task 8
+    brief step 4)."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        sweep=_SWEPT_ANALYSIS_METHOD,
+        extra_steps=["summarize"],
+        extra_step_source=_FAILS_EVERY_REPEAT_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "partial"
+    condition = run["execution"]["conditions"][0]
+    condition_label = condition["label"]
+    assert condition_label  # a fixture is a claim too: this must be non-empty
+    entries = condition["steps"]["step02_summarize"]
+    repeat_label, entry = next(iter(entries.items()))
+    assert entry["status"] == "failed"
+
+    capsys.readouterr()
+    code = main(["report", str(doc["run_dir"] / "run.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "## Attrition" in out
+    assert "partial" in out
+    assert condition_label in out
+    assert repeat_label in out
+    assert "failed" in out
+
+
+def test_fixture_f_a_wholly_failed_run_also_renders_at_exit_0(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Decision 6's `failed` arm: no step anywhere completes, so
+    `run_status` reports `"failed"` rather than `"partial"`
+    (`test_io_units_train_raises_without_a_fold_or_holdout`'s own measured
+    shape) — and `report` still renders it at exit 0, the same rule
+    covering all three statuses."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        sweep=_SWEPT_ANALYSIS_METHOD,
+        _starter_step=_FAILS_EVERY_REPEAT_STEP,
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+    capsys.readouterr()
+    code = main(["report", str(doc["run_dir"] / "run.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "## Attrition" in out
+    assert "failed" in out
+
+
+def test_report_of_a_bundle_path_routes_to_the_interim_not_built_diagnostic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The bundle render is task 10's — not built by this function — so
+    `report study.yaml` routes to the interim "specified but not built"
+    diagnostic exactly as `study add` does until its own task lands
+    (§ Corrections correction 5), rather than crashing on an unbuilt
+    branch. `report`'s CLI Status cell flips to `built` in this same
+    commit for the RUN form; this is the bundle form's honest interim.
+    """
+    bundle = tmp_path / "study.yaml"
+    bundle.write_text("runs: []\n")
+    capsys.readouterr()
+    code = main(["report", str(bundle)])
+    err = capsys.readouterr().err
+    assert code == EXIT_INVOCATION
+    assert "publishable report" in err
+    assert "is specified but not built" in err
+
+
+def test_report_form_e_report_form_through_main_is_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """`E-REPORT-FORM`, redacted through the SAME collector path as every
+    other refusal this function prints — no credentials are at stake this
+    early, but the exit code and the coded diagnostic both travel through
+    `main` rather than a direct `report_form` call."""
+    bogus = tmp_path / "not_a_run_or_study.yaml"
+    bogus.write_text("{}\n")
+    capsys.readouterr()
+    code = main(["report", str(bogus)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-FORM" in err
+
+
+# --- Correction 7: redaction, with a positive control ---------------------
+
+_REPORT_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_report_assay")
+class CredReportAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_REPORT_CRED"]
+"""
+
+_LEAKY_REPORT_OVERRIDE = """\
+import os
+
+from publishable import BaseReport
+
+
+class Report(BaseReport):
+    format = "markdown"
+
+    def sections(self, run, io):
+        raise RuntimeError(
+            "boom, deliberately, carrying " + os.environ["PUBLISHABLE_TEST_REPORT_CRED"]
+        )
+"""
+
+_REPORT_CRED_SENTINEL = "sekrit-report-h8c-task8-9f3a"
+
+
+def _build_credentialed_project(tmp_path: Path) -> dict[str, Any]:
+    """A project-local template (`required_env`), so `get_template`
+    resolving it through `repo_root` is what makes `credentials`
+    genuinely non-empty — never a hand-built record, on the advisor's own
+    point that a positive control over a set populated by luck proves
+    nothing."""
+    from publishable.generators.experiment import generate_experiment
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir(parents=True)
+    rows = "\n".join(f"p{i}" for i in range(10))
+    (data / "index.csv").write_text(f"patient_id\n{rows}\n")
+    assert main(["new", str(root)]) == 0
+    (root / "templates").mkdir(parents=True, exist_ok=True)
+    (root / "templates" / "cred_report_assay.py").write_text(_REPORT_CRED_TEMPLATE)
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="cred_report_assay",
+        input_dir=str(data),
+        output_dir=str(results),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "H8c task 8 credential redaction positive control"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "cred report"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    assert main(["run", str(cfg)]) == 0
+    run_dir = next(results.glob("run_*"))
+    return {"root": root, "run_dir": run_dir, "pkg": "cohort_pilot"}
+
+
+def test_an_override_raise_carrying_a_declared_credential_is_redacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Correction 7's whole point, verified through `main`. The override's
+    `sections()` raises a plain `RuntimeError` — not a `ContractError` —
+    carrying the declared credential's VALUE in its message; `report`
+    must still redact it, through `E-REPORT-OVERRIDE-RAISED`.
+
+    The template declares `required_env`, resolved through the project's
+    OWN `repo_root` — never a hand-built `credentials` mapping — so a
+    passing assertion here is evidence the wiring works, not evidence a
+    fixture got lucky.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_REPORT_CRED", raising=False)
+    monkeypatch.setenv("PUBLISHABLE_TEST_REPORT_CRED", _REPORT_CRED_SENTINEL)
+    built = _build_credentialed_project(tmp_path)
+    _write_report(built["root"], built["pkg"], _LEAKY_REPORT_OVERRIDE)
+
+    capsys.readouterr()
+    code = main(["report", str(built["run_dir"] / "run.yaml")])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    # The pair, not just the absence (CLAUDE.md: "pair the absence with
+    # the presence" — an assertion of absence alone passes identically if
+    # nothing ran at all).
+    assert _REPORT_CRED_SENTINEL not in captured.err
+    assert _REPORT_CRED_SENTINEL not in captured.out
+    assert "E-REPORT-OVERRIDE-RAISED" in captured.err
+    assert "<redacted:PUBLISHABLE_TEST_REPORT_CRED>" in captured.err
