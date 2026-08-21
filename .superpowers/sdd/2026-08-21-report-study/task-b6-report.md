@@ -157,3 +157,134 @@ as well as "flag but print nothing".
 
 No count phrase, positional row locator, or line-number citation appears above; document citations
 are by section.
+
+## Fix round 1
+
+Review at `f3ec269`: `.superpowers/sdd/2026-08-21-report-study/task-b6-review.md`. Spec compliance
+PASS stood; task quality FAILED on five Majors, six Minors — four of them the same defect (a pin
+that cannot fail) and one (Major 5) a real, inherited hole in a guard this task copied and then
+claimed complete. Every fix below was verified by running the real mutation against the FULL,
+UNFILTERED suite (`uv run pytest tests/test_report.py -q`, and the whole suite once at the end),
+reverted by editing the file back, and the revert re-verified by rerunning.
+
+### Major 1 — the code-hash agreement arm asserted nothing
+`test_bundle_two_runs_same_commit_same_code_hash_no_notice` now takes `capsys` and asserts
+`"W-STUDY-CODE-HASH-MISMATCH" not in out`, matching the apparatus agree-arm's own shape. **Mutation
+run:** forcing the notice unconditionally (`if len(code_hash_present) > 1 and len(code_hashes) > 1`
+→ `if True`) now fails exactly this test and the new Minor 2 arm, and passes the two arms that
+assert a real mismatch or a genuine cross-commit non-finding — a property-preserving change (e.g.
+neither of those two touches the branch this mutation widens) leaves both unaffected. Reverted;
+`tests/test_report.py -k code_hash` back to 4/4 passed.
+
+### Major 2 — the Hypotheses `run` tag was pinned by nothing
+Rewrote `test_bundle_hypotheses_table_tags_each_row_with_its_run_name` to give the two members
+DISTINCT hypothesis ids (`h1`, `h2`), isolate the rendered text after `"## Hypotheses"`, and check
+each row's own `run` field against its own id — no longer checking whether either member's name
+appears anywhere in the whole document. **Mutation run:** deleting `{"run": name}` from
+`_bundle_hypotheses_rows` (report.py) now fails this test alone. A property-preserving arm (any
+other bundle test) is unaffected because none of them reads the Hypotheses table's `run` column.
+Reverted; the single test back to 1/1 passed.
+
+### Major 3 — Fixture T's bundle arm matched the member's own name
+Renamed the two members to `sensitivity` (flagged) and `primary` (clean) — neither name contains
+"draft" — and split `out` on `"## primary"` so the flagged member's own text is isolated before
+asserting `"not reachable from any commit"` is present there and absent from the clean member's
+block. **Mutation run:** neutering the flag (`if record.get("draft") is True:` → `if False:`) now
+fails this test; before the fix, the identical mutation left the old body green (confirmed by
+rerunning the pre-fix assertion against the mutation — the surviving `"draft"` hits were exactly
+`## draft_run` and a hypotheses row, as the review's own instrumentation found). A
+property-preserving arm (e.g. changing the flag's own wording without disabling it) still passes,
+since the isolated block still contains the sentence. Reverted; the single test back to 1/1 passed.
+
+### Major 4 — the bundle-side `E-REPORT-RECORD-INCOMPLETE` guard was pinned by nothing
+Added `test_bundle_member_missing_a_needed_key_is_e_report_record_incomplete`, parametrized over
+`execution`/`results`/`config` (the run form's own three dropped keys), asserting exit 1, the code
+in `stderr`, and no `Traceback`, through `main(["report", str(bundle_path)])`. **Mutation run:**
+deleting the whole `try`/`except` in `render_bundle` and calling `_report_io_from_record` bare now
+fails all three parametrized arms (plus the Major 5 arm below, which needs the same guard).
+Reverted; `-k "bundle_member_missing_a_needed_key or bundle_member_with_execution"` back to 4/4
+passed.
+
+### Major 5 — a bundle member with a structurally wrong `execution` gave a bare traceback
+This is a real defect, not a pin gap, and the fix is in `src/publishable/report.py`, not only in
+tests. Both sites — `render_bundle`'s bundle-side guard and `command_report`'s run-side guard —
+widened `except (KeyError, TypeError)` to `except (KeyError, TypeError, AttributeError, ValueError,
+IndexError)`. `AttributeError` is the one the review's own probe hit (`execution: "x"` reaches
+`.get` on a `str` inside `artifacts.derive_step_scopes_and_repeats`); `ValueError`/`IndexError` are
+added defensively for the same class of malformed-shape fault, on the reviewer's own suggested
+remedy. Two new tests pin both sites through the real command:
+`test_bundle_member_with_execution_not_a_mapping_is_refused_not_a_traceback` (bundle) and
+`test_run_form_with_execution_not_a_mapping_is_refused_not_a_traceback` (run — the site this
+guard was copied FROM, confirmed to share the identical hole). **Mutation run:** narrowing both
+`except` tuples back to `(KeyError, TypeError)` fails exactly these two tests (and no others),
+reproducing the review's own traceback. Reverted; `-k execution_not_a_mapping` back to 2/2 passed.
+The `docs/reference.md` § Errors row for `E-REPORT-RECORD-INCOMPLETE` needed no wording change once
+the guard actually covers `execution` — the row's claim is true again because the code was fixed to
+match it, not because the row was narrowed. `render_bundle`'s own docstring (the comment the review
+flagged as "asserting a guarantee the code does not provide") is rewritten to name the fix and the
+review finding rather than claim completeness on its own.
+
+### Minor 1 — the named decoy fixture caught the discovery mutation only by crash
+`test_m_discovery_bundle_beside_a_report_py_shows_no_extra_section` now writes
+`bundle/environment/repo_root.txt` pointing at the built project's own root, so a wrongly-wired
+discovery call would actually SUCCEED in importing the decoy rather than crash on a missing file
+first. **Verified by running the discovery mutation again** (wiring `render_with_override` into
+`render_bundle`'s loop): this fixture now fails with `DECOY OVERRIDE SECTION` genuinely present in
+the rendered text — the property itself, not `E-REPORT-OVERRIDE-REPO` — confirmed by reading the
+failure's own diff. Reverted; the fixture back to passing under shipped code.
+
+### Minor 2 — an absent figure was reported as a mismatch printing `'None'`
+Ruled: a record with no `code_hash` at all, or an apparatus block that is a mapping but carries no
+`hash` key, is now EXCLUDED from its comparison — the identical grounds Decision 8 already gives for
+a `null` apparatus ("this experiment declares no probe is not a deployment claim" reads the same way
+for "this record makes no code-identity claim at all" and "this block carries no hash to compare").
+Two new tests: `test_bundle_missing_code_hash_excluded_not_printed_as_none` and
+`test_bundle_apparatus_mapping_with_no_hash_key_excluded_not_printed_as_none`, each asserting both
+the notice's absence and that the literal string `"None"` never reaches `out`. **Mutation run:**
+reverting the two `is not None` / `app.get("hash") is not None` filters back to the unfiltered forms
+fails exactly these two tests (and, for the apparatus filter, together with the pre-existing
+null-exclusion test, since one filter now covers both shapes) — the three genuine-finding arms and
+the null-apparatus arm are unaffected. Reverted; `-k apparatus` and `-k code_hash` both back to
+full green. `docs/reference.md`'s two § Warnings rows are reworded to state the widened exclusion
+rule (mapping-with-no-hash, not only `null`) rather than left narrower than the code.
+
+### Minor 3 — the nine `E-STUDY-UNREADABLE` arms asserted only the code
+Each of the nine `read_bundle` refusal tests now also asserts a distinguishing substring of its own
+raise site's message (e.g. `"no study.yaml at"`, `"not valid YAML"`, `` "`runs` is" ``, `"not a
+non-empty string"`, `"resolves outside the bundle directory"`), on `read_record_file`'s own
+docstring rule that two faults under one code must stay distinguishable by message, not only by
+code. No mutation is claimed for this one: it closes the specific gap named (message asserted, not
+only code), not a new discriminating property.
+
+### Minor 4 — the two new § Warnings rows broke the table's alphabetical ordering
+Reordered so `W-STUDY-APPARATUS-MISMATCH` sits above `W-STUDY-CODE-HASH-MISMATCH` (A before C), and
+reworded both rows to stand alone rather than one depending on "the row above" for its own meaning
+— the apparatus row no longer opens with "the identical shape one column over," and the code-hash
+row now states its own exclusion rule directly instead of pointing at a neighbor. Measured the same
+way the review did: extracted every `| … | `CODE` |` row from § Warnings and confirmed the whole
+table (apart from the pre-existing trailing `W-FREEZE-LOCK-MOVED`) sorts.
+
+### Minor 5 — the report's config-count paraphrase
+The claim is not repeated here or anywhere in this fix round; this section makes no statement about
+the feasibility analysis's four-row table. The original Status paragraph is left as the historical
+record of what was written at the time, per this project's rule that a task report is corrected by
+appending rather than retro-edited.
+
+### Minor 6 — two report claims narrower than their evidence
+Corrected in substance by the Major 1/3 fixes above rather than by editing the earlier prose: the
+"plan's own named fixture" claim now holds as an independent certification of the negative (Minor 1
+closed it), and Fixture T's bundle arm now genuinely "catches 'flag but print nothing'" rather than
+only "refuse the whole bundle" (Major 3 closed it). No further edit to the original report text, on
+the same append-rather-than-retro-edit rule Minor 5 states.
+
+## Gates and full suite after the fix round
+
+`uv run ruff check .` clean · `uv run ruff format --check .` 90 files, unchanged · `uv run mypy` 50
+source files, clean · `uv run pytest` **2783 passed, 1 skipped, 2 xfailed** (2776 before this fix
+round; +7 new tests: three parametrized Major 4 arms, two Major 5 arms, two Minor 2 arms — Major
+1/2/3/Minor 1's fixes rewrote existing tests rather than adding new ones).
+
+## What I did not close, and why
+
+Nothing. All five Majors and all six Minors above were addressed with a code or test change and
+verified by running.

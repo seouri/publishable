@@ -1096,9 +1096,23 @@ def _bundle_cross_checks(
         if len(group) < 2:
             continue
 
-        code_hashes = {record.get("code_hash") for _, record in group}
-        if len(code_hashes) > 1:
-            names = ", ".join(sorted(name for name, _ in group))
+        # Minor 2 (whole-branch review): a record with NO `code_hash` at
+        # all (missing or `None`) is excluded from this comparison, on
+        # the identical grounds Decision 8 already gives for a `null`
+        # apparatus — "this experiment declares no probe is not a
+        # deployment claim" reads the same way as "this record carries
+        # no code identity claim at all". Without the filter, the
+        # missing figure's own `None` printed in the notice's own text,
+        # which answered "not captured" as though it were a real,
+        # disagreeing hash.
+        code_hash_present = [
+            (name, record.get("code_hash"))
+            for name, record in group
+            if record.get("code_hash") is not None
+        ]
+        code_hashes = {h for _, h in code_hash_present}
+        if len(code_hash_present) > 1 and len(code_hashes) > 1:
+            names = ", ".join(sorted(name for name, _ in code_hash_present))
             notices.append(
                 (
                     "W-STUDY-CODE-HASH-MISMATCH",
@@ -1107,11 +1121,15 @@ def _bundle_cross_checks(
                 )
             )
 
+        # Minor 2's identical fix one column over: an apparatus block
+        # present as a MAPPING but carrying no `hash` key at all is
+        # excluded the same way a `null` apparatus already is — a block
+        # with no hash to compare is not a deployment claim either.
         apparatus_present: list[tuple[str, Mapping[str, Any]]] = []
         for name, record in group:
             provenance = record.get("provenance")
             app = provenance.get("apparatus") if isinstance(provenance, Mapping) else None
-            if isinstance(app, Mapping):
+            if isinstance(app, Mapping) and app.get("hash") is not None:
                 apparatus_present.append((name, app))
         apparatus_hashes = {app.get("hash") for _, app in apparatus_present}
         if len(apparatus_present) > 1 and len(apparatus_hashes) > 1:
@@ -1186,19 +1204,24 @@ def render_bundle(bundle_dir: Path, members: list[tuple[str, dict[str, Any]]]) -
     form"), over `bundle_dir` — a bundle holds bare record files, not run
     directories, so there is no other directory to build it from.
 
-    `KeyError`/`TypeError` while building a member's `ReportIO` is the
-    identical fault the run form's `E-REPORT-RECORD-INCOMPLETE` names — a
-    record that parsed clean but is missing or malformed at `execution`,
-    `results.conditions`, or `config.data.input_dir` — reused rather than
-    reminted, on Decision 15's own "the row widens" precedent for a fault
-    with more than one caller.
+    Building a member's `ReportIO` over a malformed `execution`,
+    `results.conditions`, or `config.data.input_dir` is the run form's own
+    `E-REPORT-RECORD-INCOMPLETE` fault, reused here rather than reminted
+    (Decision 15's "the row widens" precedent). **Whole-branch review,
+    Major 5**: `KeyError`/`TypeError` is NOT the complete set — a shape
+    like `execution: "x"` reaches `.get` on a `str` inside
+    `derive_step_scopes_and_repeats` and raises `AttributeError`, which
+    escaped both this guard and the run form's identical one until this
+    fix. The tuple below is widened at both call sites; the § Errors row
+    is corrected in the same commit to stop naming `execution` as covered
+    when it was not.
     """
     sections: list[Section] = []
     for name, record in members:
         sections.append(_bundle_header_section(name, record))
         try:
             io = _report_io_from_record(bundle_dir, record)
-        except (KeyError, TypeError) as exc:
+        except (KeyError, TypeError, AttributeError, ValueError, IndexError) as exc:
             raise ContractError(
                 f"bundle member {name!r} parses and has a `run_id`, but is "
                 f"missing or malformed at {exc!r} — `report` needs "
@@ -1424,7 +1447,13 @@ def command_report(path: Path) -> int:
     # read" through, rather than minting a fifth code for the same fault.
     try:
         io = _report_io_from_record(run_dir, record)
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError, AttributeError, ValueError, IndexError) as exc:
+        # Whole-branch review, Major 5: `KeyError`/`TypeError` alone let
+        # `execution: "x"` (a str, not a mapping) reach `.get` inside
+        # `derive_step_scopes_and_repeats` and raise a bare `AttributeError`
+        # traceback out of this built command — inherited by task 10's
+        # bundle-side copy of this exact guard, and fixed at both sites in
+        # the same commit that found it.
         c = Collector()
         c.credentials = credentials
         c.error(

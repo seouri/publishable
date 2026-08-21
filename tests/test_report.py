@@ -2287,6 +2287,7 @@ def test_read_bundle_missing_study_yaml_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(tmp_path / "study.yaml")
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "no study.yaml at" in str(excinfo.value)
 
 
 def test_read_bundle_invalid_yaml_is_e_study_unreadable(tmp_path: Path):
@@ -2295,6 +2296,7 @@ def test_read_bundle_invalid_yaml_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "not valid YAML" in str(excinfo.value)
 
 
 def test_read_bundle_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
@@ -2303,6 +2305,7 @@ def test_read_bundle_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "did not parse to a mapping" in str(excinfo.value)
 
 
 def test_read_bundle_runs_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
@@ -2311,6 +2314,7 @@ def test_read_bundle_runs_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "`runs` is" in str(excinfo.value)
 
 
 def test_read_bundle_entry_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
@@ -2319,6 +2323,7 @@ def test_read_bundle_entry_not_a_mapping_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "runs.'main' is" in str(excinfo.value)
 
 
 def test_read_bundle_file_field_missing_is_e_study_unreadable(tmp_path: Path):
@@ -2327,6 +2332,7 @@ def test_read_bundle_file_field_missing_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "not a non-empty string" in str(excinfo.value)
 
 
 def test_read_bundle_file_not_in_the_bundle_is_e_study_unreadable(tmp_path: Path):
@@ -2335,6 +2341,7 @@ def test_read_bundle_file_not_in_the_bundle_is_e_study_unreadable(tmp_path: Path
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "is not a file in the bundle" in str(excinfo.value)
 
 
 def test_read_bundle_file_escaping_the_bundle_is_e_study_unreadable(tmp_path: Path):
@@ -2350,6 +2357,7 @@ def test_read_bundle_file_escaping_the_bundle_is_e_study_unreadable(tmp_path: Pa
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "resolves outside the bundle directory" in str(excinfo.value)
 
 
 def test_read_bundle_file_absolute_path_is_e_study_unreadable(tmp_path: Path):
@@ -2369,6 +2377,7 @@ def test_read_bundle_file_absolute_path_is_e_study_unreadable(tmp_path: Path):
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-STUDY-UNREADABLE"
+    assert "resolves outside the bundle directory" in str(excinfo.value)
 
 
 def test_read_bundle_member_present_but_corrupt_is_e_upstream_record_unreadable(tmp_path: Path):
@@ -2385,6 +2394,75 @@ def test_read_bundle_member_present_but_corrupt_is_e_upstream_record_unreadable(
     with pytest.raises(ContractError) as excinfo:
         read_bundle(path)
     assert excinfo.value.code == "E-UPSTREAM-RECORD-UNREADABLE"
+
+
+@pytest.mark.parametrize("dropped_key", ["execution", "results", "config"])
+def test_bundle_member_missing_a_needed_key_is_e_report_record_incomplete(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str], dropped_key: str
+):
+    """Major 4 (whole-branch review): the bundle-side `E-REPORT-RECORD-
+    INCOMPLETE` guard (`render_bundle`'s own `try`/`except`) was
+    documented — the § Errors row widened in this same commit — and
+    reached by NO test. Verified by running: deleting the whole
+    `try`/`except` there left the full suite green, and a probe through
+    the real console script confirmed the guard IS reachable. Parametrized
+    over the run form's own three dropped keys (whole-branch review,
+    Major 2, task-b5) so the bundle path is proven refused — never a
+    traceback — through `main`, for each of the three facts the row
+    names."""
+    record = dict(fixture_r["run"])
+    assert dropped_key in record  # the fixture's own claim: it's really there
+    del record[dropped_key]
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("main", record)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-RECORD-INCOMPLETE" in err
+    assert "Traceback" not in err
+
+
+def test_bundle_member_with_execution_not_a_mapping_is_refused_not_a_traceback(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Major 5 (whole-branch review): a member whose `execution` is a
+    plain string (`execution: "x"`) reaches `.get` on a `str` inside
+    `artifacts.derive_step_scopes_and_repeats` and raised a bare
+    `AttributeError` traceback out of this built command — escaping the
+    old `except (KeyError, TypeError)` at BOTH this guard's copy and the
+    run form's. Both sites now also catch `AttributeError`, `ValueError`
+    and `IndexError`; this pins the bundle side through the real command.
+    The § Errors row named `execution` as covered before this fix made
+    that true — this test is what makes the row's claim checkable rather
+    than merely written."""
+    record = dict(fixture_r["run"])
+    record["execution"] = "x"
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("main", record)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-RECORD-INCOMPLETE" in err
+    assert "Traceback" not in err
+
+
+def test_run_form_with_execution_not_a_mapping_is_refused_not_a_traceback(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Major 5's sibling arm, over `report <run.yaml>` directly — the site
+    this task's bundle-side guard was copied FROM, and the one the
+    reviewer confirmed shares the identical hole through the real
+    console script."""
+    run_path = fixture_r["run_dir"] / "run.yaml"
+    doc = yaml.safe_load(run_path.read_text())
+    doc["execution"] = "x"
+    run_path.write_text(yaml.safe_dump(doc))
+    capsys.readouterr()
+    code = main(["report", str(run_path)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-RECORD-INCOMPLETE" in err
+    assert "Traceback" not in err
 
 
 def test_read_bundle_reads_members_in_declared_order(fixture_r: dict[str, Any]):
@@ -2418,19 +2496,35 @@ def test_bundle_render_through_main_shows_every_members_standard_sections_and_hy
 
 
 def test_bundle_hypotheses_table_tags_each_row_with_its_run_name(fixture_r: dict[str, Any]):
-    """Two members, same underlying record (`fixture_r` and `fixture_d`
-    each build their OWN scaffolded project onto the same `tmp_path`, so
-    the two fixtures cannot share one test — the second copy under a
-    different bundle name is enough to prove the `run` column tags each
-    row rather than a single global label)."""
+    """Major 2 (whole-branch review): the original version asserted only
+    that each member's own name appeared SOMEWHERE in the rendered text —
+    satisfied by `_bundle_header_section`'s `## <name>` heading alone, so
+    deleting `{"run": name}` from `_bundle_hypotheses_rows` (report.py)
+    left it green. Fixed by giving the two members DISTINCT hypothesis
+    ids (`h1`, `h2`) and isolating the Hypotheses section's own text, so
+    each hypothesis row's `run` tag is checked against ITS OWN row, not
+    against output any other section could have produced."""
+    second_record = dict(fixture_r["run"])
+    results = dict(second_record["results"])
+    hypotheses = [dict(results["hypotheses"][0])]
+    hypotheses[0]["id"] = "h2"
+    results["hypotheses"] = hypotheses
+    second_record["results"] = results
+
     bundle_path = _write_bundle(
-        fixture_r["run_dir"].parent / "bundle",
-        [("baseline_run", fixture_r["run"]), ("second_run", fixture_r["run"])],
+        bundle_dir=fixture_r["run_dir"].parent / "bundle",
+        members=[("baseline_run", fixture_r["run"]), ("second_run", second_record)],
     )
     _doc, members = read_bundle(bundle_path)
-    text = render_bundle(bundle_path.parent, members)
-    assert "baseline_run" in text
-    assert "second_run" in text
+    rendered = render_bundle(bundle_path.parent, members)
+
+    hypotheses_text = rendered.split("## Hypotheses", 1)[1]
+    (h1_row,) = [line for line in hypotheses_text.splitlines() if "h1" in line and "|" in line]
+    (h2_row,) = [line for line in hypotheses_text.splitlines() if "h2" in line and "|" in line]
+    assert "baseline_run" in h1_row
+    assert "second_run" not in h1_row
+    assert "second_run" in h2_row
+    assert "baseline_run" not in h2_row
 
 
 # --- Fixture T's bundle arm (carried from task 9 by name) ---
@@ -2446,21 +2540,33 @@ def test_fixture_t_bundle_flags_a_draft_member_at_exit_0(
     one of five runs was a draft would throw away four legitimate
     renders"). `draft: true` is hand-edited onto a real, completed
     record — the shipped key, never the unbuilt `draft` COMMAND — exactly
-    as task 9's own Fixture T states."""
+    as task 9's own Fixture T states.
+
+    Major 3 (whole-branch review): the original version named the
+    flagged member `draft_run` and asserted bare `"draft" in out`, which
+    the member's OWN NAME already satisfies via `## draft_run` — verified
+    by neutering the flag in `_bundle_header_section` and finding the
+    surviving `"draft"` hits were exactly that heading and a hypotheses
+    row, with the suite unchanged. Renamed to names carrying no
+    substring of "draft" (`sensitivity`, `primary`), and the flagged
+    member's own section text is isolated from the clean member's before
+    asserting, so only the flag's OWN SENTENCE — reachable only through
+    `if record.get("draft") is True` — can satisfy the assertion."""
     draft_record = dict(fixture_r["run"])
     assert draft_record["draft"] is False  # the fixture's own claim
     draft_record["draft"] = True
     bundle_path = _write_bundle(
         fixture_r["run_dir"].parent / "bundle",
-        [("draft_run", draft_record), ("clean_run", fixture_r["run"])],
+        [("sensitivity", draft_record), ("primary", fixture_r["run"])],
     )
     capsys.readouterr()
     code = main(["report", str(bundle_path)])
     out = capsys.readouterr().out
     assert code == EXIT_OK
-    assert "draft" in out
-    assert "## clean_run" in out
-    assert "## Conditions" in out  # the clean run's own sections still render
+    sensitivity_block, primary_block = out.split("## primary", 1)
+    assert "not reachable from any commit" in sensitivity_block
+    assert "not reachable from any commit" not in primary_block
+    assert "## Conditions" in primary_block  # the clean run's own sections still render
 
 
 # --- No override discovery happens on the bundle path, ever ---
@@ -2498,9 +2604,20 @@ def test_m_discovery_bundle_beside_a_report_py_shows_no_extra_section(tmp_path: 
     gives it a `report.py` with a distinctly-titled extra section. The
     bundle sits in a SIBLING directory and its one member's `entrypoint`
     still names that project's own package — the shape a wrongly-wired
-    discovery call would need to succeed. Under shipped code the extra
-    title never appears, because nothing on the bundle path ever imports
-    `<pkg>.report`."""
+    discovery call would need to succeed.
+
+    Minor 1 (whole-branch review): the original version left the bundle
+    directory WITHOUT `environment/repo_root.txt`, so a wrongly-wired
+    discovery call there would raise `E-REPORT-OVERRIDE-REPO` before ever
+    reaching the decoy's import — the fixture caught the discovery
+    mutation by CRASH, not by its own assertion, and could not tell "no
+    discovery" apart from "discovery that fails for an unrelated reason".
+    Verified by running: under the discovery mutation, adding
+    `repo_root.txt` (as below) made the decoy section RENDER for real.
+    Writing that file here makes the mutation succeed if it ran at all,
+    so this assertion is now load-bearing rather than a crash in
+    disguise — the negative is `DECOY OVERRIDE SECTION` staying absent
+    even though discovery, if it ran, would find and render it."""
     built = _build_project(tmp_path / "proj", tmp_path / "data", tmp_path / "results")
     _write_report(
         built["root"],
@@ -2513,6 +2630,9 @@ def test_m_discovery_bundle_beside_a_report_py_shows_no_extra_section(tmp_path: 
         "        yield self.section('DECOY OVERRIDE SECTION', body='should never render')\n",
     )
     bundle_path = _write_bundle(tmp_path / "bundle", [("main", built["record"])])
+    environment_dir = bundle_path.parent / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "repo_root.txt").write_text(str(built["root"]))
 
     _doc, members = read_bundle(bundle_path)
     text = render_bundle(bundle_path.parent, members)
@@ -2547,7 +2667,17 @@ def _with_apparatus(record: dict[str, Any], apparatus: "dict[str, Any] | None") 
     return copy
 
 
-def test_bundle_two_runs_same_commit_same_code_hash_no_notice(fixture_r: dict[str, Any]):
+def test_bundle_two_runs_same_commit_same_code_hash_no_notice(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Major 1 (whole-branch review): the original version took no
+    `capsys` and asserted only `EXIT_OK` — which `command_report`'s own
+    docstring guarantees neither cross-check notice ever changes, so the
+    assertion could not fail even if `W-STUDY-CODE-HASH-MISMATCH` fired
+    on every honest pair. Verified by running: making
+    `_bundle_cross_checks` emit the notice unconditionally left the old
+    body green. Now asserts the notice's ABSENCE directly, matching the
+    sibling apparatus agree-arm's own shape."""
     proj = _build_bundle_source_project(fixture_r["run_dir"].parent.parent / "src2")
     a = _run_once(proj)
     b = _run_once(proj)
@@ -2556,8 +2686,11 @@ def test_bundle_two_runs_same_commit_same_code_hash_no_notice(fixture_r: dict[st
     bundle_path = _write_bundle(
         proj["results"] / "bundle", [("a", a["record"]), ("b", b["record"])]
     )
+    capsys.readouterr()
     code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
     assert code == EXIT_OK
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
 
 
 def test_bundle_notice_code_hash_mismatch_under_one_commit(
@@ -2617,6 +2750,50 @@ def test_bundle_apparatus_hashes_agree_no_notice(
     out = capsys.readouterr().out
     assert code == EXIT_OK
     assert "W-STUDY-APPARATUS-MISMATCH" not in out
+
+
+def test_bundle_missing_code_hash_excluded_not_printed_as_none(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Minor 2 (whole-branch review): a record with NO `code_hash` at all
+    is now excluded from the comparison rather than folded in as the
+    string `'None'` — verified before the fix by calling
+    `_bundle_cross_checks` directly and observing
+    `code_hash differs (['None', 'sha256:...'])` for a pair that never
+    made a disagreeing claim at all. One member's `code_hash` key is
+    deleted outright (not set to `null`); the other's is real. Same
+    commit on both, so without the fix the pair would have been
+    reported."""
+    a = dict(fixture_r["run"])
+    del a["code_hash"]
+    b = dict(fixture_r["run"])
+    assert a["provenance"]["git"]["commit"] == b["provenance"]["git"]["commit"]
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-CODE-HASH-MISMATCH" not in out
+    assert "None" not in out
+
+
+def test_bundle_apparatus_mapping_with_no_hash_key_excluded_not_printed_as_none(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Minor 2's identical fix one column over: an apparatus block that IS
+    a mapping but carries no `hash` key at all — distinct from Decision
+    8's own `null`-apparatus case, which this fixture does not exercise —
+    is excluded the same way, rather than contributing the string
+    `'None'` to a printed mismatch beside a real hash."""
+    a = _with_apparatus(fixture_r["run"], {"probe": "x", "facts": {}})  # no "hash" key
+    b = _with_apparatus(fixture_r["run"], _apparatus_block({"gpu": "A100"}))
+    bundle_path = _write_bundle(fixture_r["run_dir"].parent / "bundle", [("a", a), ("b", b)])
+    capsys.readouterr()
+    code = main(["report", str(bundle_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "W-STUDY-APPARATUS-MISMATCH" not in out
+    assert "None" not in out
 
 
 def test_bundle_apparatus_hashes_differ_under_one_commit_is_a_notice(
