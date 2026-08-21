@@ -21,13 +21,18 @@ module scope) would have.
 
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import yaml
+
 from publishable import apparatus
 from publishable.cli import declared_credential_names
+from publishable.config import Config
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError, PublishableError
+from publishable.runner import resolve_condition_cfg
 from publishable.secrets import credential_values, load_env, missing_env
 from publishable.sweep import Condition, expand
 from publishable.templates.registry import (
@@ -55,6 +60,7 @@ class _Ready(NamedTuple):
     probe_name: str
     declared_facts: list[str]
     conditions: list[Condition]
+    cfgs: dict[int, Config]
     credentials: dict[str, str]
 
 
@@ -94,17 +100,13 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
     (d) load_env(repo_root)                      not a gate — answers (k)
     (e) template resolution                      -> four REUSED codes      exit 1
     (f) template declares no apparatus_probe     -> E-FREEZE-NO-APPARATUS  exit 1
+    (g) sweep.yaml absent/unreadable              -> E-FREEZE-PLAN-MISSING  exit 1
+    (h) re-expand + cross-check (task 5)          -> E-FREEZE-PLAN-MISMATCH exit 1
     (i) ledger has no run_start/pre_execution     -> E-FREEZE-LEDGER-MISSING exit 1
         a ledger line is malformed                -> E-FREEZE-LEDGER-UNREADABLE (inherited
                                                        from `apparatus.replay_ledger`)   exit 1
     (j) probe name vs the ledger's `probe`       -> E-FREEZE-PROBE-MISMATCH exit 1
     (k) a declared credential is unset           -> EXIT_EXTERNAL          exit 5
-
-    Gates (g)/(h) — the `sweep.yaml` cross-check that builds the real,
-    cross-checked condition set — are task 5's; until they land, the
-    condition set used for the credential collectors here is a bare local
-    `expand(doc)`, exactly as task 4's brief step 7 rules ("until task 5
-    lands, from `expand(doc)` called locally").
     """
     # (a)
     if (run_dir / "run.yaml").exists():
@@ -228,7 +230,93 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
         )
     declared_facts = list(getattr(template, "apparatus_facts", None) or [])
 
+    # (g) — one code, one remedy: the run died before its plan was written,
+    # or the directory was edited.
+    sweep_path = run_dir / "sweep.yaml"
+    if not sweep_path.is_file():
+        return _refuse(
+            Collector(),
+            "E-FREEZE-PLAN-MISSING",
+            str(sweep_path),
+            "no sweep.yaml in this run directory — the run died before its "
+            "plan was written, or the directory was edited",
+            EXIT_WRONG,
+        )
+    try:
+        recorded = yaml.safe_load(sweep_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return _refuse(
+            Collector(),
+            "E-FREEZE-PLAN-MISSING",
+            str(sweep_path),
+            f"sweep.yaml does not parse: {exc}",
+            EXIT_WRONG,
+        )
+    if not isinstance(recorded, Mapping) or not isinstance(recorded.get("conditions"), list):
+        return _refuse(
+            Collector(),
+            "E-FREEZE-PLAN-MISSING",
+            str(sweep_path),
+            "sweep.yaml does not hold a `conditions` list — the run died "
+            "before its plan was written, or the directory was edited",
+            EXIT_WRONG,
+        )
+
+    # (h) — re-expand the copied config and cross-check the FULL four-tuple
+    # per condition (§ Corrections, correction 8): `index`, `label`,
+    # `values` and `is_baseline`. `values` is the field that determines the
+    # cfg a probe is called under, and under `ablate`/a declared `baseline`
+    # a label can hold still while `values` moves — a two-field check would
+    # pass a config copy whose conditions probe different parameters than
+    # the run does. `design_digest` is deliberately NOT part of this check:
+    # it covers `data.units`/`sweep.groups`, neither of which affects the
+    # cfg a probe is called under, so checking it would guard a property
+    # `freeze` does not depend on. A plain `parameters` edit changing every
+    # cfg is a residual this check cannot see either — no `parameters_hash`
+    # is recorded until `run.yaml` — named rather than half-covered.
     conditions = expand(doc)
+    cfgs = {c.index: resolve_condition_cfg(doc, c) for c in conditions}
+    recorded_conditions = recorded["conditions"]
+    if len(recorded_conditions) != len(conditions):
+        return _refuse(
+            Collector(),
+            "E-FREEZE-PLAN-MISMATCH",
+            str(sweep_path),
+            f"sweep.yaml records {len(recorded_conditions)} condition(s), but "
+            f"the config copy re-expands to {len(conditions)} — the run "
+            "directory or the config copy was edited; do not trust either",
+            EXIT_WRONG,
+        )
+    for cond, rec in zip(conditions, recorded_conditions, strict=True):
+        if not isinstance(rec, Mapping):
+            return _refuse(
+                Collector(),
+                "E-FREEZE-PLAN-MISMATCH",
+                str(sweep_path),
+                f"condition {cond.index}'s recorded entry is not a mapping — "
+                "the run directory or the config copy was edited; do not "
+                "trust either",
+                EXIT_WRONG,
+            )
+        mismatch: str | None = None
+        if rec.get("index") != cond.index:
+            mismatch = "index"
+        elif rec.get("label") != cond.label:
+            mismatch = "label"
+        elif dict(rec.get("values") or {}) != dict(cond.values):
+            mismatch = "values"
+        elif bool(rec.get("is_baseline")) != cond.is_baseline:
+            mismatch = "is_baseline"
+        if mismatch is not None:
+            return _refuse(
+                Collector(),
+                "E-FREEZE-PLAN-MISMATCH",
+                str(sweep_path),
+                f"condition {cond.index}'s `{mismatch}` disagrees with "
+                "sweep.yaml's recorded plan — the run directory or the "
+                "config copy was edited; do not trust either",
+                EXIT_WRONG,
+            )
 
     # (i)
     try:
@@ -296,6 +384,7 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
         probe_name=declared_probe,
         declared_facts=declared_facts,
         conditions=conditions,
+        cfgs=cfgs,
         credentials=credentials,
     )
 

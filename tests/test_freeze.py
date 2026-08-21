@@ -107,6 +107,10 @@ def _edit_config_yaml(run_dir: Path, **changes) -> None:
     (run_dir / "config.yaml").write_text(yaml.safe_dump(doc))
 
 
+def _load_sweep_yaml(run_dir: Path) -> dict:
+    return yaml.safe_load((run_dir / "sweep.yaml").read_text())
+
+
 def _assert_refused(result, code: str, exit_code: int, ledger_before: list[dict], run_dir: Path):
     assert isinstance(result, _Refused), result
     assert result.exit_code == exit_code
@@ -411,3 +415,95 @@ def test_credentials_include_a_parameter_value_s_requires_env(
     result = _precheck(run_dir)
     assert isinstance(result, _Ready), result
     assert result.credentials.get("F_CRED_TOKEN") == "shh"
+
+
+# --- Task 5: the sweep.yaml cross-check ------------------------------------
+
+
+def test_gate_g_sweep_yaml_absent_is_plan_missing(installed, registries, tmp_path, capsys):
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before = _ledger_lines(run_dir)
+    (run_dir / "sweep.yaml").unlink()
+    result = _precheck(run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir)
+
+
+def test_gate_g_sweep_yaml_unreadable_is_plan_missing(installed, registries, tmp_path, capsys):
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before = _ledger_lines(run_dir)
+    (run_dir / "sweep.yaml").write_text("not: [valid, yaml: at all\n")
+    result = _precheck(run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir)
+
+
+def test_gate_h_a_structural_edit_is_plan_mismatch(installed, registries, tmp_path, capsys):
+    """M13's discriminator: the config copy's `sweep` is edited so
+    re-expansion yields a different label set than `sweep.yaml` recorded."""
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    _edit_config_yaml(
+        run_dir, sweep={"grid": {"instrument.model": ["m1"]}}
+    )  # one condition, not two
+    before = _ledger_lines(run_dir)
+    result = _precheck(run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir)
+
+
+def test_gate_h_values_only_edit_is_plan_mismatch(installed, registries, tmp_path, capsys):
+    """The second mutation's own discriminator (task 5 step 7): a declared
+    `baseline` whose VALUE moves in the config copy while `index`, `label`
+    and `is_baseline` all hold still — printed and checked below before
+    trusting the fixture, per the brief's own instruction."""
+    doc = _fixture_p(
+        installed,
+        tmp_path,
+        capsys,
+        sweep={"baseline": {"instrument.model": "m1"}},
+    )
+    run_dir = doc["run_dir"]
+    sweep_doc = _load_sweep_yaml(run_dir)
+    recorded = sweep_doc["conditions"]
+    assert len(recorded) == 1
+    assert recorded[0]["label"] == "baseline"
+    assert recorded[0]["is_baseline"] is True
+    assert recorded[0]["values"] == {"instrument.model": "m1"}
+
+    _mid_run(run_dir)
+    _edit_config_yaml(run_dir, sweep={"baseline": {"instrument.model": "m2"}})
+
+    # Confirm the two branches CAN differ before trusting the fixture: the
+    # re-expanded condition's `label`/`index`/`is_baseline` must still match
+    # the recorded ones — only `values` moves.
+    from publishable.sweep import expand
+    from publishable.validate import load_document
+
+    edited_doc = load_document(run_dir / "config.yaml")
+    reexpanded = expand(edited_doc)
+    assert len(reexpanded) == 1
+    assert reexpanded[0].label == recorded[0]["label"]
+    assert reexpanded[0].index == recorded[0]["index"]
+    assert reexpanded[0].is_baseline == recorded[0]["is_baseline"]
+    assert dict(reexpanded[0].values) != recorded[0]["values"]
+
+    before = _ledger_lines(run_dir)
+    result = _precheck(run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir)
+
+
+def test_ready_carries_cfgs_keyed_by_condition_index(installed, registries, tmp_path, capsys):
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    result = _precheck(run_dir)
+    assert isinstance(result, _Ready), result
+    assert set(result.cfgs) == {c.index for c in result.conditions}
+    for condition in result.conditions:
+        assert (
+            result.cfgs[condition.index].parameters.instrument.model
+            == (condition.values["instrument.model"])
+        )
