@@ -87,3 +87,41 @@ about the code, and report what you grepped rather than a count.**
 show the diff is exactly one entry per arm with nothing reordered. Sole editor, post-edit lists in advance
 and the finding-not-an-edit clause were all present; **the missing sentence is the one that makes the
 mechanism checkable rather than trusted**, which is the whole difference between this and a licence.
+
+## Batch 2 — tasks 1, 2 — the shared apparatus machinery, nothing dispatched
+
+Commits `1fc05dc` (`replay_ledger`), `911fb0c` (`PHASES`, four constants, the assert, every core call
+site), `7c76653` (report), `cc30a09` (fix round). Suite 2522 → **2539** → **2541**. **Spec compliance
+PASS; three Majors closed.**
+
+**Decision 9's structural argument held under test, which is the batch's real result.** `replay_ledger`
+calls **the shipped `Observations.record`** per qualifying line with **no** first-answered, scoping or
+`nan`-reflexivity logic duplicated — and the reviewer ran **the gate's own `check_changed` over a
+replayed baseline from a real run**: agreeing facts pass, a moved fact refuses. `freeze` and the gate
+**cannot** disagree because they are the same code, which is what the decision bought rather than
+asserted.
+
+**A test that iterates the thing under test measures nothing about its contents** — now a `CLAUDE.md`
+row. The vocabulary test looped over `sorted(PHASES)`, the frozenset under test, so **removing a member
+moved the expectation and the actual together**: all four removals failed on `assert 3 == 4` rather than
+through the guard, and the test's second assertion went **vacuous** under every mutation. Rebuilt against
+the four literal spellings; each removal now fails **inside `append_observation` at the removed name
+itself**, confirmed against the full suite.
+
+**A dated measurement was inherited rather than measured, and was false in half.** The docstring claimed
+a run-start assert fire leaves an `apparatus/` directory; re-measured, the root is
+`['environment','manifest','sweep.yaml']` — **no `apparatus/`, which cannot exist because the assert
+precedes the `mkdir`, as the docstring's own argument says.** The brief mislabelled one of the two fires
+and the docstring carried it. **The implementer disclosed the transcript was inherited**, which is why it
+was fixable rather than shipped — and a dated build fact carried from a brief is the same failure as any
+carried claim.
+
+**Carried into task 4's brief rather than fixed:** `facts` present-but-not-a-mapping **escapes the one
+refusal** — `facts: null` and `facts: [1,2]` raise `AttributeError`, and `condition: 42` silently yields
+an **int-keyed baseline**, which is exactly the edited-or-truncated-file class the refusal exists for.
+Carrying it into the *brief* is the point: an H8a finding routed to a task **fell out of the chain**
+between a review and the brief written from it.
+
+**And the fix round declined to re-verify one thing and said so** — the review's own third-call-site
+repro, accepted at face value rather than re-run, recorded in a *what was not independently re-verified*
+section. **That is the right shape for a limit**: name it rather than let a silence imply coverage.
