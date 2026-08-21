@@ -477,6 +477,13 @@ made by the author of the rule forbidding it, while measuring for it.
   it — so the brief extracted from that plan still said *delete*, and the task deleted. **The ledger
   reaches the controller and the reviewers; it reaches no implementer.** Append the correction to
   the plan when the ruling is made, or restate every live overruling in the dispatch.
+- **The sibling that already got it right is the first place to look.** Four defects in one slice were
+  each fixable by reading a file that already had the answer: `freeze`'s credential containment (copied
+  as calls without its `try`), a structural metric test rather than a reserved name, identity-based
+  `sys.path` removal rather than `pop(0)`, and `report`'s own `results.summary` walk while `study`
+  invented a shallower one that was **dead on every real record**. **Before writing a walk, a guard or
+  a containment, grep for one that already exists** — and if you cite it as precedent, copy where it
+  sits, not only what it calls.
 - **Carrying a finding into a brief is necessary and not sufficient.** On one slice a finding routed
   to a task **fell out of the chain** between the review that raised it and the brief written from it.
   On the next it was **in the brief, measured, named** — and still not built, while the report claimed
