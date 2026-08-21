@@ -5,6 +5,7 @@ detection, the per-side header and the four rows that need no apparatus row
 """
 
 import re
+import uuid
 from pathlib import Path
 
 import pytest
@@ -492,7 +493,9 @@ def _row_labels_in_output(output: str) -> list[str]:
 
 
 def test_h8b_row_order_is_pinned(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    assert ROW_LABELS == ["code_hash", "input_manifest", "uv.lock", "parameters_hash"]
+    # Task 9's one authorized edit to this list: 'apparatus' inserted in
+    # fourth position, before 'parameters_hash'. Nothing else reordered.
+    assert ROW_LABELS == ["code_hash", "input_manifest", "uv.lock", "apparatus", "parameters_hash"]
     doc = run_a_project(tmp_path, units=8)
     run_a = doc["run_dir"]
 
@@ -507,7 +510,12 @@ def test_h8b_row_order_is_pinned(tmp_path: Path, capsys: pytest.CaptureFixture[s
     # mutation reordered that constant, `_row_labels_in_output`'s extraction
     # would move with it and the assertion would stay vacuously true (the
     # "test iterates the thing under test" shape `CLAUDE.md` warns about).
-    # The literal below is the independent expectation.
+    # The literal below is the independent expectation. `'apparatus'` is
+    # deliberately NOT in this list: both sides here are `run_a_project`
+    # scaffolds, template `generic` declares no probe, and Decision 2 OMITS
+    # the row when both sides' `provenance.apparatus` is `null` — this
+    # fixture never exercises the apparatus row's presence, only that its
+    # absence doesn't disturb the other four rows' order.
     assert _row_labels_in_output(out) == [
         "code_hash",
         "input_manifest",
@@ -546,21 +554,27 @@ def test_h8b_row_labels_are_parsed_from_the_documents_at_all():
 
 def test_h8b_row_labels_agree_with_readme_and_design_principles():
     """README § The loop you'll actually live in and design-principles.md
-    § Same code, different parameters both show the four-row form (no
-    apparatus row, since template `generic` declares no probe) —
-    `ROW_LABELS` must equal what THEY say. If either document renamed
-    `uv.lock` tomorrow, this must fail."""
-    assert _document_row_labels(README_MD) == ROW_LABELS
-    assert _document_row_labels(DESIGN_PRINCIPLES_MD) == ROW_LABELS
+    § Same code, different parameters both show the FOUR-row form — no
+    apparatus row, since template `generic` declares no probe and Decision
+    2 omits the row when both sides are `null`, which is every pair either
+    worked output shows. `ROW_LABELS` now carries `apparatus` itself (task
+    9), so the comparison is against `ROW_LABELS` with that one row
+    dropped, not against `ROW_LABELS` whole — updated from task 8's
+    equality (which held only while `apparatus` had not landed) for exactly
+    the reason task 8's own docstring anticipated. If either document
+    renamed `uv.lock` tomorrow, this must still fail."""
+    without_apparatus = [label for label in ROW_LABELS if label != "apparatus"]
+    assert _document_row_labels(README_MD) == without_apparatus
+    assert _document_row_labels(DESIGN_PRINCIPLES_MD) == without_apparatus
 
 
-def test_h8b_row_labels_agree_with_reference_once_apparatus_is_dropped():
+def test_h8b_row_labels_agree_with_reference_now_that_apparatus_has_landed():
     """reference.md § The apparatus core can only observe shows the
-    five-row form. `apparatus` is task 9's row; until it lands,
-    `ROW_LABELS` is that same document sequence with `apparatus` removed."""
-    labels = _document_row_labels(REFERENCE_MD)
-    assert "apparatus" in labels
-    assert [label for label in labels if label != "apparatus"] == ROW_LABELS
+    FIVE-row form, `apparatus` fourth. Now that task 9 has landed the row,
+    `ROW_LABELS` must equal that document's sequence exactly — the
+    inversion of the pin above, which drops the row precisely because
+    README/design-principles' worked pair never has one to show."""
+    assert _document_row_labels(REFERENCE_MD) == ROW_LABELS
 
 
 # ---------------------------------------------------------------------------
@@ -582,3 +596,214 @@ def test_h8b_both_operands_unreadable_are_both_reported(
     assert str(empty_a) in out
     assert str(empty_b) in out
     assert out.count("E-UPSTREAM-RECORD-MISSING") == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 9: the `apparatus` row. Fixture P (H7d Part A's shape, inherited): a
+# synthetic installed distribution registering a probe, a project-local
+# template declaring `apparatus_probe`/`apparatus_facts`, two conditions so
+# the per-condition scope is exercised rather than assumed. The probe's
+# `calibration_id` answer comes from an environment variable the test sets
+# — "a fact that can be moved between calls" — rather than a file, since the
+# registered probe function reads it at CALL time, not at import time, so
+# the same registration serves two separately-scaffolded projects with two
+# different answers.
+# ---------------------------------------------------------------------------
+
+_H8B_APPARATUS_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h8b_apparatus_assay")
+class H8bApparatusAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h8b_probe"
+    apparatus_facts = ["calibration_id"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+_H8B_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h8b_probe")
+def probe(cfg):
+    return Apparatus(facts={"calibration_id": os.environ.get("H8B_CALIBRATION_ID")})
+"""
+
+
+def _install_h8b_probe(installed) -> None:
+    # A fresh, per-test module NAME (not merely a fresh site directory):
+    # `sys.modules` caches by module name across tests in the same process,
+    # and a cached module's top level does not re-run on a second import —
+    # so a second test reusing "h8b_probe_mod" would import the CACHED
+    # module from an earlier test without re-executing `@register_probe`,
+    # and `registries()` resetting the registry dict between tests would
+    # then make the entry point look unregistered. Measured: this is
+    # exactly the shape, distinct module per test avoids it.
+    module_name = f"h8b_probe_mod_{uuid.uuid4().hex}"
+    site = installed(
+        "dist-h8b-probe", "1.0", {"publishable.probes": {"h8b_probe": f"{module_name}:probe"}}
+    )
+    (site / f"{module_name}.py").write_text(_H8B_PROBE_MODULE)
+
+
+def _run_with_probe(
+    project_dir: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    calibration_id: str,
+) -> dict:
+    project_dir.mkdir()
+    monkeypatch.setenv("H8B_CALIBRATION_ID", calibration_id)
+    return run_a_project(
+        project_dir,
+        capsys=capsys,
+        experiment_type="h8b_apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H8B_APPARATUS_TEMPLATE,
+    )
+
+
+def test_h8b_fixture_a1_apparatus_differs_two_conditions_moving(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    """Fixture A1: two Fixture P runs whose probe answers a different
+    `calibration_id` in the second. Asserts exactly TWO detail lines, each
+    containing its own condition key, each carrying that condition's own
+    old and new values read back from the two records' own
+    `provenance.apparatus.facts` — never typed."""
+    _install_h8b_probe(installed)
+    doc_a = _run_with_probe(tmp_path / "proj_a", capsys, monkeypatch, "CAL-2026-07-19")
+    doc_b = _run_with_probe(tmp_path / "proj_b", capsys, monkeypatch, "CAL-2026-08-02")
+
+    run_a_yaml = yaml.safe_load((doc_a["run_dir"] / "run.yaml").read_text())
+    run_b_yaml = yaml.safe_load((doc_b["run_dir"] / "run.yaml").read_text())
+    facts_a = run_a_yaml["provenance"]["apparatus"]["facts"]
+    facts_b = run_b_yaml["provenance"]["apparatus"]["facts"]
+    assert set(facts_a) == set(facts_b) and len(facts_a) == 2, "the fixture needs two conditions"
+
+    capsys.readouterr()
+    code = command_diff(doc_a["run_dir"], doc_b["run_dir"])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^apparatus\s+DIFFERS$", out, re.M)
+
+    detail_lines = [line for line in out.splitlines() if "calibration_id" in line and "→" in line]
+    assert len(detail_lines) == 2, "one per condition — no collapsing"
+    for condition in facts_a:
+        matching = [line for line in detail_lines if line.strip().startswith(condition + ".")]
+        assert len(matching) == 1, f"condition {condition} must have its own qualified line"
+        assert (
+            f"{facts_a[condition]['calibration_id']} → {facts_b[condition]['calibration_id']}"
+            in (matching[0])
+        )
+
+
+def test_h8b_fixture_a2_apparatus_identical_and_one_sided(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    """Fixture A2, first arm: a Fixture P pair whose probe answers the same
+    `calibration_id` both times prints `apparatus identical` with the
+    digest — never `DIFFERS`, and no detail lines."""
+    _install_h8b_probe(installed)
+    doc_a = _run_with_probe(tmp_path / "proj_a", capsys, monkeypatch, "CAL-2026-07-19")
+    doc_b = _run_with_probe(tmp_path / "proj_b", capsys, monkeypatch, "CAL-2026-07-19")
+
+    capsys.readouterr()
+    code = command_diff(doc_a["run_dir"], doc_b["run_dir"])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^apparatus\s+identical\s+sha256:", out, re.M)
+    assert "calibration_id" not in out
+
+
+def test_h8b_fixture_a2_one_sided_apparatus_null_is_differs_and_names_the_side(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    """Fixture A2, second arm: a Fixture P record (apparatus non-null)
+    against a Fixture R record (`run_a_project`'s ordinary scaffold,
+    `apparatus: null` — template `generic` declares no probe) is `DIFFERS`
+    in both operand orders, each naming which side recorded none. This is
+    what pins "the row appears whenever EITHER side has one" and that
+    silence would read as agreement."""
+    _install_h8b_probe(installed)
+    with_apparatus = _run_with_probe(tmp_path / "proj_a", capsys, monkeypatch, "CAL-2026-07-19")
+    without_apparatus = run_a_project(tmp_path / "proj_b", units=8, capsys=capsys)
+
+    run_with = with_apparatus["run_dir"]
+    run_without = without_apparatus["run_dir"]
+
+    capsys.readouterr()
+    code = command_diff(run_with, run_without)
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^apparatus\s+DIFFERS$", out, re.M)
+    assert "B recorded no apparatus" in out
+
+    capsys.readouterr()
+    code_reverse = command_diff(run_without, run_with)
+    out_reverse = capsys.readouterr().out
+    assert code_reverse == EXIT_OK
+    assert re.search(r"^apparatus\s+DIFFERS$", out_reverse, re.M)
+    assert "A recorded no apparatus" in out_reverse
+
+
+def test_h8b_apparatus_row_omitted_when_both_sides_null(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The omission rule's own positive control: two ordinary `run_a_project`
+    scaffolds (both `apparatus: null`) print no `apparatus` line at all —
+    not `identical`, not `DIFFERS`, nothing."""
+    doc_a = run_a_project(tmp_path / "proj_a", units=8, capsys=capsys)
+    doc_b = run_a_project(tmp_path / "proj_b", units=8, capsys=capsys)
+    capsys.readouterr()
+    command_diff(doc_a["run_dir"], doc_b["run_dir"])
+    out = capsys.readouterr().out
+    assert not re.search(r"^apparatus\s", out, re.M)
+
+
+# ---------------------------------------------------------------------------
+# M2's own discriminating fixture (Decision 2's cost-if-wrong; task 9 step
+# 8): the identical arm survives one side's `facts` mapping being
+# RE-SERIALIZED in a different key order, because the verdict compares
+# `.hash` (canonicalized with `sort_keys=True` by `apparatus.apparatus_hash`
+# — invariant to reordering) rather than the `.facts` mapping directly. Two
+# real Fixture P runs answering the SAME `calibration_id` never differ in
+# key order on their own (same code path both times), so this reordering
+# is applied BY HAND to be the thing that would trip a mapping comparison
+# — printing `list(...)` first, per the brief, to confirm the reordering
+# survives into what `_render_row` actually receives.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_apparatus_identical_survives_a_facts_key_reorder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    _install_h8b_probe(installed)
+    doc_a = _run_with_probe(tmp_path / "proj_a", capsys, monkeypatch, "CAL-2026-07-19")
+    doc_b = _run_with_probe(tmp_path / "proj_b", capsys, monkeypatch, "CAL-2026-07-19")
+    run_a = yaml.safe_load((doc_a["run_dir"] / "run.yaml").read_text())
+    run_b = yaml.safe_load((doc_b["run_dir"] / "run.yaml").read_text())
+
+    facts_b = run_b["provenance"]["apparatus"]["facts"]
+    reordered = {
+        condition: dict(reversed(list(fact_map.items()))) for condition, fact_map in facts_b.items()
+    }
+    reordered = dict(reversed(list(reordered.items())))
+    # Confirm the reordering actually survives into what the comparison
+    # sees, per the brief's own instruction — CPython dicts preserve
+    # insertion order, so this is measuring that fact rather than assuming
+    # it.
+    assert list(reordered) != list(facts_b) or any(
+        list(reordered[c]) != list(facts_b[c]) for c in facts_b
+    ), "the reorder must actually change iteration order, or this fixture proves nothing"
+    run_b["provenance"]["apparatus"]["facts"] = reordered
+
+    lines = _render_row("apparatus", run_a, run_b)
+    assert re.match(r"^apparatus\s+identical", lines[0]), lines

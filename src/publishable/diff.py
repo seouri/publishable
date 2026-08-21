@@ -6,11 +6,12 @@ README.md § The loop you'll actually live in. See
 docs/superpowers/specs/2026-08-20-diff-freeze-design.md Decisions 1-6 and
 docs/superpowers/plans/2026-08-20-diff-freeze.md tasks 7-11.
 
-**This module is built in slices.** This task (H8b task 7-8) delivers
-`covered_config`'s delta walk and the four rows that do not need H7d's
-apparatus — `code_hash`, `input_manifest`, `uv.lock`, `parameters_hash` —
-over a RUN-VS-RUN pair, plus form detection and the per-side header. The
-`apparatus` row (task 9), a config side's `not comparable` rows and the
+**This module is built in slices.** Tasks 7-8 delivered `covered_config`'s
+delta walk and the four rows that do not need H7d's apparatus —
+`code_hash`, `input_manifest`, `uv.lock`, `parameters_hash` — over a
+RUN-VS-RUN pair, plus form detection and the per-side header. This task
+(H8b task 9) adds the `apparatus` row, fourth in `ROW_LABELS`, over the
+same run-vs-run pair. A config side's `not comparable` rows and the
 command's exit-code ruling (task 10), the upstream block and the CLI arm
 (task 11) are later tasks' own diffs. `diff` does **not** dispatch through
 `cli.main` until task 11 — every call here is direct, on `command_diff`.
@@ -26,12 +27,12 @@ from publishable.errors import ContractError
 from publishable.hashes import covered_config
 from publishable.lineage import read_run_record
 
-# Task 9 is the only task permitted to insert `'apparatus'` here, in fourth
+# Task 9 was the only task permitted to insert `'apparatus'` here, in fourth
 # position, before `'parameters_hash'` — Decision 1's row order, pinned by
 # `tests/test_diff.py`'s row-order mutation (task 8 step 8). Every other row
 # label is `reference.md`/`design-principles.md`/`README.md`'s own text, not
 # a name this module invented.
-ROW_LABELS = ["code_hash", "input_manifest", "uv.lock", "parameters_hash"]
+ROW_LABELS = ["code_hash", "input_manifest", "uv.lock", "apparatus", "parameters_hash"]
 
 _ABSENT = object()
 
@@ -231,6 +232,94 @@ _LABEL_WIDTH = 19  # measured against all three worked outputs' fenced `diff` ex
 _VERDICT_WIDTH = 13  # "identical" (9) padded to the same examples' digest column
 
 
+def _apparatus_detail_lines(app_a: dict[str, Any], app_b: dict[str, Any]) -> list[str]:
+    """Decision 2 step 2: one line per `(condition, fact)` pair whose value
+    differs, each qualified by the condition key — never collapsed — and a
+    condition present in one side's `facts` and not the other gets its own
+    line saying so rather than being skipped (Decision 2's third
+    sub-ruling). Sorted by `(condition, fact)` so two runs of `diff` over
+    the same pair print identically; a condition-level line sorts before
+    any of that condition's fact lines because its fact key is `""`.
+
+    Column-aligned to the longest qualifier in THIS batch, the same
+    mechanism `parameter_deltas` uses (Decision 3's own worked example),
+    not a fixed separator."""
+    facts_a = app_a.get("facts") or {}
+    facts_b = app_b.get("facts") or {}
+    items: list[tuple[str, str, str, str]] = []  # (condition, fact, qualifier, text)
+    for condition in sorted(set(facts_a) | set(facts_b)):
+        in_a = condition in facts_a
+        in_b = condition in facts_b
+        if not (in_a and in_b):
+            missing = "A" if not in_a else "B"
+            items.append((condition, "", condition, f"no apparatus recorded for {missing}"))
+            continue
+        fa = facts_a[condition] or {}
+        fb = facts_b[condition] or {}
+        for fact in sorted(set(fa) | set(fb)):
+            value_a = fa.get(fact, _ABSENT)
+            value_b = fb.get(fact, _ABSENT)
+            if value_a == value_b:
+                continue
+            items.append(
+                (
+                    condition,
+                    fact,
+                    f"{condition}.{fact}",
+                    f"{_render_leaf(value_a)} → {_render_leaf(value_b)}",
+                )
+            )
+    if not items:
+        return []
+    items.sort(key=lambda item: (item[0], item[1]))
+    width = max(len(qualifier) for _, _, qualifier, _ in items) + 2
+    return [f"  {qualifier:<{width}}{text}" for _, _, qualifier, text in items]
+
+
+def _render_apparatus_row(
+    record_a: dict[str, Any], record_b: dict[str, Any], letter_a: str = "A", letter_b: str = "B"
+) -> list[str]:
+    """The `apparatus` row (Decision 2). Its VERDICT compares
+    `provenance.apparatus.hash` — the figure `report study.yaml` cross-checks
+    in H8c — never the `facts` mappings directly (M2: a mapping comparison
+    can disagree with the hash over a canonicalization the hash already
+    applies, `sort_keys=True`, and the row must not be able to disagree
+    with the one figure this project treats as authoritative). Its DETAIL
+    LINES, when it prints `DIFFERS`, come from `.facts`.
+
+    Three sub-rulings, none of which the documents answer on their own:
+    - omitted when BOTH sides' `provenance.apparatus` is `null` (the one
+      case `design-principles.md` documents: template `generic` declares
+      no probe);
+    - `DIFFERS` when exactly ONE side has one, with a line naming which
+      side recorded none — silence would read as agreement;
+    - a condition key present in one side's `facts` and not the other is a
+      detail line, not a skip (`_apparatus_detail_lines`).
+
+    A CONFIG side is not this function's caller at all — Decision 5 (task
+    10) wins over the omission rule for a config operand, printing
+    `not comparable` regardless of what the other side holds, including a
+    `null` `provenance.apparatus`, which this function alone would have
+    omitted (§ Corrections, correction 10). `command_diff`'s config-vs-*
+    branch must route around this function, not through it."""
+    app_a = (record_a.get("provenance") or {}).get("apparatus")
+    app_b = (record_b.get("provenance") or {}).get("apparatus")
+    if app_a is None and app_b is None:
+        return []
+    if app_a is None or app_b is None:
+        missing = letter_a if app_a is None else letter_b
+        return [f"{'apparatus':<{_LABEL_WIDTH}}DIFFERS", f"  {missing} recorded no apparatus"]
+    hash_a = app_a.get("hash")
+    hash_b = app_b.get("hash")
+    if hash_a == hash_b:
+        verdict = f"{'identical':<{_VERDICT_WIDTH}}{_truncated(hash_a)}"
+        return [f"{'apparatus':<{_LABEL_WIDTH}}{verdict}"]
+    return [
+        f"{'apparatus':<{_LABEL_WIDTH}}DIFFERS",
+        *_apparatus_detail_lines(app_a, app_b),
+    ]
+
+
 def _render_row(row: str, record_a: dict[str, Any], record_b: dict[str, Any]) -> list[str]:
     """One row's lines: the label, its verdict, and any detail lines.
 
@@ -246,7 +335,15 @@ def _render_row(row: str, record_a: dict[str, Any], record_b: dict[str, Any]) ->
     `_LABEL_WIDTH`/`_VERDICT_WIDTH` — the widths all three worked outputs
     show (batch 5 review, Minor 1) — so a line copied out of a document
     matches a line this function prints.
+
+    `apparatus` (task 9) is NOT routed through the generic `not captured`
+    guard below: its own omission/one-sided rules (Decision 2) are not the
+    generic "either figure is `None`" reading — a `None` `hash` distinct
+    from a `None` `provenance.apparatus` block matters here in a way no
+    other row needs, so it gets its own function.
     """
+    if row == "apparatus":
+        return _render_apparatus_row(record_a, record_b)
     figure_a = _figure(row, record_a)
     figure_b = _figure(row, record_b)
     if figure_a is None or figure_b is None:
