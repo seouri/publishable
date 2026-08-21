@@ -9,11 +9,13 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.test_cli import run_a_project
 
 from publishable.cli import main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
-from publishable.study import study_new
+from publishable.run_record import SCHEMA_VERSION
+from publishable.study import REDACTED, _redact, study_add, study_new
 
 
 def _snapshot(root: Path) -> set[tuple[str, bytes]]:
@@ -120,3 +122,176 @@ def test_study_add_still_not_built_until_task_13(tmp_path: Path):
 
 def test_study_with_no_subcommand_still_answers_not_built_until_task_13():
     assert main(["study"]) == EXIT_INVOCATION
+
+
+# --- Task 12: `study add` part 1 — the copy, the redaction, `code` --------
+
+
+def _real_run(tmp_path: Path, subdir: str) -> dict:
+    """One real, `git`-committed project, run end to end — the only way to
+    get a genuine `provenance.git.commit`/`code_hash` pair. Each call gets
+    its own subdirectory so `run_a_project`'s own scaffold-and-commit dance
+    produces a distinct repo, and so a distinct commit, per call."""
+    built = run_a_project(tmp_path / subdir)
+    record = yaml.safe_load((built["run_dir"] / "run.yaml").read_text())
+    return {"run_dir": built["run_dir"], "record": record}
+
+
+def _fixture_y_record() -> dict:
+    """Fixture Y: a record synthesized by hand, not one a real `run`
+    produced — its only job is to exercise the `hostname` row of
+    § What `study add` redacts, which nothing in this build writes
+    (measured at `ebf642a`: `provenance.environment` is `{manager,
+    python_version, uv_lock, uv_lock_hash}`). Every other field here is
+    copied from a real record's shape so `read_record_file`'s own checks
+    (a real `run_id`, this build's `schema_version`) pass, but the VALUES
+    are hand-picked to exercise every redacted field at once.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": "run_2026-08-21T00-00-00Z_deadbee",
+        "status": "completed",
+        "draft": False,
+        "config": {
+            "data": {"input_dir": "/secure/cohort/input", "output_dir": "/secure/cohort/output"}
+        },
+        "parameters_hash": "1a2b",
+        "code_hash": "8e21",
+        "provenance": {
+            "git": {"repo_root": "/home/klee/my-study", "commit": "abc123", "remote": None},
+            "environment": {
+                "manager": "uv",
+                "python_version": "3.11.0",
+                "hostname": "workstation-42.hospital.internal",
+            },
+            "input_manifest": "manifest/input.json",
+            "input_manifest_hash": "3d8a",
+            "apparatus": None,
+        },
+        "results": {"conditions": []},
+    }
+
+
+def _write_record(path: Path, record: dict) -> None:
+    path.write_text(yaml.safe_dump(record, sort_keys=False))
+
+
+def test_study_add_copies_the_record_and_updates_runs_in_study_yaml(tmp_path: Path):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    notices = study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    assert notices == []
+    target = bundle / "main.run.yaml"
+    assert target.exists()
+    copied = yaml.safe_load(target.read_text())
+    assert copied["run_id"] == run["record"]["run_id"]
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    assert doc["runs"]["main"] == {"file": "main.run.yaml", "run_id": run["record"]["run_id"]}
+
+
+def test_study_add_writes_code_commit_and_remote_from_the_first_add(tmp_path: Path):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    git = run["record"]["provenance"]["git"]
+    assert doc["code"] == {"remote": git["remote"], "commit": git["commit"]}
+
+
+def test_study_add_redacts_the_four_present_fields_but_keeps_every_hash(tmp_path: Path):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    copied = yaml.safe_load((bundle / "main.run.yaml").read_text())
+    assert copied["config"]["data"]["input_dir"] == REDACTED
+    assert copied["config"]["data"]["output_dir"] == REDACTED
+    assert copied["provenance"]["git"]["repo_root"] == REDACTED
+    assert copied["provenance"]["input_manifest"] == REDACTED
+    # Every hash stays, byte-equal to the source.
+    record = run["record"]
+    assert copied["code_hash"] == record["code_hash"]
+    assert copied["parameters_hash"] == record["parameters_hash"]
+    assert (
+        copied["provenance"]["input_manifest_hash"] == record["provenance"]["input_manifest_hash"]
+    )
+
+
+def test_study_add_redaction_is_not_secrets_redact_field_replacement_only():
+    """This is not `secrets.redact` — that matches credential VALUES by
+    substring anywhere in a string; this replaces four known PATHS
+    regardless of their value. A value that happens to contain a
+    credential-looking substring elsewhere in the record is untouched."""
+    record = _fixture_y_record()
+    record["results"] = {"note": "the word repo_root appears nowhere else"}
+    redacted = _redact(record)
+    assert redacted["results"] == {"note": "the word repo_root appears nowhere else"}
+
+
+def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
+    """Fixture Y: the one row exercised only over a hand-built record,
+    because nothing in this build writes `provenance.environment.hostname`
+    today (it is H6's)."""
+    record = _fixture_y_record()
+    redacted = _redact(record)
+    assert redacted["provenance"]["environment"]["hostname"] == REDACTED
+
+
+def test_study_add_leaves_hostname_untouched_when_absent_from_the_source(tmp_path: Path):
+    """The real-run counterpart of the fixture above: today's real records
+    never carry `hostname` at all, and redaction must not invent the key."""
+    run = _real_run(tmp_path, "proj1")
+    redacted = _redact(run["record"])
+    assert "hostname" not in redacted["provenance"]["environment"]
+
+
+def test_study_add_leaves_null_fields_exactly_null_not_marked_redacted():
+    record = _fixture_y_record()
+    record["config"]["data"]["output_dir"] = None
+    redacted = _redact(record)
+    assert redacted["config"]["data"]["output_dir"] is None
+
+
+def test_apply_code_block_second_add_under_another_name_does_not_replace_and_notices(
+    tmp_path: Path,
+):
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run1 = _real_run(tmp_path, "proj1")
+    run2 = _real_run(tmp_path, "proj2")
+    assert (
+        run1["record"]["provenance"]["git"]["commit"]
+        != run2["record"]["provenance"]["git"]["commit"]
+    )
+    study_add(bundle, run1["run_dir"] / "run.yaml", "main")
+    notices = study_add(bundle, run2["run_dir"] / "run.yaml", "sensitivity")
+    assert notices and notices[0][0] == "W-STUDY-COMMIT-MISMATCH"
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    assert doc["code"]["commit"] == run1["record"]["provenance"]["git"]["commit"]
+
+
+def test_apply_code_block_fixture_b_third_run_replaces_only_under_as_main(tmp_path: Path):
+    """Fixture B: three real runs, three distinct commits. `main`,
+    `sensitivity`, then `main` again (task 12 does not yet refuse a
+    re-added name — that is task 13's). The mutation this discriminates
+    (task 12 step 6, second mutation): recomputing `code.commit` as "the
+    commit all runs share" has no answer over three pairwise-different
+    commits, while the honest rule just keeps the latest `--as main` add."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run1 = _real_run(tmp_path, "proj1")
+    run2 = _real_run(tmp_path, "proj2")
+    run3 = _real_run(tmp_path, "proj3")
+    commits = {
+        run1["record"]["provenance"]["git"]["commit"],
+        run2["record"]["provenance"]["git"]["commit"],
+        run3["record"]["provenance"]["git"]["commit"],
+    }
+    assert len(commits) == 3
+    study_add(bundle, run1["run_dir"] / "run.yaml", "main")
+    study_add(bundle, run2["run_dir"] / "run.yaml", "sensitivity")
+    study_add(bundle, run3["run_dir"] / "run.yaml", "main")
+    doc = yaml.safe_load((bundle / "study.yaml").read_text())
+    assert doc["code"]["commit"] == run3["record"]["provenance"]["git"]["commit"]
