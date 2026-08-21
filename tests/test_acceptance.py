@@ -84,6 +84,13 @@ def test_scaffold_then_run_produces_a_real_record(tmp_path: Path, capsys):
     assert doc["provenance"]["environment"]["uv_lock_hash"] is None
     assert "W-ENV-UNLOCKED" in capsys.readouterr().out
 
+    # H8b Decision 7: `run` also writes `<run_dir>/config.yaml` (the config as it
+    # was) and `environment/repo_root.txt` (the repo it came from) — the two
+    # facts a mid-run command cannot otherwise obtain, and what `freeze` needs.
+    assert (run_dir / "environment" / "repo_root.txt").read_text().strip() == str(root.resolve())
+    config_copy = yaml.safe_load((run_dir / "config.yaml").read_text())
+    assert config_copy["experiment_type"] == doc["config"]["experiment_type"]
+
 
 def test_a_present_lockfile_is_captured_and_hashed_with_no_warning(tmp_path: Path, capsys):
     root, cfg, results = build(tmp_path)

@@ -2344,6 +2344,13 @@ def command_run(config_path: Path) -> int:
         if lock_path is not None:
             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
+        # `freeze` (H8b) needs the config as it was and the repo it came from — the
+        # two facts a mid-run command cannot otherwise obtain or compute, since
+        # `run.yaml` embeds the config only once, at the end. A byte copy, never a
+        # re-dump: a re-dump would silently drop every comment `init` wrote.
+        (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
+        (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+
         # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
         # the first execution: `docs/reference.md` § The other files a run writes
         # calls it "settled before the first execution and never touched again",

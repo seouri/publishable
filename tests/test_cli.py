@@ -15848,6 +15848,7 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     run_dir = doc["run_dir"]
     assert sorted(p.name for p in run_dir.iterdir()) == [
         "conditions",
+        "config.yaml",
         "environment",
         "executions.jsonl",
         "manifest",
@@ -15878,7 +15879,10 @@ def test_h8b_arm_b_environments_contents(tmp_path):
         sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
     )
     run_dir = doc["run_dir"]
-    assert sorted(p.name for p in (run_dir / "environment").iterdir()) == ["pyproject.toml"]
+    assert sorted(p.name for p in (run_dir / "environment").iterdir()) == [
+        "pyproject.toml",
+        "repo_root.txt",
+    ]
 
 
 def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
@@ -16027,3 +16031,81 @@ def test_h8b_arm_f_the_embedded_config_is_the_file(tmp_path):
     run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
     cfg_on_disk = yaml.safe_load(doc["cfg"].read_text())
     assert run_doc["config"] == cfg_on_disk
+
+
+# --- H8b task 3: Fixture C — the config copy and the recorded repo root ----
+#
+# Built on a raw scaffold-and-run, deliberately NOT on `run_a_project`: that
+# helper rewrites the config with `yaml.safe_dump(doc)`, and
+# `yaml.safe_dump(yaml.safe_load(x)) == x` is True for what it writes, which
+# would make the byte-equality assertion below blind (§ Corrections,
+# `docs/superpowers/plans/2026-08-20-diff-freeze.md`). Precedent for an
+# inline scaffold-and-run outside the helper:
+# `test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback` above.
+
+
+def test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root(
+    tmp_path: Path,
+):
+    """Decision 7: `run` starts writing `<run_dir>/config.yaml` (a byte copy of
+    the config file) and `<run_dir>/environment/repo_root.txt` (the absolute
+    repo root `command_run` already computed). Two assertions, neither alone
+    sufficient: byte equality (catches a re-dump — M12) and a parsed-mapping
+    equality against `run.yaml`'s own embedded `config` (catches a copy taken
+    from a different object). A control — `b"#" in cfg.read_bytes()` — makes
+    the byte-equality assertion non-vacuous: without it, a fixture that lost
+    its comments for an unrelated reason would still pass the byte arm for
+    free.
+    """
+    from publishable.generators.experiment import generate_experiment
+    from publishable.validate import load_document
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+
+    # Raw-text edit — a targeted string replacement, not a parse-and-re-dump —
+    # so every inline comment `init` wrote survives. Fills the two REQUIRED
+    # `metadata` fields `validate` demands; changes nothing else.
+    raw = cfg.read_text()
+    assert 'description: ""' in raw
+    assert "authors: []" in raw
+    raw = raw.replace(
+        'description: ""',
+        'description: "Fixture C: pins the config copy and the repo root"',
+    )
+    raw = raw.replace("authors: []", 'authors: ["Kyungjoon Lee"]')
+    cfg.write_text(raw)
+
+    # THE CONTROL: the edited config still carries comments — the byte-equality
+    # assertion below is not vacuously satisfied by a commentless file.
+    assert b"#" in cfg.read_bytes()
+
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "experiment"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    run_dir = sorted((tmp_path / "results").glob("run_*"))[-1]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    copied = run_dir / "config.yaml"
+    assert copied.read_bytes() == cfg.read_bytes()
+    assert load_document(copied) == run_doc["config"]
+
+    repo_root_txt = (run_dir / "environment" / "repo_root.txt").read_text()
+    assert repo_root_txt == f"{root.resolve()}\n"
