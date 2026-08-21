@@ -2,15 +2,10 @@
 """`BaseReport`, `Section`, override discovery, and `command_report`.
 docs/reference.md § A report override renders one experiment's own
 figures, § The importable surface, § Operation commands' `report` row.
-
-**Import direction, measured** (`freeze.py`'s own docstring states the
-identical shape for `cli.declared_credential_names`): this module imports
-`cli._report_not_built` at module scope, for the one `report <study.yaml>`
-arm that routes to the interim "specified but not built" diagnostic until
-task 10 builds the bundle render. `cli.py`'s own module-level imports do
-not import this module — `cli._dispatch` imports `command_report` inside
-its own function body, joining `OPERATION_COMMANDS`'s existing one-path
-arm — so this direction closes no cycle; the reverse would.
+`cli._dispatch` imports `command_report` inside its own function body,
+joining `OPERATION_COMMANDS`'s existing one-path arm — this module
+imports nothing from `cli` at all (the bundle-form arm below is this
+module's own coded refusal, not a call into `cli._report_not_built`).
 """
 
 import importlib
@@ -500,9 +495,17 @@ class BaseReport:
 
     def sections(self, run: Any, io: Any) -> Iterator[Section]:
         """A generator, yielding `Section` values. Core never materializes
-        the list before rendering, so an override that yields a cheap
-        section first and an expensive figure last prints the cheap one
-        first.
+        the list before rendering, so a later `Section`'s body is never
+        constructed if an earlier one raises. **Sized down (whole-branch
+        review, Minor 5): this does NOT mean an override's cheap section
+        prints before its expensive one finishes** — `command_report`
+        collects `render_with_override`'s full return into one `str`
+        before printing it once, and both renderers join every section's
+        text into one string before returning it, so nothing reaches
+        stdout until every section — cheap and expensive alike — has been
+        rendered. The lazy generator saves the LATER SECTION'S OWN
+        construction when an earlier one refuses; it buys no streaming
+        of output.
 
         Yields all four standard sections, in Decision 5's order:
         Conditions, Deltas, Hypothesis verdicts, Attrition. Every one is a
@@ -954,25 +957,31 @@ def command_report(path: Path) -> int:
     rather than adding a second one.
 
     **Exit codes (Decision 6).** `1` for `report`'s OWN refusals — a
-    malformed operand (`E-REPORT-FORM`), a corrupt or unreadable record
-    (the shipped `E-UPSTREAM-RECORD-*` family), a draft run
-    (`E-REPORT-DRAFT`, Decision 7), or an override fault
-    (`E-REPORT-OVERRIDE-*`, `E-REPORT-FORMAT`, `E-REPORT-BODY`). `0` for
-    every STATUS a record can
-    hold once it renders — `completed`, `partial` and `failed` alike,
-    because a read command's exit code reports whether it could read,
-    never what it read: the record's own `status` and its failed
-    executions are rendered by the Attrition section, not folded into
-    this function's return value. `diff`'s Decision 4 rules the identical
-    thing for the identical reason, and the two now agree in both
-    directions. `2` is `main`'s own invocation-arity refusal, decided
-    before this function is ever called.
+    malformed operand (`E-REPORT-FORM`), an unresolvable template
+    (`E-TEMPLATE-LOAD`/`E-TEMPLATE-COLLISION`/`E-TEMPLATE-INSTALLED-
+    UNSUPPORTED`/`E-TEMPLATE-UNKNOWN`, resolved the same way `freeze`
+    resolves them), a corrupt, unreadable, or record `report` cannot use
+    (the shipped `E-UPSTREAM-RECORD-*` family, or this function's own
+    `E-REPORT-RECORD-INCOMPLETE`), a draft run (`E-REPORT-DRAFT`,
+    Decision 7), the bundle form (`E-REPORT-BUNDLE-UNSUPPORTED`), or an
+    override fault (`E-REPORT-OVERRIDE-*`, `E-REPORT-FORMAT`,
+    `E-REPORT-BODY`). `0` for every STATUS a record can hold once it
+    renders — `completed`, `partial` and `failed` alike, because a read
+    command's exit code reports whether it could read, never what it
+    read: the record's own `status` and its failed executions are
+    rendered by the Attrition section, not folded into this function's
+    return value. `diff`'s Decision 4 rules the identical thing for the
+    identical reason, and the two now agree in both directions. `2` is
+    `main`'s own invocation-arity refusal, decided before this function
+    is ever called — this function itself never returns `2`.
 
     **`report <study.yaml>` is not this function's to render.** The
-    bundle form is routed to `cli._report_not_built` — the interim
-    "specified but not built" diagnostic `study add` takes in
-    § Corrections correction 5's own words, until task 10 builds the
-    bundle render and replaces this branch outright.
+    bundle form is refused with its OWN code, `E-REPORT-BUNDLE-
+    UNSUPPORTED`, at exit `1` — never `cli._report_not_built`'s "command
+    is not built" diagnostic at exit `2`, which as of THIS commit's
+    `Status`-cell flip would be a false claim about a command that IS
+    built (whole-branch review, Major 1). Task 10 replaces this one
+    branch outright with the real bundle render.
 
     **Decision 7: a draft run (`config.yaml`'s `draft: true`, § Draft
     runs) is refused, not watermarked.** § Draft runs' own verb is
@@ -1032,9 +1041,27 @@ def command_report(path: Path) -> int:
         return EXIT_WRONG
 
     if form == "bundle":
-        from publishable.cli import _report_not_built
-
-        return _report_not_built("report", "Building one")
+        # Major 1 (whole-branch review): the bundle FORM is not built —
+        # the RUN form is, as of this same commit's `Status` cell flip —
+        # so routing here to `cli._report_not_built` printed a false
+        # claim ("`publishable report` is specified but not built") at
+        # exit 2, an invocation-fault code Decision 6 reserves for a
+        # fault decided before this function is ever called. This is
+        # `report`'s own refusal instead: exit 1, and a message naming
+        # the FORM rather than the command. `E-REPORT-BUNDLE-UNSUPPORTED`
+        # is the interim-build-family shape (`CLAUDE.md`'s "-UNSUPPORTED
+        # suffix"), retired wholesale — not narrowed — the day task 10
+        # builds the bundle render.
+        c = Collector()
+        c.error(
+            "E-REPORT-BUNDLE-UNSUPPORTED",
+            str(path),
+            "the BUNDLE form of `report` — `report <study.yaml>` — is "
+            "not yet built in this version; `report <run.yaml>` is. See "
+            "docs/reference.md § Building one",
+        )
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
 
     run_dir = path.parent
     try:
@@ -1071,10 +1098,61 @@ def command_report(path: Path) -> int:
         repo_root = _read_repo_root(run_dir)
     except ContractError:
         repo_root = None
-    template = get_template(name, repo_root)
+    # Critical 1 (whole-branch review): `freeze.py`'s own recipe wraps this
+    # EXACT call in a `try` and refuses through a redacting `Collector` —
+    # copying its three calls without copying its containment left a
+    # project-local template that raises on import (`E-TEMPLATE-LOAD`) or
+    # collides with another claimant (`E-TEMPLATE-COLLISION`) free to
+    # escape into `main`'s bare, un-redacting `except PublishableError`.
+    # `command_run` gets away with an unguarded `get_template` only
+    # because `validate_config` already made the identical call and
+    # returned without error first — `command_report` validates nothing,
+    # which is exactly why the shape is live here and nowhere else this
+    # was swept. Mirrors `freeze._precheck`'s own `except BaseException`
+    # arm verbatim, including its `partial_templates` recovery: a class
+    # that raised AFTER `@register_template` still finished constructing
+    # in memory, and `required_env` is readable off it even though the
+    # module that defined it is refused wholesale.
+    try:
+        template = get_template(name, repo_root)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        code = exc.code if isinstance(exc, PublishableError) else "E-TEMPLATE-LOAD"
+        partial = getattr(exc, "partial_templates", None) or []
+        names: list[str] = []
+        for cls in partial:
+            names.extend(declared_credential_names_for(dict(doc), cls))
+        c = Collector()
+        c.credentials = credential_values(names)
+        c.error(code, str(path), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
     credentials = credential_values(declared_credential_names_for(dict(doc), template))
 
-    io = _report_io_from_record(run_dir, record)
+    # Major 2 (whole-branch review): a parseable-but-incomplete record
+    # (a hand-truncated `run.yaml` missing `execution`, `results` or
+    # `config`) gave a raw `KeyError` traceback out of a built command,
+    # where `diff` over the identical file renders at exit 0. Refused
+    # with a remedy instead, reusing the shipped `E-UPSTREAM-RECORD-*`
+    # family Decision 15 already routes "a run record `report` cannot
+    # read" through, rather than minting a fifth code for the same fault.
+    try:
+        io = _report_io_from_record(run_dir, record)
+    except (KeyError, TypeError) as exc:
+        c = Collector()
+        c.credentials = credentials
+        c.error(
+            "E-REPORT-RECORD-INCOMPLETE",
+            str(path),
+            f"this record parses and has a `run_id`, but is missing or "
+            f"malformed at {exc!r} — `report` needs `execution`, "
+            "`results.conditions` and `config.data.input_dir` to build "
+            "the read-only artifact accessor an override receives; the "
+            "record was edited or truncated by hand",
+        )
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
 
     def _render(report_cls: "type[BaseReport] | None") -> str:
         return render_report(report_cls, record, io)

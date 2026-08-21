@@ -7811,3 +7811,26 @@ spreads onto that row, needing no new traversal.
 
 **Cost if wrong / if unclaimed:** two documents describe a run-level fact no run carries and a report
 section no build renders, and a reader who goes looking for it in a real `run.yaml` finds nothing.
+
+## OPEN — Decision 2's "prints the cheap one first" is not delivered at the real command — **Owner: unassigned**
+
+`docs/superpowers/specs/2026-08-21-report-study-design.md` Decision 2 (line ~124-125): "an override
+that yields a cheap section first and an expensive figure last should print the cheap one first."
+That claim was unverifiable while `render_with_override`/`render_report` were exercised only by
+direct call; H8c task 8's own `command_report` is what makes it checkable at the surface that
+actually prints, and it is false there. `command_report` does `text = render_with_override(...)`
+then `print(text)` once — nothing reaches stdout until the whole render finishes — and both
+renderers (`render_markdown`, `render_html`) join every section's text into one returned `str`
+before `command_report` ever sees it. `BaseReport.sections`'s own docstring in
+`src/publishable/report.py` was sized down in H8c's fix round to say only what is true: the lazy
+generator saves a LATER section's construction cost when an earlier one raises, never a print-order
+guarantee.
+
+**Not fixed here.** Streaming output section-by-section would need `command_report` to iterate and
+print each section as `render_markdown`/`render_html` produce it, which is a real behavior change to
+a shipped command, not a wording fix — out of a review's fix-round scope and not owned by any task
+in this slice.
+
+**Cost if wrong/if unclaimed:** a reader of the design doc believes an override can make an
+expensive figure's slowness invisible by ordering it last; at the real command, it cannot — every
+section blocks the first byte of output.

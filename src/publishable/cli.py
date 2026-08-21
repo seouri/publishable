@@ -3729,11 +3729,14 @@ def _dispatch(command: str, rest: list[str]) -> int:
         # `freeze` and `report` join the existing one-path arm rather than
         # getting a second enforcer of the same rule (`_nest_repeat`'s own
         # docstring argues against two enforcers of one rule). Function-local
-        # imports: both `freeze.py` and `report.py` import a `cli` name at
-        # module scope (`declared_credential_names`, `_report_not_built`), so
-        # `cli.py` importing either of them there too would close a cycle —
-        # this is the escape hatch, and it costs nothing since `_dispatch` is
-        # called once per invocation, not once per import.
+        # import: `freeze.py` imports `cli.declared_credential_names` at
+        # module scope, so `cli.py` importing `freeze` there too would close
+        # a cycle — this is the escape hatch, and it costs nothing since
+        # `_dispatch` is called once per invocation, not once per import.
+        # `report.py` imports nothing from `cli` at all (its bundle-form arm
+        # is its own coded refusal), so `command_report` is function-local
+        # here for symmetry with `command_freeze` rather than out of any
+        # cycle of its own.
         from publishable.freeze import command_freeze
         from publishable.report import command_report
 

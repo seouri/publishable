@@ -30,7 +30,6 @@ from publishable.artifacts import ReportIO, derive_step_scopes_and_repeats
 from publishable.cli import main
 from publishable.diagnostics import (
     EXIT_FAILED,
-    EXIT_INVOCATION,
     EXIT_OK,
     EXIT_PARTIAL,
     EXIT_WRONG,
@@ -1807,26 +1806,6 @@ def test_fixture_f_a_wholly_failed_run_also_renders_at_exit_0(
     assert "failed" in out
 
 
-def test_report_of_a_bundle_path_routes_to_the_interim_not_built_diagnostic(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
-    """The bundle render is task 10's — not built by this function — so
-    `report study.yaml` routes to the interim "specified but not built"
-    diagnostic exactly as `study add` does until its own task lands
-    (§ Corrections correction 5), rather than crashing on an unbuilt
-    branch. `report`'s CLI Status cell flips to `built` in this same
-    commit for the RUN form; this is the bundle form's honest interim.
-    """
-    bundle = tmp_path / "study.yaml"
-    bundle.write_text("runs: []\n")
-    capsys.readouterr()
-    code = main(["report", str(bundle)])
-    err = capsys.readouterr().err
-    assert code == EXIT_INVOCATION
-    assert "publishable report" in err
-    assert "is specified but not built" in err
-
-
 def test_report_form_e_report_form_through_main_is_exit_1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
@@ -1980,3 +1959,230 @@ def test_fixture_t_a_draft_run_is_refused_not_rendered(
     assert code == EXIT_WRONG
     assert captured.out == ""
     assert "E-REPORT-DRAFT" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# H8c task 8/9 fix round 1 — whole-branch review findings
+# (.superpowers/sdd/2026-08-21-report-study/task-b5-review.md)
+# ---------------------------------------------------------------------------
+
+_KEYBOARD_INTERRUPT_REPORT_OVERRIDE = """\
+from publishable import BaseReport
+
+
+class Report(BaseReport):
+    format = "markdown"
+
+    def sections(self, run, io):
+        raise KeyboardInterrupt("ctrl-c carrying sekrit-h8c-b5-fix-round-1")
+"""
+
+
+def test_major_3_keyboard_interrupt_from_an_override_propagates_with_no_message(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Whole-branch review, Major 3: the `except KeyboardInterrupt: raise
+    KeyboardInterrupt from None` guard was shipped and pinned by NOTHING
+    — mutating it to a bare `raise` left the full suite unchanged at
+    2746, and the reviewer's own probe then leaked the sentinel. Pinned
+    here the same way `test_a_resolvers_keyboard_interrupt_at_run_
+    propagates_with_no_message` (`tests/test_cli.py`) pins the identical
+    shape for a resolver: `pytest.raises(KeyboardInterrupt)` around
+    `main([...])`, then assert the re-raised object carries no message —
+    `excinfo.value.args == ()` — so a probe-constructed credential
+    cannot reach Python's own uncaught-exception printer.
+
+    A mutation deleting the `except KeyboardInterrupt` arm (falling
+    through to the wide `except BaseException` below it) would report a
+    finding and return `EXIT_WRONG` instead of propagating — this test
+    would then see no `KeyboardInterrupt` at all and fail on
+    `pytest.raises` itself, which is why the assertion is only
+    reachable at all if the guard's `except` clause exists.
+    """
+    _write_report(fixture_r["root"], "cohort_pilot", _KEYBOARD_INTERRUPT_REPORT_OVERRIDE)
+    capsys.readouterr()
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        main(["report", str(fixture_r["run_dir"] / "run.yaml")])
+    assert excinfo.value.args == ()
+    assert str(excinfo.value) == ""
+    captured = capsys.readouterr()
+    assert "sekrit-h8c-b5-fix-round-1" not in captured.out
+    assert "sekrit-h8c-b5-fix-round-1" not in captured.err
+
+
+# --- Minor 2: `E-REPORT-BODY` pinned through `main`, not through the
+# renderer directly (task 8's own brief: no assertion via a direct call) ---
+
+_BAD_BODY_REPORT_OVERRIDE = """\
+from publishable import BaseReport
+
+
+class Report(BaseReport):
+    format = "markdown"
+
+    def sections(self, run, io):
+        yield self.section("Bad body", body=42)
+"""
+
+
+def test_minor_2_e_report_body_is_reachable_through_main(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Whole-branch review, Minor 2: the shipped guard was pinned only at
+    `render_markdown`/`render_html` directly, against the brief's own
+    "every assertion in this task goes through `main`" instruction. An
+    override yielding a non-`str`, non-mapping `body` must give a coded
+    refusal at the command, not a call-site-only guarantee."""
+    _write_report(fixture_r["root"], "cohort_pilot", _BAD_BODY_REPORT_OVERRIDE)
+    capsys.readouterr()
+    code = main(["report", str(fixture_r["run_dir"] / "run.yaml")])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-BODY" in err
+
+
+# --- Minor 4: a SUCCESSFUL override, composing with the standard sections,
+# rendered through the real command — both formats ---
+
+_SUCCESSFUL_HTML_REPORT_OVERRIDE = """\
+from publishable import BaseReport
+
+
+class Report(BaseReport):
+    format = "html"
+
+    def sections(self, run, io):
+        yield from super().sections(run, io)
+        yield self.section("Extra figure", body="a figure an override adds")
+"""
+
+
+def test_minor_4_a_successful_html_override_renders_through_main(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str]
+):
+    """Whole-branch review, Minor 4: every `main(["report", ...])` call in
+    the suite so far was either the no-override path or a FAILURE path —
+    `format = "html"` and a composing override's ordinary success were
+    both unpinned at the command surface Decision 16 is about."""
+    _write_report(fixture_r["root"], "cohort_pilot", _SUCCESSFUL_HTML_REPORT_OVERRIDE)
+    capsys.readouterr()
+    code = main(["report", str(fixture_r["run_dir"] / "run.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert out.startswith("<!doctype html>")
+    assert "<h2>Conditions</h2>" in out
+    assert "<h2>Extra figure</h2>" in out
+    assert "a figure an override adds" in out
+
+
+# --- Critical 1: `get_template` resolving OUTSIDE every `try`, before
+# `credentials` exists, escaped into `main`'s bare, un-redacting handler ---
+
+_RAISES_AFTER_REGISTRATION_CRED_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_report_assay")
+class CredReportAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_REPORT_CRED"]
+
+
+raise RuntimeError(
+    "template top level boom, carrying " + os.environ["PUBLISHABLE_TEST_REPORT_CRED"]
+)
+"""
+
+
+def test_critical_1_a_template_raising_after_registration_is_still_redacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Whole-branch review, Critical 1: `get_template`/`declared_
+    credential_names_for` ran OUTSIDE every `try` and BEFORE `credentials`
+    existed, so a project-local template that raises while importing —
+    AFTER its own `@register_template` call, the case § Secrets &
+    credentials explicitly promises IS covered — escaped `command_report`
+    entirely into `main`'s bare `except PublishableError`, which
+    `spec-defects.md` already files as un-redacted by construction.
+
+    `freeze.py`'s own recipe (the one task 8 cited as precedent) wraps
+    this exact call in a `try`/`except BaseException` and refuses through
+    a redacting `Collector`, recovering `required_env` off the
+    `partial_templates` the exception still carries — copied here.
+
+    A project's `templates/` directory can hold only ONE file per
+    experiment; this reuses `_build_credentialed_project`'s scaffold and
+    then overwrites the template file with a module whose top level
+    raises after registering, so the class exists in memory (readable
+    for `required_env`) while the module that defined it is refused
+    wholesale — the exact shape `PartialLoadError.partial_templates`
+    exists for.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_REPORT_CRED", raising=False)
+    monkeypatch.setenv("PUBLISHABLE_TEST_REPORT_CRED", _REPORT_CRED_SENTINEL)
+    built = _build_credentialed_project(tmp_path)
+    (built["root"] / "templates" / "cred_report_assay.py").write_text(
+        _RAISES_AFTER_REGISTRATION_CRED_TEMPLATE
+    )
+
+    capsys.readouterr()
+    code = main(["report", str(built["run_dir"] / "run.yaml")])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert _REPORT_CRED_SENTINEL not in captured.err
+    assert _REPORT_CRED_SENTINEL not in captured.out
+    assert "<redacted:PUBLISHABLE_TEST_REPORT_CRED>" in captured.err
+    assert "E-TEMPLATE-LOAD" in captured.err
+
+
+# --- Major 1: the bundle form's own honest refusal, at an exit code
+# Decision 6 permits, never the "command is not built" diagnostic ---
+
+
+def test_major_1_report_of_a_bundle_path_is_report_s_own_refusal_not_a_false_claim(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Whole-branch review, Major 1: `report <study.yaml>` printed
+    `` `publishable report` is specified but not built `` at exit 2 —
+    false as of the very commit that flipped the `Status` cell to
+    `built`, and 2 is reserved for an invocation fault Decision 6 says is
+    decided BEFORE this function is ever called. Now `report`'s own
+    refusal: exit 1, naming the FORM rather than the command."""
+    bundle = tmp_path / "study.yaml"
+    bundle.write_text("runs: []\n")
+    capsys.readouterr()
+    code = main(["report", str(bundle)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-BUNDLE-UNSUPPORTED" in err
+    assert "is specified but not built" not in err
+
+
+# --- Major 2: a parseable-but-incomplete record is refused, not a traceback ---
+
+
+@pytest.mark.parametrize("dropped_key", ["execution", "results", "config"])
+def test_major_2_a_record_missing_a_needed_key_is_refused_not_a_traceback(
+    fixture_r: dict[str, Any], capsys: pytest.CaptureFixture[str], dropped_key: str
+):
+    """Whole-branch review, Major 2: `_report_io_from_record` subscripted
+    `execution`, `results.conditions` and `config.data.input_dir`
+    unguarded, so dropping any one of the three top-level keys gave a raw
+    `KeyError` traceback out of a built command — where `diff` over the
+    identical file renders at exit 0. Parametrized over all three
+    dropped keys the reviewer's own table names, so each is independently
+    proven refused rather than only the first one tried."""
+    run_path = fixture_r["run_dir"] / "run.yaml"
+    doc = yaml.safe_load(run_path.read_text())
+    assert dropped_key in doc  # the fixture's own claim: it's really there
+    del doc[dropped_key]
+    run_path.write_text(yaml.safe_dump(doc))
+
+    capsys.readouterr()
+    code = main(["report", str(run_path)])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-REPORT-RECORD-INCOMPLETE" in err
+    assert "Traceback" not in err
