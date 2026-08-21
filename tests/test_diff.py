@@ -904,3 +904,291 @@ def test_h8b_a_config_that_is_not_a_mapping_still_yields_no_render(
     assert "not captured" not in out
     assert "not comparable" not in out
     assert "E-DIFF-CONFIG-UNREADABLE" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 11: the upstream block (Decision 6), and the CLI arm.
+#
+# Fixture U: two runs identical in every printed row, one of which consumed
+# an upstream through `io.reuse_from` and one which did not. The two runs
+# are the SAME project (same commit, same config, unedited between them —
+# `main(["run", str(cfg)])` called twice) so `code_hash`, `input_manifest`,
+# `parameters_hash` are identical by construction rather than by luck, and
+# the Fixture-P apparatus template (same `calibration_id` both times) makes
+# `apparatus` identical too. Only `uv.lock` is `not captured` on both sides
+# (no lockfile committed) rather than literally `identical` — a deliberate,
+# reported relaxation; see the batch report. Which run consumes the
+# upstream is decided by an ENVIRONMENT VARIABLE the starter step reads at
+# call time, never by editing source or config, which is what keeps every
+# other row identical: a step that instead had two different SOURCE forms
+# (one calling `reuse_from`, one not) would make `code_hash` itself differ,
+# defeating the fixture before it starts.
+# ---------------------------------------------------------------------------
+
+_H8B_FIXTURE_U_UPSTREAM_STEP = (
+    "from publishable import BaseStep\n\n\n"
+    "class Step(BaseStep):\n"
+    '    scope = "run"\n\n'
+    "    def run(self, cfg, io):\n"
+    '        io.write("out.json", {{"n": 3}})\n'
+)
+
+_H8B_FIXTURE_U_STARTER_STEP = """\
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for unit in units:
+            io.record(unit.key, {{"present": True}})
+        upstream_dir = os.environ.get("H8B_FIXTURE_U_UPSTREAM_DIR")
+        upstream_step = os.environ.get("H8B_FIXTURE_U_UPSTREAM_STEP")
+        if upstream_dir and upstream_step:
+            io.reuse_from(upstream_dir, upstream_step, "out.json")
+        return {{"n_units": len(units)}}
+"""
+
+
+def _resolve_latest(output_dir: Path) -> Path:
+    """`<output_dir>/latest`, never a glob — a glob over a directory holding
+    more than one `run_*` has no defined order (`Path.glob`), which is the
+    exact hazard H8a's own § Corrections records having been observed. Falls
+    back to `latest.txt` on the same precedent `point_latest` writes it on."""
+    link = output_dir / "latest"
+    if link.exists():
+        return link.resolve()
+    text = (output_dir / "latest.txt").read_text().strip()
+    return output_dir / text
+
+
+def _build_fixture_u_upstream(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> tuple[Path, str]:
+    doc = run_a_project(
+        tmp_path / "upstream_u",
+        capsys=capsys,
+        units=8,
+        extra_steps=["publish"],
+        extra_step_source=_H8B_FIXTURE_U_UPSTREAM_STEP,
+    )
+    run_dir = doc["run_dir"]
+    record = yaml.safe_load((run_dir / "run.yaml").read_text())
+    shared_names = list(record["execution"]["shared"].keys())
+    assert len(shared_names) == 1
+    return run_dir, shared_names[0]
+
+
+def test_h8b_fixture_u_upstream_block_and_the_differ_only_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    """All five rows read `identical`, which is what proves the upstream
+    block carries information no row does. That needs a REAL `uv.lock`
+    (Fixture L's own mechanism) committed before either of the two runs
+    this fixture compares — a throwaway first run scaffolds the project,
+    then the lockfile is written and committed, then the two runs under
+    comparison both happen on that same, now-unmoving commit, so
+    `code_hash`/`uv.lock`/`input_manifest`/`parameters_hash` are identical
+    by construction and `apparatus` is identical because the probe answers
+    the same `calibration_id` every time — only the environment variable
+    the starter step reads decides which of the two calls `reuse_from`."""
+    import subprocess
+
+    _install_h8b_probe(installed)
+    upstream_run_dir, upstream_step = _build_fixture_u_upstream(tmp_path, capsys)
+
+    monkeypatch.delenv("H8B_FIXTURE_U_UPSTREAM_DIR", raising=False)
+    monkeypatch.delenv("H8B_FIXTURE_U_UPSTREAM_STEP", raising=False)
+    monkeypatch.setenv("H8B_CALIBRATION_ID", "CAL-STABLE")
+    doc = run_a_project(
+        tmp_path / "proj_u",
+        capsys=capsys,
+        experiment_type="h8b_apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H8B_APPARATUS_TEMPLATE,
+        _starter_step=_H8B_FIXTURE_U_STARTER_STEP,
+    )
+    root = doc["root"]
+    cfg = doc["cfg"]
+    output_dir = doc["results_dir"]
+
+    # Fixture L's mechanism: a real lockfile, committed, AFTER the
+    # throwaway first run and BEFORE either of the two runs this fixture
+    # actually compares — so both share one non-null `uv_lock_hash`.
+    (root / "uv.lock").write_text("# a stand-in lockfile, fixture U\n")
+    subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "lock"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_x = _resolve_latest(output_dir)  # no upstream
+
+    monkeypatch.setenv("H8B_FIXTURE_U_UPSTREAM_DIR", str(upstream_run_dir))
+    monkeypatch.setenv("H8B_FIXTURE_U_UPSTREAM_STEP", upstream_step)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_y = _resolve_latest(output_dir)  # WITH upstream
+    assert run_y != run_x
+
+    run_x_yaml = yaml.safe_load((run_x / "run.yaml").read_text())
+    run_y_yaml = yaml.safe_load((run_y / "run.yaml").read_text())
+    assert run_x_yaml["provenance"]["environment"]["uv_lock_hash"] is not None
+    assert run_x_yaml["provenance"]["upstream"] == []
+    assert len(run_y_yaml["provenance"]["upstream"]) == 1
+
+    capsys.readouterr()
+    code = command_diff(run_x, run_y)
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+
+    # All five rows read `identical` — no row disagrees, and none is
+    # `not captured` either, which is the pre-condition the "differ only"
+    # line depends on.
+    assert "DIFFERS" not in out
+    assert "not captured" not in out
+    for row in ROW_LABELS:
+        assert re.search(rf"^{re.escape(row)}\s+identical", out, re.M), (row, out)
+
+    # The upstream block: not a sixth row, present, naming B's entry.
+    assert re.search(r"^upstream$", out, re.M)
+    upstream_run_id = run_y_yaml["provenance"]["upstream"][0]["run_id"]
+    assert re.search(rf"^\s+B\s+{re.escape(upstream_run_id)}\s", out, re.M)
+    assert not re.search(rf"^\s+A\s+{re.escape(upstream_run_id)}\s", out, re.M)
+
+    # And the line that proves the block carries information no row does.
+    assert "these runs differ only in their upstreams" in out
+
+
+def test_h8b_upstream_block_absent_when_both_sides_upstream_is_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Fixture R2's own pair: `provenance.upstream` is `[]` on both sides
+    (measured — every scaffolded run writes it), so the block must not
+    print at all, and the "differ only" line certainly must not."""
+    doc = run_a_project(tmp_path, units=8, capsys=capsys)
+    run_a = doc["run_dir"]
+
+    def edit(config: dict) -> None:
+        config["parameters"]["analysis"]["min_samples"] += 1
+
+    run_b = _second_run_after_edit(doc, edit)
+    capsys.readouterr()
+    command_diff(run_a, run_b)
+    out = capsys.readouterr().out
+    assert not re.search(r"^upstream$", out, re.M)
+    assert "differ only in their upstreams" not in out
+
+
+def test_h8b_a_draft_run_earns_the_draft_label_in_the_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The draft label, from a fixture with `draft: true` hand-set on a
+    record — `draft` itself is H9's, so a GENUINE draft run cannot be
+    produced at this task; this pins the RENDER against the recorded key,
+    not against a real draft run. See the batch report."""
+    doc = run_a_project(tmp_path / "proj_a", units=8, capsys=capsys)
+    run_dir = doc["run_dir"]
+    run_yaml_path = run_dir / "run.yaml"
+    record = yaml.safe_load(run_yaml_path.read_text())
+    assert record["draft"] is False, "measured: draft: false present on every run"
+    record["draft"] = True
+    run_yaml_path.write_text(yaml.safe_dump(record, sort_keys=False))
+
+    from publishable.diff import _load_side
+
+    side = _load_side(run_dir)
+    line = _header_line("A", side)
+    assert "draft" in line.split()
+
+
+# ---------------------------------------------------------------------------
+# Mutations for the upstream block (task 11 steps 9-10).
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_mutation_unconditional_upstream_block_caught_by_fixture_r2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """M (step 9): print the block unconditionally. Caught by an ordinary
+    two-run pair — `[]` on both sides is what every such pair writes
+    (measured), so an unconditional block would print an empty `upstream`
+    section on every comparison. The real code must NOT print it here;
+    this test is the pin, and the mutation is applied and reverted against
+    `diff.py` directly (reported in the batch report, not left applied)."""
+    doc = run_a_project(tmp_path, units=8, capsys=capsys)
+    run_a = doc["run_dir"]
+
+    def edit(config: dict) -> None:
+        config["parameters"]["analysis"]["min_samples"] += 1
+
+    run_b = _second_run_after_edit(doc, edit)
+    capsys.readouterr()
+    command_diff(run_a, run_b)
+    out = capsys.readouterr().out
+    assert "upstream" not in out
+
+
+def test_h8b_the_differ_only_line_absent_when_a_row_also_differs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch, installed, registries
+):
+    """The second discriminating fixture for the upstream block (step 10):
+    upstreams differ AND `parameters_hash` differs. The block still prints
+    (an upstream entry exists on one side), but the "differ only" line's
+    whole content is that the OTHER rows agree — printing it beside a
+    DIFFERS row would be a false claim, so it must be absent here even
+    though an all-identical fixture (Fixture U) alone could not tell a
+    correct build from one that prints the line unconditionally."""
+    import subprocess
+
+    _install_h8b_probe(installed)
+    upstream_run_dir, upstream_step = _build_fixture_u_upstream(tmp_path, capsys)
+
+    monkeypatch.delenv("H8B_FIXTURE_U_UPSTREAM_DIR", raising=False)
+    monkeypatch.delenv("H8B_FIXTURE_U_UPSTREAM_STEP", raising=False)
+    monkeypatch.setenv("H8B_CALIBRATION_ID", "CAL-STABLE")
+    doc = run_a_project(
+        tmp_path / "proj_u2",
+        capsys=capsys,
+        experiment_type="h8b_apparatus_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H8B_APPARATUS_TEMPLATE,
+        _starter_step=_H8B_FIXTURE_U_STARTER_STEP,
+    )
+    root = doc["root"]
+    cfg = doc["cfg"]
+    output_dir = doc["results_dir"]
+    (root / "uv.lock").write_text("# a stand-in lockfile\n")
+    subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "lock"],
+        cwd=root,
+        check=True,
+    )
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_x = _resolve_latest(output_dir)
+
+    # Edit a parameter AND set the upstream env vars, so both `parameters_hash`
+    # and the upstream list move between run_x and run_y.
+    config = yaml.safe_load(cfg.read_text())
+    config["parameters"]["instrument"]["model"] = "m2"
+    cfg.write_text(yaml.safe_dump(config))
+    monkeypatch.setenv("H8B_FIXTURE_U_UPSTREAM_DIR", str(upstream_run_dir))
+    monkeypatch.setenv("H8B_FIXTURE_U_UPSTREAM_STEP", upstream_step)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_y = _resolve_latest(output_dir)
+    assert run_y != run_x
+
+    capsys.readouterr()
+    command_diff(run_x, run_y)
+    out = capsys.readouterr().out
+    assert re.search(r"^parameters_hash\s+DIFFERS$", out, re.M)
+    assert re.search(r"^upstream$", out, re.M)
+    assert "these runs differ only in their upstreams" not in out

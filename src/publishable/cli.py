@@ -145,7 +145,6 @@ OPERATION_COMMANDS = {"validate", "run", "freeze"}
 # number — `docs/reference.md` moves under every edit above the citation.
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
-    "diff": "Operation commands",
     "docs": "Operation commands",
     "draft": "Draft runs",
     "dry-run": "Operation commands",
@@ -3743,6 +3742,20 @@ def _dispatch(command: str, rest: list[str]) -> int:
             "freeze": command_freeze,
         }
         return handlers[command](Path(rest[0]))
+    if command == "diff":
+        # `diff` gets its OWN arm rather than joining `OPERATION_COMMANDS`'s:
+        # that arm enforces exactly ONE path, and `diff` takes exactly TWO —
+        # a second enforcer of a different arity rule, not a second enforcer
+        # of the same one `freeze` joined above (H8b task 11, Decision 5
+        # part 1). Same rejection of a leading `-`, same "no flags" rule
+        # (`design-principles.md` § Everything is in the file): no
+        # `--format`, no `--only`, no selector.
+        if len(rest) != 2 or any(p.startswith("-") for p in rest):
+            print("`diff` takes exactly two paths and no flags", file=sys.stderr)
+            return EXIT_INVOCATION
+        from publishable.diff import command_diff
+
+        return command_diff(Path(rest[0]), Path(rest[1]))
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION

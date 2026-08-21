@@ -6,19 +6,15 @@ README.md § The loop you'll actually live in. See
 docs/superpowers/specs/2026-08-20-diff-freeze-design.md Decisions 1-6 and
 docs/superpowers/plans/2026-08-20-diff-freeze.md tasks 7-11.
 
-**This module is built in slices.** Tasks 7-8 delivered `covered_config`'s
+**This module was built in slices.** Tasks 7-8 delivered `covered_config`'s
 delta walk and the four rows that do not need H7d's apparatus, plus form
-detection and the per-side header. Task 9 added the `apparatus` row. This
-task (H8b task 10) adds a CONFIG side: exactly one of the five rows
-(`parameters_hash`) is computed against it, and the other four print
-`not comparable` with a reason (Decision 5) — the same rule whether the
-other side is a config or a run. Decision 4's exit-code ruling (`diff`
-exits `0` on every comparison it renders, `1` only when it cannot render
-one) was already the shape `command_diff`'s `return EXIT_OK` gave tasks
-7-9; this task adds the mutation that pins it. The upstream block and the
-CLI arm (task 11) are the last task's own diff. `diff` does **not**
-dispatch through `cli.main` until task 11 — every call here is direct, on
-`command_diff`.
+detection and the per-side header. Task 9 added the `apparatus` row. Task
+10 added a CONFIG side, computing `parameters_hash` and refusing the
+other four rows as `not comparable`, plus Decision 4's exit-code
+mutation pin. This task (H8b task 11) adds the upstream block — printed
+after the rows, only when either side's `provenance.upstream` is
+non-empty, never a sixth row — and gives `diff` its own `cli.py`
+dispatch arm, completing the command.
 """
 
 from pathlib import Path
@@ -439,11 +435,86 @@ def _render_parameters_hash_mixed(side_a: _Side, side_b: _Side) -> list[str]:
     return [f"{'parameters_hash':<{_LABEL_WIDTH}}DIFFERS", *deltas]
 
 
+def _upstream_entries(side: _Side) -> list[dict[str, Any]]:
+    """A run side's `provenance.upstream` — `[]` on every shipped run that
+    consumed none (measured, H8a's own decision) — or `[]` for a config
+    side, which has no `provenance` at all. Never distinguishes "absent"
+    from "empty": both read as nothing to show, which is the only reading
+    that matters for whether the block prints."""
+    if side.form != "run record":
+        return []
+    assert side.record is not None
+    entries: list[dict[str, Any]] = (side.record.get("provenance") or {}).get("upstream") or []
+    return entries
+
+
+def _upstream_hash_repr(value: Any) -> str:
+    """§ Corrections, correction 7: an upstream entry's `code_hash`/
+    `parameters_hash` CAN be `None` — `UpstreamLedger.record` copies
+    `record.get(...)` — and rendering it as `None…` would be the exact
+    false-identity shape Decision 1's `not captured` exists to prevent.
+    Reused rather than re-minted. This is a DEFENSIVE render, not a
+    disposition of the OPEN filing naming H9 as owner and H8b as the
+    secondary consumer — whether a hash-less upstream record is corrupt or
+    honest is still H9's question."""
+    return "not captured" if value is None else _truncated(value)
+
+
+def _upstream_block_lines(side_a: _Side, side_b: _Side) -> list[str]:
+    """Decision 6's upstream block: printed only when either side's
+    `provenance.upstream` is non-empty, listing each entry's `run_id` and
+    its two short hashes, one line per (side letter, entry) so a reader
+    can tell which side consumed which ancestor. NOT a sixth row — the
+    five rows are documented three ways and their count is load-bearing,
+    so this returns its own header line ("upstream") rather than joining
+    `ROW_LABELS`."""
+    entries_a = _upstream_entries(side_a)
+    entries_b = _upstream_entries(side_b)
+    if not entries_a and not entries_b:
+        return []
+    lines = ["upstream"]
+    for letter, entries in (("A", entries_a), ("B", entries_b)):
+        for entry in entries:
+            lines.append(
+                f"  {letter}  {entry['run_id']}   "
+                f"code_hash {_upstream_hash_repr(entry.get('code_hash'))}   "
+                f"parameters_hash {_upstream_hash_repr(entry.get('parameters_hash'))}"
+            )
+    return lines
+
+
+def _all_five_rows_identical(record_a: dict[str, Any], record_b: dict[str, Any]) -> bool:
+    """True only when every row in `ROW_LABELS` would print `identical` —
+    never true if any row is `not captured` or `DIFFERS`, and the
+    `apparatus` row's own omission (both sides `null`) counts as agreeing,
+    since there is nothing there to disagree over. Used only to decide
+    whether the "these runs differ only in their upstreams" line applies —
+    Decision 6's own reachable state, since an upstream artifact is read
+    from `output_dir`, outside the input manifest."""
+    for row in ROW_LABELS:
+        if row == "apparatus":
+            app_a = (record_a.get("provenance") or {}).get("apparatus")
+            app_b = (record_b.get("provenance") or {}).get("apparatus")
+            if app_a is None and app_b is None:
+                continue
+            if app_a is None or app_b is None:
+                return False
+            if app_a.get("hash") != app_b.get("hash"):
+                return False
+            continue
+        figure_a = _figure(row, record_a)
+        figure_b = _figure(row, record_b)
+        if figure_a is None or figure_b is None or figure_a != figure_b:
+            return False
+    return True
+
+
 def command_diff(a: Path, b: Path) -> int:
-    """`diff a b`, end to end: form detection, the per-side header, and all
+    """`diff a b`, end to end: form detection, the per-side header, all
     five rows over any combination of a run record and a config (Decision
-    5 part 4 — config-vs-config and config-vs-run are the same rule).
-    The upstream block and the CLI arm (task 11) are the last piece.
+    5 part 4 — config-vs-config and config-vs-run are the same rule), and
+    the upstream block (Decision 6). Dispatched from `cli.main`'s own
+    `diff` arm.
 
     **Exit code (Decision 4):** `0` whenever a comparison is RENDERED —
     every row `identical`, every row `DIFFERS`, any mix, `not captured`,
@@ -479,7 +550,8 @@ def command_diff(a: Path, b: Path) -> int:
     print(_header_line("A", side_a))
     print(_header_line("B", side_b))
 
-    if side_a.form == "run record" and side_b.form == "run record":
+    both_runs = side_a.form == "run record" and side_b.form == "run record"
+    if both_runs:
         assert side_a.record is not None and side_b.record is not None
         for row in ROW_LABELS:
             for line in _render_row(row, side_a.record, side_b.record):
@@ -497,5 +569,18 @@ def command_diff(a: Path, b: Path) -> int:
             else:
                 for line in _not_comparable_lines(row):
                     print(line)
+
+    # Decision 6: the upstream block, AFTER the rows, printed only when
+    # either side's `provenance.upstream` is non-empty — never a sixth row.
+    upstream_lines = _upstream_block_lines(side_a, side_b)
+    if upstream_lines:
+        for line in upstream_lines:
+            print(line)
+        if both_runs:
+            assert side_a.record is not None and side_b.record is not None
+            if _all_five_rows_identical(side_a.record, side_b.record) and _upstream_entries(
+                side_a
+            ) != _upstream_entries(side_b):
+                print("  these runs differ only in their upstreams")
 
     return EXIT_OK

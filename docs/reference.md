@@ -3536,7 +3536,7 @@ These take paths and nothing else.
 | `publishable report` | NOT BUILT | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
 | `publishable freeze` | built | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
 | `publishable reproduce` | NOT BUILT | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
-| `publishable diff` | NOT BUILT | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
+| `publishable diff` | built | two config or run paths | Prints a per-side header (form, identity, status, `draft`), then five rows — `identical`, `DIFFERS` with its detail lines, `not captured` (the figure is `null`), or `not comparable` (a config side) — and an `upstream` block when either side consumed one, naming it when all five rows agree despite it |
 | `publishable docs` | NOT BUILT | *(none)* | Regenerates every `publishable:begin/end` managed region |
 | `publishable list-templates` | NOT BUILT | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
 
