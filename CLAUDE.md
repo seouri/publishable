@@ -423,6 +423,12 @@ made by the author of the rule forbidding it, while measuring for it.
   commit. A rewrite invents; a deletion cannot.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+- **Carrying a finding into a brief is necessary and not sufficient.** On one slice a finding routed
+  to a task **fell out of the chain** between the review that raised it and the brief written from it.
+  On the next it was **in the brief, measured, named** — and still not built, while the report claimed
+  guards that existed at no commit. The second is worse than the first: **a report's claim that a
+  carried finding is closed has to be checked against the code like any other claim**, because the
+  carry itself creates the expectation that it was done.
 - **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
