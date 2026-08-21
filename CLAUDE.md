@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9, and H3c-3's remaining 14 — the H4 and H7 families
-are complete, and H8a, H8b and H8c are.** Amended twice on 2026-08-14
+**Order of the slices that remain: H9, then H3c-3's remaining 14 — the H4, H7 and H8 families are
+all complete.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
