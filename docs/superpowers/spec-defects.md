@@ -7722,3 +7722,38 @@ the probe step § Operation commands describes, and if so, whether `replay_ledge
 `PHASE_RUN_START`/`PHASE_PRE_EXECUTION` filter should widen to admit it as a `freeze` baseline too —
 a `dry-run` immediately before a `run` starts would otherwise report a baseline `freeze` cannot see
 answered any differently than a run that never `dry-run`'d at all. Not decided here.
+
+## OPEN — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+
+**Found by** H8b's whole-branch review; **left open deliberately by both the implementing task and the
+controller**, with the reasoning below, because the cheap fix is in the **shared worked example** and this
+repo's own § The worked example is the cross-document trap it has been burned by most.
+
+**The defect.** `diff` prints a per-side header before the rows — measured at `4e7ff85` in
+`diff.py`'s `_header_line`: `letter`, form, then for a run record its `run_id`, its `status`, and the word
+`draft` when `draft: true`; for a config side, the form and **the path as given, never resolved**, and no
+status word. **All three worked outputs — in `README.md`, `docs/design-principles.md` and
+`docs/reference.md` § Three hashes' apparatus block — begin at `code_hash` and show no header.** A reader
+copying any of them gets output the command does not produce.
+
+**Why it was not fixed under a fix round.** The three blocks are at **different levels of concreteness**,
+so there is no single identical edit to apply three times: `reference.md` carries the worked example's
+real run IDs (`run_2026-08-06T14-02-11Z_8e21ab3` and `run_2026-08-07T09-14-03Z_8e21ab3`), while `README.md`
+uses `~/results/cohort-pilot/run_A|run_B` paths and `design-principles.md` uses `<run_a>`/`<run_b>`
+placeholders. Each needs a header **consistent with its own level of abstraction**, and a wrong worked
+example is self-propagating in a way a filed defect is not.
+
+**What its owner must do.** Add a header to each block at that block's own concreteness, using the
+measured format above and the worked example's `status: completed`; **keep the two-space column
+separator** the shipped code uses; **do not change any hash prefix, run ID, or delta line** — those are
+numerically checked and § The worked example forbids narrowing them; and run **both** consistency passes,
+since three fenced blocks in three of the four documents move together. **Check whether `reference.md`'s
+apparatus block should show `apparatus DIFFERS` beside a `completed` status** — it should, and that pairing
+is worth stating rather than leaving a reader to wonder.
+
+**Owner: H8c**, which already owns `report`'s rendering of the same worked example and the one
+`reference.md` sentence closing the `diff`-versus-gate ruling — so it is the next slice with these
+documents open and a review pass of its own.
+
+**Cost if wrong / if unclaimed:** three normative documents show `diff` output missing its first two lines.
+Nothing computes from them, and every value they do show is correct.
