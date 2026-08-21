@@ -25,8 +25,11 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9, then H3c-3's remaining 14 — the H4, H7 and H8 families are
-all complete.** Amended twice on 2026-08-14
+**Order of the slices that remain: H5 Artifacts, H6 Hashes and provenance, H9, then H3c-3's remaining
+14 — the H4, H7 and H8 families are all complete.** H5 and H6 are chartered as **independent** in the
+spine design and were omitted from this sentence for several slices while it was narrowed around the
+families being worked; `spec-defects.md` carries live entries owned by each, which is how the omission
+was caught. Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -69,7 +72,7 @@ qualifications stay attached to that number: the plugin must exist and be instal
 apparatus probe is neither executed nor recorded (`cli.py` writes `apparatus: null` unconditionally
 regardless of what a template declares — filed, owned by H7d, **which H7d Part A has since built** —
 see the entry below, where the executable count stays unmoved all the same). Six stayed blocked on two causes neither
-of which is H7b's: `io.reuse_from` (unbuilt, unowned) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
+of which is H7b's: `io.reuse_from` (**which H8a has since built** — see the entry below) for E3, E4, E6, and `E-DATA-WEIGHT-CONTRAST`
 for C1–C3, **which H4b-1 has since retired** — see the entry below, where C1–C3 stay non-executable on
 `io.reuse_from` alone. Also closed: `hash_index` was broken for every source, table and glob included,
 not only the resolver's, and had no filing — closed and struck in the same entry; and the credential leak
@@ -82,7 +85,7 @@ Ctrl-C still stops the command.
 intersection, its interval is its own construction there, and the record carries `weighted_by` and
 `n_paired_effective`. **No-remaining-core-side-blocker was said to go three → six** here — C1, C2 and C3
 joining E1, E2 and E5 — measured the same way, by running each config's blocks through `validate_config`. **The
-executable count stays at three**, because C1–C3 also need `io.reuse_from`, still unbuilt and unowned.
+executable count stays at three**, because C1–C3 also need `io.reuse_from`, then unbuilt and unowned and **since built by H8a**.
 
 **CORRECTED 2026-08-20 by H8's scoping: that phrase answers no consistent question, and every later
 entry below repeats it.** The contradiction is verbatim in one table cell of the feasibility analysis —
@@ -213,7 +216,9 @@ or by absolute path, and every read is accumulated into `provenance.upstream`. `
 `run.yaml` reader **nothing in `src/` had**, eleven `E-UPSTREAM-*` refusals, and a containment rule now
 enforced on **three** readers — `reuse_from`, `read_upstream` and `read_condition`, the last two having
 enforced **no name rule at all**. **It moves exactly one row of the feasibility analysis' table, 6 → 0**,
-and mints no new number; the `report_by`-under-`resample` gap still meets **seven** configs and is H4's.
+and mints no new number; the `report_by`-under-`resample` gap still meets **seven** configs and is **unassigned** — it was H4's,
+and the 2026-08-19 re-owning after H4d merged moved it, along with four others, to *unassigned with a
+reason*: no remaining slice has the `statistics` block as its surface.
 **H8 was scoped at 30 tasks against a one-row charter**, split 10/8/12 — H8b is `diff`/`freeze`, H8c is
 `report`/`study`, and **`BaseReport` is H8c's** (§ Package layout makes `report.py` *be* `BaseReport`).
 
@@ -532,7 +537,7 @@ made by the author of the rule forbidding it, while measuring for it.
   sibling row *does*. When you insert or remove a row, check every row it **moved**, and every count
   phrase near it.
 
-### Two mechanical traps
+### Mechanical traps
 
 - **Never filter the output of a sweep whose job is to find a string** — filter the file list. A reviewer
   checking this exact rule lost a true hit to `grep -v superpowers`, because the matching line contained
