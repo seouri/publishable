@@ -7602,8 +7602,10 @@ failure mode `not captured` was minted to prevent.
 
 **So no behaviour changes**, and the remedy is one sentence in `reference.md` saying why the two rules
 differ — because a reader who knows the gate's tolerance will otherwise read `diff`'s row as a bug, which
-is exactly what happened here. **Owner: H8c**, which writes § Errors and the apparatus cross-check and is
-already in the documents.
+is exactly what happened here. **AMENDED 2026-08-21 (H8b task 12): CLOSED.** The sentence landed in
+`reference.md` § The apparatus core can only observe, directly beside the fenced `diff` example this
+filing's own reproduction quotes — task 12 was already editing that section for the ASCII-ellipsis fix,
+so it took the sentence rather than routing it to H8c as first ruled.
 
 **Cost if wrong:** a reader who wants run-to-run apparatus drift judged by the gate's rule has to compute
 it themselves from the two `facts` mappings, which `diff` prints in full.
@@ -7643,3 +7645,35 @@ reports; it doesn't decide" (`freeze`'s own stated posture in the same section).
 
 **Found by:** H8b task-b6 review, Minor 11, verified by running a probe returning `None` then a real
 value across two runs and reading `diff`'s own output.
+
+## OPEN — a plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under, invisibly to every artifact on disk mid-run — **Owner: H9**
+
+`freeze`'s `E-FREEZE-PLAN-MISMATCH` check (§ Corrections against the code, correction 8) cross-checks
+the full four-tuple — `index`, `label`, `values`, `is_baseline` — that `expand(doc)` re-derives from
+the run-start `config.yaml` copy against `sweep.yaml`'s recorded plan. That catches an edit to
+`sweep`, `data.units`, or anything else `expand` reads. It does **not** catch a plain `parameters`
+edit: `expand` never reads `parameters`, so a `config.yaml` whose `parameters.instrument.model` was
+hand-edited after run start still re-expands to the identical conditions and passes the cross-check
+— and `resolve_condition_cfg` then hands the **edited** `cfg` to the probe, which measures under
+parameters the run itself never adopted.
+
+**Why this is invisible mid-run, not merely unchecked.** `parameters_hash` is computed once, at
+`run.yaml` assembly (`cli.command_run`, after the plan ends), and no artifact written at run start
+records it — `config.yaml` is a byte copy with nothing to compare it against until the run
+finishes. So there is no run-start `parameters_hash` for `freeze` to re-derive the edited copy
+against and refuse a mismatch the way `E-FREEZE-PLAN-MISMATCH` refuses a `sweep`-shape mismatch.
+The gap is named rather than half-covered: task 5 (H8b) considered and rejected checking
+`design_digest` for the identical reason — it covers `data.units`/`sweep.groups`, neither of which
+determines the cfg a probe is called under — and a check against `parameters` specifically would
+need a hash `run.yaml` does not yet hold at the point `freeze` would need it.
+
+**The check its owner must make.** `resume` (H9) reads the same two run-start artifacts
+(`config.yaml`, `environment/repo_root.txt`) `freeze` does, for the same reason — to keep going
+against a run whose `run.yaml` was never written — and needs its own answer to "did this config
+change since run start" to refuse resuming under edited parameters. Whether `resume`'s hash
+comparison closes this gap for `freeze` too, or whether a run-start `parameters_hash` artifact is
+warranted independent of `resume`, is **not decided here** — H8b's task 5 named the residual and
+declined to build toward either answer, since building one would commit `freeze` to an artifact
+`resume`'s own design might choose differently.
+
+**Found by:** H8b task 5 step 3 (named, not filed there), filed by task 12 per its own brief.

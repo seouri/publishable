@@ -1597,3 +1597,46 @@ addresses an artifact, not the design that produced it](reference.md#reuse_from-
 already shows in code. Without that step, E2's own `run.yaml` records the compile step under
 `execution.conditions`, and a downstream `io.reuse_from` naming it raises `E-UPSTREAM-STEP-SCOPED`
 rather than reading anything — a plugin defect, not a core one.
+
+### Measured on 2026-08-21 against commit `cad8940` — after H8b
+
+**`diff` and `freeze` dispatch.** `main(["diff", "/nope/a", "/nope/b"])` reaches real argument handling
+(`E-IO-FAILED`, exit `1`), and `cli.NOT_BUILT_COMMANDS` no longer holds either key — both moved out under
+their own tasks, verified by running rather than by reading the constant. `run` now writes two more
+artifacts, `config.yaml` and `environment/repo_root.txt`, so a run in progress can be re-read without its
+`run.yaml`.
+
+**H8b unblocks ZERO configs, and the table below is repeated from the H8a entry unchanged — no row
+moves.** `diff` and `freeze` are commands a user runs *around* a run, not dependencies a config needs:
+neither runs at `validate`, neither is called from a step, and — checked by running rather than assumed —
+`GenericTemplate.apparatus_probe` resolves to `None` and `generic` is the only template any of the nine
+configs here validates against, so `freeze` against any of them would report `E-FREEZE-NO-APPARATUS`
+before a probe ever ran. Nothing this slice built is a state any of these nine configs reaches.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**No row moves for H8b either, and this entry's own table above is the H8a entry's, character for
+character** — repeated rather than restated, because a paraphrase is exactly the failure mode
+"carried claim" names elsewhere in this section: the table's own words are what a later reader should
+quote, not this entry's gloss on them. **Mint no fifth number here either.** Nothing above changes what H8a's entry already established; this
+entry exists to say so on the record rather than to leave H8b's landing unmeasured against this analysis.
+
+**Correction, appended here rather than retro-edited: the 2026-08-15 entry's sentence about these five
+commands was already imprecise when written, and is narrower still now.** That entry reads: *"`dry-run`,
+`draft`, `resume`, `study`, and `reproduce` each print `unknown command` and exit `2`."* Measured by
+running `resume` at this commit: it prints `` `publishable resume` is specified but not built in this
+version — see docs/reference.md § Resuming `` and exits `2` — not `unknown command`, which is the
+diagnostic a genuinely unrecognized name gets. That distinction is exactly what `_report_not_built`'s own
+docstring draws ("a roadmap entry rather than a typo"), so the imprecision was already there on
+2026-08-15, unrelated to anything this slice built. Narrower now for two further reasons: `study` was
+never one key — `cli.NOT_BUILT_COMMANDS` holds `study add` and `study new` separately, both still
+unbuilt — and `diff`/`freeze` have since left the unbuilt set entirely, both this slice's own, so a
+sentence naming the current unbuilt CLI surface would read `dry-run`, `draft`, `resume`, `study add`,
+`study new`, `report`, `reproduce`, `docs`, `list-templates`, and `demo`. This corrects the sentence; it
+does not retro-edit the 2026-08-15 entry's dated claim about what was true that day, which stands as
+written.
