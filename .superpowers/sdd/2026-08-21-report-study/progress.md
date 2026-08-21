@@ -207,3 +207,48 @@ the behaviour:** the limit now names a rendered report body, so the next reader 
 **And a fix that was correct and unpinned, again.** Mutating `raise KeyboardInterrupt from None` to a bare
 `raise` left the **full suite unchanged** while the probe leaked the sentinel — the row `CLAUDE.md` counts
 five times in three slices, now six.
+
+## Batches 6 and 7 — `report <study.yaml>`, then `study new`/`study add`
+
+Batch 6: `a828ee9`, `f3ec269`, `6fee3fe` (fix round). Batch 7: `c84a820`, `35586e8`, `3b24652`,
+`30b69df`, `7e5f9b9`, `02bcaa2` (fix round). Suite 2753 → 2776 → 2783 → 2821 → **2823**; mypy 50 → **51**,
+formatter 90 → **92**. **Batch 6 failed task quality; batch 7 failed both verdicts.**
+
+**Batch 6's isolation delivered what it was for.** The negative it existed to certify — **no override
+discovery on the bundle path** — holds, verified independently three ways: the bundle arm returns before
+both call sites, the four section functions take `run` only so the `io` is **unreachable by
+construction**, and there is no `hashes`/`apparatus` import at all. The prescribed discovery mutation
+reproduced at exactly **12 failed / 102 passed**.
+
+**But four of its pins could not fail, and three were one shape — now a `CLAUDE.md` row: an assertion
+satisfied by NEIGHBOURING OUTPUT.** `assert "draft" in out` passed because the member was named
+**`draft_run`**; a `run`-tag pin passed on the bundle header's `##` heading; and a no-notice control took
+**no `capsys`** and asserted only an exit code the notice never changes. All three stayed green with the
+behaviour neutered. **When you assert a substring, ask what else in the output could produce it.**
+
+### Batch 7's Critical: a branch dead on every real record
+
+**`results.summary` is nested by step name** — the producer writes `summary[e.step_name] = …` — so the
+thin-metric walk inspected a mapping carrying neither `basis` nor `reported` and **silently returned
+nothing.** A real run with two `Estimate`s against a floor of 10 gave `[]`.
+
+Three things compounded it. **The design's own table asserted that branch was "measured in r3's
+`results.summary`"** — a reachability the code could not deliver. **All three of its pins were built at
+the nesting `run` never produces** — fixtures agreeing with the bug. And **a correction that re-read
+`W-STEP-ESTIMATE-N` judged it "still true on that basis"** — the right verdict from a wrong premise, which
+is the subtlest way a re-read can fail.
+
+**And it was the fourth defect in this slice fixable by reading a sibling that already had it right** —
+now a `CLAUDE.md` rule. The others: `freeze`'s credential containment **copied as calls without its
+`try`**; a reserved name where a **structural** test existed; `pop(0)` where **identity** removal existed.
+Here `report.py` already walked `results.summary` correctly, forty lines from the code that invented a
+shallower walk.
+
+**Also batch 7: a § Errors row narrower than its code — the whole-branch Major on BOTH preceding
+sub-slices — appearing as a CONTEXT LINE in all four of the batch's own commit diffs.** It was in front of
+the implementer four times.
+
+**What held on stronger evidence than claimed:** the duplicate-name refusal, snapshotted as
+`(size, mtime_ns, bytes)` rather than bytes alone, identical on **both** halves with the check preceding
+the record read; and the redaction, verified by a **full leaf-path diff** — exactly four paths change,
+**all six hash paths unchanged**, where the shipped test asserted three.
