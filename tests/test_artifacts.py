@@ -2052,3 +2052,99 @@ def test_fixture_r_reuse_from_reads_a_genuinely_produced_summary_artifact(tmp_pa
 
     io = _reuse_io(tmp_path)  # output_dir is irrelevant: the absolute form ignores it
     assert io.reuse_from(str(run_dir), step_name, "programs/a.json") == {"program": "a"}
+
+
+# ---------------------------------------------------------------------------
+# H8c task 17: the guard pin, arm C — the artifact paths `read_condition`
+# resolves, through a real `summary` step, at three repeats and again at
+# one. Captured by running, at `7f04755`. NEVER MOVES IN THIS SLICE: task 2
+# rewrites `read_condition`'s traversal (design Decision 4, plan correction
+# 2), and this arm asserts on the VALUE READ, never on a constructed path,
+# so it pins the answer rather than the construction that produces it.
+# See `docs/superpowers/plans/2026-08-21-report-study.md` task 17.
+# ---------------------------------------------------------------------------
+
+
+def _h8c_arm_c_build_and_run(tmp_path: Path, n_repeats: int) -> dict:
+    """One real project: a condition-scoped step `step02_fit` writes
+    `model.json`; the generated (repeat-scoped) starter writes
+    `units.parquet` via `io.record`, as every starter step does; a
+    `summary`-scoped `step03_compare` reads both back through
+    `io.read_condition` — the condition-scoped artifact without naming a
+    repeat, the repeat-scoped one naming `io.repeats[0]`, exactly the
+    documented pattern. Returns the run directory and the parsed record.
+    """
+    import subprocess
+
+    from publishable.cli import main
+    from publishable.generators.experiment import generate_experiment
+    from publishable.generators.step import generate_step
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir(parents=True)
+    rows = "\n".join(f"p{i}" for i in range(10))
+    (data / "index.csv").write_text(f"patient_id\n{rows}\n")
+    assert main(["new", str(root)]) == 0
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results),
+    )
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="fit")
+    (root / "src" / "cohort_pilot" / "steps" / "step02_fit.py").write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "condition"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        io.write("model.json", {"m": cfg.parameters.analysis.method})\n'
+        "        return {}\n"
+    )
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="compare")
+    (root / "src" / "cohort_pilot" / "steps" / "step03_compare.py").write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "summary"\n\n'
+        "    def run(self, cfg, io):\n"
+        "        repeat = io.repeats[0]\n"
+        '        model = io.read_condition(0, "step02_fit", "model.json")\n'
+        "        units = io.read_condition(\n"
+        '            0, "step01_summarize_units", "units.parquet", repeat=repeat\n'
+        "        )\n"
+        '        return {"model_m": model["m"], "n_rows": len(units)}\n'
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "H8c arm C"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["replication"] = {"repeats": [{"kind": "seed", "n": n_repeats}]}
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "arm c"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    assert main(["run", str(cfg)]) == 0
+    run_dir = next(results.glob("run_*"))
+    record = yaml.safe_load((run_dir / "run.yaml").read_text())
+    return {"run_dir": run_dir, "record": record}
+
+
+def test_h8c_arm_c_read_condition_resolves_at_three_repeats_and_at_one(tmp_path: Path):
+    """Arm C. Two real runs, identical but for the repeat count, each read
+    back through the SAME `summary` step and the SAME two `io.read_condition`
+    calls — one for a condition-scoped artifact (no `repeat=`), one for a
+    repeat-scoped artifact (`repeat=io.repeats[0]`). The assertion is on the
+    VALUE `step03_compare` returned into `results.summary`, never on a path
+    either test constructs: `_nest_repeat`'s collapse at one repeat and its
+    nesting at three are both exercised, by running, without this test
+    needing to know which directory shape either one produces.
+    """
+    three = _h8c_arm_c_build_and_run(tmp_path / "three", 3)
+    one = _h8c_arm_c_build_and_run(tmp_path / "one", 1)
+
+    for built in (three, one):
+        summary = built["record"]["results"]["summary"]["step03_compare"]
+        assert summary == {"model_m": "pearson", "n_rows": 10}

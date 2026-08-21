@@ -1374,3 +1374,84 @@ def test_h8b_an_empty_string_parameter_value_renders_visibly():
     b = {"experiment_type": "generic", "parameters": {"analysis": {"method": "pearson"}}}
     lines = parameter_deltas(a, b)
     assert lines == ['  parameters.analysis.method  "" → pearson']
+
+
+# ---------------------------------------------------------------------------
+# H8c task 17: the guard pin, arm D — the three worked `diff` blocks' rows,
+# as raw text. Captured by reading the documents, at `7f04755`. NEVER MOVES
+# IN THIS SLICE: task 16 inserts its two per-side header lines ABOVE the
+# `code_hash` line in each of these same three blocks and touches nothing
+# at or below it, so a passing arm D — after task 16 lands — is itself the
+# proof that no hash prefix, run ID, delta line, row label, row order or
+# separator moved. This arm needs NO authorized editor for exactly that
+# reason: if it fires, that is a finding, not a pin to update.
+#
+# The block is located by the `code_hash` ROW LINE it contains (the same
+# `identical`/`DIFFERS` shape `_document_row_labels` above matches on),
+# never by an ordinal or an nth-fence index — a positional locator has been
+# wrong twice in this repo (`CLAUDE.md` § Locating a table row by
+# position), and `reference.md` alone has more than one fence containing
+# the literal substring "code_hash" (its full `run.yaml` example uses
+# `code_hash: sha256:8e21...` in YAML syntax, which the stricter anchor
+# below does not match). Raw text, never `yaml.safe_load` or any other
+# reader: a defect that lives in *how* bytes are written is undone by a
+# reader before the assertion reaches it (`CLAUDE.md`'s YAML-alias
+# instance), which is why this parses the file's own lines rather than
+# feeding them through any structured loader.
+# ---------------------------------------------------------------------------
+
+
+def _diff_block_raw_lines(path: Path) -> tuple[str, ...]:
+    """The fenced block containing a `code_hash  identical|DIFFERS` row,
+    from that row to the end of its own fence, as raw text lines. Fences in
+    these documents don't nest, so consecutive ``` markers pair up in
+    file order."""
+    lines = path.read_text().splitlines()
+    fence_idxs = [i for i, line in enumerate(lines) if line.startswith("```")]
+    for start, end in zip(fence_idxs[0::2], fence_idxs[1::2], strict=True):
+        body = lines[start + 1 : end]
+        for j, line in enumerate(body):
+            if re.match(r"^code_hash\s{2,}(identical|DIFFERS)\b", line):
+                return tuple(body[j:])
+    raise AssertionError(f"no `diff`-shaped fenced block found in {path}")
+
+
+def test_h8c_arm_d_readme_worked_diff_block_rows(tmp_path: Path):
+    """Arm D / README.md § The loop you'll actually live in."""
+    assert _diff_block_raw_lines(README_MD) == (
+        "code_hash          identical    sha256:8e21…",
+        "input_manifest     identical    sha256:3d8a…",
+        "uv.lock            identical    sha256:6b1f…",
+        "parameters_hash    DIFFERS",
+        "  parameters.analysis.min_samples   30 → 50",
+    )
+
+
+def test_h8c_arm_d_design_principles_worked_diff_block_rows(tmp_path: Path):
+    """Arm D / design-principles.md § Same code, different parameters."""
+    assert _diff_block_raw_lines(DESIGN_PRINCIPLES_MD) == (
+        "code_hash          identical    sha256:8e21…",
+        "input_manifest     identical    sha256:3d8a…",
+        "uv.lock            identical    sha256:6b1f…",
+        "parameters_hash    DIFFERS",
+        "  parameters.analysis.method       pearson → spearman",
+        "  parameters.analysis.min_samples  30 → 50",
+    )
+
+
+def test_h8c_arm_d_reference_worked_diff_block_rows(tmp_path: Path):
+    """Arm D / reference.md § The apparatus core can only observe. The one
+    of the three carrying an `apparatus` row instead of a `parameters_hash
+    DIFFERS` — located correctly rather than by position is exactly what
+    this arm proves for this file, since an earlier, YAML-syntax
+    `code_hash: sha256:8e21...` line sits in an unrelated fenced block
+    earlier in the same document."""
+    assert _diff_block_raw_lines(REFERENCE_MD) == (
+        "code_hash          identical    sha256:8e21…",
+        "input_manifest     identical    sha256:3d8a…",
+        "uv.lock            identical    sha256:6b1f…",
+        "apparatus          DIFFERS",
+        "  00_baseline.calibration_id         CAL-2026-07-19 → CAL-2026-08-02",
+        "  01_method=spearman.calibration_id  CAL-2026-07-19 → CAL-2026-08-02",
+        "parameters_hash    identical    sha256:1a2b…",
+    )

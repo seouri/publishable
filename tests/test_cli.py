@@ -16143,3 +16143,281 @@ def test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root(
 
     repo_root_txt = (run_dir / "environment" / "repo_root.txt").read_text()
     assert repo_root_txt == f"{root.resolve()}\n"
+
+
+# ---------------------------------------------------------------------------
+# H8c task 17: the guard pin — the record's field-level shape (arm A) and
+# `publishable.__all__` (arm B). Captured by running, at `7f04755`
+# (`main`, clean tree, before H8c's own first task). See
+# `docs/superpowers/plans/2026-08-21-report-study.md` task 17 and
+# `docs/superpowers/specs/2026-08-21-report-study-design.md`.
+#
+# What this does NOT re-capture, and what was grepped to decide that:
+# `run.yaml`'s TOP-LEVEL key list and its `provenance` key list are already
+# pinned, in this exact order, by `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`,
+# `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty`, and
+# `test_h8b_arm_c_the_records_key_lists_status_and_exit` above (grep for
+# `keys()) ==` over this file: nine hits, of which those three plus two
+# `sweep.yaml`/allocation-document assertions are the only full-key-list
+# pins that exist, and none of the remaining four touches `results`,
+# `conditions[]`, `aggregated[step]`, a metric entry, a `by` stratum, `vs_
+# baseline`, `contrasts[0]`, `hypotheses[0]`, `results.summary`, or
+# `provenance.units` — every one of those is new coverage here). One more
+# copy of the top-level/`provenance` lists would be one more place to edit
+# for no new discriminating power, so arm A below never touches either.
+# ---------------------------------------------------------------------------
+
+_ARM17_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        shift = {{"pearson": 0, "spearman": 1}}.get(
+            cfg.parameters.analysis.method, 0
+        )
+        for i, unit in enumerate(units):
+            if i == 0:
+                # The one `io.skip` call the brief asks for: unit 0 is
+                # ineligible in every condition, so `n.ineligible == 1`
+                # everywhere and `n.completed == 39` of 40.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            extra = 0.5 if (i + shift) % 2 == 1 else 0.0
+            io.record(unit.key, {{"pred": float(i) + float(shift) + extra}})
+        return {{"n_units": len(units)}}
+"""
+
+_ARM17_CONDITION_STEP_SOURCE = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        # Exists only to put a CONDITION-scoped step entry in `execution`,
+        # beside the repeat-scoped starter's — the discriminator arm A's
+        # last row reads back.
+        return {{}}
+"""
+
+
+def test_h8c_arm_a_the_records_field_level_shape(tmp_path: Path):
+    """Arm A — THE RECORD'S FIELD-LEVEL SHAPE. NEVER MOVES IN THIS SLICE.
+
+    H8c changes no run record and no run artifact, so every key list below is
+    a never-moves detector over exactly the surface `report`'s four standard
+    sections read (design Decision 5, plan corrections 8 and 9). Full key
+    LISTS, never membership: a key added by accident is exactly what a list
+    assertion catches and `"x" in mapping` cannot. Every value below is read
+    back from a real run or recomputed from what was read back — the only
+    literals are key NAMES, per the brief.
+
+    Driven once, with every property task 17's brief names in one run: a
+    `cohort` attribute, two conditions (`baseline` vs `method=spearman`),
+    three `seed` repeats, `statistics.report_by: [cohort]`, one declared
+    `statistics.contrasts` entry, one `confirmatory` hypothesis, and one
+    `io.skip` call. A second, condition-scoped generated step exists for the
+    sole purpose of the last row: an execution entry that carries `status`
+    directly, standing beside the repeat-scoped starter's, whose entry
+    nests the repeat labels instead.
+    """
+    doc = run_a_project(
+        tmp_path,
+        units=40,
+        unit_attributes=["cohort"],
+        replication={"repeats": [{"kind": "seed", "n": 3}]},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "report_by": ["cohort"],
+            "contrasts": [
+                {"id": "spearman_vs_baseline", "of": "method=spearman", "against": "baseline"}
+            ],
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "spearman exceeds pearson",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "observed",
+            }
+        ],
+        extra_steps=["fit"],
+        extra_step_source=_ARM17_CONDITION_STEP_SOURCE,
+        _starter_step=_ARM17_STARTER_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    results = run["results"]
+    conditions = results["conditions"]
+    step = "step01_summarize_units"
+
+    assert list(results.keys()) == ["conditions", "summary", "contrasts", "hypotheses"]
+
+    # baseline: no `vs_baseline`; non-baseline: `vs_baseline` present.
+    assert list(conditions[0].keys()) == [
+        "index",
+        "label",
+        "values",
+        "per_repeat",
+        "aggregated",
+        "is_baseline",
+    ]
+    assert "vs_baseline" not in conditions[0]
+    assert list(conditions[1].keys()) == [
+        "index",
+        "label",
+        "values",
+        "per_repeat",
+        "aggregated",
+        "vs_baseline",
+        "is_baseline",
+    ]
+
+    aggregated_step = conditions[0]["aggregated"][step]
+    recorded_metric_names = {
+        k for k in aggregated_step if k != "by" and isinstance(aggregated_step[k], dict)
+    }
+    assert set(aggregated_step.keys()) == recorded_metric_names | {"by"}
+    assert recorded_metric_names == {"pred"}
+
+    metric_entry = aggregated_step["pred"]
+    assert list(metric_entry.keys()) == [
+        "value",
+        "basis",
+        "n",
+        "ci95",
+        "method",
+        "correction",
+        "repeat_spread",
+    ]
+
+    by_levels = aggregated_step["by"]["cohort"]
+    assert set(by_levels) == {"a", "b"}
+    by_entry = by_levels["a"]["pred"]
+    assert list(by_entry.keys()) == ["value", "basis", "n", "ci95", "method", "correction"]
+    assert "repeat_spread" not in by_entry
+
+    vs_baseline_entry = conditions[1]["vs_baseline"][step]["pred"]
+    assert list(vs_baseline_entry.keys()) == [
+        "delta",
+        "basis",
+        "paired",
+        "method",
+        "n_paired",
+        "ci95",
+        "cohens_d",
+        "correction",
+        "ci95_corrected",
+        "correction_level",
+        "family_size",
+        "family",
+    ]
+
+    contrast_entry = results["contrasts"][0]
+    assert list(contrast_entry.keys()) == ["id", "of", "against", step]
+    assert contrast_entry["of"] == "01_method=spearman"
+    assert contrast_entry["against"] == "00_baseline"
+
+    verdict = results["hypotheses"][0]
+    assert list(verdict.keys()) == [
+        "id",
+        "kind",
+        "declared_in",
+        "observed",
+        "verdict_evaluated_on",
+        "supported",
+        "verdict_rests_on",
+        "family_size",
+        "family",
+    ]
+    assert list(verdict["family"].keys()) == ["hypotheses"]
+
+    assert list(run["provenance"]["units"].keys()) == ["n", "key"]
+
+    execution = run["execution"]
+    assert list(execution.keys()) == ["shared", "conditions", "summary"]
+    assert isinstance(execution["conditions"], list)
+
+    condition_scoped_entry = execution["conditions"][0]["steps"]["step02_fit"]
+    assert "status" in condition_scoped_entry
+
+    repeat_scoped_entry = execution["conditions"][0]["steps"][step]
+    assert "status" not in repeat_scoped_entry
+    # The run's repeat labels, read back from a second, independent block of
+    # the SAME record — `per_repeat`, which `command_run` fills from the
+    # execution ledger rather than from `execution` itself — never a literal
+    # such as `"seed08"`.
+    per_repeat_labels = set(conditions[0]["per_repeat"][step].keys())
+    assert per_repeat_labels
+    assert set(repeat_scoped_entry.keys()) == per_repeat_labels
+
+
+def test_h8c_arm_a_the_summary_estimate_with_no_n(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Arm A, continued — `results.summary[step][key]`'s key list, and `n`
+    read back as `None` for a `summary`-scoped `Estimate` declared with a
+    `ci95` and no `n`. A separate, minimal run: the shape does not depend on
+    `report_by`/contrasts/hypotheses, and reusing `_ESTIMATE_SUMMARY_STEP`
+    (already in this module, exercised by
+    `test_an_estimate_with_an_interval_and_no_n_warns` above) is the
+    fixture, not a new one invented for this pin.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert list(entry.keys()) == ["value", "reported", "ci95", "n", "method"]
+    assert entry["n"] is None
+
+
+def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
+    """Arm B — `publishable.__all__`, as a full sorted list. THE ONE ARM AN
+    AUTHORIZED TASK MAY EDIT — task 1, per the design's Decision 2 and § The
+    importable surface. Post-edit state, stated in advance: `'BaseReport'`
+    is appended and the list RE-SORTED, and the `'BaseReport' not in`
+    assertion below is DELETED — nothing else changes. Task 1's report must
+    show that one-name diff, with nothing else reordered. Every other task
+    that finds this arm failing has found a finding to report, not an
+    assertion to edit.
+    """
+    import publishable
+
+    assert list(publishable.__all__) == [
+        "Apparatus",
+        "ArtifactError",
+        "ArtifactExistsError",
+        "BaseExperiment",
+        "BaseStep",
+        "BaseTemplate",
+        "ContractError",
+        "Estimate",
+        "Param",
+        "PublishableError",
+        "Unit",
+        "register_probe",
+        "register_reader",
+        "register_resolver",
+        "register_template",
+        "register_writer",
+    ]
+    assert list(publishable.__all__) == sorted(publishable.__all__)
+    assert "BaseReport" not in publishable.__all__
