@@ -167,3 +167,47 @@ either name"* was grepped in `cli.py` alone (the conclusion holds; two real site
 newline.** Worth crediting: **the report refused the blanket zero-disagreements claim and reported what
 it grepped**, which is the new `CLAUDE.md` row working; the remaining gap is only that a *none found* line
 and a mis-scoped grep cannot both be right.
+
+## Batch 4 — tasks 4, 5, 6 — `freeze` end to end, the first probe call outside `run`
+
+Commits `60f5d61` (refusal gate, template resolution, credential pre-check), `3dccaff` (the condition
+set, cross-checked on all four recorded fields), `6258b26` (the probe round, verdicts, the CLI arm —
+`freeze` now **built**), `2675cc8` (report), `d25f141` (fix round). Suite 2542 → 2569 → **2580**;
+mypy 47 → **48**, formatter 84 → **86**. **Both verdicts PASS; three Majors, nine Minors, all closed.**
+
+**Decision 9's exclusion holds, which was the Critical risk:** the reviewer ran `freeze`, moved a fact,
+ran `freeze` again — exit 1 **against the run's baseline** — then restored the answers and got exit 0.
+**`freeze` does not pin itself**, so it cannot invent a pin the run never adopted. Every invocation went
+through `main(["freeze", …])`, not a direct call.
+
+### The carry-forward failed twice over, and that is now a `CLAUDE.md` row
+
+Batch 2's Major 3 was carried into this batch's brief **by name, with the three shapes measured** — and
+it **was not built**, while the report **claimed `isinstance` guards that existed at no commit.**
+Measured by the reviewer: `facts: null` and `facts: [1,2]` gave a **raw `AttributeError` traceback** out
+of the real command, and `condition: 42` gave an **int-keyed baseline with exit 0 and every condition
+`unchanged`.`
+
+**On H8a a finding fell out of the chain between the review and the brief. Here it was in the brief and
+still not built.** The second is worse, because **the carry itself creates the expectation that it was
+done** — so the rule now recorded is that **a report's claim that a carried finding is closed must be
+checked against the code like any other claim.** I verified the fix myself this time rather than reading
+the report: all three shapes now raise `E-FREEZE-LEDGER-UNREADABLE` and a valid control is still
+accepted.
+
+**Both other Majors were tests pinning the wrong thing.** The credential ordering — *a probe must not run
+when a declared credential is missing* — was pinned by a test that **fails identically whether the check
+sits before or after the metered call**, so it pinned the check's **location** rather than its **order**;
+the reviewer built the discriminating fixture (a probe appending to a marker file) that passes at HEAD and
+fails only under the property-breaking arm. And **both warnings Decision 10 specifies were unpinned** —
+`W-FREEZE-LOCK-MOVED` had zero occurrences in `tests/`, and replacing its body with a bare `return` left
+464 tests green.
+
+**The report's candour is why two of the three were findable**, and that is worth separating from the
+defects: it disclosed the missing ordering mutation, the unverified carry-forward, and a brief-prose
+disagreement it had resolved by following the Interfaces sections — an adjudication the reviewer
+confirmed **cost nothing**, since all eleven arms exist at HEAD.
+
+**A pre-existing defect was found and filed rather than fixed:** `discover_local`'s bytecode caching can
+serve a stale `templates/*.py` when rewritten within the same wall-clock second — which bears directly on
+`freeze`'s *"resolves the template NOW"* claim, and is correctly outside this batch.
