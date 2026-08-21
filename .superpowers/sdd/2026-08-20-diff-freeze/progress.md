@@ -255,3 +255,68 @@ the redundant constant assertion removed.
 **One reviewer practice worth keeping:** it **stated the grading scale explicitly** rather than silently
 applying a harsher one than the previous batch received. A verdict is comparable only if the scale is
 stable.
+
+## Batch 6 — tasks 9, 10, 11 — `diff`'s apparatus row, its exit code and config side, its upstream block and CLI arm
+
+Commits `8bb90c2` (task 9), `b4be0c8` (task 10), `bdaccaa` (task 11), `4afe0dc` (fix round). Suite
+2609 → 2623 across the three tasks. Reviewed against `f138536`: **PASS with findings, four Majors,
+twelve Minors, all closed the same day** — three ruled behaviours the report's own mutations never
+reached (`diff`'s CLI arm's arity-and-flag guard, Decision 2's rule that a condition key present on
+one side and absent on the other gets its own line, the upstream block's `not captured` render for a
+missing hash), and a fixture comment (Fixture U) that licensed the exact edit that would have
+destroyed its own discriminating half. **Appended late** (2026-08-21, in the whole-branch fix round)
+because this ledger stopped recording after batch 5 and neither this batch nor batch 7 had an entry —
+the gap the whole-branch review's Minor 7 named. Not retro-written from a live observation of the
+batch; reconstructed from `task-b6-report.md`/`task-b6-review.md`, which are the original record.
+
+## Batch 7 — task 12 — codes, homes, and the § Executability re-measurement
+
+Commit `639d0f7`. Documents only: nine new § Errors/Warnings rows, four reused-code rows widened,
+two § Package layout rows, one deleted stale `CLAUDE.md` clause, the H8b development-record entry,
+one new `spec-defects.md` filing (owner H9) plus one closure (the diff-vs-gate divergence), and a
+dated § Executability entry repeating H8a's four-row table character for character. **No batch
+review was dispatched for this task** — the same gap batch 6 also has, and the more consequential
+one: the whole-branch review's Majors 2, 3 and 4 (a § Errors row narrower than its code, a
+docstring asserting an unfiled filing, a § Warnings row silent about a surface Decision 10 lists)
+all live in this commit's own surface, and a task review would plausibly have caught at least the
+first two, since both are the shape task 12's own brief warned about — *"a § Errors row written
+from an earlier decision's wording that nobody re-read."* Recorded here for the same reason as
+batch 6's entry: reconstructed after the fact from `task-b7-report.md`, not from watching the batch.
+
+## Whole-branch review and fix round — 2026-08-21
+
+**Verdict: DO NOT MERGE**, four Majors (one behavioural, three documentation/record), no Critical.
+Closed in one fix round, one commit:
+
+- **Major 1** — a config operand carrying a value `json.dumps` cannot serialize (an unquoted
+  YAML date, the plausible case) tracebacked out of `diff` after printing four rows.
+  `diff._parameters_hash_for`'s one call that recomputes a config side's hash fresh now catches
+  `TypeError` and reraises as `E-DIFF-CONFIG-UNREADABLE` — the sibling refusal a config operand this
+  build cannot read already carries. `spec-defects.md`'s pre-existing entry for the identical fault
+  class at `design_digest`/`run` (owner H3) is amended, not struck: `diff`'s own instance is closed,
+  `run`'s is not.
+- **Major 2** — `E-APPARATUS-RAISED`'s § Errors row said "one of two outcomes"; `freeze` is a third,
+  named now.
+- **Major 3** — `apparatus.py`'s `PHASES` docstring claimed a `spec-defects.md` filing that did not
+  exist. Closed by filing it for real (owner H9), rather than by deleting the claim, since deleting
+  would have left the underlying gap — no build decides where a `dry_run` ledger line belongs — with
+  nowhere written down at all.
+- **Major 4** — `W-APPARATUS-UNANSWERED`'s § Warnings row described only `run`'s "at run end"
+  surface; `freeze`'s own emit site, and that its counts are cumulative with the run's own history
+  via the ledger replay rather than a fresh accumulator, are named now.
+
+Minors closed the same round: a stale "seven"/"eighth" count in a `freeze.py` comment (now
+eight/ninth); the "five rows / four when null" count phrase in `CLAUDE.md`'s H8b entry, which
+omitted the config-side exception `reference.md`'s own copy self-corrects — deleted rather than
+corrected, per the standing rule against counts in a document; the `discover_local` bytecode-cache
+deferral's owner line, which named a finished task as a live option — re-owned to H9 alone;
+`repo_root.txt`'s shape, previously unchecked, so a bogus or non-directory path fell through to a
+coded but wrong-remedy `E-TEMPLATE-UNKNOWN` rather than `E-FREEZE-NO-CONFIG` — now checked, with two
+new tests distinguishing the correct code from the wrong one; and one documentation sentence naming
+which stream each of `freeze`'s two warnings prints to, previously stated nowhere. Not closed:
+the three worked `diff` outputs' missing per-side header lines (Minor 6) — left as the review found
+it, a documentation nit against the shared worked example this repo keeps under a stricter
+consistency bar than an ordinary sentence, not touched without its own review round.
+
+Full details, per finding, of what changed and what verified it: `task-b7-report.md` § Whole-branch
+fix round.

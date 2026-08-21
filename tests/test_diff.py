@@ -21,6 +21,7 @@ from publishable.diff import (
     _form,
     _header_line,
     _load_side,
+    _parameters_hash_for,
     _render_row,
     _Side,
     _upstream_block_lines,
@@ -447,6 +448,71 @@ def test_h8b_load_side_raises_contracterror_for_unreadable_record(tmp_path: Path
     with pytest.raises(ContractError) as exc_info:
         _load_side(empty_dir)
     assert exc_info.value.code == "E-UPSTREAM-RECORD-MISSING"
+
+
+# ---------------------------------------------------------------------------
+# Whole-branch review Major 1: a config operand holding a value
+# `json.dumps` cannot serialize (a bare, unquoted date, most plausibly)
+# tracebacked out of `diff` after printing four rows. `_parameters_hash_for`
+# is the guard's home — it is the one call that recomputes a config side's
+# hash fresh — and `E-DIFF-CONFIG-UNREADABLE` is the sibling refusal reused
+# rather than a new code minted for a config operand this build cannot read.
+# ---------------------------------------------------------------------------
+
+
+def test_h8b_parameters_hash_for_a_config_with_an_unserializable_value_is_e_diff_config_unreadable(
+    tmp_path: Path,
+):
+    """Direct unit-level proof, on the precedent
+    `test_h8b_load_side_raises_contracterror_for_unreadable_record` sets: the
+    function that raises does so under the right code, independent of how
+    `main`/`command_diff` render it."""
+    a = tmp_path / "d.yaml"
+    a.write_text("experiment_type: generic\nexpires: 2026-01-01\nparameters: {}\n")
+    side = _load_side(a)
+    with pytest.raises(ContractError) as exc_info:
+        _parameters_hash_for(side)
+    assert exc_info.value.code == "E-DIFF-CONFIG-UNREADABLE"
+
+
+def test_h8b_diff_of_two_configs_with_an_unserializable_value_is_a_clean_diagnostic_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """End to end through `main`, reproducing the whole-branch review's exact
+    repro: an unquoted date under `yaml.safe_load` is a `datetime.date`, with
+    no quoting mistake in sight. Before the fix this reached `main` as a bare
+    `TypeError` after the four `not comparable` rows had already printed;
+    `main`'s own `except PublishableError` is what turns a raised
+    `ContractError` into a diagnostic on stderr rather than a traceback, so
+    this asserts through the real dispatch path, not a direct
+    `command_diff` call."""
+    d = tmp_path / "d.yaml"
+    d.write_text("experiment_type: generic\nexpires: 2026-01-01\nparameters: {}\n")
+    code = main(["diff", str(d), str(d)])
+    out, err = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert "E-DIFF-CONFIG-UNREADABLE" in err
+    assert "Traceback" not in err
+    # The four rows this operand pair CAN answer still printed before the
+    # guard's own refusal — the "cheap close" the review names, not a
+    # validate-first redesign that would withhold them.
+    assert "not comparable" in out
+
+
+def test_h8b_diff_of_a_config_with_an_unserializable_value_against_an_ordinary_config_still_raises(
+    tmp_path: Path,
+):
+    """Property-preserving arm: an ordinary config beside the bad one still
+    reaches the same guard, because `_parameters_hash_for` is called on BOTH
+    sides regardless of which one is malformed — the crash site the review
+    found is reachable from either operand position."""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("experiment_type: generic\nexpires: 2026-01-01\nparameters: {}\n")
+    ok = tmp_path / "ok.yaml"
+    ok.write_text("experiment_type: generic\nparameters: {}\n")
+    with pytest.raises(ContractError) as exc_info:
+        command_diff(ok, bad)
+    assert exc_info.value.code == "E-DIFF-CONFIG-UNREADABLE"
 
 
 # ---------------------------------------------------------------------------

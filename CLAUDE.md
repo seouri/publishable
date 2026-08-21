@@ -211,18 +211,18 @@ one line off tests a different property** — a claim that a failed read leaves 
 survived its own batch's mutation, which stopped above the existence check rather than above the read.
 
 **H8b (`diff` and `freeze`) merged on 2026-08-21 — the second of H8's three.** `diff` compares two runs,
-or a run and a config, hash by hash — five rows over a run-vs-run pair with a declared apparatus (four
-when both sides' apparatus is `null`), an `upstream` block when either side consumed one — and exits `0`
-on every comparison it renders, `1` only when an operand can't be read. `freeze` re-reads a run's
-environment and re-probes its apparatus mid-run without executing anything, appending to the same ledger
-`run` writes and reporting a moved fact as a failure rather than deciding one — the gate at the next
-execution is what stops the run. **It retires no refusal and unblocks ZERO configs**; the feasibility
-analysis's four-row table is repeated unchanged, because neither command runs at `validate` and no config
-in it declares an `apparatus_probe` a real plugin backs. `run` gains two artifacts —
-`config.yaml` and `environment/repo_root.txt` — so `freeze` can resolve a project-local template's
-`apparatus_probe` by path after the fact. **Decision 7 is a behaviour change to a shipped command, and
-unlike H7d Part B's it is additive only**: no existing key, verdict, status, or exit code moves: two new
-files land in a run directory nothing already iterates.
+or a run and a config, hash by hash — each applicable row as `identical`, `DIFFERS` with its detail
+lines, `not captured`, or `not comparable` (a config side), an `upstream` block when either side
+consumed one — and exits `0` on every comparison it renders, `1` only when an operand can't be read.
+`freeze` re-reads a run's environment and re-probes its apparatus mid-run without executing anything,
+appending to the same ledger `run` writes and reporting a moved fact as a failure rather than deciding
+one — the gate at the next execution is what stops the run. **It retires no refusal and unblocks ZERO
+configs**; the feasibility analysis's four-row table is repeated unchanged, because neither command
+runs at `validate` and no config in it declares an `apparatus_probe` a real plugin backs. `run` gains
+two artifacts — `config.yaml` and `environment/repo_root.txt` — so `freeze` can resolve a
+project-local template's `apparatus_probe` by path after the fact. **Decision 7 is a behaviour change
+to a shipped command, and unlike H7d Part B's it is additive only**: no existing key, verdict, status,
+or exit code moves: two new files land in a run directory nothing already iterates.
 
 Three things worth carrying. **A subprocess probe stood in for a pin again** — `diff`'s CLI arm (exactly
 two paths, no flags) was demonstrated correct by one prose invocation and by nothing else; replacing its

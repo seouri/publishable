@@ -459,10 +459,11 @@ even that. Say it once: the constants are the guarantee, the assert only
 backs them up.
 
 `PHASE_DRY_RUN` is named here and called by NOTHING at this commit — no
-build appends a `dry_run` line. Where one should is filed to H9 rather
-than answered here: `reference.md` § Operation commands says `dry-run`
-"creates nothing," while § The apparatus files lists `dry_run` as one of
-the four phases, and both cannot hold until that gap is closed.
+build appends a `dry_run` line. `reference.md` § Operation commands says
+`dry-run` "creates nothing," while § The apparatus files lists `dry_run`
+as one of the four phases, and both cannot hold until that gap is closed —
+`docs/superpowers/spec-defects.md` § "no build appends a `PHASE_DRY_RUN`
+ledger line" is the filing, owner H9.
 
 **Measured cost when `append_observation`'s assert fires**, 2026-08-20, by
 patching it to raise and driving a real `run` through `main(["run", …])`

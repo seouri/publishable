@@ -4200,6 +4200,24 @@ converts the same `TypeError` into `E-SWEEP-SAMPLE-INVALID` for its own callers,
 `expand`'s "raises `PublishableError`" contract true but does **not** close this, since `cli`
 reaches the digest first.
 
+**AMENDED 2026-08-21 (H8b whole-branch fix round): the same `TypeError` class reaches two more
+call sites this entry did not name, and one of the three is now closed — locally, not by this
+entry's own fix.** `hashes.parameters_hash` (via `hashes._canonical`'s `json.dumps`) hits the
+identical fault over `covered_config(config)` — a wider projection than `data.units` alone, since
+it covers everything but `metadata`/the two host paths, so a bare date in `limits`, `statistics`,
+or an unknown top-level key reaches it too, not only `data.units`. Two callers were exposed:
+`cli.command_run` (writing `run.yaml`'s `parameters_hash`, still open, still H3's — `run` validates
+first in the ordinary path but a `draft` or a config that otherwise validates clean with a stray
+date in, say, `limits` is not caught by any existing check) and `diff._parameters_hash_for`, which
+H8b's whole-branch review found tracebacking a config operand after printing four rows
+(`src/publishable/diff.py`). **`diff`'s instance is closed**, in `diff.py` itself: a `try`/`except
+TypeError` around the one call that recomputes a config side's hash fresh, reraising as
+`E-DIFF-CONFIG-UNREADABLE` — the sibling refusal a config operand `diff` cannot read already
+carries, chosen over minting a tenth `E-FREEZE`-adjacent code. That closes `diff`'s **surface**, not
+this entry's: `run`'s own crash — the one this entry was filed for — is untouched, still reachable
+from `command_run`, still H3's to close at the `validate`-time or `design_digest`-canonicalization
+level this entry already names as the real decision. Not struck.
+
 ## ~~RETIRING `E-SWEEP-ABLATE-UNSUPPORTED` OPENED A WINDOW UNTIL TASK 5 LANDS~~ CLOSED
 
 **Found by:** H2 Sweeps, Task 4 review, reading what the retired refusal was also doing.
@@ -7531,7 +7549,7 @@ against the function itself, for the next caller that does not route through `fi
 
 **Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
 
-## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: H9 (option a); H8b task 12 may instead take the narrower option (b)**
+## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: H9**
 
 `src/publishable/templates/discovery.py`'s `_import_file` builds its spec through
 `importlib.util.spec_from_file_location`, which hands back an ordinary `SourceFileLoader` — the
@@ -7576,10 +7594,13 @@ so audit it for side effects on any concurrent import elsewhere in the process).
 weaker property instead: `discover_local` is resolved fresh per **process**, never guaranteed
 fresh per **call** — which would make the phrase "resolves the template NOW" (a code comment in
 `src/publishable/freeze.py`, not a claim `reference.md` makes anywhere) imprecise and in need of
-its own correction there. **Routed rather than left unowned**: (a) sits naturally with **H9**, which
-resolves the same template from the same two run-start artifacts for `resume` and would inherit
-this exact hazard; (b), the narrower documentation-only fix, is this slice's own **task 12** to take
-if it prefers not to wait on H9.
+its own correction there. **Re-owned 2026-08-21 (H8b whole-branch fix round): H8b's task 12 has
+finished and did not take option (b)**, so the owner line naming it as a live alternative would read
+as work nobody holds — per CLAUDE.md, *"re-owner a deferral when the slice that filed it finishes."*
+**H9** owns both options now: (a) sits naturally with it regardless, since it resolves the same
+template from the same two run-start artifacts for `resume` and would inherit this exact hazard;
+(b), the narrower documentation-only fix, is no longer anyone's to take in passing and is H9's to
+weigh against (a) rather than default to.
 
 **Found by:** H8b task 4/6, while building a fixture for `E-FREEZE-PROBE-MISMATCH` (`tests/
 test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
@@ -7677,3 +7698,27 @@ declined to build toward either answer, since building one would commit `freeze`
 `resume`'s own design might choose differently.
 
 **Found by:** H8b task 5 step 3 (named, not filed there), filed by task 12 per its own brief.
+
+## OPEN — no build appends a `PHASE_DRY_RUN` ledger line, and § Operation commands and § The apparatus files contradict each other about whether one belongs — Owner: H9
+
+`src/publishable/apparatus.py` defines `PHASE_DRY_RUN` and lists it in `PHASES`, but no call site in
+`src/` passes it — grepped, zero hits outside the constant's own definition and its membership in
+`PHASES`. Two passages disagree about whether that is even the right end state: `reference.md`
+§ Operation commands says `dry-run` "creates nothing," while § The apparatus files lists `dry_run` as
+one of the four phases a probe runs at. Both cannot hold until `dry-run` itself is built (it is
+`NOT_BUILT_COMMANDS` today), which is why this is H9's rather than H8b's — `dry-run` is not a
+surface either `diff` or `freeze` dispatches through, and deciding what it appends is inseparable
+from building it.
+
+**Found by:** H8b whole-branch review (Major 3), reading `apparatus.py`'s `PHASES` docstring, which
+claimed this gap "is filed to H9" when no such entry existed here — closed by filing it for real
+rather than by deleting the claim. `replay_ledger`'s own docstring, in the same file, made the
+narrower and accurate claim — "§ Refusals routes that gap to H9" — which is the design document,
+not this one; this entry is what makes the shipped code's OWN claim true rather than merely no
+longer false.
+
+**The check its owner must make.** Whether `dry-run`'s own build appends a `PHASE_DRY_RUN` line at
+the probe step § Operation commands describes, and if so, whether `replay_ledger`'s
+`PHASE_RUN_START`/`PHASE_PRE_EXECUTION` filter should widen to admit it as a `freeze` baseline too —
+a `dry-run` immediately before a `run` starts would otherwise report a baseline `freeze` cannot see
+answered any differently than a run that never `dry-run`'d at all. Not decided here.

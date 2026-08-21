@@ -421,10 +421,27 @@ def _parameters_hash_for(side: _Side) -> str:
     run time — versus a config side's, which does not exist on disk at all
     and is computed fresh, over the SAME function `run` used to write it
     (`hashes.parameters_hash`), so a config-vs-run row cannot disagree with
-    the run's own figure over anything but an actual edit to the file."""
+    the run's own figure over anything but an actual edit to the file.
+
+    **A config side's fresh computation can raise `TypeError`** — an
+    unquoted date, or any other scalar `yaml.safe_load` hands back that
+    `json.dumps` (inside `hashes._canonical`) cannot serialize, reachable
+    anywhere `covered_config` does not exclude (whole-branch review, Major
+    1). A run side never reaches this: its `parameters_hash` is a string
+    already written to disk, not recomputed. Caught here and reraised under
+    the sibling refusal a config operand this build cannot read already
+    carries — `E-DIFF-CONFIG-UNREADABLE` — rather than left to reach `main`
+    as a bare `TypeError` after this comparison's other four rows have
+    already printed."""
     if side.form == "config":
         assert side.config is not None
-        return _compute_parameters_hash(side.config)
+        try:
+            return _compute_parameters_hash(side.config)
+        except TypeError as exc:
+            raise ContractError(
+                f"{side.path} contains a value `diff` cannot hash: {exc}",
+                code="E-DIFF-CONFIG-UNREADABLE",
+            ) from exc
     assert side.record is not None
     figure: str = side.record["parameters_hash"]
     return figure

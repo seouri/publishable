@@ -191,6 +191,22 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
             EXIT_WRONG,
         )
     repo_root = Path(repo_root_text)
+    # Shape, not just presence (whole-branch review, Minor 5). Left unchecked,
+    # a nonexistent path or a plain file here fell through to `_claims`, which
+    # answers as if the project simply registered no local template — so the
+    # eventual refusal was `E-TEMPLATE-UNKNOWN`, a real code with the WRONG
+    # remedy: it reads as "install the plugin" when the fault is "this run
+    # directory was hand-edited," which `E-FREEZE-NO-CONFIG`'s message
+    # already says correctly for the sibling cases above.
+    if not repo_root.is_dir():
+        return _refuse(
+            Collector(),
+            "E-FREEZE-NO-CONFIG",
+            str(repo_root_path),
+            f"environment/repo_root.txt names `{repo_root_text}`, which is not "
+            "a directory — the directory was edited; it cannot be frozen",
+            EXIT_WRONG,
+        )
 
     # (d) — never overrides an exported variable, and safe to call twice;
     # answers (k), which is why it sits above the credential pre-check and
@@ -478,10 +494,11 @@ def command_freeze(run_dir: Path) -> int:
     # (l) — the probe call. `_probe_for` is the same three-step dispatch
     # `command_run` uses at run start; a dispatch fault here (the plugin
     # was uninstalled after the run started, say) is neither one of the
-    # seven `E-FREEZE-*` codes nor a member of `apparatus.APPARATUS_CODES`
-    # — `command_run`'s own dispatch wrapper routes it the same way, to
-    # `EXIT_WRONG`, and this reuses that routing rather than inventing an
-    # eighth code.
+    # eight `E-FREEZE-*` codes (whole-branch review, Minor 1 — this comment
+    # itself undercounted them, from the day it was written) nor a member
+    # of `apparatus.APPARATUS_CODES` — `command_run`'s own dispatch wrapper
+    # routes it the same way, to `EXIT_WRONG`, and this reuses that routing
+    # rather than inventing a ninth code.
     try:
         probe_fn = apparatus._probe_for(ready.probe_name)
     except KeyboardInterrupt:

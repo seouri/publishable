@@ -187,6 +187,51 @@ def test_gate_c_repo_root_txt_empty_is_no_config(installed, registries, tmp_path
     _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
 
 
+def test_gate_c_repo_root_txt_naming_a_nonexistent_path_is_no_config_not_template_unknown(
+    installed, registries, tmp_path, capsys
+):
+    """Whole-branch review, Minor 5: unchecked, this fell through to
+    `_claims`, which answers as if the repo simply registers no local
+    template, so the eventual refusal was `E-TEMPLATE-UNKNOWN` — a real code
+    with the WRONG remedy for a hand-edited run directory. `_assert_refused`
+    checks the exit code and the untouched ledger, but not the printed
+    diagnostic's own code and text, so those are asserted here directly
+    against `_precheck`'s stderr render — the only place either is
+    observable."""
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before = _ledger_lines(run_dir)
+    bogus = str(tmp_path / "does-not-exist-at-all")
+    (run_dir / "environment" / "repo_root.txt").write_text(bogus)
+    result = _precheck(run_dir)
+    err = capsys.readouterr().err
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    assert "E-FREEZE-NO-CONFIG" in err
+    assert "not a directory" in err
+    assert "E-TEMPLATE-UNKNOWN" not in err
+
+
+def test_gate_c_repo_root_txt_naming_a_plain_file_is_no_config_not_template_unknown(
+    installed, registries, tmp_path, capsys
+):
+    """The second shape Minor 5 named: a plain file rather than a missing
+    path, distinguishing `is_dir()` from a bare `exists()` check."""
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    before = _ledger_lines(run_dir)
+    plain_file = tmp_path / "a-plain-file.txt"
+    plain_file.write_text("not a repo")
+    (run_dir / "environment" / "repo_root.txt").write_text(str(plain_file))
+    result = _precheck(run_dir)
+    err = capsys.readouterr().err
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    assert "E-FREEZE-NO-CONFIG" in err
+    assert "not a directory" in err
+    assert "E-TEMPLATE-UNKNOWN" not in err
+
+
 def test_gate_e_unknown_template_reuses_the_shipped_code(installed, registries, tmp_path, capsys):
     doc = _fixture_p(installed, tmp_path, capsys)
     run_dir = doc["run_dir"]
