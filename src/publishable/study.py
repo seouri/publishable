@@ -228,9 +228,14 @@ def _floor_metric_entries(record: Mapping[str, Any]) -> list[tuple[str, Mapping[
                             continue
                         for sub_metric, entry in level_metrics.items():
                             if _is_thin_checkable_entry(entry):
+                                # `metric` here is already the literal key
+                                # `"by"` — the strata mapping's OWN key in
+                                # `aggregated[step]` — so folding it into
+                                # the label a second time doubled it to
+                                # `...by.by[cohort=a]...`. Named once.
                                 entries.append(
                                     (
-                                        f"{label}.{metric}.by[{attribute}={level}].{sub_metric}",
+                                        f"{label}.by[{attribute}={level}].{sub_metric}",
                                         entry,
                                     )
                                 )
@@ -238,7 +243,14 @@ def _floor_metric_entries(record: Mapping[str, Any]) -> list[tuple[str, Mapping[
     for condition in results.get("conditions") or []:
         if not isinstance(condition, Mapping):
             continue
-        label = condition.get("label", condition.get("index"))
+        # `.get("label", default)`'s default fires only on a MISSING key,
+        # and a real condition's record carries `label: null` for an
+        # unswept run — so this must test for `None` explicitly rather
+        # than rely on the two-argument form, or every such line reads
+        # the literal word `None` instead of falling back to `index`.
+        label = condition.get("label")
+        if label is None:
+            label = condition.get("index")
         aggregated = condition.get("aggregated")
         if isinstance(aggregated, Mapping):
             for step, block in aggregated.items():
@@ -265,9 +277,22 @@ def _floor_metric_entries(record: Mapping[str, Any]) -> list[tuple[str, Mapping[
 
     summary = results.get("summary")
     if isinstance(summary, Mapping):
-        for metric, entry in summary.items():
-            if _is_thin_checkable_entry(entry):
-                entries.append((f"summary.{metric}", entry))
+        # `results.summary` is nested by STEP NAME — `run_record.py`'s
+        # `_results_block` writes `summary[e.step_name] =
+        # summary_values(r.returned)` — so a `reported: true` `Estimate`
+        # sits at `summary[step][metric]`, never at `summary[metric]`
+        # directly. `report.py`'s own `_execution_rows` reads the sibling
+        # `execution.get("summary")` block with the identical step-then-
+        # entry nesting; this mirrors that shape rather than reading one
+        # level short of it (a Critical this batch's review found: the
+        # one-level-short walker made every `reported: true` `Estimate`
+        # unreachable on any record `run` actually writes).
+        for step, block in summary.items():
+            if not isinstance(block, Mapping):
+                continue
+            for metric, entry in block.items():
+                if _is_thin_checkable_entry(entry):
+                    entries.append((f"summary.{step}.{metric}", entry))
 
     return entries
 
@@ -399,6 +424,11 @@ def study_add(bundle: Path, run_yaml: Path, name: str) -> list[tuple[str, str]]:
     if isinstance(floor, (int, float)):
         thin = thin_metric_lines(record, floor)
         if thin and not _confirm(thin):
+            # Fix round 1, Minor 3: quitting exits `0` (nothing FAILED —
+            # this is a judgment call, not a refusal) but must not be
+            # silent. Without a printed line, a quit and a completed add
+            # are indistinguishable from the terminal alone.
+            print("Quit — nothing was added to the bundle.")
             return []  # quitting: nothing written, not even a partial copy
 
     redacted = _redact(record)

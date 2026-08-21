@@ -3822,10 +3822,21 @@ def _dispatch_study_new(rest: list[str]) -> int:
     `EXIT_INVOCATION`, never silently dropped the way `_dispatch_generate`
     drops one — a typo'd `--titel` would otherwise write a bundle carrying
     the wrong title, and `E-STUDY-EXISTS` then refuses to let anyone
-    correct it. `test_reference_cli_tables_match_what_the_cli_does` probes
-    this arm from inside this very repository with two junk positionals
-    and no `--title`, so the arity/`--title` check must fire before
-    `study_new` ever touches disk.
+    correct it.
+
+    `test_reference_cli_tables_match_what_the_cli_does` DOES probe this
+    arm from inside this very repository with two junk positionals and no
+    `--title` (`main(["study", "new", "_probe_a", "_probe_b"])`), but — a
+    docstring claim checked and found overreaching in fix round 1 — that
+    test's own `built`-row branch asserts only that stderr carries neither
+    `unknown command` nor `is specified but not built`; it checks no exit
+    code and touches no disk. Removing the arity/`--title` check leaves it
+    passing, because the invocation then falls through to
+    `_refuse_if_in_repo` instead — `_probe_a` resolves inside THIS repo,
+    so `E-STUDY-IN-REPO` fires and neither forbidden phrase appears
+    either way. What actually pins this check is
+    `tests/test_study.py`'s own direct `main(...)` calls, which assert the
+    exit code and (separately) that nothing reached disk.
     """
     positional: list[str] = []
     title: str | None = None

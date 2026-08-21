@@ -7879,3 +7879,15 @@ passages and `W-HYPOTHESIS-INFERENCE-BASE`'s own message owe a rewrite instead.
 `run.yaml` and greps for `basis: "repeats"` finds nothing, in the same document family that treats
 an undated build claim as fact; and `study add`'s own third branch stays forever pinned only against
 a hand-built fixture, never against anything `run` produced.
+
+**AMENDED 2026-08-21 (H8c batch 7, fix round 1): the pin itself was at the wrong nesting, so
+"reachable the day a producer lands" did not follow as written.** The batch 7 review found
+`thin_metric_lines`'s `results.summary` walk read one level too shallow — `run_record.py`'s own
+producer writes `summary[e.step_name] = summary_values(r.returned)`, nested by STEP NAME, while the
+walker (and all three of this branch's pins, including the `basis: "repeats"` one this entry is
+about) treated `summary` as keyed directly by metric name. Fixed in the same commit, with a
+real-run pin (a genuine `summary` step returning two `Estimate`s) added alongside the corrected
+fixture nesting. This closes the reachability gap the amendment names — the `reported: true`
+branch is now genuinely wired to what `run` writes — but it does **not** touch the substance of
+this entry: `basis: "repeats"` is still written nowhere, the disposition question above is
+unchanged, and the entry stays OPEN, Owner: unassigned.

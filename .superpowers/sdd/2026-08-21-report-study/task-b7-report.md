@@ -252,3 +252,127 @@ answering it.
 - The `basis: "repeats"` filing states a disposition question rather than resolving it; whoever
   claims that entry should re-check whether the H4 family's completion still holds before choosing
   a side.
+
+## Fix round 1
+
+Review at `7e5f9b9` (`.superpowers/sdd/2026-08-21-report-study/task-b7-review.md`): both verdicts
+FAILED — one Critical, three Majors (report named two explicitly; folding Major 1 and Major 2 as
+findings below, consistent with the review's own numbering), six Minors. All closed in one commit.
+Gates before this round: mypy 51, format 92, suite 2821/1/2. After: mypy 51, format 92, suite
+**2823/1/2** (+2 net: the Critical's real-run pin and Minor 4's propagate-a-different-code pin;
+every other change edited an existing test in place).
+
+### CRITICAL 1 — `results.summary`'s nesting
+
+Fixed in `_floor_metric_entries` (`src/publishable/study.py`): the `summary` loop now descends
+`for step, block in summary.items(): for metric, entry in block.items():`, matching
+`run_record.py`'s own producer (`summary[e.step_name] = summary_values(r.returned)`) and the
+sibling idiom already in-repo at `report.py`'s `_execution_rows` (`execution.get("summary")`,
+step-then-entry). Entry labels changed from `summary.{metric}` to `summary.{step}.{metric}`.
+
+**Rebuilt the three fixtures the review named** (`tests/test_study.py`): the two `reported: true`
+pins and the `basis: "repeats"` pin all moved their hand-built entry one level deeper, under a
+`"step02_report"` key, so they exercise the corrected nesting rather than agreeing with the bug.
+
+**Added a real-run pin**, `test_thin_metric_lines_finds_reported_estimates_on_a_real_run`: a
+genuine `summary` step (`_SUMMARY_ESTIMATES_STEP`, run through `run_a_project`) returns two
+`Estimate`s — `n=4` (below the floor) and `n=None` (no denominator at all) — and the test asserts
+both `set(summary) == {"step02_report"}` (pinning the nesting itself against the real producer,
+not just against a hand-built shape) and that both show up in `thin_metric_lines`'s output.
+
+**Verified by running against the full, unfiltered suite, twice.** First, with the pre-fix code
+restored and the real-run step source reproducing the review's own repro exactly (an `Estimate`
+with `n=4` and one with `n=None`): `thin_metric_lines` returned `[]` before the fix — confirmed
+independently, not just taken from the review. Second, after landing the fix, I re-broke it as a
+regression check — reverted the `summary` loop to the one-level-short reading and ran the full
+suite: **4 failed, 2819 passed** (the three rebuilt fixtures plus the new real-run pin, all and
+only in `test_study.py`), then reverted by copying the pre-mutation file back and re-ran to confirm
+2823/1/2. **Property-preserving arm:** any test whose record carries no `results.summary` at all
+(every `aggregated`/`vs_baseline`/`contrasts`-only fixture in the file) is unaffected either way,
+since the mutant only changes what happens when a `summary` block is present.
+
+**Corrected the `basis: "repeats"` filing claim** (`docs/superpowers/spec-defects.md`, amended
+entry, dated 2026-08-21): the fix closes the reachability gap for the `reported: true` branch
+(now genuinely wired to what `run` writes) but the amendment is explicit that this does **not**
+touch the entry's substance — `basis: "repeats"` is still written nowhere, the disposition
+question is unchanged, and the entry stays OPEN, Owner: unassigned. The entry is amended rather
+than rewritten, per this file's own convention for a correction against a live record.
+
+### MAJOR 1 — `E-STUDY-UNREADABLE`'s § Errors row
+
+Widened the row (`docs/reference.md`) to name both callers: `report <study.yaml>` reading the
+whole bundle document, and `study add` reading the bundle it is about to add into
+(`_load_study_doc`) before checking anything else. No code change — this is purely correction 6's
+"the row lands in the commit that raises the code," applied one batch late.
+
+### MAJOR 2 — the join arm's exit-code-only assertion
+
+`test_study_new_add_report_join_through_main_end_to_end` now captures stdout around the `report`
+call and asserts `"## main"` and `"## sensitivity"` (the exact heading `_bundle_header_section`
+writes) both appear, plus each run's own `run_id` line. **Verified by running against the full
+suite, both ways.** Confirmed the strengthened assertions pass today. Then mutated
+`report.py`'s `render_bundle` (a one-line change: dropped the `sections.append
+(_bundle_header_section(...))` call, restored by copying the pre-mutation file back afterward,
+never `git checkout`) and ran the full suite: **3 failed** — the join test itself (on the new
+`"## main" in out` assertion) plus two pre-existing `test_report.py` bundle tests. Confirms the
+exact shape the review named: an exit-code-only assertion would have passed this mutant, since
+`main(["report", ...])` still returns `0` when the render is missing its per-member headers.
+Reverted; full suite back to 2823/1/2. **Property-preserving arm:** a mutation that reorders the
+two `study add` calls, or renames a run, leaves both headers present under different labels — the
+assertion would still discriminate correctly on content, just against different names; not tested
+separately since the review's own repro (omitting the header) is the direct hit on what changed.
+
+### MINOR 1 — the docstring crediting the wrong test
+
+Rewrote `_dispatch_study_new`'s docstring (`src/publishable/cli.py`) to state plainly that
+`test_reference_cli_tables_match_what_the_cli_does`'s `built`-row branch checks neither exit code
+nor disk state, that removing the arity/`--title` check still passes it (falling through to
+`_refuse_if_in_repo` instead, since the probe path resolves inside this repo), and that
+`tests/test_study.py`'s own direct `main(...)` calls are what actually pin the property. No test
+change: the existing `test_study_new_probe_arity_from_the_cli_table_test_writes_nothing_here`
+already asserts the exit code directly, which the review confirmed does discriminate.
+
+### MINOR 2 — the prompt's labels
+
+Two independent fixes in `_floor_metric_entries` (`src/publishable/study.py`): the condition label
+now tests `is None` explicitly (`.get("label", default)`'s default fires only on a *missing* key,
+never on a present `null`) before falling back to `index`; and the `by`-strata label no longer
+folds `metric` (which is already the literal string `"by"`) into the path a second time, closing
+the `...by.by[cohort=a]...` doubling. Verified by re-running the no-TTY refusal test with `-s` and
+reading the printed lines directly — confirmed clean (`condition 0.aggregated...by[cohort=a]...`)
+where before they read `condition None.aggregated...by.by[cohort=a]...`.
+
+### MINOR 3 — quitting the prompt is silent
+
+`study_add` now prints `"Quit — nothing was added to the bundle."` (stdout) on the quit path,
+before returning `[]`. `test_study_add_writes_nothing_when_quit_at_a_tty` gained a `capsys`
+assertion for it. Decision 13's own rule ("quitting writes nothing," no exit code specified) is
+unchanged — this only makes the outcome legible at the terminal.
+
+### MINOR 4 — the unpinned "every other `ContractError` propagates" claim
+
+New test, `test_refuse_if_in_repo_propagates_any_other_contracterror_unexamined`: monkeypatches
+`publishable.study.find_repo_root` to raise a `ContractError` coded `E-SOMETHING-ELSE` and asserts
+`study_new` lets it through unchanged. No code change — the claim already held; it needed a
+mutation-shaped fixture, not a fix.
+
+### MINOR 5 — the two weak substring assertions
+
+Both `"new" in err` / `"add" in err` pairs (`tests/test_study.py` and `tests/test_cli.py`)
+replaced with an exact-string comparison against the full usage message. Verified by running: both
+pass against the real message today, and — being exact-string rather than substring — no longer
+pass for "many plausible rewordings" the way the review characterized the original pair.
+
+### MINOR 6 — the unpinned print half of `E-STUDY-CONFIRM-REQUIRED`'s § Errors row
+
+`test_study_add_refuses_with_no_tty_and_writes_nothing` gained a `capsys` assertion: the header
+line and all four `n.completed=6 < 10` entries must reach stdout even though the refusal itself is
+printed to stderr by `main`'s own `except PublishableError`. Verified by running — both streams
+checked in the same test.
+
+### What I did not close, and why
+
+Nothing from the review is left open. The two "Notes for task 16, not findings against this
+batch" items (§ Exit codes' creation-command sentence omitting `E-STUDY-NAME-EXISTS`; `study add`
+performing no `_refuse_if_in_repo` of its own, holding transitively through `study new`) are
+explicitly scoped by the review to task 16's audit, not to this batch — left untouched.

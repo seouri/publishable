@@ -9307,13 +9307,15 @@ def test_a_command_group_with_no_subcommand_gets_a_usage_error_naming_both(capsy
     specified-but-unbuilt diagnostic the group used to get when every
     subcommand it could name was still unbuilt (§ Corrections,
     correction 4) — and `unknown command` would still be the one wrong
-    word for a group the document specifies."""
+    word for a group the document specifies. Pinned to the exact message
+    (fix round 1's Minor 5) rather than to bare substrings of `"new"`/
+    `"add"`, which barely discriminate on their own."""
     assert main(["study"]) == EXIT_INVOCATION
     err = capsys.readouterr().err
-    assert "unknown command" not in err
-    assert "is specified but not built" not in err
-    assert "new" in err
-    assert "add" in err
+    assert err == (
+        "`publishable study` needs a subcommand: `new` or `add` — see "
+        "docs/reference.md § Creation commands\n"
+    )
 
 
 # --- Task 1 (resample-honoured): regression pin — the undeclared-`resample`

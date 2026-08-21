@@ -84,6 +84,25 @@ def test_study_new_direct_call_raises_e_study_in_repo(tmp_path: Path):
     assert exc_info.value.code == "E-STUDY-IN-REPO"
 
 
+def test_refuse_if_in_repo_propagates_any_other_contracterror_unexamined(
+    tmp_path: Path, monkeypatch
+):
+    """Fix round 1, Minor 4: `_refuse_if_in_repo`'s docstring claims every
+    `ContractError` OTHER than `E-GIT-NO-REPO` propagates unexamined — a
+    safety claim with no fixture behind it before this. Pinned by making
+    `find_repo_root` raise a differently-coded one."""
+    import publishable.study as study_module
+
+    def _boom(_path):
+        raise ContractError("simulated failure", code="E-SOMETHING-ELSE")
+
+    monkeypatch.setattr(study_module, "find_repo_root", _boom)
+    bundle = tmp_path / "study"
+    with pytest.raises(ContractError) as exc_info:
+        study_new(bundle, "Title")
+    assert exc_info.value.code == "E-SOMETHING-ELSE"
+
+
 def test_study_new_direct_call_raises_e_study_exists(tmp_path: Path):
     bundle = tmp_path / "study"
     study_new(bundle, "First")
@@ -374,12 +393,16 @@ def test_study_add_arity_probe_from_the_cli_table_test_writes_nothing():
 
 
 def test_study_group_with_no_subcommand_names_both_subcommands_at_exit_2(capsys):
+    """Pinned to the exact message rather than to bare substrings of
+    `"new"`/`"add"` — fix round 1's Minor 5: those two words are
+    substrings of many plausible rewordings and so barely discriminate on
+    their own."""
     assert main(["study"]) == EXIT_INVOCATION
     err = capsys.readouterr().err
-    assert "unknown command" not in err
-    assert "is specified but not built" not in err
-    assert "new" in err
-    assert "add" in err
+    assert err == (
+        "`publishable study` needs a subcommand: `new` or `add` — see "
+        "docs/reference.md § Creation commands\n"
+    )
 
 
 def test_study_group_with_an_unrecognized_subcommand_is_a_usage_error(capsys):
@@ -430,9 +453,19 @@ def test_thin_metric_lines_fixture_n_lists_only_the_thin_strata_a_proper_subset(
 
 
 def test_thin_metric_lines_reported_estimate_with_no_n_is_listed_unconditionally():
+    """Nested by STEP NAME then metric, matching `run_record.py`'s own
+    producer (`summary[e.step_name] = summary_values(r.returned)`) —
+    `results.summary` is never keyed by metric name directly. A hand-built
+    fixture at the wrong nesting is exactly how B7's own review caught
+    Decision 13's second branch dead on every real record: it agrees with
+    the bug it exists to pin."""
     record = _fixture_y_record()
     record["results"] = {
-        "summary": {"site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": None}}
+        "summary": {
+            "step02_report": {
+                "site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": None}
+            }
+        }
     }
     lines = thin_metric_lines(record, 10)
     assert any("declares no n" in line for line in lines)
@@ -441,7 +474,11 @@ def test_thin_metric_lines_reported_estimate_with_no_n_is_listed_unconditionally
 def test_thin_metric_lines_reported_estimate_below_floor_is_listed():
     record = _fixture_y_record()
     record["results"] = {
-        "summary": {"site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": 4}}
+        "summary": {
+            "step02_report": {
+                "site_effect": {"value": 0.3, "reported": True, "ci95": [0.1, 0.5], "n": 4}
+            }
+        }
     }
     lines = thin_metric_lines(record, 10)
     assert any("reported n=4" in line for line in lines)
@@ -450,19 +487,61 @@ def test_thin_metric_lines_reported_estimate_below_floor_is_listed():
 def test_thin_metric_lines_basis_repeats_synthesized_is_compared_against_repeat_count():
     """Nothing in this build writes `basis: "repeats"` (filed in
     `docs/superpowers/spec-defects.md`) — exercised only over this
-    hand-built entry."""
+    hand-built entry, nested by step name then metric to match
+    `run_record.py`'s own producer shape (fix round 1: the original
+    fixture sat one level too shallow, at the same wrong nesting the
+    `reported: true` fixtures above did)."""
     record = _fixture_y_record()
     record["results"] = {
         "summary": {
-            "slow_metric": {
-                "value": 1.2,
-                "basis": "repeats",
-                "repeat_spread": {"std": 0.1, "n": 3, "kind": "seed"},
+            "step02_report": {
+                "slow_metric": {
+                    "value": 1.2,
+                    "basis": "repeats",
+                    "repeat_spread": {"std": 0.1, "n": 3, "kind": "seed"},
+                }
             }
         }
     }
     lines = thin_metric_lines(record, 10)
     assert any("repeat count=3" in line for line in lines)
+
+
+_SUMMARY_ESTIMATES_STEP = """\
+from publishable import BaseStep
+from publishable.estimate import Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{
+            "site_adjusted_delta": Estimate(
+                value=0.041, ci95=(0.012, 0.070), n=4, method="mixed_model"
+            ),
+            "no_denominator": Estimate(value=0.5, ci95=(0.1, 0.9), n=None, method="hand"),
+        }}
+"""
+
+
+def test_thin_metric_lines_finds_reported_estimates_on_a_real_run(tmp_path: Path):
+    """The real-run pin for Critical 1 (fix round 1): a genuine `summary`
+    step returning two `Estimate`s — one below the floor, one declaring no
+    `n` at all — through an actual `run`, never a hand-built record. Before
+    the fix, `results.summary` nested by STEP NAME
+    (`run_record.py`'s `summary[e.step_name] = summary_values(r.returned)`)
+    made every `reported: true` entry invisible to a walker that read one
+    level short, and `thin_metric_lines` returned `[]` here."""
+    built = run_a_project(
+        tmp_path, extra_steps=["report"], extra_step_source=_SUMMARY_ESTIMATES_STEP
+    )
+    record = yaml.safe_load((built["run_dir"] / "run.yaml").read_text())
+    summary = record["results"]["summary"]
+    assert set(summary) == {"step02_report"}  # nested by step name, not by metric
+    lines = thin_metric_lines(record, 10)
+    assert any("reported n=4" in line for line in lines)
+    assert any("declares no n" in line for line in lines)
 
 
 def test_thin_metric_lines_vs_baseline_contrast_entry_is_not_silently_skipped(tmp_path: Path):
@@ -537,7 +616,10 @@ def test_study_add_proceeds_when_confirmed_at_a_tty(tmp_path: Path, monkeypatch)
     assert (bundle / "main.run.yaml").exists()
 
 
-def test_study_add_writes_nothing_when_quit_at_a_tty(tmp_path: Path, monkeypatch):
+def test_study_add_writes_nothing_when_quit_at_a_tty(tmp_path: Path, monkeypatch, capsys):
+    """Fix round 1, Minor 3: quitting exits `0` (a judgment call, not a
+    refusal) but must say so — otherwise a quit and a completed add are
+    indistinguishable from the terminal alone."""
     bundle = tmp_path / "study"
     study_new(bundle, "Title")
     run = _fixture_n_run(tmp_path)
@@ -548,12 +630,17 @@ def test_study_add_writes_nothing_when_quit_at_a_tty(tmp_path: Path, monkeypatch
     assert notices == []
     assert _snapshot(bundle) == before
     assert not (bundle / "main.run.yaml").exists()
+    assert "Quit — nothing was added to the bundle." in capsys.readouterr().out
 
 
-def test_study_add_refuses_with_no_tty_and_writes_nothing(tmp_path: Path, monkeypatch):
+def test_study_add_refuses_with_no_tty_and_writes_nothing(tmp_path: Path, monkeypatch, capsys):
     """M8's own discriminator: asserting only the raised code would pass a
     build that refused AFTER copying — this asserts the bundle holds no
-    new file too."""
+    new file too. Fix round 1, Minor 6: § Errors' `E-STUDY-CONFIRM-
+    REQUIRED` row promises "prints the offending metrics before
+    refusing" — unpinned before this; the four `n.completed=6 < 10` lines
+    must reach STDOUT even though the refusal itself lands on stderr
+    (through `main`'s own `except PublishableError`)."""
     bundle = tmp_path / "study"
     study_new(bundle, "Title")
     run = _fixture_n_run(tmp_path)
@@ -564,6 +651,9 @@ def test_study_add_refuses_with_no_tty_and_writes_nothing(tmp_path: Path, monkey
     assert exc_info.value.code == "E-STUDY-CONFIRM-REQUIRED"
     assert _snapshot(bundle) == before
     assert not (bundle / "main.run.yaml").exists()
+    printed = capsys.readouterr().out
+    assert "The following reported metrics fall below" in printed
+    assert printed.count("n.completed=6 < 10") == 4
 
 
 def test_study_add_uses_the_bundled_records_own_floor_not_a_cwd_config(tmp_path: Path, monkeypatch):
@@ -589,12 +679,18 @@ def test_study_add_uses_the_bundled_records_own_floor_not_a_cwd_config(tmp_path:
     assert not (bundle / "main.run.yaml").exists()
 
 
-def test_study_new_add_report_join_through_main_end_to_end(tmp_path: Path):
+def test_study_new_add_report_join_through_main_end_to_end(tmp_path: Path, capsys):
     """Task 14 step 7: the join no other batch owns. Task 10 renders
     bundles Fixture B hand-builds; tasks 11-14 write bundles nothing
     renders. This is the one end-to-end arm that closes the loop —
     `study new`, `study add` twice, `report <study.yaml>`, all through
-    `main`."""
+    `main`.
+
+    Exit `0` alone passes identically if the render produced nothing
+    (B7's own review mandate names this shape), so this asserts the
+    rendered text names BOTH runs — `## main` and `## sensitivity`,
+    `_bundle_header_section`'s own heading, one per bundled member — and
+    that each carries its own `run_id`, not a shared or empty one."""
     bundle = tmp_path / "study"
     run1 = _real_run(tmp_path, "proj1")
     run2 = _real_run(tmp_path, "proj2")
@@ -609,4 +705,10 @@ def test_study_new_add_report_join_through_main_end_to_end(tmp_path: Path):
         )
         == EXIT_OK
     )
+    capsys.readouterr()  # discard the two `study add` invocations' own output
     assert main(["report", str(bundle / "study.yaml")]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "## main" in out
+    assert "## sensitivity" in out
+    assert f"run_id: {run1['record']['run_id']}" in out
+    assert f"run_id: {run2['record']['run_id']}" in out
