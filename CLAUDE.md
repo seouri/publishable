@@ -25,8 +25,8 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H8b, H8c, H9, and H3c-3's remaining 14 — the H4 and H7 families
-are complete, and H8a is.** Amended twice on 2026-08-14
+**Order of the slices that remain: H8c, H9, and H3c-3's remaining 14 — the H4 and H7 families
+are complete, and H8a and H8b are.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -210,6 +210,32 @@ nothing reordered — **the answer to five earlier slices weakening a pin quietl
 one line off tests a different property** — a claim that a failed read leaves the ledger untouched
 survived its own batch's mutation, which stopped above the existence check rather than above the read.
 
+**H8b (`diff` and `freeze`) merged on 2026-08-21 — the second of H8's three.** `diff` compares two runs,
+or a run and a config, hash by hash — each applicable row as `identical`, `DIFFERS` with its detail
+lines, `not captured`, or `not comparable` (a config side), an `upstream` block when either side
+consumed one — and exits `0` on every comparison it renders, `1` only when an operand can't be read.
+`freeze` re-reads a run's environment and re-probes its apparatus mid-run without executing anything,
+appending to the same ledger `run` writes and reporting a moved fact as a failure rather than deciding
+one — the gate at the next execution is what stops the run. **It retires no refusal and unblocks ZERO
+configs**; the feasibility analysis's four-row table is repeated unchanged, because neither command
+runs at `validate` and no config in it declares an `apparatus_probe` a real plugin backs. `run` gains
+two artifacts — `config.yaml` and `environment/repo_root.txt` — so `freeze` can resolve a
+project-local template's `apparatus_probe` by path after the fact. **Decision 7 is a behaviour change
+to a shipped command, and unlike H7d Part B's it is additive only**: no existing key, verdict, status,
+or exit code moves: two new files land in a run directory nothing already iterates.
+
+Three things worth carrying. **A subprocess probe stood in for a pin again** — `diff`'s CLI arm (exactly
+two paths, no flags) was demonstrated correct by one prose invocation and by nothing else; replacing its
+arity-and-flag guard with a one-line arity check left the full suite green, closed in the batch's own
+fix round. **A seam named in the design had code and no fixture**: Decision 2's rule that a condition key
+present in one side's `apparatus.facts` and absent from the other gets its own line, rather than being
+skipped, was implemented and untested — a bare `continue` in its place passed every test. And **`diff`'s
+`apparatus` row and the run-time change gate were ruled two questions, not one contradiction**: the gate
+asks whether the apparatus moved *during* this run, so a fact answered for the first time
+(`null → value`) passes; `diff` asks whether two runs measured through the same apparatus, so that same
+transition is a real difference and prints `DIFFERS` — no behaviour changed, and `reference.md` § The
+apparatus core can only observe now says so beside the worked example.
+
 **H7d Part B (the apparatus: gate and stop) merged on 2026-08-20 — the apparatus is complete.** A fact
 that moves from its **first *answered*** observation fails the run (`E-APPARATUS-CHANGED`), an
 unreachable apparatus stops it, `EXIT_EXTERNAL` gains its first reader with **5 winning over 3 and 4**,
@@ -349,8 +375,9 @@ every session.
 | Scoping a diagnostic by the helper it calls | `E-TEMPLATE-UNKNOWN` had **two** emit sites; a task scoped by `template_names()`'s single call site missed the second, which went on claiming "no installed template registers" under a § Errors row just rewritten to say otherwise. **§ Errors carries one row per code, not per emit site**, so a diagnostic's unit of work is every site that raises *or* reports it |
 | Reading a subprocess probe as a pin | A probe proves the moment; a test proves tomorrow. H7b Part B's credential-leak fix was verified through the real console script for every shape at both commands — and the reviewer's combined mutation then left the suite **unchanged**, because the fix commit added one test. **Five times in three slices a correct fix shipped unpinned.** Verify by probe, then pin by mutation |
 | Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
+| Reporting **zero disagreements** with the code | **Six consecutive slices' reports claimed it and all six were wrong** — and every one hid in a claim about **other tests or other rows**, never in the implementer's own reasoning about its own code: a docstring asserting *"no existing test asserts this"* when one did, a § Errors row asserted that did not exist, a fixture named that was absent, a brief's *"no fixture can reach it"* that a bare call falsified. **Brief-supplied prose is where zero hides**, because it reads as established rather than as a claim. The check is mechanical and catches all six: **before writing "no existing test asserts X", or repeating any claim a brief makes about the code, grep for it.** Report what you grepped, not a count |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
-| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody — `EXIT_EXTERNAL` was the same fault outside `BaseTemplate` until H7d Part B task 8 gave it its reader) |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody — `EXIT_EXTERNAL` was the same fault outside `BaseTemplate` until H7d Part B task 8 gave it its reader, and that clause is kept deliberately: it is the row's own evidence that it retires entries as readers land) |
 
 ### Writing checks that can fail
 
@@ -369,6 +396,7 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | A mutation applied to a proxy | The extracted helper's body rather than the call site; the fixture rather than the wiring |
 | Varying config **shape** when the property is about roster **content** | Nineteen adversary configs over one roster made every refusal roster-incidental. **A refusal that happens to fire must be attributed before it is counted** |
 | A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
+| A test that **iterates the thing under test** | A vocabulary test looped over `sorted(PHASES)` — the very frozenset under test — so removing a member changed the expectation and the actual together: all four removals failed on `assert 3 == 4` rather than through the guard, and the test's second assertion went **vacuous** under every mutation. **Enumerate the literals the set should contain**, or the test measures only that the set equals itself |
 | A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 | A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
@@ -421,6 +449,23 @@ made by the author of the rule forbidding it, while measuring for it.
   commit. A rewrite invents; a deletion cannot.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+- **A batch with no review is where the findings will be.** Twice a controller ran a slice's final
+  batch straight into the whole-branch gate without a task review. Both times the gate caught the
+  omission itself; the second time **three of its four Majors lived in exactly that unreviewed
+  task** — two § Errors rows narrower than their code and a docstring asserting a filing that does
+  not exist. A documents-and-codes task looks like the safest one to skip and is the one whose
+  output no later batch reads, so **nothing else will find its errors.**
+- **A ruling that overrules a brief has to reach the brief.** A plan correction was overruled when
+  the plan landed, the overruling was recorded in the slice ledger, and the plan was left carrying
+  it — so the brief extracted from that plan still said *delete*, and the task deleted. **The ledger
+  reaches the controller and the reviewers; it reaches no implementer.** Append the correction to
+  the plan when the ruling is made, or restate every live overruling in the dispatch.
+- **Carrying a finding into a brief is necessary and not sufficient.** On one slice a finding routed
+  to a task **fell out of the chain** between the review that raised it and the brief written from it.
+  On the next it was **in the brief, measured, named** — and still not built, while the report claimed
+  guards that existed at no commit. The second is worse than the first: **a report's claim that a
+  carried finding is closed has to be checked against the code like any other claim**, because the
+  carry itself creates the expectation that it was done.
 - **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —

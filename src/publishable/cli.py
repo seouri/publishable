@@ -133,7 +133,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "run"}
+OPERATION_COMMANDS = {"validate", "run", "freeze"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -145,11 +145,9 @@ OPERATION_COMMANDS = {"validate", "run"}
 # number — `docs/reference.md` moves under every edit above the citation.
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
-    "diff": "Operation commands",
     "docs": "Operation commands",
     "draft": "Draft runs",
     "dry-run": "Operation commands",
-    "freeze": "Operation commands",
     "list-templates": "Operation commands",
     "report": "Operation commands",
     "reproduce": "Reproducing on another device",
@@ -2344,6 +2342,13 @@ def command_run(config_path: Path) -> int:
         if lock_path is not None:
             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
+        # `freeze` (H8b) needs the config as it was and the repo it came from — the
+        # two facts a mid-run command cannot otherwise obtain or compute, since
+        # `run.yaml` embeds the config only once, at the end. A byte copy, never a
+        # re-dump: a re-dump would silently drop every comment `init` wrote.
+        (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
+        (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+
         # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
         # the first execution: `docs/reference.md` § The other files a run writes
         # calls it "settled before the first execution and never touched again",
@@ -2459,7 +2464,7 @@ def command_run(config_path: Path) -> int:
             # probe failure here leaves the same shape any other pre-`run.yaml`
             # failure already leaves — no `run.yaml`, everything before it.
             if observer is not None:
-                observer.observe_round(phase="run_start", condition_index=None)
+                observer.observe_round(phase=apparatus.PHASE_RUN_START, condition_index=None)
             # H7d Part B, Decision 3/Decision 5: one `StopSignal` per run,
             # shared by `execute_plan`'s apparatus gate and its
             # `max_failed_fraction` guard. `run_status` below reads
@@ -3722,8 +3727,35 @@ def _dispatch(command: str, rest: list[str]) -> int:
         if len(rest) != 1 or rest[0].startswith("-"):
             print(f"`{command}` takes exactly one path and no flags", file=sys.stderr)
             return EXIT_INVOCATION
-        path = Path(rest[0])
-        return command_validate(path) if command == "validate" else command_run(path)
+        # `freeze` joins the existing one-path arm rather than getting a
+        # second enforcer of the same rule (`_nest_repeat`'s own docstring
+        # argues against two enforcers of one rule). A function-local import:
+        # `freeze.py` imports `cli.declared_credential_names` at module
+        # scope, so `cli.py` importing `freeze` there too would close a
+        # cycle — this is the escape hatch, and it costs nothing since
+        # `_dispatch` is called once per invocation, not once per import.
+        from publishable.freeze import command_freeze
+
+        handlers: dict[str, Callable[[Path], int]] = {
+            "validate": command_validate,
+            "run": command_run,
+            "freeze": command_freeze,
+        }
+        return handlers[command](Path(rest[0]))
+    if command == "diff":
+        # `diff` gets its OWN arm rather than joining `OPERATION_COMMANDS`'s:
+        # that arm enforces exactly ONE path, and `diff` takes exactly TWO —
+        # a second enforcer of a different arity rule, not a second enforcer
+        # of the same one `freeze` joined above (H8b task 11, Decision 5
+        # part 1). Same rejection of a leading `-`, same "no flags" rule
+        # (`design-principles.md` § Everything is in the file): no
+        # `--format`, no `--only`, no selector.
+        if len(rest) != 2 or any(p.startswith("-") for p in rest):
+            print("`diff` takes exactly two paths and no flags", file=sys.stderr)
+            return EXIT_INVOCATION
+        from publishable.diff import command_diff
+
+        return command_diff(Path(rest[0]), Path(rest[1]))
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION

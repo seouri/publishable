@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from publishable.hashes import code_hash, design_digest, parameters_hash, short
+from publishable.hashes import code_hash, covered_config, design_digest, parameters_hash, short
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -337,3 +337,123 @@ def test_the_seed_exclusion_never_raises_on_a_shape_it_did_not_expect():
     Each of these must return a digest instead of raising."""
     for holdout in ("nonsense", ["a", "list"], 3, None):
         assert design_digest({"data": {"units": {"holdout": holdout}}}).startswith("sha256:")
+
+
+# --- H8b task 13, arm G: parameters_hash agrees with its own embedded ------
+# config. Captured at `0a636af` by running. NEVER MOVES IN THIS SLICE — task 7
+# rewrites `parameters_hash`'s body (extracting `covered_config`) without
+# changing what it hashes, and this arm is the pin that would catch it if it
+# did.
+
+
+def test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config(tmp_path: Path):
+    """The first sub-arm needs a real run, so it drives one —
+    `test_h8b_arm_g_metadata_only_change_is_identical` and
+    `test_h8b_arm_g_max_failed_fraction_change_differs` are pure-function
+    checks and need none. No existing test in this file compares
+    `parameters_hash` against a real `run.yaml`'s own recorded value; every
+    existing test here calls the function directly on a hand-built dict.
+    This is new coverage."""
+    import yaml
+    from tests.test_cli import run_a_project
+
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert parameters_hash(run_doc["config"]) == run_doc["parameters_hash"]
+
+
+def test_h8b_arm_g_metadata_only_change_is_identical():
+    """Fixture M's first arm, at the function level. `metadata.description`
+    moves, nothing else. This is the SAME claim
+    `test_parameters_hash_excludes_metadata_and_the_two_paths` already makes
+    (over a different literal — `metadata.name`/`description` together
+    there, `description` alone here) — restated for arm G's own record, not
+    new coverage."""
+    base = {
+        "experiment_type": "generic",
+        "metadata": {"name": "a", "description": "one"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+        "limits": {"max_failed_fraction": 0.1},
+    }
+    changed = {**base, "metadata": {**base["metadata"], "description": "a different description"}}
+    assert parameters_hash(base) == parameters_hash(changed)
+
+
+def test_h8b_arm_g_max_failed_fraction_change_differs():
+    """Fixture M's second arm, at the function level: `limits` is inside the
+    hash, so a `limits.max_failed_fraction` edit and nothing else must
+    differ. No existing test in this file edits `limits` specifically — the
+    nearest neighbour edits `data.input_manifest_policy` — so this is new
+    coverage for this key, even though it is the same *shape* of assertion
+    as the existing `parameters.analysis.method` edit."""
+    base = {
+        "experiment_type": "generic",
+        "metadata": {"name": "a", "description": "one"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+        "limits": {"max_failed_fraction": 0.1},
+    }
+    changed = {**base, "limits": {"max_failed_fraction": 0.9}}
+    assert parameters_hash(base) != parameters_hash(changed)
+
+
+def test_h8b_covered_config_is_the_exact_projection_parameters_hash_hashes():
+    """H8b task 7, Decision 3: `covered_config` is the extraction of
+    `parameters_hash`'s own inline projection — every top-level key except
+    `metadata`, with `data` narrowed to everything but `input_dir` and
+    `output_dir`. This is the pin that `parameters_hash` now calls
+    `covered_config` rather than reimplementing it: hashing `covered_config`'s
+    own return must equal `parameters_hash`'s output, for a config carrying
+    every excluded field at once so the projection is exercised on all three
+    exclusions in one fixture."""
+    import hashlib
+    import json
+
+    config = {
+        "experiment_type": "generic",
+        "metadata": {"name": "a", "description": "one", "authors": ["x"]},
+        "data": {
+            "input_dir": "/x",
+            "output_dir": "/y",
+            "input_manifest_policy": "hash_all",
+            "units": {"key": "patient_id"},
+        },
+        "parameters": {"analysis": {"method": "pearson"}},
+        "limits": {"max_failed_fraction": 0.1},
+    }
+    covered = covered_config(config)
+    assert "metadata" not in covered
+    assert "input_dir" not in covered["data"]
+    assert "output_dir" not in covered["data"]
+    assert covered["data"]["input_manifest_policy"] == "hash_all"
+    assert covered["data"]["units"] == {"key": "patient_id"}
+    assert covered["parameters"] == {"analysis": {"method": "pearson"}}
+    assert covered["limits"] == {"max_failed_fraction": 0.1}
+    canonical = json.dumps(covered, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    expected = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    assert parameters_hash(config) == expected
+
+
+def test_h8b_covered_config_does_not_mutate_input():
+    """The same non-mutation property `test_parameters_hash_does_not_mutate_input`
+    pins for `parameters_hash`, restated directly against the extracted
+    function — `covered_config` builds new dicts rather than editing the
+    caller's."""
+    config = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    before = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    covered_config(config)
+    assert config == before

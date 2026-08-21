@@ -937,3 +937,554 @@ def test_the_ordering_chain_records_before_it_gates(tmp_path):
         apparatus_mod.check_changed = real_check_changed
 
     assert order == ["record", "check_changed"], order
+
+
+# --- H8b task 1: `replay_ledger` — the baseline, replayed through the
+# shipped `Observations` -------------------------------------------------
+
+
+def _write_ledger(run_dir, lines):
+    import json
+
+    ledger_dir = run_dir / "apparatus"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    (ledger_dir / "probes.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+_H8B_T1_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h8b_t1_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": cfg.parameters.instrument.model})
+"""
+
+_H8B_T1_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h8b_t1_assay")
+class H8bT1Assay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h8b_t1_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+
+def test_replay_ledger_against_a_real_run_reproduces_provenance_apparatus_facts(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture P's shape, driven to completion: a synthetic installed
+    distribution registering a probe, a project-local template declaring
+    `apparatus_probe`/`apparatus_facts`, two swept conditions. The pin is
+    that `replay_ledger`'s `facts_document()` reproduces
+    `provenance.apparatus.facts` — both read back from the artifacts a real
+    `run` wrote (`apparatus/probes.jsonl`, `run.yaml`), never asserted as a
+    literal. This is the arm that pins that the reader reads what the
+    writer wrote."""
+    import yaml
+    from tests.test_cli import run_a_project
+
+    from publishable.apparatus import replay_ledger
+    from publishable.diagnostics import EXIT_OK
+
+    site = installed(
+        "dist-h8b-t1", "1.0", {"publishable.probes": {"h8b_t1_probe": "h8b_t1_probe_mod:probe"}}
+    )
+    (site / "h8b_t1_probe_mod.py").write_text(_H8B_T1_PROBE_MODULE)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h8b_t1_assay",
+        parameters={"instrument": {"model": "m1"}},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H8B_T1_TEMPLATE,
+        expect_exit=EXIT_OK,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    observations = replay_ledger(doc["run_dir"])
+    assert observations.facts_document() == run["provenance"]["apparatus"]["facts"]
+    assert {v["model_revision"] for v in observations.facts_document().values()} == {"m1", "m2"}
+
+
+def test_replay_ledger_two_conditions_scope_independently(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_a",
+                "probe": "p",
+                "facts": {"f": "x"},
+            },
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "01_b",
+                "probe": "p",
+                "facts": {"f": "y"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_a": {"f": "x"}, "01_b": {"f": "y"}}
+
+
+def test_replay_ledger_null_then_value_keeps_the_answer(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "v"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": "v"}}
+
+
+def test_replay_ledger_value_then_null_keeps_the_answer(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "v"},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": "v"}}
+
+
+def test_replay_ledger_excludes_freeze_and_dry_run_lines_from_the_baseline(tmp_path):
+    """Decision 9: only `run_start`/`pre_execution` lines feed the baseline.
+    A well-formed `freeze` line and a well-formed `dry_run` line, each
+    answering the fact a `run_start` line left `null`, must both be
+    invisible to `facts_document()` — the fact stays `null`."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": None},
+            },
+            {
+                "at": "t",
+                "phase": "freeze",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "from-freeze"},
+            },
+            {
+                "at": "t",
+                "phase": "dry_run",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "from-dry-run"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {"00_x": {"f": None}}
+
+
+def test_replay_ledger_an_unrecognized_phase_is_skipped_not_refused(tmp_path):
+    """The ledger is append-only; a phase this build has no name for must not
+    make an old `freeze` unable to read a newer run's ledger."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "some_future_phase",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"f": "z"},
+            }
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json at all {{{",
+        # Batch 4 review, Minor 2: `[1, 2, 3]` is caught by the NEXT guard
+        # (the missing-keys check: `"phase" not in [1, 2, 3]` is `True`)
+        # regardless of whether the `isinstance(doc, Mapping)` guard exists
+        # at all — deleting that guard left every arm here green. A JSON
+        # array containing the three key STRINGS as elements is what the
+        # missing-keys check cannot catch (`"phase" in doc` is `True` for a
+        # list holding the string `"phase"`), so this fixture reaches
+        # `doc["phase"]` next — a `TypeError` if the `Mapping` guard is
+        # gone, `E-FREEZE-LEDGER-UNREADABLE` if it is there.
+        '["phase", "condition", "facts"]',
+        '{"phase": "run_start", "condition": "00_x"}',
+    ],
+    ids=["not-json", "not-a-mapping", "missing-facts"],
+)
+def test_replay_ledger_a_malformed_line_is_E_FREEZE_LEDGER_UNREADABLE(tmp_path, raw):
+    from publishable.apparatus import replay_ledger
+    from publishable.errors import ContractError
+
+    ledger_dir = tmp_path / "apparatus"
+    ledger_dir.mkdir()
+    (ledger_dir / "probes.jsonl").write_text(raw + "\n")
+
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path)
+    assert excinfo.value.code == "E-FREEZE-LEDGER-UNREADABLE"
+
+
+def test_replay_ledger_with_no_ledger_file_returns_an_empty_observations(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+def test_replay_ledger_with_an_empty_ledger_file_returns_an_empty_observations(tmp_path):
+    from publishable.apparatus import replay_ledger
+
+    ledger_dir = tmp_path / "apparatus"
+    ledger_dir.mkdir()
+    (ledger_dir / "probes.jsonl").write_text("")
+    observations = replay_ledger(tmp_path)
+    assert observations.facts_document() == {}
+
+
+def test_m8_fixture_a_second_freezes_own_answer_agrees_because_freeze_lines_are_excluded(
+    tmp_path,
+):
+    """Decision 9's stated risk, pinned directly (Mutation M8's non-mutated
+    half — see the task report for the mutated half, which needs editing
+    `replay_ledger`'s filter and is exercised by hand rather than shipped).
+
+    A `run_start` line leaves `pinned` `null`; a constructed `freeze` line
+    (task 6 builds the real `freeze` command; this ledger is hand-written
+    to stand in for one) answers it `"a"`. `replay_ledger` must exclude that
+    line, so a SECOND freeze's own `record`-then-`changed` call — simulating
+    what `freeze` does against the replayed baseline — sees no prior answer,
+    adopts `"b"` as this pair's first-answered value via `record`, and then
+    `changed` compares `"b"` against the value it just adopted: no
+    contradiction. Were the `freeze` line admitted to the baseline instead,
+    `record` would find the pair already answered `"a"` and never overwrite
+    it, and `changed` would then report `"a"` vs `"b"` as a contradiction —
+    two different exit codes downstream, not two different internal states."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "run_start",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": None},
+            },
+            {
+                "at": "t",
+                "phase": "freeze",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "a"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    observations.record("00_x", {"pinned": "b"})
+    assert observations.changed("00_x", {"pinned": "b"}) is None
+
+
+def test_m9_fixture_the_baseline_is_first_answered_not_most_recent(tmp_path):
+    """Mutation M9's fixture: `pinned` goes `r1 → null → r2` across three
+    `pre_execution` lines — the one transition that distinguishes *first
+    answered* from *most recent*, since with only two values the first is
+    also the last-but-one. Under the shipped rule the baseline is `r1`, so
+    an incoming `r1` agrees. `replay_ledger` calling `Observations.record`
+    per line (rather than assigning `_first_answered[pair]` unconditionally
+    per line) is what this pins; see the task report for the mutated run."""
+    from publishable.apparatus import replay_ledger
+
+    _write_ledger(
+        tmp_path,
+        [
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "r1"},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": None},
+            },
+            {
+                "at": "t",
+                "phase": "pre_execution",
+                "condition": "00_x",
+                "probe": "p",
+                "facts": {"pinned": "r2"},
+            },
+        ],
+    )
+    observations = replay_ledger(tmp_path)
+    observations.record("00_x", {"pinned": "r1"})
+    assert observations.changed("00_x", {"pinned": "r1"}) is None
+
+
+# --- H8b task 2: `PHASES`, the four constants, and the assert ------------
+
+
+def test_phases_is_exactly_the_four_named_constants():
+    from publishable.apparatus import (
+        PHASE_DRY_RUN,
+        PHASE_FREEZE,
+        PHASE_PRE_EXECUTION,
+        PHASE_RUN_START,
+        PHASES,
+    )
+
+    assert PHASES == {PHASE_RUN_START, PHASE_PRE_EXECUTION, PHASE_DRY_RUN, PHASE_FREEZE}
+    assert PHASES == {"run_start", "pre_execution", "dry_run", "freeze"}
+
+
+def test_append_observation_accepts_each_of_the_four_named_phases(tmp_path):
+    """Mutation M7's non-mutated arm: one call per name, each landing its own
+    line carrying its own `phase`. **Iterates the four LITERAL spellings,
+    never `PHASES` itself** (batch B2 review, Major 1: the first version of
+    this test looped over `sorted(PHASES)`, so a removed name was never
+    passed to `append_observation` at all — the expectation and the actual
+    moved together, all four removals failed on one arithmetic assertion
+    identically, and none through the guard being tested). Removing any one
+    of the four literal spellings from `PHASES` now turns THAT SPELLING's
+    own call into an `AssertionError`, fired at the removed name — run once
+    per name removed, exercised by hand and reported in the task report
+    rather than shipped as a mutated permanent test."""
+    import json
+
+    from publishable.apparatus import append_observation
+
+    for phase in ("run_start", "pre_execution", "dry_run", "freeze"):
+        append_observation(tmp_path, phase=phase, condition="00_x", probe="p", facts={})
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert len(lines) == 4
+    assert [line["phase"] for line in lines] == [
+        "run_start",
+        "pre_execution",
+        "dry_run",
+        "freeze",
+    ]
+
+
+def test_append_observation_refuses_a_fifth_spelling_before_writing_anything(tmp_path):
+    """The re-measured claim this task closes: at this branch's own prior
+    commit, this same call wrote `"BOGUS_FIFTH_SPELLING"` verbatim to
+    `probes.jsonl` — the docstring's "closed vocabulary of four" was an
+    unenforced claim. Now it raises `AssertionError` before the `mkdir`
+    even runs, naming the offending value and all four legal names, and
+    leaves no line on disk. Mutation M6's non-mutated arm: moving the
+    assert below the write (exercised by hand, reported in the task
+    report) would still raise but leave the bogus line behind — only the
+    ledger's own content distinguishes the two placements."""
+    from publishable.apparatus import append_observation
+
+    with pytest.raises(AssertionError) as excinfo:
+        append_observation(
+            tmp_path, phase="BOGUS_FIFTH_SPELLING", condition="00_x", probe="p", facts={}
+        )
+    message = str(excinfo.value)
+    assert "BOGUS_FIFTH_SPELLING" in message
+    for name in ("run_start", "pre_execution", "dry_run", "freeze"):
+        assert name in message
+    assert not (tmp_path / "apparatus" / "probes.jsonl").exists()
+
+
+def test_cli_and_runner_call_sites_pass_the_named_constants():
+    """Enumerated by READING `cli.py` and `runner.py` for every place a
+    `phase` string can originate (§ Answering a question with a proxy: a
+    grep for one spelling is the fourth proxy and shipped a credential
+    leak once already) and confirmed afterwards with a grep for `phase=`
+    across `src/publishable/*.py`, in that order: exactly two core call
+    sites pass a phase at all — `cli.command_run`'s run-start round and
+    `runner.execute_plan`'s per-execution round — and both now read a
+    constant rather than a literal, checked here by source inspection so a
+    reversion of EITHER OF THESE TWO SITES back to a bare string fails
+    this test rather than only failing silently under `python -O`.
+
+    **This pin's own scope is exactly these two function bodies** (batch
+    B2 review, Minor 3) — it inspects `command_run` and `execute_plan` and
+    nothing else, so a hypothetical THIRD literal call site added
+    elsewhere in `src/publishable/` would not be caught by this test; the
+    completeness claim ("there is no third site") rests on the
+    reading-then-grep enumeration in the task report, not on this
+    assertion alone."""
+    import inspect
+
+    from publishable import cli as cli_mod
+    from publishable import runner as runner_mod
+
+    cli_source = inspect.getsource(cli_mod.command_run)
+    assert "phase=apparatus.PHASE_RUN_START" in cli_source
+    assert 'phase="run_start"' not in cli_source
+
+    runner_source = inspect.getsource(runner_mod.execute_plan)
+    assert "phase=apparatus.PHASE_PRE_EXECUTION" in runner_source
+    assert 'phase="pre_execution"' not in runner_source
+
+
+# --- Fix round 1, Major 2: the surviving shape of `append_observation`'s
+# assert firing, pinned by a real run rather than left only in a docstring
+
+
+def test_the_run_start_fire_leaves_no_run_yaml_no_executions_and_no_lock(
+    installed, registries, tmp_path, monkeypatch
+):
+    """The docstring's run-start half, re-measured for this fix round rather
+    than carried a second time: `append_observation`'s assert is the
+    function's FIRST statement, above the `mkdir`, so `apparatus/` cannot
+    exist when it fires on the run-start round — the earlier docstring's
+    claim that it did was carried from a differently-labelled measurement
+    (batch B2 review, Major 2) and has since been deleted rather than
+    rewritten. What is pinned here is only what was independently
+    re-measured: the traceback is uncaught, `run.yaml` and
+    `executions.jsonl` are both absent, and `lock` is gone."""
+    from tests.test_cli import run_a_project
+
+    import publishable.apparatus as apparatus_mod
+
+    site = installed(
+        "dist-fix1-a", "1.0", {"publishable.probes": {"h8b_t1_probe": "fix1a_probe_mod:probe"}}
+    )
+    (site / "fix1a_probe_mod.py").write_text(_H8B_T1_PROBE_MODULE)
+
+    real_append = apparatus_mod.append_observation
+    calls = {"n": 0}
+
+    def patched(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise AssertionError("fix-round-1 probe: forced run-start fire")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(apparatus_mod, "append_observation", patched)
+
+    with pytest.raises(AssertionError, match="forced run-start fire"):
+        run_a_project(
+            tmp_path,
+            experiment_type="h8b_t1_assay",
+            parameters={"instrument": {"model": "m1"}},
+            sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+            _local_template=_H8B_T1_TEMPLATE,
+            expect_exit=1,
+        )
+
+    run_dirs = list((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "executions.jsonl").exists()
+    assert not (run_dir / "lock").exists()
+
+
+def test_a_later_pre_execution_fire_leaves_one_paid_execution_and_no_run_yaml(
+    installed, registries, tmp_path, monkeypatch
+):
+    """The docstring's later-`pre_execution`-fire half: one execution already
+    paid for, `run.yaml` absent, `lock` gone — `CLAUDE.md`'s own phrase,
+    measured rather than quoted. The fourth `append_observation` call (two
+    run-start calls, then the first execution's `pre_execution` call) is
+    where the fire lands under this template's two-condition sweep."""
+    from tests.test_cli import run_a_project
+
+    import publishable.apparatus as apparatus_mod
+
+    site = installed(
+        "dist-fix1-b", "1.0", {"publishable.probes": {"fix1b_probe": "fix1b_probe_mod:probe"}}
+    )
+    (site / "fix1b_probe_mod.py").write_text(
+        _H8B_T1_PROBE_MODULE.replace("h8b_t1_probe", "fix1b_probe")
+    )
+    template = _H8B_T1_TEMPLATE.replace("h8b_t1_probe", "fix1b_probe").replace(
+        "h8b_t1_assay", "fix1b_assay"
+    )
+
+    real_append = apparatus_mod.append_observation
+    calls = {"n": 0}
+
+    def patched(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 4:
+            raise AssertionError("fix-round-1 probe: forced later pre_execution fire")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(apparatus_mod, "append_observation", patched)
+
+    with pytest.raises(AssertionError, match="forced later pre_execution fire"):
+        run_a_project(
+            tmp_path,
+            experiment_type="fix1b_assay",
+            parameters={"instrument": {"model": "m1"}},
+            sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+            _local_template=template,
+            expect_exit=1,
+        )
+
+    run_dirs = list((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert not (run_dir / "run.yaml").exists()
+    assert not (run_dir / "lock").exists()
+    executions = (run_dir / "executions.jsonl").read_text().splitlines()
+    assert len(executions) == 1

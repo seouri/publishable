@@ -57,13 +57,34 @@ def _canonical(payload: Any) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def parameters_hash(config: dict[str, Any]) -> str:
-    """Everything in the config except `metadata` and the two host paths."""
+def covered_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Everything in the config except `metadata` and the two host paths.
+
+    This is `parameters_hash`'s own projection, extracted rather than
+    reimplemented (H8b task 7, Decision 3) so the hash and `diff`'s parameter
+    delta walk read the SAME coverage — one function is how the two do not
+    drift, on the argument H8a's `read_run_record` already made for importing
+    `SCHEMA_VERSION` rather than restating it. `data.input_dir`/`output_dir`
+    are host paths, not declarations, and excluded for the same reason
+    `metadata` is: neither is part of "same code, different parameters."
+
+    **Does not normalize.** § Three hashes' "Values are normalized to what
+    `init` would have materialized before hashing" is not implemented here —
+    see `docs/superpowers/spec-defects.md` §
+    "`parameters_hash` does not normalize to what `init` would have
+    materialized", an OPEN gap owned by H6. Closing it needs the template's
+    `parameter_spec`, which this function deliberately does not take.
+    """
     covered = {k: v for k, v in config.items() if k != "metadata"}
     data = covered.get("data")
     if isinstance(data, dict):
         covered["data"] = {k: v for k, v in data.items() if k not in ("input_dir", "output_dir")}
-    return _prefixed(hashlib.sha256(_canonical(covered)).hexdigest())
+    return covered
+
+
+def parameters_hash(config: dict[str, Any]) -> str:
+    """sha256 over `covered_config(config)`'s canonical JSON."""
+    return _prefixed(hashlib.sha256(_canonical(covered_config(config))).hexdigest())
 
 
 def _units_excluding_drawn_seeds(units: Any) -> Any:

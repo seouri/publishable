@@ -1124,6 +1124,21 @@ checkboxes below are this task's work items, and the two are deliberately not th
         probing now would pin a fact the run's own gate never adopted. Task 1 returns an empty
         `Observations` for both an absent file and a file with no qualifying line; **this code covers
         both**, because the remedy is identical.
+      - **Carried forward from task 1's batch review (Major 3), not closed there and not this task's
+        to skip.** `replay_ledger`'s `E-FREEZE-LEDGER-UNREADABLE` guard checks key PRESENCE only, not
+        shape: a line whose `facts` value is present but not a mapping (`null`, a list) raises a bare
+        `AttributeError` out of `Observations.record` rather than being refused, and a line whose
+        `condition` value is present but not a `str` (an `int`, say) is accepted silently and yields
+        an int-keyed baseline that reads as "never answered" — a quieter fail-open, since it lets
+        `freeze` adopt a pin it should have refused to compute at all. Both are exactly the
+        edited-or-truncated-file class this refusal exists for, and the § Errors row task 12 writes
+        for `E-FREEZE-LEDGER-UNREADABLE` gives the cause as "the file was edited or truncated" — a
+        cause this task's own gate cannot currently honour for these two shapes. Once this task wires
+        `freeze`, `main` catches only `PublishableError`/`OSError`, so an `AttributeError` here becomes
+        an uncaught traceback rather than a diagnostic. **Repair, under code that already exists**:
+        extend `replay_ledger`'s guard to also require `isinstance(doc["facts"], Mapping)` and
+        `isinstance(doc["condition"], str)` before calling `Observations.record`, reported as the same
+        one code.
       - **`E-FREEZE-PROBE-MISMATCH`** is the one that is easy to miss. `templates/**` is hashed but
         freely **editable while a run executes**, and `freeze` resolves the template **now**. Probing a
         different apparatus than the run measures through, and then reporting `unchanged`, is worse
@@ -2309,3 +2324,24 @@ eleventh entry about one.
 - **Three filings are named as NOT to be struck** (H6's normalization, H9's upstream hash, the
   unassigned truncation), because a plan that renders a gap correctly and strikes it has closed
   someone else's work by accident.
+
+---
+
+## Correction appended 2026-08-21 — § Corrections against the code, item 4 was overruled and this plan did not say so
+
+**Correction 4 claimed `CLAUDE.md`'s `EXIT_EXTERNAL` clause was "already false" and self-contradicting,
+and instructed its deletion. The controller overruled it as itself false** when the plan landed: the
+clause reads *"`EXIT_EXTERNAL` **was** the same fault outside `BaseTemplate` **until** H7d Part B task 8
+gave it its reader"* — past tense, and consistent with the sentence naming `field_convention` as the sole
+remaining example. **Deleting it removes the row's own evidence that it retires entries as readers land**,
+which is the property that makes the row self-maintaining.
+
+**The overruling was recorded in the slice ledger and NOT here — so task 12's brief, extracted from this
+plan, still carried correction 4, and task 12 deleted the clause exactly as instructed.** The clause has
+been restored with its reason attached.
+
+**The process lesson, which is the symmetric twin of one already recorded:** a finding carried *into* a
+brief still has to be verified as built. **A ruling that OVERRULES a brief has to reach the brief** —
+recording it in the ledger reaches the controller and the reviewers, and reaches no implementer, because
+briefs are extracted from the plan. Either append the correction to the plan when the ruling is made, or
+restate every live overruling in the dispatch itself.

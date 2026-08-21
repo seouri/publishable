@@ -4200,6 +4200,24 @@ converts the same `TypeError` into `E-SWEEP-SAMPLE-INVALID` for its own callers,
 `expand`'s "raises `PublishableError`" contract true but does **not** close this, since `cli`
 reaches the digest first.
 
+**AMENDED 2026-08-21 (H8b whole-branch fix round): the same `TypeError` class reaches two more
+call sites this entry did not name, and one of the three is now closed — locally, not by this
+entry's own fix.** `hashes.parameters_hash` (via `hashes._canonical`'s `json.dumps`) hits the
+identical fault over `covered_config(config)` — a wider projection than `data.units` alone, since
+it covers everything but `metadata`/the two host paths, so a bare date in `limits`, `statistics`,
+or an unknown top-level key reaches it too, not only `data.units`. Two callers were exposed:
+`cli.command_run` (writing `run.yaml`'s `parameters_hash`, still open, still H3's — `run` validates
+first in the ordinary path but a `draft` or a config that otherwise validates clean with a stray
+date in, say, `limits` is not caught by any existing check) and `diff._parameters_hash_for`, which
+H8b's whole-branch review found tracebacking a config operand after printing four rows
+(`src/publishable/diff.py`). **`diff`'s instance is closed**, in `diff.py` itself: a `try`/`except
+TypeError` around the one call that recomputes a config side's hash fresh, reraising as
+`E-DIFF-CONFIG-UNREADABLE` — the sibling refusal a config operand `diff` cannot read already
+carries, chosen over minting a tenth `E-FREEZE`-adjacent code. That closes `diff`'s **surface**, not
+this entry's: `run`'s own crash — the one this entry was filed for — is untouched, still reachable
+from `command_run`, still H3's to close at the `validate`-time or `design_digest`-canonicalization
+level this entry already names as the real decision. Not struck.
+
 ## ~~RETIRING `E-SWEEP-ABLATE-UNSUPPORTED` OPENED A WINDOW UNTIL TASK 5 LANDS~~ CLOSED
 
 **Found by:** H2 Sweeps, Task 4 review, reading what the retired refusal was also doing.
@@ -7530,3 +7548,212 @@ which is already canonical under pytest, so no shipped test is affected either w
 against the function itself, for the next caller that does not route through `find_repo_root`.
 
 **Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
+
+## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: H9**
+
+`src/publishable/templates/discovery.py`'s `_import_file` builds its spec through
+`importlib.util.spec_from_file_location`, which hands back an ordinary `SourceFileLoader` — the
+loader that consults `__pycache__/<stem>.<tag>.pyc` and treats a cached entry as valid whenever the
+source file's `(mtime, size)` matches what the `.pyc` recorded. `mtime` on the filesystems this was
+measured against (macOS APFS, a Linux tmpfs) carries whole-second resolution, so two writes to the
+same `templates/*.py` path inside one process, one second apart or less, can leave the SECOND
+import serving the FIRST write's compiled bytecode — silently, with no exception and no diagnostic.
+
+**Verified by running**, 2026-08-20, against a `_claims(root)` call pair with no test harness
+involved: write a template file declaring `apparatus_probe = "f_probe"`, resolve it, overwrite the
+same path with a template declaring `apparatus_probe = "g_probe"`, resolve again — the second
+resolution answers `"f_probe"`, the FIRST file's value. Inserting a `time.sleep(1.2)` between the
+two writes makes the second resolution answer correctly (`"g_probe"`); inserting an unrelated
+`print()` call between them was independently observed to change the outcome too, which is exactly
+the shape a caller would misdiagnose as flakiness rather than a caching defect, since nothing about
+the *code being tested* changed — only how much wall-clock time elapsed around it.
+
+**Why this is `freeze`'s problem too, not only `discover_local`'s.** H8b's `freeze` resolves the
+run's template `_claims(repo_root)` fresh at invocation, exactly so an edit to `templates/**` made
+while a run executes is seen — `E-FREEZE-PROBE-MISMATCH`'s whole premise is that `freeze` re-reads
+the tree rather than trusting what the run captured. A `templates/*.py` edited and a `freeze`
+invoked inside the same wall-clock second as an EARLIER resolution in the same process (another
+`freeze`, or a `validate`/`run` that resolved the same repo moments before) can silently see the
+stale file. This is unlikely to matter for two separate CLI invocations, each its own process with
+a cold `sys.modules`/no relevant in-memory state — but it is real within one long-lived process
+(a test suite, a notebook, a future daemon wrapping `freeze`) and was reproduced with no test
+harness at all, so it is a property of `_import_file`, not an artifact of how a test happened to
+call it.
+
+**Not a batch defect.** H8b's own tests avoid it by writing a template's edited content under a
+NEW filename rather than overwriting the path a prior resolution already read in the same process
+— worked around, not fixed, and noted at each call site in `tests/test_freeze.py`. No shipped
+test in this repo overwrites a `templates/*.py` path and re-resolves within the same process, so
+nothing already green depends on the stale answer.
+
+**The check its owner must make.** Two options. (a) Force recompilation: passing `check=False` to
+`spec_from_file_location` does not help — the loader still consults the cache — so the fix is more
+likely handing it a fresh `importlib.machinery.SourceFileLoader(module_name, str(path))` explicitly,
+or a belt-and-suspenders `sys.dont_write_bytecode = True` scoped around the import (module-global,
+so audit it for side effects on any concurrent import elsewhere in the process). (b) Document the
+weaker property instead: `discover_local` is resolved fresh per **process**, never guaranteed
+fresh per **call** — which would make the phrase "resolves the template NOW" (a code comment in
+`src/publishable/freeze.py`, not a claim `reference.md` makes anywhere) imprecise and in need of
+its own correction there. **Re-owned 2026-08-21 (H8b whole-branch fix round): H8b's task 12 has
+finished and did not take option (b)**, so the owner line naming it as a live alternative would read
+as work nobody holds — per CLAUDE.md, *"re-owner a deferral when the slice that filed it finishes."*
+**H9** owns both options now: (a) sits naturally with it regardless, since it resolves the same
+template from the same two run-start artifacts for `resume` and would inherit this exact hazard;
+(b), the narrower documentation-only fix, is no longer anyone's to take in passing and is H9's to
+weigh against (a) rather than default to.
+
+**Found by:** H8b task 4/6, while building a fixture for `E-FREEZE-PROBE-MISMATCH` (`tests/
+test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
+resolved the pre-edit class.
+
+## ~~`diff`'s `apparatus` row reports `DIFFERS` on a `null → value` transition the gate deliberately permits~~ — RULED not a divergence, 2026-08-21
+
+**Ruled by the controller, 2026-08-21: these are not two answers to one question — they are two
+questions.** The filing below states both readings faithfully and is kept for that reasoning; what it
+lacked is the observation that the gate and `diff` are asking different things.
+
+**The gate asks: did the apparatus move DURING this run?** Part B's Decision 1 compares against the
+first *answered* observation, so `null → value` is a fact **being answered for the first time**, not a
+fact changing — which is why it does not fail the run.
+
+**`diff` asks: did these two runs measure through the same apparatus?** A fact one run answered and the
+other did not is a **real difference between the runs**, and `diff`'s job is to report it. Suppressing it
+would make two genuinely different observation sets read as `identical`, which is the opposite of the
+failure mode `not captured` was minted to prevent.
+
+**So no behaviour changes**, and the remedy is one sentence in `reference.md` saying why the two rules
+differ — because a reader who knows the gate's tolerance will otherwise read `diff`'s row as a bug, which
+is exactly what happened here. **AMENDED 2026-08-21 (H8b task 12): CLOSED.** The sentence landed in
+`reference.md` § The apparatus core can only observe, directly beside the fenced `diff` example this
+filing's own reproduction quotes — task 12 was already editing that section for the ASCII-ellipsis fix,
+so it took the sentence rather than routing it to H8c as first ruled.
+
+**Cost if wrong:** a reader who wants run-to-run apparatus drift judged by the gate's rule has to compute
+it themselves from the two `facts` mappings, which `diff` prints in full.
+
+`docs/reference.md` § The apparatus core can only observe rules, for the run-time gate, that
+`null → "LOT-88231"` and the reverse are "that fact becoming available and becoming unavailable.
+Neither is evidence the apparatus moved" — the third of the three `Param`-shaped states (a value, a
+declared absence, a key that isn't there at all), and only a value-to-different-value move fails a
+run. `diff`'s `apparatus` row (H8b task 9, Decision 2) does not share that tolerance: its verdict
+compares `provenance.apparatus.hash`, computed over the FULL facts mapping including every `null`,
+so a probe that answered `null` in run A and a real value in run B moves the hash and prints
+`DIFFERS` with a detail line naming the transition.
+
+**Verified by running**, 2026-08-21, with a probe answering `None` for `calibration_id` in one run
+and `"CAL-X"` in the other, both other facts held equal:
+
+```
+apparatus          DIFFERS
+  00_model=m1.calibration_id  null → CAL-X
+```
+
+**Defensible as built, not yet defensible as documented.** `diff` reports observations — what
+changed between two records — rather than replaying the gate's own tolerance; a reader who knows
+`reference.md`'s "neither is evidence the apparatus moved" sentence has no way to learn from `diff`'s
+output alone that this particular `DIFFERS` is the tolerated kind rather than the failing kind.
+No decision (1-15 in `docs/superpowers/specs/2026-08-20-diff-freeze-design.md`), no `reference.md`
+sentence and no prior filing says which reading is correct.
+
+**The check to run before dispositioning it.** Two readings, neither built here. (a) `diff` gains
+the gate's own tolerance: a `null ↔ value` transition on an otherwise-unmoved fact renders as
+`identical` (or a distinct third word), which would need its own fixture pair distinguishing it
+from a genuine value-to-value move — the same two-conditions-needed shape this batch's Major 2
+finding named. (b) `reference.md` gains one sentence next to the apparatus row's fenced example
+saying `DIFFERS` here is a strictly wider net than the gate's, and a `null` on either side of an
+arrow is exactly the tolerated case, not a failure — the cheaper fix, and the one closer to "`diff`
+reports; it doesn't decide" (`freeze`'s own stated posture in the same section).
+
+**Found by:** H8b task-b6 review, Minor 11, verified by running a probe returning `None` then a real
+value across two runs and reading `diff`'s own output.
+
+## OPEN — a plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under, invisibly to every artifact on disk mid-run — **Owner: H9**
+
+`freeze`'s `E-FREEZE-PLAN-MISMATCH` check (§ Corrections against the code, correction 8) cross-checks
+the full four-tuple — `index`, `label`, `values`, `is_baseline` — that `expand(doc)` re-derives from
+the run-start `config.yaml` copy against `sweep.yaml`'s recorded plan. That catches an edit to
+`sweep`, `data.units`, or anything else `expand` reads. It does **not** catch a plain `parameters`
+edit: `expand` never reads `parameters`, so a `config.yaml` whose `parameters.instrument.model` was
+hand-edited after run start still re-expands to the identical conditions and passes the cross-check
+— and `resolve_condition_cfg` then hands the **edited** `cfg` to the probe, which measures under
+parameters the run itself never adopted.
+
+**Why this is invisible mid-run, not merely unchecked.** `parameters_hash` is computed once, at
+`run.yaml` assembly (`cli.command_run`, after the plan ends), and no artifact written at run start
+records it — `config.yaml` is a byte copy with nothing to compare it against until the run
+finishes. So there is no run-start `parameters_hash` for `freeze` to re-derive the edited copy
+against and refuse a mismatch the way `E-FREEZE-PLAN-MISMATCH` refuses a `sweep`-shape mismatch.
+The gap is named rather than half-covered: task 5 (H8b) considered and rejected checking
+`design_digest` for the identical reason — it covers `data.units`/`sweep.groups`, neither of which
+determines the cfg a probe is called under — and a check against `parameters` specifically would
+need a hash `run.yaml` does not yet hold at the point `freeze` would need it.
+
+**The check its owner must make.** `resume` (H9) reads the same two run-start artifacts
+(`config.yaml`, `environment/repo_root.txt`) `freeze` does, for the same reason — to keep going
+against a run whose `run.yaml` was never written — and needs its own answer to "did this config
+change since run start" to refuse resuming under edited parameters. Whether `resume`'s hash
+comparison closes this gap for `freeze` too, or whether a run-start `parameters_hash` artifact is
+warranted independent of `resume`, is **not decided here** — H8b's task 5 named the residual and
+declined to build toward either answer, since building one would commit `freeze` to an artifact
+`resume`'s own design might choose differently.
+
+**Found by:** H8b task 5 step 3 (named, not filed there), filed by task 12 per its own brief.
+
+## OPEN — no build appends a `PHASE_DRY_RUN` ledger line, and § Operation commands and § The apparatus files contradict each other about whether one belongs — Owner: H9
+
+`src/publishable/apparatus.py` defines `PHASE_DRY_RUN` and lists it in `PHASES`, but no call site in
+`src/` passes it — grepped, zero hits outside the constant's own definition and its membership in
+`PHASES`. Two passages disagree about whether that is even the right end state: `reference.md`
+§ Operation commands says `dry-run` "creates nothing," while § The apparatus files lists `dry_run` as
+one of the four phases a probe runs at. Both cannot hold until `dry-run` itself is built (it is
+`NOT_BUILT_COMMANDS` today), which is why this is H9's rather than H8b's — `dry-run` is not a
+surface either `diff` or `freeze` dispatches through, and deciding what it appends is inseparable
+from building it.
+
+**Found by:** H8b whole-branch review (Major 3), reading `apparatus.py`'s `PHASES` docstring, which
+claimed this gap "is filed to H9" when no such entry existed here — closed by filing it for real
+rather than by deleting the claim. `replay_ledger`'s own docstring, in the same file, made the
+narrower and accurate claim — "§ Refusals routes that gap to H9" — which is the design document,
+not this one; this entry is what makes the shipped code's OWN claim true rather than merely no
+longer false.
+
+**The check its owner must make.** Whether `dry-run`'s own build appends a `PHASE_DRY_RUN` line at
+the probe step § Operation commands describes, and if so, whether `replay_ledger`'s
+`PHASE_RUN_START`/`PHASE_PRE_EXECUTION` filter should widen to admit it as a `freeze` baseline too —
+a `dry-run` immediately before a `run` starts would otherwise report a baseline `freeze` cannot see
+answered any differently than a run that never `dry-run`'d at all. Not decided here.
+
+## OPEN — the three worked `diff` outputs predate the per-side header and now show output the command does not produce — **Owner: H8c**
+
+**Found by** H8b's whole-branch review; **left open deliberately by both the implementing task and the
+controller**, with the reasoning below, because the cheap fix is in the **shared worked example** and this
+repo's own § The worked example is the cross-document trap it has been burned by most.
+
+**The defect.** `diff` prints a per-side header before the rows — measured at `4e7ff85` in
+`diff.py`'s `_header_line`: `letter`, form, then for a run record its `run_id`, its `status`, and the word
+`draft` when `draft: true`; for a config side, the form and **the path as given, never resolved**, and no
+status word. **All three worked outputs — in `README.md`, `docs/design-principles.md` and
+`docs/reference.md` § Three hashes' apparatus block — begin at `code_hash` and show no header.** A reader
+copying any of them gets output the command does not produce.
+
+**Why it was not fixed under a fix round.** The three blocks are at **different levels of concreteness**,
+so there is no single identical edit to apply three times: `reference.md` carries the worked example's
+real run IDs (`run_2026-08-06T14-02-11Z_8e21ab3` and `run_2026-08-07T09-14-03Z_8e21ab3`), while `README.md`
+uses `~/results/cohort-pilot/run_A|run_B` paths and `design-principles.md` uses `<run_a>`/`<run_b>`
+placeholders. Each needs a header **consistent with its own level of abstraction**, and a wrong worked
+example is self-propagating in a way a filed defect is not.
+
+**What its owner must do.** Add a header to each block at that block's own concreteness, using the
+measured format above and the worked example's `status: completed`; **keep the two-space column
+separator** the shipped code uses; **do not change any hash prefix, run ID, or delta line** — those are
+numerically checked and § The worked example forbids narrowing them; and run **both** consistency passes,
+since three fenced blocks in three of the four documents move together. **Check whether `reference.md`'s
+apparatus block should show `apparatus DIFFERS` beside a `completed` status** — it should, and that pairing
+is worth stating rather than leaving a reader to wonder.
+
+**Owner: H8c**, which already owns `report`'s rendering of the same worked example and the one
+`reference.md` sentence closing the `diff`-versus-gate ruling — so it is the next slice with these
+documents open and a review pass of its own.
+
+**Cost if wrong / if unclaimed:** three normative documents show `diff` output missing its first two lines.
+Nothing computes from them, and every value they do show is correct.

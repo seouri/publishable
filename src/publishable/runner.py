@@ -638,7 +638,7 @@ def execute_plan(
         if observer is not None:
             try:
                 observer.observe_round(
-                    phase="pre_execution", condition_index=execution.condition_index
+                    phase=apparatus.PHASE_PRE_EXECUTION, condition_index=execution.condition_index
                 )
             except ContractError as exc:
                 # One seam, not two (Decision 3): `observe_round` raises for

@@ -313,6 +313,37 @@ def test_operation_commands_take_no_flags(capsys):
     assert main(["run", "cfg.yaml", "--allow-dirty"]) == EXIT_INVOCATION
 
 
+# H8b batch 6 review, Major 1: `diff`'s own CLI arm (arity exactly two, no
+# flags) was reached by no test but a prose probe — weakening the guard to
+# `if len(rest) < 1:` left the full suite green. Each shape below is its
+# own test, on `test_operation_commands_take_no_flags`'s own precedent, and
+# each asserts BOTH the exit code and the exact message, since a control
+# asserting only an absence passes identically if nothing ran.
+_DIFF_ARITY_MESSAGE = "`diff` takes exactly two paths and no flags"
+
+
+def test_diff_with_no_paths_is_an_invocation_error(capsys):
+    assert main(["diff"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_with_one_path_is_an_invocation_error(capsys):
+    assert main(["diff", "a"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_with_three_paths_is_an_invocation_error(capsys):
+    assert main(["diff", "a", "b", "c"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_diff_rejects_a_leading_dash_on_either_path(capsys):
+    assert main(["diff", "-x", "b"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+    assert main(["diff", "a", "--flag"]) == EXIT_INVOCATION
+    assert _DIFF_ARITY_MESSAGE in capsys.readouterr().err
+
+
 def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path, capsys):
     """The ruled-on fix: `run`'s OSError surfaces as `E-IO-FAILED` at exit 1, never a
     bare traceback. `output_dir` existing as a *file* makes `Path.mkdir` raise
@@ -15799,3 +15830,316 @@ def test_resolver_io_has_no_reuse_from_and_step_io_does(tmp_path: Path):
 
     assert not hasattr(ResolverIO, "reuse_from")
     assert hasattr(StepIO, "reuse_from")
+
+
+# --- H8b task 13: the guard pin, its literals captured at `0a636af` ---------
+#
+# Decision 7 (H8b design) changes the run directory: `run` will start writing
+# `<run_dir>/config.yaml` and `environment/repo_root.txt` (task 3). Everything
+# below was captured BEFORE that change, by driving `run_a_project` and
+# reading the artifacts back — none is transcribed from `cli.py` or
+# `run_record.py`. See `docs/superpowers/plans/2026-08-20-diff-freeze.md`
+# task 13 and `docs/superpowers/specs/2026-08-20-diff-freeze-design.md`
+# Decision 7. Arms A and B are the only two authorized to move in this slice,
+# and task 3 is their sole authorized editor — see each docstring below for
+# the post-edit list. Every other task that finds any arm here failing has
+# found a finding to report, not an assertion to edit.
+
+
+def test_h8b_arm_a_the_run_directorys_root(tmp_path):
+    """Arm A — THE RUN DIRECTORY'S ROOT. ONE OF TWO ARMS AN AUTHORIZED TASK
+    MAY EDIT, and task 3 is that task.
+
+    Driven WITH a sweep so the list includes `conditions` (a run with no
+    sweep has no such directory). No existing test in this file asserts the
+    full sorted root list of a run directory — the nearest neighbours
+    (`results_dir.iterdir()`, one level up; several `rglob("*")` sweeps
+    filtered to directories) are named in
+    `docs/superpowers/plans/2026-08-20-diff-freeze.md` § Which existing pins
+    Decision 7's new artifacts move, and none of them is this assertion, so
+    this is new coverage.
+
+    Task 3 appends `'config.yaml'` to this list, keeping it sorted, and
+    nothing else changes. The post-edit list is:
+    `['conditions', 'config.yaml', 'environment', 'executions.jsonl',
+    'manifest', 'run.yaml', 'sweep.yaml']`. Task 3's report must show the
+    diff is exactly one entry per arm with nothing reordered.
+
+    The `lock` assertion below is implied by the list equality above it —
+    if `lock` existed, `iterdir()` would list it and the equality would fail
+    first, so this line can never fail on its own. Kept because the brief
+    prescribed it verbatim; the list assertion is what actually delivers it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    assert sorted(p.name for p in run_dir.iterdir()) == [
+        "conditions",
+        "config.yaml",
+        "environment",
+        "executions.jsonl",
+        "manifest",
+        "run.yaml",
+        "sweep.yaml",
+    ]
+    assert (run_dir / "lock").exists() is False
+
+
+def test_h8b_arm_b_environments_contents(tmp_path):
+    """Arm B — `environment/`'s contents. THE SECOND ARM AN AUTHORIZED TASK
+    MAY EDIT, and task 3 is that task.
+
+    A scaffolded project resolves no lockfile (the `W-ENV-UNLOCKED` path), so
+    `uv.lock` is absent and only `pyproject.toml` is captured. No existing
+    test asserts the full sorted contents of `environment/` — the nearest
+    neighbours assert individual files' bytes or existence, never the full
+    list — so this is new coverage.
+
+    Task 3 appends `'repo_root.txt'`, keeping it sorted. The post-edit list
+    is: `['pyproject.toml', 'repo_root.txt']`. Task 3's report must show the
+    diff is exactly one entry per arm with nothing reordered.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    assert sorted(p.name for p in (run_dir / "environment").iterdir()) == [
+        "pyproject.toml",
+        "repo_root.txt",
+    ]
+
+
+def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
+    """Arm C — the record's key lists. NEVER MOVES IN THIS SLICE.
+
+    `run.yaml`'s and `provenance`'s key lists are already asserted, in this
+    exact order, by `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`
+    and `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` above —
+    this is the SAME claim, restated here so H8b's own pin is self-contained
+    and does not depend on H8a's docstring surviving unedited. Not new
+    coverage; carried forward deliberately.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert list(run_doc.keys()) == [
+        "schema_version",
+        "run_id",
+        "status",
+        "draft",
+        "config",
+        "parameters_hash",
+        "code_hash",
+        "provenance",
+        "layout",
+        "execution",
+        "results",
+    ]
+    assert list(run_doc["provenance"].keys()) == [
+        "git",
+        "environment",
+        "apparatus",
+        "input_manifest",
+        "input_manifest_hash",
+        "input_manifest_changed",
+        "publishable_version",
+        "plugin_versions",
+        "units",
+        "units_hash",
+        "allocation",
+        "allocation_hash",
+        "upstream",
+    ]
+    assert run_doc["status"] == "completed"
+    assert run_doc["draft"] is False
+
+
+def test_h8b_arm_d_the_five_figures_diff_reads(tmp_path):
+    """Arm D — the five figures `diff` will read. NEVER MOVES IN THIS SLICE.
+
+    No existing test asserts these five together as `diff`'s own operands —
+    each figure individually has scattered coverage (`provenance.apparatus`
+    is asserted `None` for `generic` elsewhere; `provenance.upstream == []`
+    is H8a's arm B), but this is the first place all five are pinned as one
+    group, which is new coverage for the group even where an individual
+    figure's value is not.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    provenance = run_doc["provenance"]
+    environment = dict(provenance["environment"])
+    python_version = environment.pop("python_version")
+    assert environment == {"manager": "uv", "uv_lock": None, "uv_lock_hash": None}
+    assert isinstance(python_version, str) and python_version
+    assert provenance["apparatus"] is None
+    assert provenance["upstream"] == []
+    assert run_doc["code_hash"].startswith("sha256:")
+    assert run_doc["parameters_hash"].startswith("sha256:")
+    assert provenance["input_manifest_hash"].startswith("sha256:")
+
+
+def test_h8b_arm_e_sweep_yamls_recorded_plan_shape(tmp_path):
+    """Arm E — `sweep.yaml`'s recorded plan, which `freeze` will cross-check.
+    NEVER MOVES IN THIS SLICE.
+
+    The top-level key list half is new coverage: no existing test reads
+    `sweep.yaml` as a file for its shape at all. The `selectors`-absence
+    half is NOT new: `tests/test_sweep.py`'s
+    `test_the_sweep_document_records_the_resolved_plan` already asserts
+    `doc["conditions"] == [...]` by full dict equality, which pins the
+    entry key set — including the absence of `selectors` — exactly. Kept
+    here anyway because it is the fact Decision 8 (H8b design) grounds its
+    "re-expand rather than rebuild from `sweep.yaml`" ruling on, and this
+    arm is where a reader of *this* pin should find it restated, even
+    though the shipped test is what actually guards it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
+    assert list(sweep_doc.keys()) == [
+        "design_digest",
+        "conditions",
+        "repeats",
+        "labels",
+        "order",
+        "execution_order",
+    ]
+    for entry in sweep_doc["conditions"]:
+        assert list(entry.keys()) == ["index", "label", "values", "is_baseline"]
+        assert "selectors" not in entry
+    assert design_digest(run_doc["config"]) == sweep_doc["design_digest"]
+
+
+def test_h8b_arm_f_the_embedded_config_is_the_file(tmp_path):
+    """Arm F — the embedded config is the file. NEVER MOVES IN THIS SLICE.
+
+    Distinct from Fixture C (task 3's, once `<run_dir>/config.yaml` exists):
+    this compares `run.yaml`'s embedded `config` against the config file
+    `run_a_project` generated and edited, which exists today with no code
+    change. `tests/test_acceptance.py`'s
+    `test_scaffold_then_run_produces_a_real_record` already makes exactly
+    this whole-mapping comparison for the UNSWEPT case, so this arm is NOT
+    new coverage in general. What it adds is narrower: driven WITH a sweep,
+    it is the only place in the suite that would catch a *swept* run's
+    embedded config diverging from the file — confirmed by narrowing a
+    `{**config, "sweep": None}` mutation in `run_record.py` to fire only
+    under a declared `sweep.grid`, which then failed only this arm and
+    `test_h8b_arm_g_parameters_hash_agrees_with_run_yamls_embedded_config`
+    across the full suite (2 failed, 2520 passed), where the unnarrowed
+    mutation had failed both this arm and the acceptance test above.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=8,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    run_dir = doc["run_dir"]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    cfg_on_disk = yaml.safe_load(doc["cfg"].read_text())
+    assert run_doc["config"] == cfg_on_disk
+
+
+# --- H8b task 3: Fixture C — the config copy and the recorded repo root ----
+#
+# Built on a raw scaffold-and-run, deliberately NOT on `run_a_project`: that
+# helper rewrites the config with `yaml.safe_dump(doc)`, and
+# `yaml.safe_dump(yaml.safe_load(x)) == x` is True for what it writes, which
+# would make the byte-equality assertion below blind (§ Corrections,
+# `docs/superpowers/plans/2026-08-20-diff-freeze.md`). Precedent for an
+# inline scaffold-and-run outside the helper:
+# `test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback` above.
+
+
+def test_h8b_fixture_c_run_writes_a_byte_copy_of_the_config_and_the_repo_root(
+    tmp_path: Path,
+):
+    """Decision 7: `run` starts writing `<run_dir>/config.yaml` (a byte copy of
+    the config file) and `<run_dir>/environment/repo_root.txt` (the absolute
+    repo root `command_run` already computed). Neither the byte-equality
+    assertion nor the parsed-mapping equality against `run.yaml`'s own
+    embedded `config` is alone sufficient: the first catches a re-dump
+    (M12), the second catches a copy taken from a different object. A
+    control — `b"#" in cfg.read_bytes()` — makes the byte-equality assertion
+    non-vacuous: without it, a fixture that lost its comments for an
+    unrelated reason would still pass the byte arm for free. A third
+    assertion pins `repo_root.txt`'s exact content, including its trailing
+    newline — the acceptance arm `.strip()`s that text, so this is the only
+    place the newline is pinned at all.
+    """
+    from publishable.generators.experiment import generate_experiment
+    from publishable.validate import load_document
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+
+    # Raw-text edit — a targeted string replacement, not a parse-and-re-dump —
+    # so every inline comment `init` wrote survives. Fills the two REQUIRED
+    # `metadata` fields `validate` demands; changes nothing else.
+    raw = cfg.read_text()
+    assert 'description: ""' in raw
+    assert "authors: []" in raw
+    raw = raw.replace(
+        'description: ""',
+        'description: "Fixture C: pins the config copy and the repo root"',
+    )
+    raw = raw.replace("authors: []", 'authors: ["Kyungjoon Lee"]')
+    cfg.write_text(raw)
+
+    # THE CONTROL: the edited config still carries comments — the byte-equality
+    # assertion below is not vacuously satisfied by a commentless file.
+    assert b"#" in cfg.read_bytes()
+
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "experiment"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    run_dir = sorted((tmp_path / "results").glob("run_*"))[-1]
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    copied = run_dir / "config.yaml"
+    assert copied.read_bytes() == cfg.read_bytes()
+    assert load_document(copied) == run_doc["config"]
+
+    repo_root_txt = (run_dir / "environment" / "repo_root.txt").read_text()
+    assert repo_root_txt == f"{root.resolve()}\n"
