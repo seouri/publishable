@@ -7763,3 +7763,50 @@ documents open and a review pass of its own.
 
 **Cost if wrong / if unclaimed:** three normative documents show `diff` output missing its first two lines.
 Nothing computes from them, and every value they do show is correct.
+
+## OPEN — `nondeterministic` is documented as a `run.yaml` field and a thing `report` notes, and nothing writes it or reads it back — **Owner: unassigned**
+
+**Found by:** H8c task 6, building the Attrition section, which is where § The two files' `run.yaml`
+example says a reader would see it.
+
+**The measurement.** At `ebf642a`: `nondeterministic` appears **zero** times in a real project's
+`run.yaml` and **zero** times in its `executions.jsonl`, over a run whose steps include a
+repeat-scoped one — grepped over both files after a genuine `main(["run", ...])`. It exists in
+`src/` only as a `BaseStep` class **attribute** (a step author's own declaration) and as what
+`W-REPL-DETERMINISTIC` reads off the step classes at `validate` — never as a value copied onto an
+execution record.
+
+**The two document passages this leaves stranded.** § The two files' `run.yaml` example shows
+`nondeterministic: false`/`true` on every repeat-scoped execution entry, as if `run` wrote it
+per-execution. `design-principles.md` § Not bit-identical reruns says core "records that in
+`run.yaml` and notes it in `report`" — two documented obligations (`run` writes it, `report` notes
+it) with no code behind either.
+
+**Why H8c task 6 built the Attrition section without it.** A section printing
+`nondeterministic: false` for every execution would be reporting a default nothing measured — the
+exact shape of a fail-open this repo has closed before by asking whether a field is actually written
+rather than assuming a documented shape has code behind it. `test_attrition_section_does_not_mention_
+nondeterministic` (`tests/test_report.py`) pins the absence directly against a real run's `execution`
+block, so a future build that starts writing the field breaks that test first rather than silently
+becoming true underneath an untouched doc passage.
+
+**Why neither H8c nor H4 is the right owner.** H8c's whole remit is read-and-render: nothing in this
+slice may alter a run, and writing `nondeterministic` onto an execution record is exactly that. H4 is
+the complete family (`docs/superpowers/plans/2026-08-21-report-study.md`'s own CLAUDE.md entry: "H4d
+merged on 2026-08-19 — the last of the H4 family") — naming it here would point a live gap at a
+slice that will not claim it.
+
+**The check its owner must make.** Whether `run` owes an emitter — copying each executed step's own
+`nondeterministic` class attribute onto its `executions.jsonl`/`execution` entry, the way § The two
+files' example already shows it — **or** whether `design-principles.md`'s "notes it in `report`" is
+the sentence that should go, on the grounds that a step-level declaration a reader can already see in
+`src/<pkg>/steps/*.py` needs no execution-level echo. Not decided here.
+
+**Which section it lands in on the day the field is written.** If `run` starts writing it onto an
+execution entry, `report`'s Attrition section is where it belongs — `_execution_rows` in
+`src/publishable/report.py` already builds one row per execution across `shared`, `conditions[]`
+(with the repeat nesting) and `summary`, and a written field would simply be one more key `**entry`
+spreads onto that row, needing no new traversal.
+
+**Cost if wrong / if unclaimed:** two documents describe a run-level fact no run carries and a report
+section no build renders, and a reader who goes looking for it in a real `run.yaml` finds nothing.

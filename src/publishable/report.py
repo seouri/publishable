@@ -239,6 +239,167 @@ def deltas_section(run: Mapping[str, Any]) -> Section:
     return Section(title="Deltas", body={"rows": rows})
 
 
+# Decision 5's Hypothesis-verdicts row, plus § Corrections correction 9:
+# `family_size`/`family` are in the record and not in the design's own list.
+# `verdict_rests_on` is the field that distinguishes `computed` from
+# `reported` — § The unit table is the inference base's rule that the one
+# interval core stores without computing is an `Estimate` a `summary` step
+# returned.
+_HYPOTHESIS_FIELDS = (
+    "id",
+    "kind",
+    "declared_in",
+    "observed",
+    "verdict_evaluated_on",
+    "supported",
+    "verdict_rests_on",
+)
+# Absent on an uncounted (`reported`) verdict — `hypotheses._is_counted`
+# excludes it from the family, so there is no family to name. Read as a
+# MAPPING generically, never by two literal keys: a hypothesis family's
+# `family` is `{hypotheses: N}`, a different shape from a comparison
+# family's `{comparisons, metrics}` — the same `_present_fields` helper the
+# Deltas section already reads `family_size`/`family` through, on purpose,
+# so the day the two sections share a table-building helper neither breaks
+# on the other's shape.
+_HYPOTHESIS_OPTIONAL_FIELDS = ("family_size", "family")
+
+
+def hypotheses_section(run: Mapping[str, Any]) -> Section:
+    """§ The four standard sections #3: `results.hypotheses[]`."""
+    rows: list[dict[str, Any]] = []
+    for verdict in (run.get("results") or {}).get("hypotheses") or []:
+        if not isinstance(verdict, Mapping):
+            continue
+        row = _present_fields(verdict, _HYPOTHESIS_FIELDS)
+        row.update(_present_fields(verdict, _HYPOTHESIS_OPTIONAL_FIELDS))
+        rows.append(row)
+    return Section(title="Hypothesis verdicts", body={"rows": rows})
+
+
+def _metric_n_rows(run: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Each metric's own `n: {resolved, completed, ineligible, failed}`,
+    read through the identical `_condition_metric_rows` traversal the
+    Conditions section uses (so a `by` stratum is excluded here on the same
+    grounds, without a second exclusion to keep in step) and projected down
+    to just the identifying columns and `n` — Attrition's own concern is
+    what happened to units, not a metric's value or method."""
+    rows: list[dict[str, Any]] = []
+    for condition in (run.get("results") or {}).get("conditions") or []:
+        if not isinstance(condition, Mapping):
+            continue
+        for row in _condition_metric_rows(condition):
+            rows.append(
+                {
+                    "kind": "metric_n",
+                    "condition_index": row["condition_index"],
+                    "condition_label": row["condition_label"],
+                    "step": row["step"],
+                    "metric": row["metric"],
+                    "by_attribute": row["by_attribute"],
+                    "by_level": row["by_level"],
+                    "n": row.get("n"),
+                }
+            )
+    return rows
+
+
+def _execution_rows(run: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """`execution`'s per-execution `status`, walked through all three of
+    `shared`, `conditions[]` (with the repeat nesting) and `summary` —
+    never only `conditions[]`, which is the mutation this function exists
+    to be caught by whenever a run has a `summary` step (Fixture R does).
+    A `conditions[].steps[step]` entry that itself carries `status` is a
+    condition-scoped step; one that does not is a mapping of repeat labels
+    to entries — the same discriminator `artifacts.derive_step_scopes_and_
+    repeats` already uses over the same block (§ Corrections correction
+    2), restated here rather than imported because that helper derives
+    SCOPES for `ReportIO`, a different consumer of the same fact.
+    """
+    rows: list[dict[str, Any]] = []
+    execution = run.get("execution")
+    if not isinstance(execution, Mapping):
+        return rows
+    shared = execution.get("shared")
+    if isinstance(shared, Mapping):
+        for step, entry in shared.items():
+            if isinstance(entry, Mapping):
+                rows.append({"kind": "execution", "scope": "shared", "step": step, **entry})
+    for condition in execution.get("conditions") or []:
+        if not isinstance(condition, Mapping):
+            continue
+        index = condition.get("index")
+        label = condition.get("label")
+        steps = condition.get("steps")
+        if not isinstance(steps, Mapping):
+            continue
+        for step, value in steps.items():
+            if not isinstance(value, Mapping):
+                continue
+            if "status" in value:
+                rows.append(
+                    {
+                        "kind": "execution",
+                        "scope": "condition",
+                        "condition_index": index,
+                        "condition_label": label,
+                        "step": step,
+                        **value,
+                    }
+                )
+            else:
+                for repeat_label, entry in value.items():
+                    if isinstance(entry, Mapping):
+                        rows.append(
+                            {
+                                "kind": "execution",
+                                "scope": "repeat",
+                                "condition_index": index,
+                                "condition_label": label,
+                                "repeat": repeat_label,
+                                "step": step,
+                                **entry,
+                            }
+                        )
+    summary = execution.get("summary")
+    if isinstance(summary, Mapping):
+        for step, entry in summary.items():
+            if isinstance(entry, Mapping):
+                rows.append({"kind": "execution", "scope": "summary", "step": step, **entry})
+    return rows
+
+
+def attrition_section(run: Mapping[str, Any]) -> Section:
+    """§ The four standard sections #4: `provenance.units.n`; each metric's
+    own `n`; every execution's `status` across `shared`, `conditions[]`
+    (with its repeat nesting) and `summary`; the top-level `status`; and
+    `provenance.input_manifest_changed` — measured to be a LIST, so this
+    renders what it holds rather than coercing it to a boolean (task 6 step
+    4's own mutation: `bool([])` is `False`, and a section that printed
+    `false` for an empty list would be indistinguishable from one that
+    printed `false` for a genuinely boolean field elsewhere).
+
+    Does **not** claim `nondeterministic` — see the filing in
+    `docs/superpowers/spec-defects.md`, "A repeat's `nondeterministic`..." —
+    because nothing in this build writes it onto an execution or a record,
+    and a section printing `nondeterministic: false` for every execution
+    would be reporting a default nothing measured.
+    """
+    rows: list[dict[str, Any]] = [{"kind": "status", "status": run.get("status")}]
+    provenance = run.get("provenance")
+    if isinstance(provenance, Mapping):
+        units = provenance.get("units")
+        if isinstance(units, Mapping):
+            rows.append({"kind": "provenance_units", **units})
+        if "input_manifest_changed" in provenance:
+            rows.append(
+                {"kind": "input_manifest_changed", "value": provenance["input_manifest_changed"]}
+            )
+    rows.extend(_metric_n_rows(run))
+    rows.extend(_execution_rows(run))
+    return Section(title="Attrition", body={"rows": rows})
+
+
 class BaseReport:
     """A renderer override for one experiment. Subclass it, override
     `sections`, and compose the standard blocks with `yield from
@@ -265,17 +426,19 @@ class BaseReport:
         section first and an expensive figure last prints the cheap one
         first.
 
-        Yields two of the four standard sections so far — Conditions, then
-        Deltas — in Decision 5's order; task 6 appends Hypothesis verdicts
-        and Attrition after them. Every standard section is a pure function
-        of `run` alone: `io` is accepted (an override's own `sections`
-        passes it straight through to `yield from super().sections(run,
-        io)`) but no standard section reads it, because Decision 5 rules
-        that none of the four ever opens a file under the run directory —
-        that is `ReportIO.read_condition`'s surface, for an override.
+        Yields all four standard sections, in Decision 5's order:
+        Conditions, Deltas, Hypothesis verdicts, Attrition. Every one is a
+        pure function of `run` alone: `io` is accepted (an override's own
+        `sections` passes it straight through to `yield from
+        super().sections(run, io)`) but no standard section reads it,
+        because Decision 5 rules that none of the four ever opens a file
+        under the run directory — that is `ReportIO.read_condition`'s
+        surface, for an override.
         """
         yield conditions_section(run)
         yield deltas_section(run)
+        yield hypotheses_section(run)
+        yield attrition_section(run)
 
 
 def report_form(path: Path) -> str:

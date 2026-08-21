@@ -25,8 +25,10 @@ from publishable.errors import ContractError
 from publishable.lineage import read_record_file
 from publishable.report import (
     Section,
+    attrition_section,
     conditions_section,
     deltas_section,
+    hypotheses_section,
     render_with_override,
     report_form,
 )
@@ -68,28 +70,36 @@ def test_base_report_section_constructs_one():
     assert section == Section(title="Method agreement", body="markdown text")
 
 
-def test_base_report_sections_is_a_generator_yielding_the_standard_sections_built_so_far():
-    """Task 5 gives the base two of the four standard sections — Conditions,
-    then Deltas — over an empty `run` (an empty record still yields both
-    sections, each with an empty `rows` list, since neither is refused for
-    lack of content). Task 6 appends the remaining two; this test moves with
-    that task rather than staying pinned to "nothing", which stopped being
-    true the moment a standard section existed.
+def test_base_report_sections_is_a_generator_yielding_all_four_standard_sections():
+    """Task 6 completes the base: all four standard sections, in Decision
+    5's order, over an empty `run`. Conditions, Deltas and Hypothesis
+    verdicts each have nothing to say about an empty record and yield an
+    empty `rows` list; Attrition still reports the (missing) top-level
+    `status` — it is not refused for lack of content either, it just has
+    one row to show for it.
     """
     report = BaseReport()
     result = report.sections(run={}, io=object())
     assert inspect.isgenerator(result)
     sections = list(result)
-    assert [s.title for s in sections] == ["Conditions", "Deltas"]
-    assert all(s.body == {"rows": []} for s in sections)
+    assert [s.title for s in sections] == [
+        "Conditions",
+        "Deltas",
+        "Hypothesis verdicts",
+        "Attrition",
+    ]
+    by_title = {s.title: s for s in sections}
+    assert by_title["Conditions"].body == {"rows": []}
+    assert by_title["Deltas"].body == {"rows": []}
+    assert by_title["Hypothesis verdicts"].body == {"rows": []}
+    assert by_title["Attrition"].body == {"rows": [{"kind": "status", "status": None}]}
 
 
 def test_an_override_composes_with_yield_from_super():
     """The documented composition shape: `yield from super().sections(run,
-    io)` then more. The base yields its two built-so-far standard sections
-    ahead of an override's own (task 6 will make it four), so this pins that
-    an override's own sections still arrive, in the order yielded, AFTER
-    whatever the base contributes.
+    io)` then more. The base yields all four standard sections ahead of an
+    override's own, so this pins that an override's own sections still
+    arrive, in the order yielded, AFTER whatever the base contributes.
     """
 
     class Report(BaseReport):
@@ -99,7 +109,14 @@ def test_an_override_composes_with_yield_from_super():
             yield self.section("Second", body="b")
 
     titles = [s.title for s in Report().sections(run={}, io=object())]
-    assert titles == ["Conditions", "Deltas", "First", "Second"]
+    assert titles == [
+        "Conditions",
+        "Deltas",
+        "Hypothesis verdicts",
+        "Attrition",
+        "First",
+        "Second",
+    ]
 
 
 def test_an_override_omitting_yield_from_yields_none_of_the_standard_sections():
@@ -1133,3 +1150,147 @@ def test_m14_an_override_mutating_a_standard_sections_mapping_body_in_place_reac
     # object core handed it.
     with pytest.raises(dataclasses.FrozenInstanceError):
         conditions.body = {"rows": []}  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# H8c task 6 — Hypothesis verdicts and Attrition, over Fixture R
+# (docs/superpowers/plans/2026-08-21-report-study.md task 6;
+# docs/superpowers/specs/2026-08-21-report-study-design.md Decision 5).
+# ---------------------------------------------------------------------------
+
+
+def test_hypotheses_section_title(fixture_r: dict[str, Any]):
+    assert hypotheses_section(fixture_r["run"]).title == "Hypothesis verdicts"
+
+
+def test_hypotheses_section_carries_the_named_fields_and_the_family(fixture_r: dict[str, Any]):
+    run = fixture_r["run"]
+    real = run["results"]["hypotheses"][0]
+    row = hypotheses_section(run).body["rows"][0]
+    for field in (
+        "id",
+        "kind",
+        "declared_in",
+        "observed",
+        "verdict_evaluated_on",
+        "supported",
+        "verdict_rests_on",
+    ):
+        assert row[field] == real[field]
+    assert "family_size" in real and "family" in real
+    assert row["family_size"] == real["family_size"]
+    assert row["family"] == real["family"]
+    assert set(row["family"]) == {"hypotheses"}
+
+
+def test_hypotheses_section_omits_family_when_the_record_does(fixture_r: dict[str, Any]):
+    """The `reported`-verdict shape (H8c doesn't build one over this
+    fixture, but the section must not assume `family`/`family_size` are
+    always present): a verdict dict missing both keys must not gain them.
+    """
+    verdict = {
+        "id": "h9",
+        "kind": "confirmatory",
+        "declared_in": "parameters_hash deadbeef",
+        "observed": None,
+        "verdict_evaluated_on": "observed",
+        "supported": None,
+        "verdict_rests_on": "reported",
+    }
+    run = {"results": {"hypotheses": [verdict]}}
+    row = hypotheses_section(run).body["rows"][0]
+    assert "family_size" not in row
+    assert "family" not in row
+
+
+# --- Attrition -------------------------------------------------------------
+
+
+def test_attrition_section_title(fixture_r: dict[str, Any]):
+    assert attrition_section(fixture_r["run"]).title == "Attrition"
+
+
+def test_attrition_section_carries_top_level_status_and_provenance_units(
+    fixture_r: dict[str, Any],
+):
+    run = fixture_r["run"]
+    rows = attrition_section(run).body["rows"]
+    status_row = next(r for r in rows if r["kind"] == "status")
+    assert status_row["status"] == run["status"]
+    units_row = next(r for r in rows if r["kind"] == "provenance_units")
+    assert units_row["n"] == run["provenance"]["units"]["n"]
+    assert units_row["key"] == run["provenance"]["units"]["key"]
+
+
+def test_attrition_section_input_manifest_changed_is_rendered_as_the_list_it_is(
+    fixture_r: dict[str, Any],
+):
+    """Measured: `provenance.input_manifest_changed` is a LIST, not a
+    boolean. This asserts the row's value is that list, unconverted — the
+    discriminator against the boolean-coercion mutation, since `bool([])`
+    is `False` and a row holding `False` would be indistinguishable from a
+    genuinely boolean field elsewhere in the section."""
+    run = fixture_r["run"]
+    real = run["provenance"]["input_manifest_changed"]
+    assert isinstance(real, list)
+    rows = attrition_section(run).body["rows"]
+    row = next(r for r in rows if r["kind"] == "input_manifest_changed")
+    assert row["value"] == real
+    assert isinstance(row["value"], list)
+    assert row["value"] is not False
+
+
+def test_attrition_section_carries_each_metrics_own_n(fixture_r: dict[str, Any]):
+    run = fixture_r["run"]
+    baseline = next(c for c in run["results"]["conditions"] if c["is_baseline"])
+    real_n = baseline["aggregated"]["step01_summarize_units"]["score"]["n"]
+    rows = attrition_section(run).body["rows"]
+    row = next(
+        r
+        for r in rows
+        if r["kind"] == "metric_n"
+        and r["condition_index"] == baseline["index"]
+        and r["step"] == "step01_summarize_units"
+        and r["metric"] == "score"
+        and r["by_attribute"] is None
+    )
+    assert row["n"] == real_n
+
+
+def test_attrition_section_walks_shared_conditions_and_summary(fixture_r: dict[str, Any]):
+    """The mutation this pins against: walking only `execution.conditions`
+    and skipping `shared`/`summary`. Fixture R has a `summary` step
+    (`step02_summarize`), so its execution's presence in the rendered rows
+    is the discriminator — a mutant reading only `conditions[]` would omit
+    it entirely."""
+    run = fixture_r["run"]
+    rows = attrition_section(run).body["rows"]
+    execution_rows = [r for r in rows if r["kind"] == "execution"]
+    scopes = {r["scope"] for r in execution_rows}
+    assert "summary" in scopes
+    summary_row = next(r for r in execution_rows if r["scope"] == "summary")
+    assert summary_row["step"] == "step02_summarize"
+    assert summary_row["status"] == run["execution"]["summary"]["step02_summarize"]["status"]
+    # And the repeat-scoped starter step's execution is walked too, nested
+    # correctly under `conditions[]`.
+    repeat_rows = [r for r in execution_rows if r["scope"] == "repeat"]
+    assert repeat_rows, "no repeat-scoped execution reached the Attrition section"
+    for row in repeat_rows:
+        assert row["step"] == "step01_summarize_units"
+        assert "repeat" in row and row["repeat"]
+        assert "status" in row
+
+
+def test_attrition_section_does_not_mention_nondeterministic(fixture_r: dict[str, Any]):
+    """The filing, pinned rather than merely stated: `nondeterministic`
+    appears nowhere in a real run's `execution` block, and this section
+    does not manufacture it. If a future build starts writing it, this
+    test's own premise (`assert "nondeterministic" not in text.dumps of
+    execution`) breaks first and points back at the filing rather than at
+    a silent default sneaking into the render.
+    """
+    run = fixture_r["run"]
+    assert "nondeterministic" not in yaml.safe_dump(run["execution"])
+    rows = attrition_section(run).body["rows"]
+    for row in rows:
+        assert "nondeterministic" not in row
