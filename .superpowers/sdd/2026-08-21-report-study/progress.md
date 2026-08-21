@@ -52,3 +52,22 @@ documents task and **three of its four whole-branch Majors lived in that commit.
 **every code's § Errors row in the commit that raises it**, because *a row narrower than its code* was the
 whole-branch Major on **both** preceding sub-slices — the second time in the very task that went
 unreviewed.
+
+## Batch 1 — task 17 — the guard pin, four arms
+
+Commits `52612ed` (the pin), `2610ef4` (report). Suite 2636 → **2643**. Four gates clean.
+
+**The implementing agent stalled waiting on a monitor** — the sixth instance across these slices, and its
+instructions said in bold not to construct one. **I verified the true state rather than assuming it:**
+455 insertions across three test files, **zero deletions**, so no mutation was left applied — established
+from the diffstat, not from the agent's account. Gates run, work committed by me, and the agent then wrote
+only its report, with the stall recorded in it. **One of the previous five stalls left a mutation applied**,
+which is why the diffstat check comes before anything else.
+
+**Arm D is the arm worth understanding, because it enforces § The worked example without being trusted.**
+It pins the three worked `diff` blocks' rows as **raw text, located by the `code_hash` line each block
+contains** rather than by position — and task 16 inserts its two header lines **above** `code_hash`, so
+**a passing arm D is itself the proof** that no hash prefix, run ID, delta line, row label, row order or
+separator moved. **It deliberately has no authorized editor**: if it fires, that is a finding. Arm B, by
+contrast, names **task 1** as sole editor with the post-edit state stated in advance — the fourth clean
+cycle of that mechanism.
