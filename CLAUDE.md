@@ -449,6 +449,17 @@ made by the author of the rule forbidding it, while measuring for it.
   commit. A rewrite invents; a deletion cannot.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+- **A batch with no review is where the findings will be.** Twice a controller ran a slice's final
+  batch straight into the whole-branch gate without a task review. Both times the gate caught the
+  omission itself; the second time **three of its four Majors lived in exactly that unreviewed
+  task** — two § Errors rows narrower than their code and a docstring asserting a filing that does
+  not exist. A documents-and-codes task looks like the safest one to skip and is the one whose
+  output no later batch reads, so **nothing else will find its errors.**
+- **A ruling that overrules a brief has to reach the brief.** A plan correction was overruled when
+  the plan landed, the overruling was recorded in the slice ledger, and the plan was left carrying
+  it — so the brief extracted from that plan still said *delete*, and the task deleted. **The ledger
+  reaches the controller and the reviewers; it reaches no implementer.** Append the correction to
+  the plan when the ruling is made, or restate every live overruling in the dispatch.
 - **Carrying a finding into a brief is necessary and not sufficient.** On one slice a finding routed
   to a task **fell out of the chain** between the review that raised it and the brief written from it.
   On the next it was **in the brief, measured, named** — and still not built, while the report claimed
