@@ -95,3 +95,49 @@ written from it** — so **the carry travels in B4's dispatch**, not only in the
 `ReportIO`'s module still names `StepIO`. Disclosed as a symmetry question for a later reviewer rather
 than resolved unilaterally, which is the right disposition for a shape that is correct but arguably
 misplaced.
+
+## Batch 3 — task 3 alone — override discovery, the slice's proxy risk
+
+Commits `cbd1461` (override discovery, four codes with their § Errors rows), `12f853d` (report). Suite
+2665 → **2685**. **Spec compliance PASS; three Majors, three Minors.**
+
+**Isolating this batch paid for itself: the proxy class recurred in a new costume and the review caught
+it.** `sys.path` restoration was **pinned by nothing** — replacing the `finally` body with `pass` left the
+full suite green — **and `pop(0)` answers *which entry did I add?* with a POSITION rather than with the
+entry.** It is reachable, because **user code runs inside that window by design**: an override doing its
+own `sys.path.insert(0, …)` makes the pop remove the wrong entry, and a second project's override then
+rendered **from the first project's `src/`.** That is Decision 3's own cost-if-wrong by a route other
+than a scan.
+
+**And the defence cited for it is where the reasoning slipped, which is the transferable part.** The
+docstring justified `pop(0)` because `load_experiment` pops by index too — **accurate about the mechanism
+and wrong about the exposure**: only an *import* runs inside that window, and a whole *render* runs inside
+this one. **A precedent that matches the code and not the risk is not a precedent.** Now a `CLAUDE.md`
+entry: *removing by position is a fifth proxy.*
+
+**The core of the task was certified the right way**, by showing both facts **steer** the answer rather
+than merely get read: repointing only `entrypoint` yields the decoy; rewriting only `repo_root.txt` yields
+the other project. And **M15 — the mutation the design and the scoping both missed — reproduced in both
+forms**, with a single-project probe passing identically on shipped code **and under both mutated forms**,
+which is what makes the blindness real rather than asserted.
+
+**A decoy whose sort position agrees with the bug — twice in one task**, the second time after the first
+had been caught and disclosed. M1's fixture ruled out only *first*-wins; **scan-last passed** because the
+decoy sorted before the real package. **Catching it once did not immunize the next fixture.** Now a
+`CLAUDE.md` row: put a decoy on **each side**.
+
+### Two controller errors of mine, same root cause
+
+**I ran `git add -A` while a fix-round agent held this worktree**, and committed its in-progress
+`report.py` docstring fix under a message that did not describe it. Nothing was lost — I checked whether
+I had captured a **fix or a live mutation** before doing anything else, and it was a fix — but that is
+the second instance of one root cause: **treating the worktree as mine while an agent holds it.** The
+first was running a review and an implementation concurrently, which polluted the reviewer's baseline.
+**Do not stage broadly while an agent is writing; name the paths.**
+
+**And a commit message described edits the commit did not contain.** A heredoc asserted on its second
+anchor *after* replacing the first, so `write_text` never ran — and `git add -A` then committed an
+untracked review file under a message written for work that had not landed. **The message was the claim
+and the diffstat was the fact**, which is this project's own rule about comments, arriving in a commit
+message. Corrected by a follow-up commit that says what happened rather than by rewriting a pushed
+commit.
