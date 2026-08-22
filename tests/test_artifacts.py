@@ -2469,3 +2469,66 @@ def test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write(tmp_path
     assert "'v'" in str(e_str.value)
     assert "str" in str(e_str.value)
     assert "int" in str(e_str.value)
+
+
+# ---------------------------------------------------------------------------
+# H5a task 13, arm E: added to the dispatch by the controller after this
+# branch's brief was extracted, because it derives from the design's SECOND
+# controller ruling ("Decision 5 is narrowed..."), which post-dates the plan
+# the brief was cut from. The brief could not carry it — only the dispatch
+# could, and it still had to be repeated as an explicit correction, which is
+# itself worth carrying: a dispatch-only instruction competes with a brief
+# and can lose. See the report's added note.
+# ---------------------------------------------------------------------------
+
+
+def test_h5a_arm_e_parquet_keeps_a_structural_or_bytes_cell_intact_csv_does_not(
+    tmp_path: Path,
+):
+    """Arm E — the second controller ruling's capability/refusal PAIR, from
+    `docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`'s
+    second ruling: `.parquet` round-trips a structural or `bytes` cell
+    BYTE-FAITHFULLY; `.csv` cannot, and stringifies it instead. Both halves
+    are pinned TOGETHER, in one test, because the pair is what
+    discriminates: a later task narrowing `.parquet`'s acceptance must fail
+    this arm, and a later task "fixing" `.csv` by stringifying more
+    precisely (rather than refusing) must also fail it — neither half alone
+    would catch the other's regression.
+
+    NO AUTHORIZED EDITOR. The `.parquet` half is a capability this slice's
+    design promises to KEEP, not merely leaves unbroken; the `.csv` half is
+    the observed corruption that is the ground for the one refusal this
+    slice adds (Decision 5, narrowed to `.csv` only by the second ruling).
+    If either assertion below fires, that is a finding. A LATER task (task
+    9) IS authorized to change `.csv`'s behaviour from "stringifies
+    silently" to "raises `ContractError` · `E-STEP-RETURN-TYPE`" — that is
+    the whole point of the refusal this slice adds — and to change the
+    message text of any such raise (task 9 prefixes the artifact name).
+    What may NEVER change, on any task in this slice: `.csv` returning an
+    actual `list` or `bytes` object rather than a string, or `.parquet`
+    refusing what it accepts today.
+
+    Every assertion checks the returned value's TYPE as well as its value:
+    `'[1, 2]' == [1, 2]` is already false, but a future encoder returning
+    `['1', '2']` (a list of strings, not the string `'[1, 2]'`) would
+    satisfy a value-only comparison for the wrong reason.
+    """
+    from publishable.artifacts import _decode_csv, _decode_parquet
+
+    io = make_io(tmp_path)
+
+    pq_list = _decode_parquet(io.write("e_list.parquet", [{"v": [1, 2]}]).read_bytes())
+    assert pq_list == [{"v": [1, 2]}]
+    assert type(pq_list[0]["v"]) is list
+
+    pq_bytes = _decode_parquet(io.write("e_bytes.parquet", [{"v": b"x"}]).read_bytes())
+    assert pq_bytes == [{"v": b"x"}]
+    assert type(pq_bytes[0]["v"]) is bytes
+
+    csv_list = _decode_csv(io.write("e_list.csv", [{"v": [1, 2]}]).read_bytes())
+    assert csv_list == [{"v": "[1, 2]"}]
+    assert type(csv_list[0]["v"]) is str
+
+    csv_bytes = _decode_csv(io.write("e_bytes.csv", [{"v": b"x"}]).read_bytes())
+    assert csv_bytes == [{"v": "b'x'"}]
+    assert type(csv_bytes[0]["v"]) is str

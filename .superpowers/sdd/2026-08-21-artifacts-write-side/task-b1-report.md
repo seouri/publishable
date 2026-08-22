@@ -128,3 +128,54 @@ reverted by editing back in place, and each revert verified both by `diff` again
 - Mutation 2's actual failure mode (a crash inside `run_a_project`'s own exit-code assertion,
   and a bare `ValueError` for arm B2) is not the failure mode the plan's wording describes. Recorded
   above rather than silently reconciled.
+
+## Arm E — added by the coordinator's dispatch, after the initial commit
+
+**One-sentence note, as asked:** the coordinator had already put this pin in the original
+dispatch (it derives from the design's *second* controller ruling, which post-dates the plan the
+task-13 brief was extracted from, so the brief itself could not carry it) — and it still did not
+land in the first pass, which confirms this project's recorded pattern that **a dispatch-only
+instruction competes with a brief and can lose**; only the coordinator's follow-up re-raise made
+it land.
+
+**What arm E pins** (`tests/test_artifacts.py::test_h5a_arm_e_parquet_keeps_a_structural_or_bytes_cell_intact_csv_does_not`),
+captured by running a real `StepIO.write` for each of four cells:
+
+| Cell | `.parquet` (via `_decode_parquet`) | `.csv` (via `_decode_csv`) |
+|---|---|---|
+| `{"v": [1, 2]}` | `[{"v": [1, 2]}]`, `type(v) is list` | `[{"v": "[1, 2]"}]`, `type(v) is str` |
+| `{"v": b"x"}` | `[{"v": b"x"}]`, `type(v) is bytes` | `[{"v": "b'x'"}]`, `type(v) is str` |
+
+Both halves live in **one test**, deliberately, because the pair is what discriminates a
+regression on either side — a fix to one format alone would still leave the other's assertions
+in the same test to catch it. **No authorized editor**: the `.parquet` half is a capability this
+slice's design promises to keep; the `.csv` half is the ground for the one refusal this slice
+adds, narrowed to `.csv` only by the second controller ruling.
+
+**Two mutations, applied to a saved copy (`/tmp/artifacts.py.orig2`, verified byte-identical to
+the task-13 baseline before mutating), run against the full test file, and reverted by editing
+back in place — each revert re-verified via `diff` (byte-identical) and by re-running:**
+
+1. **Simulated "a later task narrowing `.parquet`'s acceptance"**: in `_encode_parquet`, after
+   `_check_column_types`, added a raise on any `list`/`bytes` value. Arm E **FAILED** (the
+   `.parquet`-list write itself raised `ContractError`, before either `.csv` assertion was
+   reached). **Property-preserving controls**: arm B1 (plain scalars through `.csv`), arm B2
+   (plain scalars through `.parquet`), and arm C (bool/int, str/int clashes) all **stayed
+   green** — none of their fixtures contains a `list` or `bytes` cell, so the added raise is
+   inert for them, which is exactly the isolation the mutation is supposed to demonstrate.
+2. **Simulated "a later task fixing `.csv` by stringifying more quietly"**: in `_encode_csv`,
+   before building columns, added a pre-pass decoding any `bytes` value to `str` via
+   `.decode()` rather than leaving `csv.DictWriter`'s own `str(bytes_value)` repr. Arm E
+   **FAILED** — the `.csv`-bytes cell became `'x'` instead of `"b'x'"`, caught by the value
+   assertion (the type assertion alone would have passed, since both are `str` — this is the
+   exact case the coordinator's "assert on type as well as value" instruction was for, and here
+   it was the *value* comparison that caught it, confirming why both checks are asserted rather
+   than either alone). **Property-preserving controls**: arms B1, B2, and C stayed green again
+   — none of their fixtures carries a `bytes` cell, and the `.parquet` halves of arm E itself
+   were unaffected since the mutation only touches `_encode_csv`.
+
+**Gates after arm E**, full and unfiltered: `uv run pytest` → **2843 passed** (2842 + 1),
+1 skipped, 2 xfailed. `uv run mypy` → 52 files clean. `uv run ruff check .` and
+`ruff format --check .` → clean, 93 files. `git status --short` after both reverts shows only
+`tests/test_artifacts.py` changed; `src/publishable/artifacts.py` is diff-empty against the
+saved pre-mutation copy.
