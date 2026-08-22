@@ -18625,3 +18625,104 @@ def test_task_12_step2_still_fires_for_a_genuinely_absent_column_with_containmen
     assert agg["score"]["method"] == "t_over_units"
     assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
     assert "E-STEP-COLUMN-UNKNOWN" in doc["stdout"]
+
+
+# --- H5b task 13: the silent case's discriminating test ---------------------
+
+_TASK13_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 3:
+                io.record(unit.key, {{"flag": True}})
+            elif i < 5:
+                io.record(unit.key, {{"flag": True, "score": float(i)}})
+            else:
+                io.record(unit.key, {{"score": float(i)}})
+        return {{}}
+"""
+
+_TASK13_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("flag_counter")\n'
+    "class FlagCounter(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_flag": float(sum(1 for row in units if row.get("flag") is True))}\n'
+)
+
+
+def test_task_13_the_silent_drop_cannot_be_mistaken_for_the_fix(tmp_path, capsys):
+    """H5b task 13, the discriminating test — separate from task 4's Fixture A
+    because a fixture whose numbers agree with the bug is the trap this task
+    exists to rule out.
+
+    Eight units, one repeat. `p1`-`p3` record ONLY a bool `flag: True` (no
+    numeric column at all); `p4`-`p5` record BOTH `flag: True` and a numeric
+    `score`; `p6`-`p8` record ONLY `score`. `FlagCounter.aggregate` counts
+    `flag` via row-dict `.get`, over `UnitTable` iteration — never an
+    attribute read, so a raised `E-STEP-COLUMN-UNKNOWN` cannot substitute for
+    a wrong number here (that is task 12's shape, not this one).
+
+    Deliberately placed so the units with NO numeric column are EXACTLY the
+    ones that carry the bool (`p1`-`p3`): before H5b's task 4, a unit was
+    admitted into `collapsed` only when it recorded at least one real number
+    ANYWHERE — measured by the scoping's task 17 — so `p1`-`p3` were dropped
+    from the table entirely and their `flag: True` never reached any row,
+    while `p4`-`p5` (numeric AND bool) were admitted with `flag` intact
+    (that admission rule did not filter individual values, only whole rows).
+    Counting `flag` over the buggy table therefore reports `2.0` (`p4`,
+    `p5`), computed by running the mutation below — NOT a round number a
+    reader would accept as a coincidence, and different from the honest
+    `5.0` (`p1`-`p5`) task 4 made correct. If the two carriers had NOT
+    coincided with the numeric-free units, both readings would report `5.0`
+    and this test would prove nothing — which is why `test_fixture_a...`
+    (task 4/1) cannot stand in for this one.
+
+    Three facts a single wrong number cannot all match at once: the derived
+    value itself, `n.completed` (`len(collapsed)`, `8` correct vs. `5`
+    buggy — a derived metric's own `n` is the whole table's row count, not a
+    per-column figure), and the bootstrap interval around the value, `[2.0,
+    8.0]` correct vs. `[0.0, 4.0]` buggy (computed by running both ways,
+    including with the mutation below).
+
+    **Deviation from the brief's literal third fact, disclosed rather than
+    silently substituted.** The brief names `resample_draws` not equalling
+    the full `draws` as the third fact; measured both ways, it is `2000`
+    (the requested default) under both the correct and the buggy code,
+    because `percentile_of_derived` only drops a draw when `compute` returns
+    `None`/`nan` or raises (`stats.py`'s own docstring), and a plain
+    `sum(1 for row in units if ...)` over a bootstrap draw that always
+    contains exactly `len(units)` rows can never do any of the three — unlike
+    `mean_score` in Fixture A/arm B, which divides by a possibly-empty
+    numeric subset. `resample_draws` cannot discriminate this construction,
+    so the interval itself is the third fact instead, and it is a stronger
+    one: a buggy point estimate of `2.0` would still have to reproduce the
+    correct construction's own `[2.0, 8.0]` interval to be mistaken for it,
+    and it does not.
+
+    **What this test does NOT pin.** Nothing about the correction family
+    (arm E's Holm/`fdr_bh` measurement), nothing about a column that
+    disagrees non-numerically across repeats (Fixture C/L's territory), and
+    nothing about `report` or `study` rendering this shape (task 14's). A
+    green run of this test is evidence about the admission rule alone.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=8,
+        _starter_step=_TASK13_STEP,
+        _local_template=_TASK13_TEMPLATE,
+        experiment_type="flag_counter",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["n_flag"]
+    assert block["value"] == 5.0
+    assert block["n"]["completed"] == 8
+    assert block["ci95"] == [2.0, 8.0]
