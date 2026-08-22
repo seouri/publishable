@@ -18507,3 +18507,121 @@ def test_arm_g_the_report_by_stratum_path_moves_with_the_widened_collapse(tmp_pa
     assert by["a"]["score"]["method"] == "t_over_units"
     assert by["b"]["score"]["value"] == 4.0
     assert by["b"]["score"]["ci95"] == [-21.41240947234939, 29.41240947234939]
+
+
+# --- H5b task 12: `E-STEP-COLUMN-UNKNOWN` pinned in both directions ---------
+
+_TASK12_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_TASK12_ATTR_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("attr_reader")\n'
+    "class AttrReader(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_valid": float(sum(1 for v in units.valid if v))}\n'
+)
+
+
+def test_task_12_step1_an_attribute_read_of_a_now_carried_column_stops_firing(tmp_path, capsys):
+    """H5b task 12, step 1. Six units: `p1`-`p4` record only a numeric
+    `score`, `p5`-`p6` record only a non-numeric `valid`. `AttrReader.aggregate`
+    reads `units.valid` by ATTRIBUTE (`UnitTable.__getattr__`), not row-dict
+    `.get` — the read Fixture B's own templates deliberately avoid.
+
+    Before H5b's task 4, `_gather_repeats` admitted a unit into `collapsed`
+    only when it had recorded at least one real number anywhere — measured by
+    the scoping's task 17, end to end — so `p5`/`p6` (numeric-free) were
+    dropped from the table entirely and `valid` never appeared in any
+    surviving row: an attribute read of `units.valid` raised
+    `E-STEP-COLUMN-UNKNOWN`, contained as `W-STATS-AGGREGATE-FAILED`. After
+    task 4, every admitted unit's every recorded value is carried regardless
+    of type, so `p5`/`p6` stay in the table and `valid` is a real column:
+    `units.valid` returns `[None, None, None, None, True, True]` and
+    `n_valid` is `2.0`.
+
+    Asserting the derived value, not only the absence of the warning, is
+    required: a test that only checked the warning's absence would pass
+    identically if `aggregate` had never run at all.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_TASK12_STEP,
+        _local_template=_TASK12_ATTR_TEMPLATE,
+        experiment_type="attr_reader",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_valid"]["value"] == 2.0
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" not in doc["stdout"]
+
+
+_TASK12_ABSENT_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("absent_containment")\n'
+    "class AbsentContainment(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_broken": float(len(units.nothing_ever_records_this))}\n'
+)
+
+
+def test_task_12_step2_still_fires_for_a_genuinely_absent_column_with_containment(tmp_path, capsys):
+    """H5b task 12, step 2 (real-run half). `AbsentContainment.aggregate`
+    reads `units.nothing_ever_records_this`, a name no unit, before or after
+    H5b, has ever carried — `E-STEP-COLUMN-UNKNOWN` still raises, contained
+    as `W-STATS-AGGREGATE-FAILED` on stdout, exit 0, `run.yaml` written.
+
+    The containment's own promise, asserted rather than assumed: `cli.py`
+    calls `template.aggregate` exactly once per step inside one `try`, so a
+    raise there fails the WHOLE `derived` dict (there is no partial result) —
+    but the RECORDED column `score`'s own `t_over_units` block is computed
+    independently, in `summarize_step`'s column loop, straight from
+    `collapsed`, and never touches `aggregate` at all. It must be present
+    and correct even though the derived call blew up.
+
+    The direct-call half of this step — `E-STEP-COLUMN-UNKNOWN` still raises
+    for a name no row holds, on a table that DOES hold other columns, so the
+    fixture cannot fire on an empty table instead — already exists as pin arm
+    D(i), `tests/test_stats.py::test_an_unknown_column_raises`
+    (`UnitTable({"u1": {"pred": 1.0}})`, `t.nope`raises `E-STEP-COLUMN-UNKNOWN`):
+    grepped (`grep -rn 'E-STEP-COLUMN-UNKNOWN' tests/*.py`), read, and it
+    already covers exactly this shape — a third copy here would be the thing
+    this step's brief warns against.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_TASK12_STEP,
+        _local_template=_TASK12_ABSENT_TEMPLATE,
+        experiment_type="absent_containment",
+        parameters={},
+    )
+    assert doc["run_dir"] is not None
+    run_yaml = doc["run_dir"] / "run.yaml"
+    assert run_yaml.exists()
+    run = yaml.safe_load(run_yaml.read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "n_broken" not in agg
+    assert agg["score"]["value"] == 1.5
+    assert agg["score"]["method"] == "t_over_units"
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" in doc["stdout"]
