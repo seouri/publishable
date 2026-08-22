@@ -6253,3 +6253,68 @@ def test_ruling_1_all_non_numeric_still_earns_no_block_at_all():
     collapsed = {"u0": {"valid": True}, "u1": {"valid": True}}
     out = summarize_step(collapsed, {"completed": 2}, seed=7)
     assert out == {}
+
+
+# --- H5b batch 2 fix round: the two unpinned behaviours (M5, M6) ------------
+
+
+def test_a_bool_in_one_repeat_and_a_float_in_another_disagrees_in_both_orders():
+    """H5b batch 2 fix round, Major M5 (Controller ruling 8). `_repeats_disagree`
+    compares `(is-it-a-number, the value)` rather than the value alone, and
+    nothing failed when the tuple was replaced by `any(v != first ...)` — the
+    review ran that mutation against the whole suite and read it back
+    bit-identical.
+
+    `True == 1.0` in Python, so the bare comparison reports agreement and the
+    disagreement goes unreported. **The collapsed cell is not what
+    discriminates**: `_across_repeats` returns `1.0` under both orders and
+    under both readings (measured, both directions), so an assertion on the
+    cell would be a mutation whose two branches cannot differ. The assertion
+    is on `repeats_disagreeing`, which is the only thing the tuple changes.
+
+    Both orders, because the bare comparison is against `values[0]` and a
+    fixture holding one order proves nothing about the other — and because the
+    docstring's deleted claim was specifically about order.
+    """
+    bool_first = [
+        _result("seed17", [{"unit": "p0", "flag": True}]),
+        _result("seed42", [{"unit": "p0", "flag": 1.0}]),
+    ]
+    float_first = [
+        _result("seed17", [{"unit": "p0", "flag": 1.0}]),
+        _result("seed42", [{"unit": "p0", "flag": True}]),
+    ]
+    assert repeats_disagreeing(bool_first, "analyze", condition_index=0) == {"flag": 1}
+    assert repeats_disagreeing(float_first, "analyze", condition_index=0) == {"flag": 1}
+    # The cell, measured under both orders: unmoved, and so not a discriminator.
+    assert collapse_repeats(bool_first, "analyze", condition_index=0)["p0"]["flag"] == 1.0
+    assert collapse_repeats(float_first, "analyze", condition_index=0)["p0"]["flag"] == 1.0
+
+
+def test_a_unit_that_recorded_no_column_at_all_is_still_admitted_as_a_row():
+    """H5b batch 2 fix round, Major M6 (Controller ruling 8). `io.record(key,
+    {})` settles a unit and records nothing, so its row is `{"unit": key}` and
+    its collapsed entry is `{}`. `_gather_repeats` admits it — the comment
+    added by task 4 says so and calls it measured — and adding `if cols` to
+    `collapse_repeats`'s return comprehension left the entire suite unchanged.
+
+    The published consequence is a table one row longer, which is what the
+    end-to-end half of this pin
+    (`test_an_empty_record_is_a_row_the_template_counts` in
+    `tests/test_cli.py`) reads out of `run.yaml`. This half pins the
+    membership itself, at the function that decides it: `p2` is present and
+    empty, not absent, and `len` counts it.
+    """
+    results = [
+        _repeat_result(
+            "analyze", "seed17", 0, {"p0": {"score": 1.0}, "p1": {"score": 3.0}, "p2": {}}
+        )
+    ]
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
+    assert "p2" in collapsed
+    assert collapsed["p2"] == {}
+    assert len(collapsed) == 3
+    # And it earns the unit no metric block of its own: the column loop's
+    # numeric subset is what publishes, and `p2` contributed nothing to it.
+    out = summarize_step(collapsed, {"completed": 3}, seed=7)
+    assert out["score"]["n"]["completed"] == 2

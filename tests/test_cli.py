@@ -17866,3 +17866,350 @@ def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_crashes(tmp
     )
     assert doc["run_dir"] is not None
     assert (doc["run_dir"] / "run.yaml").exists()
+
+
+# --- H5b batch 2 fix round: Controller ruling 1 row 2 end to end (m1), and ---
+# --- Controller ruling 5's `W-STATS-COLUMN-THIN` (M3) -----------------------
+
+
+def test_ruling_1_row_2_publishes_the_contributing_count_in_run_yaml(tmp_path, capsys):
+    """H5b batch 2 fix round, Minor m1. Ruling 1's amendment row 2 shipped as
+    a figure in `run.yaml` and was pinned only by direct calls to
+    `summarize_step`, in
+    `test_ruling_1_a_column_numeric_for_some_units_and_none_for_others_keeps_a_block`
+    in `tests/test_stats.py` (grepped, it exists and asserts
+    `n["completed"] == 1` on a two-unit hand-built table). The shipped
+    behaviour change is what a reader of the record sees, so it is pinned
+    where the reader reads it.
+
+    One condition, six units, three recording `{"score": float(i)}` and three
+    recording `{"score": None}` — `_RULING1_CONTRAST_STEP`, reused rather than
+    copied. Single-condition deliberately: the two-condition form is the
+    `TypeError` its own `xfail` pin discloses, and this claim is about the
+    published count, not the contrast.
+
+    `value == 1.0` is mean(0.0, 1.0, 2.0) over the CONTRIBUTING units alone; a
+    mean over six with the `None`s coerced to zero would be `0.5`, and the
+    condition-wide count sits beside it as `resolved: 6`, so the two figures
+    cannot be confused for each other in the record.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_RULING1_CONTRAST_STEP)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["value"] == 1.0
+    assert score["n"]["completed"] == 3
+    assert score["n"]["resolved"] == 6
+
+
+def test_a_thin_recorded_column_warns_column_thin_naming_the_column_and_the_count(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M3 / Controller ruling 5. The generated
+    `limits.min_reported_n` is `10` (`materialize.py` writes it), the column
+    carries a number for three of six units, so `W-STATS-COLUMN-THIN` must
+    fire once naming both the column and the contributing count.
+
+    Asserted on stdout, the stream `command_run` prints `validate`'s and the
+    run's findings to — the same stream `assert "W-STATS-STRATUM-THIN" in
+    doc["stdout"]` already reads in this file (grepped: three occurrences in
+    the task-6 `W-STATS-STRATUM-THIN` section above).
+
+    The message, not only the code: a code assertion alone passes on a
+    warning that names the condition-wide `6` instead of the contributing
+    `3`, which is the whole point of the ruling.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_RULING1_CONTRAST_STEP)
+    assert "W-STATS-COLUMN-THIN" in doc["stdout"]
+    assert "recorded column 'score' carries a number for 3 unit(s)" in doc["stdout"]
+    assert "below limits.min_reported_n (10)" in doc["stdout"]
+
+
+def test_a_recorded_column_at_the_floor_draws_no_column_thin_warning(tmp_path, capsys):
+    """H5b batch 2 fix round, ruling 5's can-fail control, and the boundary
+    itself. The identical project with `limits.min_reported_n: 3` — the
+    contributing count exactly — must draw nothing: the comparison is `<`,
+    not `<=`, so a column meeting the declared floor is not thin. Without
+    this arm the test above passes identically under an unconditional warning,
+    which is the shape ruling 5 replaced.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_RULING1_CONTRAST_STEP,
+        limits={"min_reported_n": 3},
+    )
+    assert "W-STATS-COLUMN-THIN" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["n"]["completed"] == 3
+
+
+# --- H5b batch 2 fix round: M1 and M2 — the warning's own text, and its ------
+# --- granularity, both pinned end to end ------------------------------------
+
+_MIXED_ACROSS_REPEATS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        value = 4.0 if _counter["n"] % 2 else "n/a"
+        for unit in io.units:
+            io.record(unit.key, {{"score": value}})
+        return {{}}
+"""
+
+
+def test_a_disagreeing_column_that_still_publishes_a_value_is_not_told_it_carries_none(
+    tmp_path, capsys
+):
+    """H5b batch 2 fix round, Major M1 (Controller ruling 7). The shipped
+    `W-STATS-REPEATS-DISAGREE` message asserted two things that are false of
+    exactly this run: that the column *"is not a number"*, and that the
+    disagreeing units *"carry no value for it"*. Both clauses are deleted
+    rather than rewritten.
+
+    The fixture is the case that falsifies them. Five seed repeats, a
+    module-level counter alternating `4.0` and `"n/a"` — legal, because
+    `artifacts._check_column_types` is per file and each repeat writes its own
+    `units.parquet`, so no single file holds a `str` beside a float. Every
+    unit's repeats therefore disagree, and `_across_repeats` still returns the
+    mean of the numeric subset, so `run.yaml` publishes `score` with a value.
+
+    The two presence assertions are what stop the two absence assertions from
+    passing on a run where nothing warned at all, and the `run.yaml` reads are
+    what make the deletion true rather than merely quieter: the record and the
+    diagnostic now agree.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=4, _starter_step=_MIXED_ACROSS_REPEATS_STEP)
+    assert "W-STATS-REPEATS-DISAGREE" in doc["stdout"]
+    assert "recorded column 'score' disagrees across the repeats of 4 unit(s)" in doc["stdout"]
+    # The deleted clauses. Restoring either one fails here.
+    assert "is not a number" not in doc["stdout"]
+    assert "carry no value" not in doc["stdout"]
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["value"] == 4.0
+    assert score["n"]["completed"] == 4
+
+
+_TWO_DISAGREEING_COLUMNS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        even = _counter["n"] % 2 == 0
+        for unit in io.units:
+            io.record(unit.key, {{"flag": even, "tag": "b" if even else "a"}})
+        return {{}}
+"""
+
+
+def test_two_disagreeing_columns_in_one_step_warn_twice_once_per_column(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M2 (Controller ruling 6). The § Warnings
+    row said *"once per (condition, step)"*; the emit site iterates
+    `repeats_disagreeing(...).items()`, which is one entry per COLUMN. The row
+    was the thing that was wrong, and this is what it now claims: one step,
+    one condition, two disagreeing columns, two warnings.
+
+    Counted on the code string rather than asserted as a membership, because
+    membership passes identically at one occurrence — which is the reading the
+    row shipped.
+    """
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=4, _starter_step=_TWO_DISAGREEING_COLUMNS_STEP
+    )
+    assert doc["stdout"].count("W-STATS-REPEATS-DISAGREE") == 2
+    assert "recorded column 'flag' disagrees" in doc["stdout"]
+    assert "recorded column 'tag' disagrees" in doc["stdout"]
+    assert doc["stdout"].count("condition 0 step 'step01_summarize_units'") >= 2
+
+
+# --- H5b batch 2 fix round: M6's published half, and arm G — the ninth -------
+# --- moving-key class, the `report_by` stratum path --------------------------
+
+_EMPTY_RECORD_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{}})
+        return {{}}
+"""
+
+_EMPTY_ROWS_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("empty_rows")\n'
+    "class EmptyRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_rows": float(len(list(units)))}\n'
+)
+
+
+def test_an_empty_record_is_a_row_the_template_counts(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M6's published half (Controller ruling 8).
+    Six units, four recording `{"score": float(i)}` and two calling
+    `io.record(unit.key, {})` — a settled unit that recorded nothing.
+
+    The review measured this figure moving `4.0 -> 6.0` between `668cb05` and
+    HEAD and found it in no pin and in no moving-key list. It is the published
+    consequence of task 4's admission gate: the two empty-record units are
+    rows in the table `aggregate` is handed, so a template counting rows sees
+    six. `score` still reports the four that carried a number, which is what
+    keeps this from being a fixture where every number moves together.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_EMPTY_RECORD_STEP,
+        _local_template=_EMPTY_ROWS_TEMPLATE,
+        experiment_type="empty_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_rows"]["value"] == 6.0
+    assert agg["score"]["n"]["completed"] == 4
+    assert agg["score"]["value"] == 1.5
+
+
+_ARM_G_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        scores = {{"p1": 1.0, "p2": 3.0, "p4": 2.0, "p5": 6.0}}
+        for unit in io.units:
+            if unit.key in scores:
+                io.record(unit.key, {{"score": scores[unit.key]}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_ARM_G_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("g_by_rows")\n'
+    "class ByRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        scores = [row["score"] for row in units if "score" in row]\n'
+    "        return {\n"
+    '            "n_rows": float(len(list(units))),\n'
+    '            "mean_score": sum(scores) / len(scores) if scores else None,\n'
+    "        }\n"
+)
+
+
+def test_arm_g_the_report_by_stratum_path_moves_with_the_widened_collapse(tmp_path, capsys):
+    """H5b's guard pin, **arm G** — added by the batch 2 fix round under
+    Controller ruling 8, which found the `report_by` stratum path to be a
+    ninth moving-key class in neither the batch report's table nor any arm.
+    Fixture H is the only other fixture that exercises `by`, and it pins only
+    literals that did not move (its level `a`'s two units were always
+    admitted).
+
+    Six units in two cohorts of three; in each cohort two record a numeric
+    `score` and the third records only a bool `valid`. Before H5b that third
+    unit was dropped from `collapsed` entirely, so each level's table held two
+    rows; after task 4 it is admitted carrying its bool, so `level_collapsed`
+    — `{k: v for k, v in collapsed.items() if k in keys}`, a projection of
+    `collapsed` with no code path of its own — holds three. The level survives
+    the second gate because `score` gives it a recorded-column block, which is
+    what makes it a moving level rather than an absent one.
+
+    The moved keys are the same class the review's `668cb05`-vs-HEAD diff
+    found: each level's `n_rows.value`/`.ci95`, its `mean_score.n.completed`
+    and `ci95`, and its `mean_score.resample_draws`. **The pre-H5b values are
+    not re-measured here and are not asserted** — the narrow collapse no
+    longer exists to run — so what this arm pins is the moved state plus the
+    pair that makes the move visible inside one run: a level table of three
+    rows beside a `score` contributed by two.
+
+    **`resample_draws` is pinned and is not a constant**: it is
+    `resample_seed(digest)`-dependent, so it is this fixture's own number at
+    this fixture's own config and it moves if that config's shape does. It is
+    the **fourth** distinct such literal measured in this slice, beside arm B's
+    `1998` (direct call, `seed=7`), plan correction 7's `1999`, and the batch 2
+    review's own `1997` — which is the comparison Minor m2 was about, and the
+    reason this arm carries a labelled literal rather than arm E gaining one.
+    A draw that samples only rows carrying no `score` recomputes `mean_score`
+    as `None` and is degenerate, which is why the count is below the requested
+    2000 at all — and why `W-STATS-RESAMPLE-THIN` is expected on stdout rather
+    than a surprise.
+
+    `score`'s own per-level figures must NOT move: its numeric subset is
+    unchanged by admitting a unit that carries no number.
+    """
+    roster_csv = "patient_id,cohort\np1,a\np2,a\np3,a\np4,b\np5,b\np6,b\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_ARM_G_STEP,
+        _local_template=_ARM_G_TEMPLATE,
+        units_overrides={"attributes": ["cohort"]},
+        statistics={"report_by": ["cohort"]},
+        experiment_type="g_by_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = agg["by"]["cohort"]
+    assert set(by) == {"a", "b"}
+
+    # The MOVED keys, per level. Each level's table is three rows because the
+    # bool-only unit is admitted; `score` contributes two. Those two figures
+    # sitting side by side in one record are the move, expressed without a
+    # second run to compare against.
+    for level in ("a", "b"):
+        assert by[level]["n_rows"]["value"] == 3.0
+        assert by[level]["n_rows"]["ci95"] == [3.0, 3.0]
+        assert by[level]["n_rows"]["resample_draws"] == 2000
+        assert by[level]["mean_score"]["n"]["completed"] == 3
+        assert by[level]["score"]["n"]["completed"] == 2
+
+    assert by["a"]["mean_score"]["value"] == 2.0
+    assert by["a"]["mean_score"]["ci95"] == [1.0, 3.0]
+    assert by["b"]["mean_score"]["value"] == 4.0
+    assert by["b"]["mean_score"]["ci95"] == [2.0, 6.0]
+    # The third distinct `resample_draws` literal of this slice, at this
+    # fixture's own `resample_seed(digest)` — 73 of 2000 draws sampled only
+    # rows carrying no `score` and recomputed `None`.
+    assert by["a"]["mean_score"]["resample_draws"] == 1927
+    assert by["b"]["mean_score"]["resample_draws"] == 1927
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+
+    # Must NOT move: `score`'s own numeric subset is untouched by admitting a
+    # unit that carries no number, so its value, interval and method are the
+    # figures a pre-H5b run over the same two contributing units produced.
+    assert by["a"]["score"]["value"] == 2.0
+    assert by["a"]["score"]["ci95"] == [-10.706204736174694, 14.706204736174694]
+    assert by["a"]["score"]["method"] == "t_over_units"
+    assert by["b"]["score"]["value"] == 4.0
+    assert by["b"]["score"]["ci95"] == [-21.41240947234939, 29.41240947234939]
