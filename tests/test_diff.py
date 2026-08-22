@@ -1584,3 +1584,121 @@ def test_h8c_arm_d_reference_worked_diff_block_rows(tmp_path: Path):
         "  01_method=spearman.calibration_id  CAL-2026-07-19 → CAL-2026-08-02",
         "parameters_hash    identical    sha256:1a2b…",
     )
+
+
+# ---------------------------------------------------------------------------
+# H6a's guard pin — arm N, the seventh arm (Ruling I), captured in batch 1
+# BEFORE any code task runs. **NO AUTHORIZED EDITOR.** Arms A, B and C are in
+# `tests/test_cli.py`, arms D and E in `tests/test_hashes.py`, arm F in
+# `tests/test_validate.py`.
+#
+# Ruling I's grounds, in one line: the claim this arm holds reads like a defect
+# and is a consequence, which is precisely the claim a later slice will want to
+# soften. As task 7's own test it would be editable by whoever next touches
+# task 7's surface; as a pin arm with no authorized editor, a passing arm is
+# the proof.
+
+_H6A_OLD_DEFINITION_HASH = "sha256:ebc5ee53ac39bbab63d5270475271068dc67e6f34ead9db648bad114845b1cce"
+_H6A_NEW_DEFINITION_HASH = "sha256:71bf339cc9463f4c776c711f3d65ccf9b3bc1e18d383b78ae7d4e5170b526c2b"
+
+
+def _h6a_record_pair(run_dir: Path, hash_a: str, hash_b: str) -> tuple[Path, Path]:
+    """Two copies of one real run, differing only in `code_hash` and `run_id`.
+
+    Copied from a run this module already knows how to produce rather than
+    hand-written from scratch: every other field — `parameters_hash`, the
+    embedded config, the whole `provenance` block, `execution`, `results` — is
+    a real run's own, so the pair differs in exactly what the arm is about.
+    Each copy's `run_id` suffix is rewritten to its own digest's first seven
+    hex characters, and so is its directory name, the way `allocate_run_dir`
+    would have written them.
+    """
+    import shutil
+
+    out = []
+    for digest in (hash_a, hash_b):
+        short = digest.split(":", 1)[1][:7]
+        target = run_dir.parent / f"run_2026-08-22T00-00-00Z_{short}"
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(run_dir, target)
+        doc = yaml.safe_load((target / "run.yaml").read_text())
+        doc["code_hash"] = digest
+        doc["run_id"] = target.name
+        (target / "run.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+        out.append(target)
+    return out[0], out[1]
+
+
+def test_h6a_arm_n_diff_prints_code_hash_differs_across_the_boundary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Arm N. NO AUTHORIZED EDITOR — a passing arm IS the proof.
+
+    **This is what a reader sees across H6a's boundary for identical code, and
+    it is the cost the ruling accepts rather than a defect to fix.** Nothing
+    marks which definition produced a record's `code_hash`, so two runs of the
+    same config over the same data at the same commit — one before the change,
+    one after — are `DIFFERS` on that row and on nothing else `diff` can see.
+    A task that finds this arm failing has found `diff` or the ruling changed,
+    not a literal to refresh.
+
+    The two digests are the guard pin's own: `ebc5ee53…` is what the older
+    definition published for a tree carrying a git-excluded `src/pkg/.env`, and
+    `71bf339c…` is what the newer one publishes for the same tree.
+    """
+    doc = run_a_project(tmp_path, units=8)
+    old, new = _h6a_record_pair(doc["run_dir"], _H6A_OLD_DEFINITION_HASH, _H6A_NEW_DEFINITION_HASH)
+
+    capsys.readouterr()
+    code = command_diff(old, new)
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^code_hash\s+DIFFERS", out, re.M)
+    # Both digests are printed in `diff`'s own abbreviated form, so a reader
+    # sees the pair rather than only the verdict — and so the assertion above
+    # cannot pass on a render that says DIFFERS about some other row. The
+    # abbreviation is `diff`'s, measured here rather than assumed: it prints
+    # `sha256:` plus the first four hex characters and an ellipsis.
+    assert "sha256:ebc5…" in out
+    assert "sha256:71bf…" in out
+    # `parameters_hash` is one of the ten figures that do NOT move, and both
+    # sides are one run's own record, so its row is what tells "the code moved"
+    # from "the definition did" — and it says nothing about the difference.
+    assert re.search(r"^parameters_hash\s+identical", out, re.M)
+
+
+def test_h6a_arm_n_control_two_records_agreeing_on_code_hash_print_identical(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Arm N's can-fail control, and it is what makes the arm above non-vacuous.
+
+    Without it, `"code_hash"` and `"DIFFERS"` appearing in one render would be
+    satisfied by any `diff` that printed `DIFFERS` on that row unconditionally
+    — including one whose comparison had been neutered. The pair here is built
+    by the same helper, from the same run, with the **same** digest on both
+    sides, so the only difference between the two tests is the thing under
+    test.
+    """
+    doc = run_a_project(tmp_path, units=8)
+    same_a, same_b = _h6a_record_pair(
+        doc["run_dir"], _H6A_NEW_DEFINITION_HASH, _H6A_NEW_DEFINITION_HASH
+    )
+    assert same_a == same_b
+
+    capsys.readouterr()
+    code = command_diff(same_a, doc["run_dir"])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert re.search(r"^code_hash\s+DIFFERS", out, re.M)
+
+    # And the real pair: the run itself against a copy carrying the run's own
+    # digest, which is the identical arm this control exists to show.
+    identical, _ = _h6a_record_pair(
+        doc["run_dir"],
+        yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["code_hash"],
+        _H6A_NEW_DEFINITION_HASH,
+    )
+    capsys.readouterr()
+    assert command_diff(doc["run_dir"], identical) == EXIT_OK
+    assert re.search(r"^code_hash\s+identical", capsys.readouterr().out, re.M)
