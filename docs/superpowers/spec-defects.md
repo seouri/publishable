@@ -8690,13 +8690,14 @@ greps were re-run for this entry and reproduce. **A design line saying "Filed" i
 finding this file already records once, for a different gap, now made twice in one slice pair.
 
 **What H5b task 3 decided instead of filing.** The open question had two halves, and this slice answers
-both rather than deferring either: on the **read** side, a column reaches `aggregate`'s table regardless
-of the mixture, and is published as a metric only when every value carried for it is a real number — one
-`str` costs that column its own metric block and nothing else. On the **write** side, `E-STEP-RETURN-TYPE`
-stays exactly as strict as it is today: a column genuinely `str` for some units and a number for others,
-written across repeats, still refuses at the cost of the whole execution's record. `docs/reference.md`
-§ The per-unit tables and § Statistical reporting now say both halves in the present tense; this entry is
-what remains **open** underneath that decision.
+both rather than deferring either. On the **read** side, the three mixtures and what each publishes are
+Ruling 1's amendment table (`docs/superpowers/plans/2026-08-22-non-numeric-columns-downstream.md`
+§ "Ruling 1 — the mixed column") — the single authority every site links to instead of restating, because
+a two-case sentence describing a three-case rule has been wrong here more than once. On the **write**
+side, `E-STEP-RETURN-TYPE` stays exactly as strict as it is today: a column genuinely `str` for some units
+and a number for others, written across repeats, still refuses at the cost of the whole execution's
+record. `docs/reference.md` § The per-unit tables and § Statistical reporting now say both halves in the
+present tense; this entry is what remains **open** underneath that decision.
 
 **The residual.** Whether the write side should ever be loosened — publishing a `str`-typed column instead
 of refusing the run when a step's per-unit values disagree on type — is a real design question the read-side
@@ -8874,8 +8875,10 @@ remaining 14) charters …"*. Once H5b merges, every one of those reasons assert
 pending, which is the same staleness in a different sentence.
 
 **The five, named by their question rather than by position**, all verified with
-`grep -n "H5b, H6, H9, H3c-3's remaining 14" docs/superpowers/spec-defects.md` plus the spine-citing
-variant:
+`grep -n "H5b, H6, H9" docs/superpowers/spec-defects.md` — narrowed to a phrase no line-wrap breaks,
+since `grep -n "H5b, H6, H9, H3c-3's remaining 14"` finds only three of the four parenthetical hits: the
+one at line 1951 wraps after `H3c-3's` and a single-line grep cannot see across it — plus the
+spine-citing variant:
 
 - a `summary` step's `Estimate.method` is not coerced (the `AMENDED 2026-08-22 (H5a task 12)` note under
   § Carried out of the S4a whole-branch review);
@@ -8899,3 +8902,32 @@ H5b's surface was non-numeric columns flowing downstream into `collapse_repeats`
 `Owner:` line **and** any *"no remaining slice (…)"* enumeration, because this file has now produced the
 same staleness in both. Still **unassigned, with the reason**: it would live in `tests/`, and no
 remaining slice's surface is this file's own hygiene.
+
+## OPEN — `W-STATS-COLUMN-THIN` fires once per column, multiplying one fact by the column count on a sub-floor roster — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-22, from the H5b whole-branch review, Minor 3.** Measured with the console script, six
+units, a step recording three fully covered numeric columns and a scaffold floor `limits.min_reported_n:
+10`:
+
+```
+warning W-STATS-COLUMN-THIN  limits.min_reported_n
+        condition 0, step 'step01_summarize_units': recorded column 'a' carries a number for 6 unit(s),
+        below limits.min_reported_n (10)
+   … identically for 'b' and 'c'
+```
+
+Three warnings, one fact: the *roster* is below the floor, and no column is partially covered. The
+emit site's own comment refuses per-column-per-level on exactly this ground —
+*"per-column-per-level would multiply one fact by the number of columns"* — and Ruling 5's own argument
+for narrowing the warning was that *"an unconditional warning would fire on runs with nothing wrong."*
+Both grounds are satisfied and the warning still over-fires, at a different granularity than either
+argument was written against.
+
+**Not closed here.** This is literally what Ruling 5 ordered — one warning per condition, step and
+column below the floor — and the § Warnings row is honest about what it names (*"carries a real number
+for fewer units than `limits.min_reported_n`"*, not *"is partially covered"*). Narrowing a controller
+ruling's just-minted warning inside a whole-branch gate, with no argument against Ruling 5 written down,
+would be a behaviour change riding in on a fix round. **Owner: unassigned, with the reason** — no
+remaining slice (H6, H9, H3c-3's remaining 14) has this loop's per-column granularity as its surface;
+the fix, if made, is narrowing the loop `cli.py:3284` iterates to one warning per (condition, step) that
+counts the columns below the floor rather than to one per (condition, step, column).

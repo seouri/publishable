@@ -90,9 +90,11 @@ def _is_metric_entry(value: Any) -> bool:
     grounds for excluding `by` were "the record `report` reads can never
     hold a metric called `by`", which `cli.py`'s `W-STATS-STRATUM-SHADOWED`
     disproves in writing — a recorded column named `by` whose every value is
-    a number keeps that value on the write side, as a real metric entry. (A
-    NON-numeric one keeps no metric block at all, so the record can hold
-    either shape under this key and a structural test is what reads both.)
+    a number keeps that value on the write side, as a real metric entry. A
+    NON-numeric one can too — a mixed `by` column still keeps a full
+    metric block, computed over its contributing units. The record can
+    hold either shape under this key, and a structural test is what reads
+    both.
     Filtering by the STRING
     `"by"` is the fifth instance on this project of answering a structural
     question with a name (a module-name prefix, a class marker, state read

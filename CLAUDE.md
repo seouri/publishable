@@ -224,7 +224,7 @@ moves in a two-condition run**: `n_paired` `4 → 6`, with `mean_score` and `sco
 `resample_draws` is **seed-dependent and not a constant**: four distinct literals were measured in this
 slice (`1998`, `1999`, `1997`, `1927`), two of them pinned, and no literal is reused across arms.
 
-**Four things newly stop or newly warn, and two warnings are minted.** (i) a derived key colliding with a
+**Five things newly stop or newly warn, and two warnings are minted.** (i) a derived key colliding with a
 **non-numeric** recorded column is refused (`E-STEP-KEY-COLLISION`, re-reported as
 `W-STATS-AGGREGATE-FAILED`), where both were published under one name; (ii) a step recording a
 non-numeric column named `by` loses that step's `report_by` strata and earns
@@ -233,7 +233,11 @@ non-numeric column named `by` loses that step's `report_by` strata and earns
 raise** — contained, costing that step's `derived` mapping; (iv) a **purely numeric** derived metric newly
 draws `W-STATS-RESAMPLE-THIN`, because admitting units creates degenerate draws (`2000 → 1998` on the
 direct-call fixture, `2000 → 1927` per level on a two-level `report_by` run) — an existing code at an
-existing site seeing a wider input, so **no § Warnings row moves**. Minted: **`W-STATS-REPEATS-DISAGREE`**
+existing site (`cli.py:3257`) seeing a wider input, so **no § Warnings row moves**; (v) a **comparison's**
+declared `resample` newly draws `W-STATS-CONTRAST-RESAMPLE-THIN` at a different existing site
+(`cli.py:1659`), for the same reason — admitting units widens the contrast's own resample too, and
+`reference.md`'s row for it already rules the two are two facts, since neither the `n_paired`
+denominator nor a thin pool is the other's fact — so this too moves no § Warnings row. Minted: **`W-STATS-REPEATS-DISAGREE`**
 (a recorded column disagreeing across one unit's repeats) and **`W-STATS-COLUMN-THIN`** (a contributing
 count below `limits.min_reported_n`, per condition, step and column) — two things that newly *fire*, so
 the list does not read as if nothing new appears. **`uv.lock` is the carrier of all of it**: two runs of

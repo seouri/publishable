@@ -18503,7 +18503,7 @@ def test_arm_g_the_report_by_stratum_path_moves_with_the_widened_collapse(tmp_pa
     assert by["a"]["mean_score"]["ci95"] == [1.0, 3.0]
     assert by["b"]["mean_score"]["value"] == 4.0
     assert by["b"]["mean_score"]["ci95"] == [2.0, 6.0]
-    # The third distinct `resample_draws` literal of this slice, at this
+    # The fourth distinct `resample_draws` literal of this slice, at this
     # fixture's own `resample_seed(digest)` — 73 of 2000 draws sampled only
     # rows carrying no `score` and recomputed `None`.
     assert by["a"]["mean_score"]["resample_draws"] == 1927

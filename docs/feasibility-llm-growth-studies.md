@@ -1795,3 +1795,20 @@ same way — a slice retired or added one thing and the summary phrase was carri
 re-deriving what it counted — and row 4's `1` is now the second one made by **repeating a table** rather
 than by rewriting a phrase, which is worth recording: character-for-character repetition protects a row
 from drift and not from having been wrong when it was written.
+
+### Correction, dated 2026-08-22, against the H5b whole-branch review at commit `14b816e`
+
+**The entry above says "four things newly stop or newly warn." The correct count is five.** Measured by
+running one project twice — once against a `main` worktree and once against this branch, same project
+commit, same seed — a fifth thing newly fires and appears in neither this entry nor the four-thing
+enumeration it repeats: **`W-STATS-CONTRAST-RESAMPLE-THIN`**, at a comparison whose declared `resample`
+now draws over a table admitting units it used to drop. It is the contrast-side sibling of item (iv)'s
+`W-STATS-RESAMPLE-THIN` — same mechanism, admitting units creates degenerate draws — but at a **different
+emit site** (`cli.py:1659`, the contrast arm) from item (iv)'s (`cli.py:3257`), under a **different
+existing code** that already carries its own § Warnings row in `reference.md`, which rules the two are
+two facts on the same disclosure ground ("neither the `n_paired` denominator nor a thin pool are the same
+fact"). This slice's own nine of nine configs still meet no new stoppage: none declares a `statistics.
+contrasts` entry with `resample` over a column this analysis' non-numeric drop touches, so **row 4 is
+unmoved by this correction** — it corrects the count of newly-firing things, not the executability table.
+**No fifth row is minted here either**, matching the earlier correction's own rule: this is a count in
+prose, and the table above takes no fifth number.
