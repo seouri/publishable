@@ -739,10 +739,8 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     containment around `summarize_step` costs it every metric it computed. And
     a *numeric* attribute (an age, a dose) would be published as a metric with
     its own `ci95` and its own seat in the correction family, and handed a
-    repeat-dispersion figure for a value that cannot vary across repeats — not
-    reachable while every roster attribute arrives from `csv.DictReader` as a
-    string, and the reason not to depend on that staying true. Here an
-    attribute reaches `aggregate` and nothing else.
+    repeat-dispersion figure for a value that cannot vary across repeats. Here
+    an attribute reaches `aggregate` and nothing else.
 
     An attribute is carried through **unchanged**: it comes from the roster
     rather than from an execution, so unlike a recorded numeric column it has
@@ -752,12 +750,10 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     must not be the thing that papers over that collision, which is why the
     attributes are applied last rather than first.
 
-    `unit` is restored after the merge because nothing refuses an attribute
-    *named* `unit` (`units.py` reserves `key`, `paths` and `attributes`, the
-    fields of `Unit` itself), and the unit key column must survive: a bootstrap
-    draw duplicates units on purpose, and `percentile_of_derived` keeps the real
-    keys inside every draw precisely so a template reading `unit` sees the
-    roster it was drawn from.
+    `unit` is restored after the merge because the unit key column must survive:
+    a bootstrap draw duplicates units on purpose, and `percentile_of_derived`
+    keeps the real keys inside every draw precisely so a template reading `unit`
+    sees the roster it was drawn from.
 
     Row-level, so the four operations the table promises are untouched and
     `columns` — derived from the rows — names the attributes for free.
@@ -3557,15 +3553,32 @@ def command_run(config_path: Path) -> int:
                     # `aggregate_where`, not `statistics.report_by`: the fault
                     # is the recorded column, and there may be no `report_by`
                     # key in the file to point at.
-                    if "by" in step_summary:
+                    #
+                    # The question is *did any unit record a column called
+                    # `by`?*, and `recorded_columns` — built above from
+                    # `collapsed`, for the `repeat_spread` walk — is that
+                    # question's own answer. `step_summary` was a PROXY for it:
+                    # a NON-numeric `by` column never reaches `summarize_step`'s
+                    # published keys, so it drew no warning while
+                    # `units.parquet` carried the column and `run.yaml` carried
+                    # a `by` strata block — the two-meanings-under-one-name case
+                    # the reserved name exists to prevent. The move is only a
+                    # widening: `by` in `step_summary` implies `by` in
+                    # `recorded_columns`, because a DERIVED `by` is refused in
+                    # `summarize_step` (`RESERVED_METRIC_NAMES`) and the
+                    # containment retry above passes no `derived` at all, so the
+                    # only route into `step_summary` is the column loop over
+                    # this same `collapsed`.
+                    if "by" in recorded_columns:
                         aggregate_c.warn(
                             "W-STATS-STRATUM-SHADOWED",
                             aggregate_where,
                             f"condition {cond.index} step {step_name!r}: 'by' is a "
                             "reserved metric name — it holds the key the reporting "
                             "strata are attached under — so the recorded column of "
-                            "that name keeps its value but gets no contrast delta, "
-                            "and no strata are reported for this step",
+                            "that name gets no contrast delta and no seat in the "
+                            "correction family, and no strata are reported for this "
+                            "step",
                         )
                     # Absent, not empty, the rule `vs_baseline` and `contrasts`
                     # already follow: a `by: {}` would claim a stratification

@@ -6958,6 +6958,99 @@ def test_a_recorded_by_column_warns_even_with_no_report_by_declared(tmp_path, ca
     assert _first_contrast(run, "method=spearman")["family_size"] == 1
 
 
+# --- H5b task 9: Fixture F — a NON-numeric `by` column ----------------------
+
+_RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"pred": float(i), "by": "lvl%d" % (i % 2)}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_non_numeric_recorded_by_column_warns_and_suppresses_the_strata(
+    tmp_path, capsys, monkeypatch
+):
+    """Fixture F. The gate answers from the **recorded-column set**, not from
+    `step_summary` — so a `by` column no unit recorded a number for draws the
+    warning and loses its strata, exactly as the numeric one does.
+
+    Before this task the gate read `if "by" in step_summary`, and a non-numeric
+    `by` column never reaches `summarize_step`'s published keys (H5b task 6
+    leaves the column in `collapsed`, and the column loop still publishes no
+    block for it): so the run went **silent** and published the `cohort` strata
+    under the very name `units.parquet` was already using for a measured
+    column — two meanings under one name, which is the whole reason `by` is
+    reserved. § Steps and artifacts states the consequence without
+    qualification: *"no strata are reported for the step at all."*
+
+    **This is not the reserved-NAME-for-a-structural-fact fault.** There the
+    question was *is this entry a stratum?* and the answer given was a name;
+    here the question **is** whether a column of that name was recorded, so
+    `recorded_columns` is the direct answer rather than a proxy for one. The
+    proxy was `step_summary`, and this test is what it could not see.
+
+    `"by" not in step_block` carries both halves at once, because the strata
+    block and the metric block would occupy the same key: a non-numeric column
+    has no metric block to keep, and the strata are suppressed. `pred` is the
+    can-fail half — a run publishing nothing at all would satisfy the `by`
+    assertion for free.
+
+    The structural assertion sits **before** the stdout one deliberately:
+    pytest stops at the first failure, and the published record is the
+    load-bearing claim. Both were measured to fail under the
+    gate-back-to-`step_summary` mutation, by running it in each order — under
+    that mutant `step_block["by"]` holds the `cohort` strata while
+    `units.parquet` holds a measured `by` column, which is the defect
+    itself."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "by" not in step_block
+    assert step_block["pred"]["value"] == pytest.approx(19.5)
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+
+
+def test_a_non_numeric_by_column_still_reaches_the_unit_table(tmp_path, capsys, monkeypatch):
+    """The other half of the ruling, and the reason the suppression is not a
+    drop: the column is gone from `aggregated` and still present in
+    `units.parquet`, so nothing was lost — only the two-meanings-under-one-name
+    publication was refused. Read from the artifact rather than from the record,
+    which is where the two claims differ."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    from publishable.artifacts import _decode_parquet
+
+    tables = sorted(doc["run_dir"].rglob("units.parquet"))
+    assert tables
+    rows = _decode_parquet(tables[0].read_bytes())
+    assert {row["by"] for row in rows} == {"lvl0", "lvl1"}
+
+
 # --- Task 6: `W-STATS-STRATUM-THIN` at run time --------------------------------
 
 _SKIP_MOST_OF_COHORT_A_STEP = """\

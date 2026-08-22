@@ -89,8 +89,11 @@ def _is_metric_entry(value: Any) -> bool:
     the key it sits under. Major 3 (task-b4 review): Decision 5's own
     grounds for excluding `by` were "the record `report` reads can never
     hold a metric called `by`", which `cli.py`'s `W-STATS-STRATUM-SHADOWED`
-    disproves in writing — a recorded column named `by` "keeps its value"
-    on the write side, as a real metric entry. Filtering by the STRING
+    disproves in writing — a recorded column named `by` whose every value is
+    a number keeps that value on the write side, as a real metric entry. (A
+    NON-numeric one keeps no metric block at all, so the record can hold
+    either shape under this key and a structural test is what reads both.)
+    Filtering by the STRING
     `"by"` is the fifth instance on this project of answering a structural
     question with a name (a module-name prefix, a class marker, state read
     at the wrong moment, a one-spelling grep, `pop(0)`), so this asks the
@@ -104,11 +107,11 @@ def _is_strata_block(value: Any) -> bool:
     """The `report_by` strata shape and nothing else: attribute → level →
     metric → entry, three `Mapping`s deep with a genuine metric entry
     (`_is_metric_entry`) at the bottom of every branch. Never identified by
-    sitting under the key `"by"` — `cli.py` does not write this block at
-    all when a recorded column of that name exists (`W-STATS-STRATUM-
-    SHADOWED`: "no strata are reported for this step"), so the two shapes
-    never actually collide under one key, but a structural test costs
-    nothing to make correct in the collision's absence too.
+    sitting under the key `"by"` — `cli.py` does not write this block at all
+    when a recorded column of that name exists, numeric or not
+    (`W-STATS-STRATUM-SHADOWED`: "no strata are reported for this step"), so
+    the two shapes never actually collide under one key, but a structural
+    test costs nothing to make correct in the collision's absence too.
     """
     if not isinstance(value, Mapping) or not value:
         return False
