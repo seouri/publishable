@@ -275,7 +275,10 @@ where six consecutive slices' reports claimed zero disagreements and all six wer
       step override falsifies this arm's own premise and the arm would fire for the wrong reason.**
       Use `aggregate_returns=` (which swaps in `_AGGREGATE_STEP`'s float `pred` column) or an explicit
       numeric `_starter_step`; **grep the helper for `_AGGREGATE_STEP` and say in the docstring which
-      you used and that the step records no bool.**
+      you used and that the step records no bool.** **Say in the arm's own text that a second recorded
+      column of any non-numeric type FALSIFIES this arm rather than failing it** — the arm would then be
+      asserting identity over a run this slice legitimately moves, and the response is to fix the fixture,
+      not the literal.
       **The docstring carries two labelled sentences, not one:**
       *The rule:* identity holds when no non-numeric column exists **anywhere in the same correction
       family**, because Holm ranks across the family and one metric's interval width moves another's
@@ -372,6 +375,38 @@ where six consecutive slices' reports claimed zero disagreements and all six wer
       this plan did (a `collapse_repeats` replacement installed on `publishable.cli`), and record the
       TODAY column from the unpatched run. **The monkeypatch does not ship**: the arm's committed form
       asserts the TODAY column, and task 4 flips it.
+
+- [ ] **Step 3b: capture arm F — a DERIVED metric's permutation p-value moves, and a recorded column's
+      and a contrast's do not. Sole authorized editor: task 4.** Fixture A's two tables again, this time
+      with `null_test={"method": "permutation", "n": 500, "shuffle": "grp", "level": "rows"}`, `labels`
+      mapping each unit to `"a"`/`"b"` by parity, `seed=7`, and a `null_fn` per key that reads the
+      **relabelled mapping** (a one-argument closure cannot express a permutation here —
+      `permutation_of_derived`'s docstring says why, and a closure ignoring `labels` returns `None` for
+      every key, measured).
+
+```
+  KEY                                   TODAY (4 units)        AFTER (6 units)
+  mean_score.p_value                    0.846307385229541      0.812375249500998
+  mean_score.null_draws                 500                    500
+
+  AND THESE MUST NOT MOVE (they have no p_value at all):
+  score.p_value / .null_draws           None / None            None / None
+```
+
+      Measured at `ee8085e` (§ Corrections 16). **Why this arm exists:** the design and the scoping both
+      enumerate the moving keys and **neither names `p_value`**, and `permutation_of_derived` takes the
+      whole `collapsed` and rebuilds each draw's table from whole rows — the same mechanism that moves
+      `mean_score.ci95`. **Why it is a separate arm rather than more keys on arm B:** arm B's fixture
+      declares no `null_test`, and adding one would change the block shape every one of its seven literals
+      was captured from.
+      **State the asymmetry in the docstring, and state which half was reasoned:** a **recorded column**
+      gets no `p_value` from `summarize_step` at all (read: the write is in the derived branch only,
+      confirmed by grepping `p_value` in `stats.py` over the column loop's range → nothing); and a
+      **contrast's** p-value comes from `permutation_over_contrast` over `of_values`/`against_values` in
+      the **unpaired recorded-column** arm, which task 7 narrows — so it does not widen. **The contrast
+      half was read, not run**; if the reader wants it run, one direct call settles it.
+      **No row of the four-row table moves on this**: all eight `statistics` blocks in the feasibility
+      analysis carry `null_test: null`, which the truthy guard treats as undeclared.
 
 - [ ] **Step 4: capture arm C — the numeric `by` column keeps its metric block and its warning. NO
       AUTHORIZED EDITOR.** `tests/test_cli.py::test_a_recorded_column_named_by_keeps_its_metric_and_warns`
@@ -1578,7 +1613,11 @@ retro-edited**.
       column and may now raise (contained as `W-STATS-AGGREGATE-FAILED`), and **a purely numeric derived
       metric newly drawing `W-STATS-RESAMPLE-THIN`** because admitting units creates degenerate draws
       (`2000 → 1998` on Fixture A, `2000 → 1999` on the two-condition run — an existing code at an
-      existing site seeing a wider input, so **no § Warnings row moves**). Say that `uv.lock` is the
+      existing site seeing a wider input, so **no § Warnings row moves**). Add the eighth moving-key
+      class — **a derived metric's `p_value` and, through the family, its `p_value_corrected`**
+      (§ Corrections 16) — and say that **one warning is MINTED**, `W-STATS-REPEATS-DISAGREE`, which is a
+      new thing that fires rather than a stoppage, so the entry does not read as if nothing new appears.
+      Say that `uv.lock` is the
       carrier and that being *able* to derive the change from a lockfile hash is not being told.
       **The order line:** H5b removed from *remaining*; **H6, H9 and H3c-3's remaining 14** stated as what
       is left. **Grep `CLAUDE.md` for every occurrence of "H5b" and reconcile each**, reporting the list —
@@ -1591,10 +1630,11 @@ retro-edited**.
       be present — *a reviewer checking this exact rule lost a true hit to `grep -v superpowers`.*
       Mechanical: links, `#anchor`s, duplicate anchors, table column counts, trailing whitespace, tabs,
       invisible unicode, `×` not `x`, hyphens not en dashes — **skipping fenced blocks.**
-      Cross-document: the shared worked example (**this slice changes no worked-example number — assert
-      that, by diffing the three files' worked-example lines against task 1's arm D... which does not
-      cover them, so assert it by `git diff` over the three files and report zero hits**); config
-      completeness; enum comments; schema fields in prose; declared vs. derived; versions; prevented
+      Cross-document: the shared worked example — **this slice changes no worked-example number, and the
+      way to show it is `git diff` over `README.md`, `docs/design-principles.md` and `docs/reference.md`
+      for the worked example's interval and hash literals, expecting ZERO hits.** (No pin arm in this
+      slice covers those files; H5a's did, and citing it here would be a claim about the wrong branch.)
+      Then: config completeness; enum comments; schema fields in prose; declared vs. derived; versions; prevented
       mistakes. **The feasibility analysis is exempt from the cross-document pass and subject to the
       mechanical pass in full.**
       **Neither pass touches the development record** — a spec and a scoping record what was decided and
@@ -1695,7 +1735,10 @@ cluster set the difference did not come from. **What the task must do instead:**
 filter in `of_col`/`against_col`, and task 7's **third mutation** pins the difference by moving it back —
 without that mutation this correction is prose, and *prose in a corrections section prevents nothing.*
 The paired arm's `col_keys` is where the design put it and is correct, for the same reason: `diffs`,
-`col_weights`, `col_clusters` and `n_paired` all derive from it.
+`col_weights`, `col_clusters` and `n_paired` all derive from it. **And the unpaired arm has a fourth
+consumer the design's reading would also break:** `permutation_over_contrast`'s `of_clusters`/
+`against_clusters` are built as `[of_clusters[k] for k in of_col]`, so a value vector narrowed while
+`of_col` was not would permute a cluster list of the wrong length beside it.
 
 **3. The disagreement function needs no "plus the unit keys" parameter, because the walk is shared.**
 The design specifies *"a new pure function in `stats.py` beside `repeat_spread`, taking the same four
@@ -1818,6 +1861,23 @@ code in `report.py`**, whose structural predicates are the sibling that already 
 or docstring claiming a guarantee the code does not provide* is this repo's most-recorded habit, and
 **this instance is one the design did not name.**
 
+**16. `statistics.null_test` widens by the same mechanism, and NOBODY enumerated it.** Neither the design
+nor the scoping names `p_value` among the moving keys. `permutation_of_derived(collapsed, labels, compute,
+seed, n=…)` takes the whole `collapsed` and rebuilds each draw's table from **whole rows**, exactly as
+`percentile_of_derived` does — so admitting units widens the null distribution too. Measured on Fixture
+A's two tables at `seed=7, n=500` with a label-reading `null_fn` (probe `p6`): `mean_score.p_value`
+**`0.846307385229541` → `0.812375249500998`**, `null_draws` `500` in both. **The asymmetry is the same one
+Decision 6 already documents for `n_paired`**, and both halves were established: a **recorded column**
+gets no `p_value` from `summarize_step` at all (the write lives in the derived branch only), and a
+**contrast's** p-value comes from `permutation_over_contrast` over `of_values`/`against_values` in the
+unpaired recorded-column arm, which task 7 narrows — so it does not widen. **The contrast half was read
+rather than run**, and is named as such. **What the task must do instead:** task 1 gains **arm F** with
+those literals and task 15's `CLAUDE.md` list gains an eighth moving-key class. **No row of the four-row
+table moves**: all eight `statistics` blocks in the feasibility analysis carry `null_test: null`, which the
+truthy guard treats as undeclared — **say so explicitly, so a new moving key is not read as an
+executability change.** *An enumeration that omits a class is the carried-summary failure in miniature*,
+and this plan asserted one.
+
 ---
 
 ## Live overrulings — restated here because a ruling that overrules a brief has to reach the brief
@@ -1887,10 +1947,10 @@ implementer.** These are in the plan itself, above and here.
 
 - **Every claim about the code was measured at `ee8085e`**, by reading the file or **running** the
   behaviour, and `git diff --stat 5ee3a0c ee8085e -- src tests` is empty — so the scoping's baseline is
-  reusable while its claims are re-checked. **Fifteen corrections**, six of which reshape a task:
+  reusable while its claims are re-checked. **Sixteen corrections**, seven of which reshape a task:
   correction 2 (task 7's unpaired filter moves and gains a mutation), correction 3 (task 4 extracts a
   shared walk), correction 5 (task 4's collapse rule and task 5's Fixture L), correction 6 (task 4 gains
-  Fixture M) correction 9 (task 1 gains arm E) and correction 15 (task 9 gains step 3b).
+  Fixture M) correction 9 (task 1 gains arm E), correction 15 (task 9 gains step 3b) and correction 16 (task 1 gains arm F and the moving-key enumeration gains an eighth class).
 - **The required re-measurement was performed, not copied.** The scoping's Holm half reproduces and moves
   two keys its paragraph does not name. **It was not a non-reproduction, so no finding is owed there** —
   but the two extra keys are one.
@@ -1901,8 +1961,8 @@ implementer.** These are in the plan itself, above and here.
   are named **blind in advance** — the annotation sweep, four docstring/comment edits, and the document
   tasks — and **each owes a named replacement.** One is named **REJECTED rather than blind** (task 5's
   fourth), because it is not blind and calling it so would be wrong.
-- **Three pin arms have no authorized editor** (A, C, D) and two have exactly one each (B and E, both
-  task 4). Arm A's rule and its fixture's framing are stated as **two labelled sentences**, because the
+- **Three pin arms have no authorized editor** (A, C, D) and three have exactly one each (B, E and F,
+  all task 4). Arm A's rule and its fixture's framing are stated as **two labelled sentences**, because the
   loose version is what the scoping falsified.
 - **The four collisions that stay where they are** — H3c-3's `fold_members`, the
   `report_by`-under-`resample` gap, `repeat_spread`'s `std: 0.0`, and the degenerate-stratum warning's
