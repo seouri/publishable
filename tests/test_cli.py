@@ -3056,8 +3056,13 @@ def _first_contrast(run: dict[str, Any], label: str) -> dict[str, Any] | None:
 def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     """`vs_baseline` is where `resolve_contrasts`'s auto-generated,
     condition-against-baseline comparisons land. The scaffold's own step
-    records only a bool (`{"present": True}`, filtered by `_is_numeric`), so
-    this uses `_METHOD_VARYING_STEP` — a per-unit value that genuinely
+    records only a bool (`{"present": True}`) — carried through the
+    collapse unfiltered since H5b's task 4, but still refused a metric
+    block of its own by `stats.summarize_step`'s own per-column
+    `_is_numeric` gate (H5b task 12/13's re-derivation of this docstring:
+    the right predicate, previously misattributed to the collapse rather
+    than to this loop) — so this uses `_METHOD_VARYING_STEP` — a per-unit
+    value that genuinely
     differs by condition and has real within-condition variance — to get a
     real numeric column to difference, rather than `_AGGREGATE_STEP`'s
     `float(i)` (identical under both conditions, so `delta` and `cohens_d`
@@ -10754,11 +10759,17 @@ def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, c
       would have been asserting a fact about a document this build does not
       write, so it is replaced with a plain status check.
     - The scaffold's one auto-generated step never yields a real `aggregated`
-      metric on its own: it records `present: True`, and `stats.summarize_step`
-      drops a bool column outright ("skipped entirely... a string, or a bool").
-      So the un-narrowed `run_a_project(tmp_path, units=10)` call produces
-      `aggregated == {"step01_summarize_units": {}}` — non-empty at the top
-      level, empty where the pin needs to look, which is exactly the
+      metric on its own: `GenericTemplate` inherits `BaseTemplate.aggregate`,
+      which returns `{}` regardless of what `collapsed` holds (Decision 12) —
+      true before and after H5b, and true whether `present` were a bool or a
+      number. `stats.summarize_step` never even reaches the point of dropping
+      `present` as a bool column here (H5b task 12/13's re-derivation of this
+      docstring: it does not receive an empty table from the collapse either —
+      `present` is carried on every row after task 4 — the derived side is
+      `{}` because the template's own `aggregate` is, independent of the
+      column). So the un-narrowed `run_a_project(tmp_path, units=10)` call
+      produces `aggregated == {"step01_summarize_units": {}}` — non-empty at
+      the top level, empty where the pin needs to look, which is exactly the
       "assertion implied by another" trap: the `assert aggregated` guard would
       have passed while the loop beneath it never executed. `aggregate_returns`
       is used instead, the same helper every other end-to-end test in this

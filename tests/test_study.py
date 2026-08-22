@@ -10,12 +10,20 @@ from pathlib import Path
 import pytest
 import yaml
 from tests.test_cli import run_a_project
+from tests.test_report import _fixture_j_run
 
 from publishable.cli import main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.run_record import SCHEMA_VERSION
-from publishable.study import REDACTED, _redact, study_add, study_new, thin_metric_lines
+from publishable.study import (
+    REDACTED,
+    _floor_metric_entries,
+    _redact,
+    study_add,
+    study_new,
+    thin_metric_lines,
+)
 
 
 def _snapshot(root: Path) -> set[tuple[str, bytes]]:
@@ -732,3 +740,42 @@ def test_study_new_add_report_join_through_main_end_to_end(tmp_path: Path, capsy
     assert "## sensitivity" in out
     assert f"run_id: {run1['record']['run_id']}" in out
     assert f"run_id: {run2['record']['run_id']}" in out
+
+
+# --- H5b task 14: `study`'s thin-metric floor sees the same four entries ---
+
+
+def test_fixture_j_the_floor_walk_sees_exactly_four_metric_entries(tmp_path: Path):
+    """H5b task 14, step 2. `study.py`'s `_floor_metric_entries` — grepped
+    and read (`grep -n '_floor_metric_entries' src/publishable/study.py`,
+    two hits: its definition and its one caller in `study_add`) — walks a
+    record's `results.conditions[].aggregated` structurally via
+    `_is_thin_checkable_entry` (`basis` present, or `reported is True`),
+    never by a key's name. Fixture J's own record has exactly one
+    condition and no `vs_baseline`/`contrasts`/`summary`, so the walk's
+    only source is that one condition's `aggregated.step01_summarize_units`
+    block: `n_rows`, `n_valid`, `mean_score` (each `basis: units`, derived)
+    and `score` (`basis: units`, a recorded column with a contributing
+    count of 4). `valid` is non-numeric for every unit and earns no block
+    at all (Ruling 1's first row), so it cannot appear here either —
+    exactly the four entries `report`'s own table shows (Fixture J, step
+    1), no fifth.
+
+    Verified through the real `study add` path (Fixture J's `run.yaml`
+    added to a bundle with `--as`), not by hand-building a record: a
+    string wearing a metric block's shape (`{"basis": "units", ...}`) would
+    structurally enter this walk the same way a genuine one does, so the
+    read has to come from what a real run actually wrote.
+    """
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    built = _fixture_j_run(tmp_path)
+    assert (
+        main(["study", "add", str(bundle), str(built["run_dir"] / "run.yaml"), "--as", "main"])
+        == EXIT_OK
+    )
+    record = yaml.safe_load((bundle / "main.run.yaml").read_text())
+    entries = _floor_metric_entries(record)
+    names = {label.rsplit(".", 1)[-1] for label, _ in entries}
+    assert names == {"n_rows", "n_valid", "mean_score", "score"}
+    assert len(entries) == 4

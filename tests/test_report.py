@@ -2925,3 +2925,107 @@ def test_bundle_null_apparatus_excluded_not_counted_a_mismatch(
     assert code == EXIT_OK
     assert "W-STUDY-APPARATUS-MISMATCH" not in captured.out
     assert "W-STUDY-APPARATUS-MISMATCH" not in captured.err
+
+
+# --- H5b task 14: `report` and `study` pinned as readers of `aggregated` ----
+# --- (Fixture J) --------------------------------------------------------
+
+
+_FIXTURE_J_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i), "valid": True}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_FIXTURE_J_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("fixture_j")\n'
+    "class FixtureJ(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    "        rows = list(units)\n"
+    '        scores = [r["score"] for r in rows if "score" in r]\n'
+    "        return {\n"
+    '            "n_rows": float(len(rows)),\n'
+    '            "n_valid": float(sum(1 for r in rows if r.get("valid") is True)),\n'
+    '            "mean_score": sum(scores) / len(scores) if scores else None,\n'
+    "        }\n"
+)
+
+
+def _fixture_j_run(tmp_path: Path, subdir: str = "proj") -> dict[str, Any]:
+    """H5b Fixture J: six units, `p1`-`p4` recording `score` and `valid`
+    together, `p5`-`p6` recording only `valid`. `valid` is non-numeric for
+    EVERY unit (Ruling 1's first row) so it earns no metric block at all;
+    `score` is numeric for four of six (Ruling 1's second row, the
+    contributing-count case) so it keeps one. `limits.min_reported_n: 1`
+    so neither `score`'s contributing count of `4` nor the condition-wide
+    `6` trips a `study add` confirmation prompt below the floor.
+    """
+    return run_a_project(
+        tmp_path / subdir,
+        units=6,
+        _starter_step=_FIXTURE_J_STEP,
+        _local_template=_FIXTURE_J_TEMPLATE,
+        experiment_type="fixture_j",
+        parameters={},
+        limits={"min_reported_n": 1},
+    )
+
+
+def _table_metric_names(markdown: str, heading: str) -> set[str]:
+    """The exact `metric` column's cell values from the pipe table under
+    `heading`, never a raw substring search over the whole page: `valid`
+    could be satisfied by an unrelated word (a warning, another metric's
+    name) even when no row for the column exists."""
+    lines = markdown.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip() == heading:
+            start = i
+            break
+    assert start is not None, f"{heading!r} heading not found in report output"
+    table_lines = [line for line in lines[start + 1 :] if line.startswith("|")]
+    assert table_lines, f"no table rendered under {heading!r}"
+    header_cells = [c.strip() for c in table_lines[0].strip("|").split("|")]
+    metric_idx = header_cells.index("metric")
+    names: set[str] = set()
+    for line in table_lines[2:]:  # skip header row and its `---` separator
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        names.add(cells[metric_idx])
+    return names
+
+
+def test_fixture_j_report_renders_the_carried_and_the_dropped_columns_correctly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """H5b task 14, step 1 — Fixture J through `publishable report`.
+
+    `aggregated.step01_summarize_units` holds four metric-shaped entries
+    after H5b (`n_rows`, `n_valid`, `mean_score`, `score`) and zero for
+    `valid`, which never earns a block at all (Ruling 1's first row: a
+    column non-numeric for every unit reaches `aggregate`'s table but
+    publishes no metric). The condition table's `metric` column is parsed
+    structurally rather than substring-matched: a bare `assert "valid" not
+    in out` would also pass if the word never appeared anywhere else on
+    the page, which proves nothing about whether the ROW is absent — and
+    would equally pass if `report` had crashed before rendering anything.
+    """
+    doc = _fixture_j_run(tmp_path)
+    capsys.readouterr()
+    code = main(["report", str(doc["run_dir"] / "run.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    names = _table_metric_names(out, "## Conditions")
+    assert {"n_rows", "n_valid", "mean_score", "score"} <= names
+    assert "valid" not in names
