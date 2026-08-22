@@ -190,10 +190,30 @@ def _coerce_one(key: str, value: Any, where: str) -> Any:
     if value is None or type(value) in _SCALARS:
         return value
 
+    # A value that is already a `str` by inheritance is that string. `str` IS
+    # in `_SCALARS` — this is the identical situation `numpy.float64` is in,
+    # just for a type the `__len__` guard below would otherwise catch first,
+    # since `np.str_` has `__len__` and a plain array does too. `bytes` is NOT
+    # in `_SCALARS`, so `np.bytes_` (also a `__len__` type) is deliberately
+    # left to fall through to that guard and be refused on the same ground
+    # plain `bytes` already is — admitting the NumPy spelling of a type core
+    # refuses in its Python spelling would be the divergence this module's one
+    # rule exists to prevent. `str.__str__(value)`, not `str(value)`: the
+    # latter calls a `str` subclass's own `__str__` override, so
+    # `str(Color.RED)` is `'Color.RED'` for a `class Color(str, Enum)` under
+    # Python 3.11+ — corrupting the value silently — while `str.__str__`
+    # reaches straight past any override to the underlying character data
+    # and returns `'red'`, an exact `str` carrying the value the enum
+    # declares.
+    if isinstance(value, str):
+        return str.__str__(value)
+
     # Anything with `__len__` is structural, full stop — this must come before
     # the protocol checks below, because a NumPy array satisfies `__float__`,
     # `__index__`, and `__bool__` just as a scalar does, and coercing it would
-    # silently collapse a sequence to one element.
+    # silently collapse a sequence to one element. `np.bytes_` reaches this
+    # guard (it has `__len__`) and is refused here, on the same ground plain
+    # `bytes` is.
     if hasattr(value, "__len__"):
         raise _refuse(key, value, where)
 

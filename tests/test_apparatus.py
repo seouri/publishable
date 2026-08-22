@@ -255,6 +255,24 @@ def test_a_structural_fact_value_is_E_APPARATUS_FACT_TYPE_and_the_message_names_
     assert "list" in str(excinfo.value)
 
 
+def test_an_np_str_fact_value_resolves_instead_of_being_refused():
+    """H5a task 10's retirement, pinned: before this task, `np.str_` had
+    `__len__` and was refused by `coerce_scalars`' structural guard the same
+    way `["a-credential-shaped-value-9182736"]` above still is, re-coded here
+    to `E-APPARATUS-FACT-TYPE`. Now it coerces, so the fact resolves and its
+    recorded value is exactly `str` — a refusal that stopped firing, stated
+    as a retirement rather than left implicit."""
+    import numpy as np
+
+    from publishable import Apparatus
+    from publishable.apparatus import check_facts
+
+    returned = Apparatus(facts={"model_revision": np.str_("r1")})
+    checked = check_facts(returned, ["model_revision"], probe_name="p", credentials={})
+    assert checked == {"model_revision": "r1"}
+    assert type(checked["model_revision"]) is str
+
+
 def test_a_fact_equal_to_a_declared_credential_value_is_refused():
     """The value is `lab7`: short, lowercase, ordinary-looking, a whole word —
     chosen so an exact-value check catches it regardless of what it looks
