@@ -1927,7 +1927,7 @@ Recorded rather than fixed, each with the reason and where it lands.
 
 | Carried | Status |
 |---|---|
-| The `aggregate` table omits declared unit attributes and non-numeric columns | **Half closed, half open.** Task 13 landed the attributes half — `cli.py` now carries declared unit attributes into the table, with the collapse rule and the namespace fact stated in `reference.md` § Templates; that task's own reframing is worth keeping, since the document was already right and the code was wrong, so this was closing a divergence rather than adding a feature. **The non-numeric-column half is open — RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b**, by name and with the reason: H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") states that a non-numeric column reaching `collapse_repeats`, `summarize_step` or `aggregate`'s table is H5b tasks 11–13's, and H5a "collapses nothing and needs none" of that machinery |
+| The `aggregate` table omits declared unit attributes and non-numeric columns | **Half closed, half open.** Task 13 landed the attributes half — `cli.py` now carries declared unit attributes into the table, with the collapse rule and the namespace fact stated in `reference.md` § Templates; that task's own reframing is worth keeping, since the document was already right and the code was wrong, so this was closing a divergence rather than adding a feature. ~~**The non-numeric-column half is open — RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b**, by name and with the reason: H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") states that a non-numeric column reaching `collapse_repeats`, `summarize_step` or `aggregate`'s table is H5b tasks 11–13's, and H5a "collapses nothing and needs none" of that machinery~~ **STRUCK 2026-08-22 (H5b task 15): the non-numeric half is CLOSED — see the note below this table. The attributes half was already closed by S5 task 13 and is not re-struck.** |
 | `limits.max_ineligible_fraction` read by nothing | **CLOSED.** Read by `cli.py`; `W-DATA-INELIGIBLE` exists and has a row in `reference.md` § Warnings core reports |
 | `np.str_` / `np.bytes_` refused by `coerce_scalars`'s `__len__` guard | **CLOSED by H5a task 10 (2026-08-22), and the pairing this row drew turned out to bind two different grounds.** Measured against `src/publishable/coercion.py`: `np.str_` is now **admitted**, not refused — it is a `str` by inheritance, and `_coerce_one` admits anything already one of the four scalar types before the `__len__` guard runs at all. `np.bytes_` stays **refused**, and correctly: `bytes` is not one of the four scalar types `CLAUDE.md`'s invariant names (`str`/`int`/`float`/`bool`), so it falls through to the same `__len__` guard a NumPy array does. The row's own "the two share a slice" was right about the routing and wrong to imply one fix — one ground closes a refusal, the other confirms one that was never a bug |
 | Bootstrap-vs-analytic tolerance 0.02 against a 0.0198 worst case | **No slice; closed.** Deliberately not loosened; carried as a comment the test still wants |
@@ -1950,6 +1950,20 @@ would take an unusual template to produce — which is why this is filed rather 
 charter is the per-unit table and recorded-row contract, and a `summary`-step `Estimate`'s `method`
 field is neither. **Owner: unassigned, with that reason** — no remaining slice (H5b, H6, H9, H3c-3's
 remaining 14) has `coercion.py`'s `Estimate` exemption as its surface.
+
+**AMENDED 2026-08-22 (H5b task 15): the `aggregate`-table row's non-numeric half is CLOSED, and the row
+above is struck rather than rewritten.** Measured against `src/publishable/stats.py` and
+`src/publishable/cli.py` on H5b's branch: `collapse_repeats` carries every recorded value and admits
+every unit it was handed, so the table `aggregate` receives holds the non-numeric columns this row said
+it omitted — verified end to end through the installed console script on a project recording a bool-only
+column, not by reading the collapse. `reference.md` § Templates states the rule (a non-numeric column is
+carried and how it collapses across repeats) and § Statistical reporting states which of them earns a
+metric block. **The two halves this row paired needed two different closures**, which is why it took two
+slices: the attributes half was a divergence — the document was right and the code was wrong — while the
+non-numeric half was a behaviour change to what `aggregated` reports, and it is disclosed as one. The
+routing sentence further up this file (under § `units.parquet` type unification across rows within a
+column) points at this row for that question's status and needs no edit: it points at the row, and the
+row now carries the answer.
 
 ## New error identifier: `E-STATS-CONTRAST-WITHIN`
 
@@ -8455,7 +8469,7 @@ slice's surface is this file's own hygiene — so it wants a claimant rather tha
 stated here so whoever claims it needs no re-derivation: **parse every `## ` heading not marked closed,
 extract its `Owner:` line, and fail on any that names a slice whose merge commit exists on `main`.**
 
-## OPEN — a unit whose only recorded column is non-numeric is silently dropped from the unit table, and the statistics are then computed over nothing — **Owner: H5b**
+## ~~OPEN~~ STRUCK 2026-08-22 (H5b task 15) — CLOSED by H5b: a unit whose only recorded column is non-numeric is silently dropped from the unit table, and the statistics are then computed over nothing — ~~**Owner: H5b**~~
 
 **Filed 2026-08-21 against `0bd29a3`, before H5's design, because a silently wrong published number is the
 one defect class this project cannot leave to a slice-end filing.**
@@ -8490,6 +8504,42 @@ made in the open.
 
 **Cost while unclaimed:** any run whose step records only non-numeric columns for some units publishes
 intervals over a silently smaller table, with `n` and `resample_draws` both asserting otherwise.
+
+**STRUCK 2026-08-22 (H5b task 15): CLOSED, and the option taken is the FIRST of the four this entry
+named — the unit is admitted *and* the non-numeric column is carried with it.** `collapse_repeats`
+carries every recorded value and admits every unit it was handed (H5b task 4); `summarize_step`
+publishes a metric block for a column carrying a real number for at least one unit, none for a column
+no unit carries a number for, and the column reaches `aggregate`'s table either way. **The symptom
+this entry measured is gone, verified by running rather than by reading the change**: the six-unit
+`valid: True` roster's `n_valid` reads `{value: 6.0, ci95: [6.0, 6.0]}` where it read `0.0` /
+`[0.0, 0.0]`, pinned as the guard pin's arm B
+(`tests/test_stats.py::test_a_bool_only_column_widens_exactly_seven_moving_keys`).
+
+**Why each of the other three was rejected — a reason each, not an elimination.**
+
+- **Carried with the column omitted.** It repairs `n` and throws the value away. `reference.md`
+  § Templates commits the table `aggregate` receives to what the step recorded, and a template that
+  knows what a string means is the only thing that can read it; omitting the column would leave that
+  table describing something no artifact holds, while `units.parquet` beside it holds the value.
+- **Refused loudly.** A step that records an annotation beside its numbers is ordinary, and `None` is
+  a legal recorded value (H5a established that). Refusing would refuse configs that validate clean and
+  whose per-unit records are correct today — including the step `publishable init` generates, which
+  records `{"present": True}` and nothing else.
+- **The silent drop.** This entry's own ground stands: *no diagnostic is the only one of the four that
+  cannot be right.*
+
+**And the fourth question this entry did not ask, answered rather than left to the next reader: such a
+unit DOES enter the pairing intersection.** It enters `paired_keys`, `n_paired` and the resample pool,
+because the intersection is the units both conditions completed and is not per-metric — Decision 6 of
+this slice's design, documented by H5b task 8 in `reference.md` § Statistical reporting: *"A unit
+enters the intersection whether or not it carries the metric's own column — so a derived metric's
+`n_paired` can exceed the number of units that influenced the difference, and a recorded column's
+cannot."* A recorded column's contrast narrows again, at the subtraction, to the units carrying a real
+number for that column, so its count and its own difference vector are the same set by construction.
+
+**This closure is a behaviour change to `run`, taken with the argument made in the open** rather than
+mitigated: the values it moves are enumerated key by key in the design's § The behaviour change and in
+`CLAUDE.md`'s H5b entry, and they are pinned across the guard pin's seven arms.
 
 ## OPEN — three writers raise a bare traceback instead of a diagnostic for a NumPy scalar nested inside a mapping or list — **Owner: unassigned, no remaining slice has this as its surface**
 
@@ -8701,3 +8751,130 @@ wholesale and the reason the test was unreachable.
 colliding with a recorded column's name published an *unclustered* contrast interval, because the refusal
 could not see the column. **For a non-numeric column it now can.** The numeric case was already refused
 before this slice and is pinned as the guard pin's arm D(ii) — this entry claims nothing about it.
+
+## STRUCK 2026-08-22 (H5b task 9) — CLOSED in the slice that found it: a non-numeric recorded `by` column drew no `W-STATS-STRATUM-SHADOWED`, and the step's reporting strata were published beside it silently
+
+**Found and closed in the same slice, so it never lived as an open entry — recorded here because it was
+filed nowhere and two shipped docstrings stood in for the filing.** H5b's scoping measured that
+`cli.py`'s shadow gate asked whether `by` was in `step_summary`, and a non-numeric `by` column never
+reaches `step_summary` at all: so a step recording a string `by` beside a `report_by` declaration got
+its strata published under the record's own `by` key while `units.parquet` held the recorded column,
+with no warning and at exit `0`. The reserved name was spent twice in one record.
+
+**Why the gate could not see it.** `step_summary` was a **proxy** for *was a column of this name
+recorded?* — the answer to a different question (*did that column earn a metric block?*), and those two
+answers diverge for exactly the non-numeric case. H5b task 9 pointed the gate at
+`recorded_columns = {col for cols in collapsed.values() for col in cols}`, which is the question's own
+answer, already built in the same loop body and already read twice in it. The widening was **read
+rather than asserted**: `by` in `step_summary` implies `by` in `recorded_columns`, because a *derived*
+`by` is refused inside `summarize_step` by `RESERVED_METRIC_NAMES` and the containment retry calls
+`summarize_step` with no `derived=` argument at all — so the only route into `step_summary` is the
+column loop over the same `collapsed` the recorded-column set is built from.
+
+**What it is pinned by, and in which direction.**
+`tests/test_cli.py::test_a_non_numeric_recorded_by_column_warns_and_suppresses_the_strata`; pointing the
+gate back at `step_summary` fails it against the full suite, and **both of its assertions were measured
+to fail separately** by running it once in each assertion order, because pytest short-circuits. Verified
+end to end through the installed console script as well, on a step recording
+`{"pred": float(i), "by": "lvl<n>"}` with `attributes: [cohort]` and `report_by: [cohort]`: the warning
+fires once per condition, `run.yaml` carries no `by:` key anywhere under `aggregated`, `pred` publishes
+normally, exit `0`.
+
+**The two claims that stood in for the filing**, both in `report.py` and both narrowed in the same task
+with **no code change** to that file, whose structural predicates are the sibling that already got this
+right: `_is_strata_block`'s *"`cli.py` does not write this block at all when a recorded column of that
+name exists"* was false for a non-numeric `by` and is now true (*"numeric or not"*), and
+`_is_metric_entry`'s *"keeps its value … as a real metric entry"* was true of the numeric case only and
+now names both shapes. `grep -rn 'W-STATS-STRATUM-SHADOWED' src/publishable/*.py` returns **two** lines
+— one emit site in `cli.py` and that `report.py` docstring — and the § Warnings row was checked against
+the one emit site rather than against the grep count.
+
+**And the § Warnings row was this slice's signature defect in its third home.** The row framed itself as
+exhaustive over *every value a number* and *no unit recorded a number*, with the reachable middle case in
+neither; it now covers all three of the mixtures Ruling 1's amendment table names, for a `by` column
+whatever it holds. One row, one emit site, two conditions.
+
+## OPEN — `diff`'s `uv.lock` row prints two digests and never names the package whose pin moved — **Owner: H9**
+
+**Filed 2026-08-22 by H5b task 15, as the residual of this slice's own cost-if-wrong.** H5b changes what
+`aggregated` reports for a config whose `code_hash`, `parameters_hash` and `input_manifest_hash` are all
+`identical` between two runs, so the only `diff` row that moves across the upgrade is `uv.lock` — the
+row that carries a change in `publishable` itself. **The controller's ruling stands and this filing is
+the smaller claim it leaves:** it is not true that no row points at the change; the row that points at
+it is the one a reader is least likely to read, and it points at it without saying what moved.
+
+**Both halves of the carrier verified before filing**, by grep rather than by memory:
+`grep -rn "uv_lock_hash" src/publishable/*.py` → `cli.py` writes it under `provenance.environment`
+(beside `uv_lock: "environment/uv.lock"`), and `diff.py`'s `_figure` reads exactly that key for the
+`uv.lock` row in `ROW_LABELS`.
+
+**Reproduced, not reasoned.** Two runs of one config, the second after rewriting `uv.lock` so that one
+package's pin moves (`# lock: pkg-a==1.0.0` → `# lock: pkg-a==2.0.0`) and committing it:
+
+```
+uv.lock            DIFFERS
+  sha256:45cd… → sha256:2d84…
+```
+
+`pkg-a` appears nowhere in the output, at exit `0`. Reproduce with a scratch test built on
+`tests/test_diff.py`'s own `build` helper — scaffold a project, commit a `uv.lock`, `run`, rewrite the
+lockfile, commit, `run` again, and call `command_diff(run_a, run_b)`. The shipped
+`test_h8b_fixture_l_the_lockfile_rows_non_null_path` already builds that state and asserts the exit code
+and the two digests' inequality; **it captures no output**, which is why the missing detail was never
+visible to it.
+
+**The symptom this leaves for a user**, which is what makes it worth a filing rather than a note: a
+reader diffing two runs sees `uv.lock DIFFERS` beside changed numbers in `aggregated` and cannot tell
+from `diff`'s output whether a `publishable` upgrade or an unrelated dependency bump is what moved them.
+
+**A route exists and is not the same as being told.** Every run archives its own lockfile at
+`environment/uv.lock` (`cli.py` copies it into the run directory), so a reader *can* diff the two files
+by hand and find the package. `parameters_hash`'s `DIFFERS` detail already prints per-parameter deltas
+rather than two digests, so a per-package delta is the shape this row's sibling has and it does not.
+
+**Owner: H9**, and the reason is a surface rather than a schedule: `reproduce` is what reads the
+environment back, so H9 is the slice that must already decide what a moved lockfile means for a rerun,
+and the row's detail lines are the same question rendered for a reader.
+
+**Nothing was minted here to make the change more visible, and that is a decision rather than an
+omission.** A fourth hash, a core-version record key, and a `diff` row of its own were each refused by
+the controller on the same ground: `uv.lock` already answers *did the environment move*, and a second
+carrier for it would be a second source of truth. What is missing is detail on the row that exists, not
+a row.
+
+## RE-OWNED 2026-08-22, as H5b completes — five entries name H5b inside their own *reason* for being unassigned
+
+**This is the recurrence the `RE-OWNED 2026-08-21` entry predicted, in the one place its recommended
+check would not look.** That entry's proposed test *"parses every `## ` heading not marked closed,
+extracts its `Owner:` line, and fails on any that names a slice whose merge commit exists on `main`"* —
+and none of the five below names H5b in an `Owner:` line. Each names it in the **enumeration of
+remaining slices that justifies** the `unassigned` verdict: *"No remaining slice (H5b, H6, H9, H3c-3's
+remaining 14) charters …"*. Once H5b merges, every one of those reasons asserts a closed slice is
+pending, which is the same staleness in a different sentence.
+
+**The five, named by their question rather than by position**, all verified with
+`grep -n "H5b, H6, H9, H3c-3's remaining 14" docs/superpowers/spec-defects.md` plus the spine-citing
+variant:
+
+- a `summary` step's `Estimate.method` is not coerced (the `AMENDED 2026-08-22 (H5a task 12)` note under
+  § Carried out of the S4a whole-branch review);
+- three writers raise a bare traceback for a NumPy scalar nested inside a mapping or list (which cites
+  the spine's § The hardening slices list directly rather than the parenthetical);
+- a directly constructed `Unit` whose attribute is named `unit` hijacks the identity column;
+- the H5a design's Fixture E and `.csv`'s `None → ''` round-trip;
+- an unencodable object in a `.parquet` cell raises a bare `pyarrow.lib.ArrowInvalid`.
+
+**The correction, once, here rather than five times in five bodies** — the same form the
+`RE-OWNED 2026-08-19` and `RE-OWNED 2026-08-21` entries took, and for the same reason: editing five
+bodies would destroy what each recorded on its date. **Read every one of those five reasons with H5b
+removed from the list: "no remaining slice (H6, H9, H3c-3's remaining 14)".** That is already the form
+the entry filed by H5b task 3 uses, written a day later in the same file, so the corrected wording is not
+invented here — it is copied from the sibling that got it right. **Not one of the five changes owner**:
+H5b's surface was non-numeric columns flowing downstream into `collapse_repeats`, `summarize_step` and
+`aggregate`'s table, and none of the five is that; four are `io.write`'s own encoders and one is
+`coercion.py`'s `Estimate` exemption.
+
+**And the missing check is still missing, with its shape widened by this entry.** It wants to parse the
+`Owner:` line **and** any *"no remaining slice (…)"* enumeration, because this file has now produced the
+same staleness in both. Still **unassigned, with the reason**: it would live in `tests/`, and no
+remaining slice's surface is this file's own hygiene.
