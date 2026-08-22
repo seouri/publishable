@@ -179,3 +179,159 @@ back in place — each revert re-verified via `diff` (byte-identical) and by re-
 `ruff format --check .` → clean, 93 files. `git status --short` after both reverts shows only
 `tests/test_artifacts.py` changed; `src/publishable/artifacts.py` is diff-empty against the
 saved pre-mutation copy.
+
+## Fix round 1
+
+Responding to `.superpowers/sdd/2026-08-21-artifacts-write-side/task-b1-review.md` (both verdicts
+PASS with findings: four Majors, three Minors, all five arms discriminating, arm E discriminating
+in both directions). No `§ Errors` code raised or added; diff stays inside `tests/`. Per-finding
+record below.
+
+### Major 1 — arm E split into two tests, one no-editor and one task-9-owned
+
+The original single arm E test was labelled *NO AUTHORIZED EDITOR* while its own docstring said
+task 9 is authorized to change the `.csv` half — contradictory instructions on the same pin. Split
+into:
+
+- `test_h5a_arm_e1_parquet_keeps_a_structural_or_bytes_cell_intact` (`tests/test_artifacts.py`) —
+  the `.parquet` capability half, genuinely no editor: no task in H5a narrows what `.parquet`
+  accepts.
+- `test_h5a_arm_e2_csv_stringifies_a_structural_or_bytes_cell` (`tests/test_artifacts.py`) — the
+  `.csv` corruption half, with **task 9 named as its sole authorized editor** and the post-edit
+  state stated in advance in its own docstring (both writes must instead raise `ContractError` ·
+  `E-STEP-RETURN-TYPE`, naming the column and the artifact — plan task 9 step 5, Fixture S), on
+  H8a arm B's precedent for a pin one task is allowed to move.
+
+**Verified by:** re-running both new tests green at HEAD; re-running the two mutations from the
+original arm E (simulated `.parquet` narrowing, simulated `.csv` quiet-stringify fix) against the
+split pair — each still fails exactly the half it should and leaves the other, and arms B1/B2/C,
+green (property-preserving controls, unchanged from the original submission).
+
+### Major 2 — arm A's fixture gains an `int` column and an all-`None` column; two more docstring claims now proven
+
+The original fixture recorded only a `bool` column (`present`) and a `float` column (`score`), so
+the docstring's claims about catching `int`→`float` promotion and `None` becoming something else
+had no column to exercise them. `_H5A_ARM_A_STARTER_STEP` now also records `"n": i` (plain `int`)
+and `"note": None` (always `None`, an all-`None` column — Decision 1's round-trips-as-`None` rule).
+Column order is now `["unit", "cohort", "present", "score", "n", "note"]`; values and
+`type(v).__name__` are asserted for both new columns.
+
+**Verified by:** running the exact mutation the review used — `_encode_parquet` promoting
+`int`→`float` and mapping `None`→`"MISSING"` — against the new fixture. **Both `test_h5a_arm_a...`
+and `test_h5a_arm_b2...` now FAIL** (before this fix, only B2 failed and A stayed green). B2's
+digest changes because the mutation touches every write through `_encode_parquet`, including its
+own scalar row set — the two arms failing together is expected here, not a discriminator; arm A's
+own new assertions (`by_unit["p1"]["note"] is None` and, had that not caught it first, the `"n"`
+type check) are what make this arm's own fixture sufficient. Reverted by copying back from
+`/tmp/artifacts.py.fix1` (itself diff-empty against the original task-13 baseline
+`/tmp/artifacts.py.orig`); re-ran green.
+
+A second replacement mutation, matching the review's own second check: promoting `bool`→`int`
+(`type(v) is bool` → `int(v)`) also fails both arm A (`assert 1 is True`) and arm B2. Reverted the
+same way.
+
+### The replacement for the blind mutation (ii), recorded as arm A's real pin
+
+The report's original disclosure — that the prescribed `float()`-wrap mutation crashed with a raw
+`ValueError` rather than exercising the `type(v).__name__` row — is accurate and **stays as
+written**; the review confirms it and calls it the right instinct, not something to reconcile. But
+a blind mutation owes a replacement, and the review supplied one: in `_encode_parquet`,
+`int(v) if type(v) is float and v == int(v) else v`. **Applied and verified**: arm A fails on
+`assert 'int' == 'float'` **alone** — `first["score"]`'s type check — with every value assertion
+above it passing (`0 == 0.0`, `9 == 9.0`, since Python's `==` doesn't distinguish), and arm B2
+**green** (its floats, `1.5`/`2.5`, are non-integral so the mutation is a no-op on that fixture).
+This is now the arm's real, recorded pin for the type-row claim, replacing the blind one. Reverted
+by copying back from the saved pre-mutation copy; re-ran green.
+
+### Major 3 — arm D's literal list gains ASCII-minus spellings and six missing worked-example bounds
+
+The original 15-literal list used a Unicode minus (`−`, U+2212) for every signed bound, matching
+`CLAUDE.md`'s prose, while `reference.md`'s YAML blocks write ASCII `-` — so no ASCII-signed line
+matched at all. It also carried only the bounds CLAUDE.md's paragraph states for the *baseline* and
+*delta* readings, dropping the per-condition bounds the same paragraph names for spearman
+(`0.517`, `0.683`) and kendall (`0.347`, `0.477`), and the kendall **contrast** bound (`−0.213`,
+`−0.125` — "kendall's is −0.169, [−0.213, −0.125]"), which is the interval `CLAUDE.md` § The
+worked example says must not be narrowed back. That combination left eight lines of
+`reference.md` — including the one carrying that exact contrast interval — in none of arm D's
+tuples, while the test's own claim is that a passing arm D is proof the worked example is
+untouched.
+
+**Fixed** by rebuilding `_H5A_ARM_D_LITERALS` from `CLAUDE.md`'s worked-example paragraph in full
+(every bound it names, both signed spellings) rather than the ad hoc subset the first cut used, and
+regenerating all three golden tuples by re-running the same scan against the current files.
+`reference.md`'s tuple grows from 46 to 53 lines; `README.md` and `docs/design-principles.md` are
+unchanged (both already covered by the ASCII-minus-free literals, since README's minus signs are
+already Unicode and design-principles.md carries no interval literal at all — see below).
+
+**Verified by:** reproducing the review's own mutation — `docs/reference.md`'s
+`ci95: [-0.213, -0.125]` (kendall's contrast) changed to `[-0.113, -0.125]` — and running all three
+`[doc_name]` parametrizations. **`REFERENCE` now fails** (it stayed 3/3 green before this fix);
+`README` and `DESIGN_PRINCIPLES` **pass**, each an independent tuple over an unmodified file — the
+property-preserving half of this mutation. Reverted `docs/reference.md` by copying back from
+`/tmp/reference.md.orig`, confirmed byte-identical by `diff`, and re-ran green.
+
+### Major 4 — the report's claim about other tests, corrected
+
+The original arm A bullet said *"No existing test reads `units.parquet` for a real run"*, citing
+the brief's § Testability grep across `src/`'s `report.py`/`study.py`/`diff.py`/`lineage.py` as
+evidence — but that grep is about `src/`, not `tests/`, so it cannot support a claim about what
+tests exist. **Correcting it here rather than editing the original bullet**, on this repo's own
+rule for a published claim: append the correction and say what it replaces.
+
+**What `grep -rn "units.parquet" tests/` actually shows** (the review's own findings, confirmed by
+re-running the same grep): `tests/test_acceptance.py::test_the_interval_matches_an_independent_
+computation` reads a real run's `units.parquet` with `pq.read_table` and recomputes the interval
+from it; `tests/test_report.py:328` reads it through `read_condition` inside a real run; and
+`tests/test_cli.py:8967` (an earlier, unrelated test) iterates `sorted(run_dir.rglob(
+"units.parquet"))`.
+
+**The corrected, narrower claim**: none of those three pins **column order** or **per-column
+type** — the two properties arm A exists to pin — so arm A's novelty survives, but the original
+sentence's breadth ("no existing test reads `units.parquet` for a real run") was false and is
+replaced by this narrower one. This is the *claim broader than its evidence* shape.
+
+### Minors
+
+- **Minor 1** — arm A now locates via `sorted(doc["run_dir"].rglob("units.parquet"))` rather than
+  `next(...)`, matching `tests/test_cli.py:8967`'s own precedent (*the sibling that already got it
+  right*) for the identical shape. The run in fact writes five `units.parquet` files (one per seed
+  repeat — `init`'s default `replication.repeats` is 5 seed repeats, and a `repeat`-scoped step's
+  directory only collapses at exactly one repeat), and the fixed test now asserts `len(...) == 5`
+  and that all five decode to the same rows before reading column 0 of the first. **Verified by
+  running**: passes; the five-file count and cross-file equality are both exercised, not assumed.
+- **Minor 2** — arm E1 (post-split) now asserts the `.parquet` list cell's own element types:
+  `[type(x) for x in pq_list[0]["v"]] == [int, int]`, closing the gap where `[1, 2] == [1.0, 2.0]`
+  is `True` in Python, so a mutation promoting the list's *elements* from `int` to `float` would
+  have left the outer `type(...) is list` check satisfied. Not separately re-verified with a live
+  mutation this round (the assertion's own logic is direct: `[int, int] != [float, float]`), so
+  this is recorded as a structural fix rather than a re-run finding.
+- **Minor 3** — dropped the two redundant positional locators ("...above", "...immediately
+  above") in the comment block above arm A/D in `tests/test_cli.py` and in arm C's docstring in
+  `tests/test_artifacts.py`; each already names the test it refers to, so the word carried no
+  information and this repo has been wrong on a positional locator twice before.
+
+### The two disclosures — confirmed, kept as written
+
+Per the coordinator's message, both stay in the report exactly as originally written, and are not
+re-litigated here: the blind `float()`-wrap mutation (ii) and its accurate crash-based disclosure
+(now supplemented, not replaced, by the review's own replacement mutation, recorded above); and
+`docs/design-principles.md` carrying no worked-example interval literal at all — the review
+independently re-verified this over all sixteen bounds (`grep -nE` finding no output) and adds the
+document fact worth keeping: **§ The worked example's intervals live in two of the three
+documents (`README.md`, `reference.md`), not three** — `design-principles.md`'s entire
+worked-example footprint is the three hash-identity lines.
+
+### Gates and verification, fix round 1
+
+`uv run pytest` (full, unfiltered, foreground): **2844 passed, 1 skipped, 2 xfailed** — one more
+than the review's own re-run at `9fdb565` (2843), because arm E's split moved it from one test to
+two (Major 1); nothing else in this round changes the test count (arm A stays one test with two
+new columns, arm D stays 3 parametrizations with a larger literal list). `uv run mypy`: 52 source
+files clean. `uv run ruff check .` and `ruff format --check .`: clean, 93 files. `git status
+--short`: only `tests/test_artifacts.py`, `tests/test_cli.py`, and this report changed;
+`src/publishable/artifacts.py` and `docs/reference.md` are diff-empty against their pre-mutation
+saved copies after every mutation in this round.
+
+### Findings not closed
+
+None. All four Majors and all three Minors are closed as recorded above.

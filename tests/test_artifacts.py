@@ -2443,7 +2443,7 @@ def test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write(tmp_path
 
     The bool/int and str/int refusals themselves are ALREADY pinned by
     `test_a_bool_and_int_column_clash_raises_rather_than_coercing` and
-    `test_a_str_and_int_column_clash_raises_rather_than_coercing` above
+    `test_a_str_and_int_column_clash_raises_rather_than_coercing`
     (grepped, not assumed — both call `_encode_parquet` directly). What
     this arm adds: the same two shapes through `StepIO.write`, so a later
     `except ContractError` wrapper around `io.write`'s dispatch (task 9)
@@ -2479,51 +2479,71 @@ def test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write(tmp_path
 # could, and it still had to be repeated as an explicit correction, which is
 # itself worth carrying: a dispatch-only instruction competes with a brief
 # and can lose. See the report's added note.
+#
+# Fix round 1, Major 1: the original single test was labelled "NO AUTHORIZED
+# EDITOR" while its own docstring said task 9 IS authorized to change the
+# `.csv` half — those two statements cannot both stand, and plan task 9 step
+# 5 (Fixture S) builds exactly that refusal while step 8's expected-green
+# list is A/B1/B2/C, arm E absent because the plan predates it. Split in two:
+# arm E1 (`.parquet`, genuinely no editor) and arm E2 (`.csv`, task 9 named
+# as its SOLE editor, with the post-edit state stated in advance — H8a arm
+# B's precedent for a pin one task is allowed to move).
 # ---------------------------------------------------------------------------
 
 
-def test_h5a_arm_e_parquet_keeps_a_structural_or_bytes_cell_intact_csv_does_not(
-    tmp_path: Path,
-):
-    """Arm E — the second controller ruling's capability/refusal PAIR, from
-    `docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`'s
-    second ruling: `.parquet` round-trips a structural or `bytes` cell
-    BYTE-FAITHFULLY; `.csv` cannot, and stringifies it instead. Both halves
-    are pinned TOGETHER, in one test, because the pair is what
-    discriminates: a later task narrowing `.parquet`'s acceptance must fail
-    this arm, and a later task "fixing" `.csv` by stringifying more
-    precisely (rather than refusing) must also fail it — neither half alone
-    would catch the other's regression.
+def test_h5a_arm_e1_parquet_keeps_a_structural_or_bytes_cell_intact(tmp_path: Path):
+    """Arm E1 — `.parquet` round-trips a structural or `bytes` cell
+    BYTE-FAITHFULLY, from the second controller ruling
+    (`docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`):
+    "`.parquet` accepts both, because it *can* return them, byte-faithfully.
+    No refusal is added there." A capability this slice's design promises to
+    KEEP, not merely leaves unbroken.
 
-    NO AUTHORIZED EDITOR. The `.parquet` half is a capability this slice's
-    design promises to KEEP, not merely leaves unbroken; the `.csv` half is
-    the observed corruption that is the ground for the one refusal this
-    slice adds (Decision 5, narrowed to `.csv` only by the second ruling).
-    If either assertion below fires, that is a finding. A LATER task (task
-    9) IS authorized to change `.csv`'s behaviour from "stringifies
-    silently" to "raises `ContractError` · `E-STEP-RETURN-TYPE`" — that is
-    the whole point of the refusal this slice adds — and to change the
-    message text of any such raise (task 9 prefixes the artifact name).
-    What may NEVER change, on any task in this slice: `.csv` returning an
-    actual `list` or `bytes` object rather than a string, or `.parquet`
-    refusing what it accepts today.
+    NO AUTHORIZED EDITOR, for real this time: no task in H5a narrows what
+    `.parquet` accepts. If either assertion below fires, that is a finding.
 
-    Every assertion checks the returned value's TYPE as well as its value:
-    `'[1, 2]' == [1, 2]` is already false, but a future encoder returning
-    `['1', '2']` (a list of strings, not the string `'[1, 2]'`) would
-    satisfy a value-only comparison for the wrong reason.
+    Every assertion checks the returned value's TYPE as well as its value —
+    `[1, 2] == [1.0, 2.0]` is already `True`, so the list cell's own element
+    types are checked too (fix round 1, Minor 2: the first cut asserted only
+    the outer `list`/`bytes` type, and a mutation promoting the list's
+    elements from `int` to `float` left it green).
     """
-    from publishable.artifacts import _decode_csv, _decode_parquet
+    from publishable.artifacts import _decode_parquet
 
     io = make_io(tmp_path)
 
     pq_list = _decode_parquet(io.write("e_list.parquet", [{"v": [1, 2]}]).read_bytes())
     assert pq_list == [{"v": [1, 2]}]
     assert type(pq_list[0]["v"]) is list
+    assert [type(x) for x in pq_list[0]["v"]] == [int, int]
 
     pq_bytes = _decode_parquet(io.write("e_bytes.parquet", [{"v": b"x"}]).read_bytes())
     assert pq_bytes == [{"v": b"x"}]
     assert type(pq_bytes[0]["v"]) is bytes
+
+
+def test_h5a_arm_e2_csv_stringifies_a_structural_or_bytes_cell(tmp_path: Path):
+    """Arm E2 — `.csv` CANNOT return a structural or `bytes` cell intact, so
+    it stringifies it instead, from the second controller ruling: "`.csv`
+    refuses a structural or `bytes` cell, because it cannot return one. That
+    is the corruption case." This test pins the corruption AS OF task 13,
+    which is the ground for the refusal task 9 builds.
+
+    TASK 9 IS THE SOLE AUTHORIZED EDITOR of this test, and the post-edit
+    state is stated in advance (plan task 9 step 5, Fixture S): both writes
+    below must instead raise `ContractError` · `E-STEP-RETURN-TYPE`,
+    naming the column and the artifact — the same shape
+    `test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write`
+    above already asserts by substring. No other task may edit this test;
+    a `.csv` write returning an actual `list` or `bytes` object, rather
+    than either a string or a raise, is a finding regardless of which task
+    is running.
+
+    Every assertion checks the returned value's TYPE as well as its value.
+    """
+    from publishable.artifacts import _decode_csv
+
+    io = make_io(tmp_path)
 
     csv_list = _decode_csv(io.write("e_list.csv", [{"v": [1, 2]}]).read_bytes())
     assert csv_list == [{"v": "[1, 2]"}]

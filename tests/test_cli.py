@@ -16695,11 +16695,11 @@ def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
 # `run.yaml`'s top-level and `provenance` key lists are already pinned, in
 # order, by `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`,
 # `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` and
-# `test_h8c_arm_a_the_records_field_level_shape` above (grep for
+# `test_h8c_arm_a_the_records_field_level_shape` (grep for
 # `keys()) ==` over this file), and `publishable.__all__` is pinned whole
-# by `test_h8c_arm_b_publishable_all_is_a_full_sorted_list` immediately
-# above. H5a exports no name and writes no new record key, so none of
-# those three is repeated here.
+# by `test_h8c_arm_b_publishable_all_is_a_full_sorted_list`. H5a exports
+# no name and writes no new record key, so none of those three is
+# repeated here.
 # ---------------------------------------------------------------------------
 
 _H5A_ARM_A_STARTER_STEP = """\
@@ -16713,7 +16713,10 @@ class Step(BaseStep):
     def run(self, cfg, io):
         units = list(io.units)
         for i, unit in enumerate(units):
-            io.record(unit.key, {{"present": True, "score": float(i)}})
+            io.record(
+                unit.key,
+                {{"present": True, "score": float(i), "n": i, "note": None}},
+            )
         return {{"n_units": len(units)}}
 """
 
@@ -16728,14 +16731,35 @@ def test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types(
     something else, and any reordering, without depending on the locked
     `pyarrow` the way arm B2 (`tests/test_artifacts.py`) does.
 
+    Fix round 1, Major 2: the first cut of this fixture recorded only a
+    bool column and a float column, so the docstring's `int`-promotion and
+    `None`-becomes-something-else claims were brief-supplied prose with no
+    fixture behind them — an `_encode_parquet` mutation promoting `int` to
+    `float` and mapping `None` to `"MISSING"` left this arm green, and only
+    arm B2 (the version-coupled tripwire this arm is supposed to be
+    independent of) caught it. Two more columns close that: `n` (a plain
+    `int`) and `note` (always `None`, so the column is all-`None` and
+    Decision 1's "a column of all `None` round-trips as `None`" rule is
+    what a reader checks here).
+
     Driven by a real `run`: one declared attribute (`cohort`), ten units,
-    and a starter step recording a bool column (`present`) and a numeric
-    one (`score`) — together with `unit`/`cohort` (`str`), every base
-    scalar type this slice's coercion touches. No literal below is
-    transcribed from `artifacts.py`; every one is read back from the
-    parquet file this run actually wrote. `p1`'s and `p2`'s `cohort` values
-    are computed from `run_a_project`'s own roster formula
-    (`"ab"[i % 2]` for `patient_id == f"p{i}"`), not hand-copied.
+    and a starter step recording a bool column (`present`), a float column
+    (`score`), an int column (`n`), and an all-`None` column (`note`) —
+    together with `unit`/`cohort` (`str`), every base scalar type this
+    slice's coercion touches. No literal below is transcribed from
+    `artifacts.py`; every one is read back from the parquet file this run
+    actually wrote. `p1`'s and `p2`'s `cohort` values are computed from
+    `run_a_project`'s own roster formula (`"ab"[i % 2]` for
+    `patient_id == f"p{i}"`), not hand-copied.
+
+    Fix round 1, Minor 1: this run writes FIVE `units.parquet` files, one
+    per seed repeat (`init`'s default is 5 seed repeats, and a `repeat`-
+    scoped step's directory does not collapse when there is more than one)
+    — `next(rglob(...))` read whichever the filesystem happened to yield
+    first, a position rather than an identity, the same currency as the
+    `pop(0)` fault. `sorted(...)` is the sibling `test_cli.py:8967`'s own
+    fix for the identical shape, copied rather than reinvented, and every
+    one of the five is asserted identical below rather than assumed to be.
     """
     from publishable.artifacts import _decode_parquet
 
@@ -16745,11 +16769,14 @@ def test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types(
         unit_attributes=["cohort"],
         _starter_step=_H5A_ARM_A_STARTER_STEP,
     )
-    parquet_path = next(doc["run_dir"].rglob("units.parquet"))
-    rows = _decode_parquet(parquet_path.read_bytes())
+    parquet_paths = sorted(doc["run_dir"].rglob("units.parquet"))
+    assert len(parquet_paths) == 5
+    all_rows = [_decode_parquet(p.read_bytes()) for p in parquet_paths]
+    assert all(rows == all_rows[0] for rows in all_rows[1:])
+    rows = all_rows[0]
     by_unit = {row["unit"]: row for row in rows}
 
-    assert list(rows[0].keys()) == ["unit", "cohort", "present", "score"]
+    assert list(rows[0].keys()) == ["unit", "cohort", "present", "score", "n", "note"]
     assert len(rows) == 10
 
     assert by_unit["p1"]["cohort"] == "ab"[1 % 2]
@@ -16757,12 +16784,17 @@ def test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types(
     assert by_unit["p1"]["present"] is True
     assert by_unit["p1"]["score"] == 0.0
     assert by_unit["p10"]["score"] == 9.0
+    assert by_unit["p1"]["n"] == 0
+    assert by_unit["p10"]["n"] == 9
+    assert by_unit["p1"]["note"] is None
 
     first = rows[0]
     assert type(first["unit"]).__name__ == "str"
     assert type(first["cohort"]).__name__ == "str"
     assert type(first["present"]).__name__ == "bool"
     assert type(first["score"]).__name__ == "float"
+    assert type(first["n"]).__name__ == "int"
+    assert type(first["note"]).__name__ == "NoneType"
 
 
 _H5A_ARM_D_LITERALS = (
@@ -16770,11 +16802,21 @@ _H5A_ARM_D_LITERALS = (
     "0.488",
     "0.661",
     "0.607",
+    "0.517",
+    "0.683",
     "0.412",
+    "0.347",
+    "0.477",
     "0.026",
     "−0.007",
+    "-0.007",
     "0.059",
     "−0.169",
+    "-0.169",
+    "−0.213",
+    "-0.213",
+    "−0.125",
+    "-0.125",
     "0.014",
     "8e21",
     "1a2b",
@@ -16815,6 +16857,7 @@ _H5A_ARM_D_REFERENCE_LINES = (
     "    uv_lock_hash: sha256:6b1f...",
     "  input_manifest_hash: sha256:3d8a...",
     "          r: {value: 0.607, basis: units, method: percentile_over_units,",
+    "              ci95: [0.517, 0.683],",
     "              repeat_spread: {std: 0.014, n: 5, kind: seed}}",
     "          r: {delta: 0.026, basis: units, paired: true,",
     "              ci95: [-0.007, 0.059],",
@@ -16823,14 +16866,20 @@ _H5A_ARM_D_REFERENCE_LINES = (
     "├── run_2026-08-07T09-14-03Z_8e21ab3/     # a second run — collides with nothing",
     "└── latest -> run_2026-08-07T09-14-03Z_8e21ab3",
     "r: {value: 0.607, basis: units, weighted_by: sampling_weight,",
+    "    ci95: [0.517, 0.683]}",
     "r: {value: 0.607, basis: units, weighted_by: sampling_weight,",
+    "    ci95: [0.517, 0.683], resample_draws: 2000}",
     "  value: 0.607",
     "  repeat_spread: {std: 0.014, n: 5, kind: seed}   # how much the pipeline moved",
+    "  ci95: [0.517, 0.683]",
     "  - {std: 0.014, n: 3, kind: seed}",
+    "    r: {delta: -0.169, basis: units, method: paired_percentile_over_units,",
+    "        ci95: [-0.213, -0.125],",
     "**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have: **the point estimate over half the raw `ci95` width, largest first.** A member with no interval has no such ratio to compute — it is ranked in a tier below every member that does, ties within that tier breaking by declaration order the same way ties within the interval-carrying tier do, so the tier answers where such a member sorts without inventing an evidence value for it. It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave a family whose intervals are built at a rank ordered by two statistics, which is not an ordering.",  # noqa: E501
     "          r: {value: 0.581, basis: units, method: percentile_over_units,",
     "              ci95: [0.488, 0.661],",
     "          r: {value: 0.607, basis: units, method: percentile_over_units,",
+    "              ci95: [0.517, 0.683],",
     "              repeat_spread: {std: 0.014, n: 5, kind: seed}}",
     "          r: {delta: 0.026, basis: units, paired: true,",
     "              ci95: [-0.007, 0.059],",
@@ -16895,6 +16944,23 @@ def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
     named in `docs/superpowers/plans/2026-08-21-artifacts-write-side.md`
     task 13 — and keeping the whole line. This test re-scans the SAME file
     now and compares the two tuples byte for byte.
+
+    Fix round 1, Major 3: the first cut's literal list wrote the interval
+    bounds with a Unicode minus (`−`, U+2212) — matching `CLAUDE.md`'s own
+    prose — while `reference.md`'s YAML blocks write ASCII `-`, and it
+    named only the delta/kendall-value bounds from CLAUDE.md's worked-
+    example paragraph, dropping the per-condition bounds the same
+    paragraph also names (`0.517`, `0.683` for spearman; `0.347`, `0.477`
+    for kendall) and the kendall CONTRAST bound (`−0.213`, `−0.125` —
+    "kendall's is −0.169, [−0.213, −0.125]" — the interval
+    `CLAUDE.md` § The worked example says "must not be narrowed back").
+    That left eight lines of `reference.md` uncovered, including the one
+    carrying that exact contrast interval. The literal list now carries
+    both spellings of every signed bound and every bound CLAUDE.md's own
+    paragraph names, and re-verified by mutating `docs/reference.md`'s
+    `ci95: [-0.213, -0.125]` to `[-0.113, -0.125]`: this test now fails
+    for `REFERENCE` (see the report's Fix round 1 section for the full
+    mutation record).
     """
     text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
     assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]
