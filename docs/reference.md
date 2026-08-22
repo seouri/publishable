@@ -984,6 +984,18 @@ Each recording step's directory holds the table its [`io.record`](#units-the-thi
 
 `units.parquet`'s columns are the unit key under the name [`data.units.key`](#units-the-thing-being-measured) gives it, then every declared attribute, then every key any row recorded — the union, with a column absent from a row reading as null. A failed unit has no row anywhere, which is [how core counts one](#what-isnt-a-repeat): `failed` is what's left after `completed` and `ineligible` are subtracted from `resolved`.
 
+**A column in `units.parquet` unifies across rows by type, not by declaration.** Every value a step records already passes through the same [scalar coercion](#steps-and-artifacts) `io.record`'s values take, so what one row's cell holds is always `bool`, `int`, `float`, `str`, or `None` by the time a column is built from it — and the rule for what a *column* may hold, across every row that recorded it, is:
+
+- a column holding one type round-trips, `str` and `bool` included;
+- `int` beside `float` **promotes to `float`**, in either declaration order — a per-unit metric that comes out whole for some units and fractional for others is the ordinary case, not a conflict, and is not worth losing a run's whole record over;
+- `None` is not a type, so it is skipped when the rest of the column is examined — a column of all `None`, or `None` beside one other type, both round-trip;
+- an empty row set writes an empty table and raises nothing;
+- **anything else refuses** — `bool` beside `int` included, since that pairing is a type confusion silence would hide rather than a quantity that is sometimes whole — with `ContractError` · `E-STEP-RETURN-TYPE`, naming the column, both of the disagreeing types, and one unit recorded under each.
+
+This is the rule the code already enforces; it was reachable only by colliding with it before now. Where it costs the most is a column that is genuinely `str` for some units and a number for others — refused today, at the cost of the whole execution's record for a step that already ran. The more forgiving reading, writing such a column as `str` and leaving the mixture for a reader to see, is a live question for how the table `aggregate` receives should treat such a column, and is not decided here.
+
+**This rule is stated for the per-unit tables — `units.parquet` and `measurements.parquet`, both [`.parquet`](#steps-and-artifacts) — because that is the format it is true of.** A `.csv` write does not unify a column's types across rows at all today: two rows disagreeing on a column's type write successfully, each cell holding its own `str()`.
+
 ### The apparatus files
 
 `apparatus/probes.jsonl` is the append-only ledger every probe writes to — at `dry-run`, at run start, before each execution, and at [`freeze`](#cli-reference):
