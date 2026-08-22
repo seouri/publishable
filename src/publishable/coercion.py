@@ -11,9 +11,15 @@ implementing `__float__`, `__index__`, or `__bool__` to the Python scalar it
 stands for, keeps that, and raises `ContractError` on everything else — a
 list, a dict, an array, a `DataFrame`, a fitted model. The line is
 deliberately at *what the value already is* rather than at what could be
-talked into serializing — which is why `__len__` is the refusal test: a
-NumPy array satisfies every one of those protocols too, but it also has
-`__len__`, and the document forbids coercing it.
+talked into serializing — which is why `__len__` is the refusal test for
+everything with a length: a NumPy array satisfies every one of those
+protocols too, but it also has `__len__`, and the document forbids coercing
+it. `np.str_` has `__len__` as well and is the one carve-out from that
+guard rather than a counterexample to it — a value that is already a `str`
+by inheritance is admitted before the `__len__` guard ever runs, because
+`str` (unlike `bytes`, or an array's own type) is one of the four scalar
+types this module accepts on sight; see `_coerce_one`'s own comments for
+which ground each of `np.str_` and `np.bytes_` rests on.
 
 There is exactly one documented exception: an `Estimate` returned at
 `summary` scope. `CLAUDE.md`'s invariant states it precisely — a step's
@@ -207,6 +213,17 @@ def _coerce_one(key: str, value: Any, where: str) -> Any:
     # declares.
     if isinstance(value, str):
         return str.__str__(value)
+
+    # This branch landing here, ahead of everything that touches roster
+    # attribute values, is what closes the window a resolver-yielded `np.str_`
+    # attribute would otherwise open the moment attribute coercion ships:
+    # without it, that value would go from "never refused" straight to
+    # "refused" for one commit, invisibly, because no test today exercises a
+    # resolver's own attribute projection through this function. The pin
+    # (mutations (i)/(ii), five tests each) only proves this shared function
+    # keeps admitting a `str` by inheritance — it proves nothing about
+    # `units.py`, which calls this function nowhere yet. Closing that
+    # remaining gap is the coercion call site's own job, once one exists.
 
     # Anything with `__len__` is structural, full stop — this must come before
     # the protocol checks below, because a NumPy array satisfies `__float__`,

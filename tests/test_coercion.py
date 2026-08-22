@@ -346,6 +346,20 @@ def test_an_estimate_ci95_bound_that_is_a_str_subclass_now_raises_the_more_preci
     assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
 
 
+def test_an_estimates_n_retires_the_refusal_a_str_subclass_used_to_draw():
+    """A THIRD retirement (review Minor 1), distinct from `value`/`ci95` moving
+    to a more precise code: `n` is held to no numeric rule (`_is_number` is
+    never applied to it), so a `str`-subclass `n` does not fail a narrower
+    check afterward — it simply stops being refused. Before this task an
+    `np.str_` `n` reached `_coerce_one`'s `__len__` guard and raised
+    `E-STEP-RETURN-TYPE` directly; now it coerces and is kept, exactly as a
+    plain `str` label already was."""
+    est = Estimate(value=0.5, n=np.str_("612 pairs"), method="m")  # type: ignore[arg-type]
+    got = coerce_scalars({"d": est}, "step04_agreement", scope="summary")["d"]
+    assert type(got.n) is str
+    assert got.n == "612 pairs"
+
+
 def test_a_zero_dimensional_numpy_float_array_still_raises():
     """`np.array(1.0)` has `ndim == 0` and an `item()` like a true NumPy
     scalar — the shape closest to being mistaken for one. Measured:

@@ -180,3 +180,119 @@ None found that block this task. The one thing worth a reviewer's attention: thi
 widens what every one of the 7 `coerce_scalars` call sites accepts, and I verified all 7 by
 reading `src/` first and confirming with grep second, per the enumeration above — no eighth site
 was found.
+
+---
+
+## Fix round 1
+
+Both verdicts were PASS with one Major and three Minors; all four are closed below. Full unfiltered
+suite re-run after the fixes, and again after each of the three prescribed mutations and their
+reverts: **2855 passed, 1 skipped, 2 xfailed** (2854 prior + 1 new arm for Minor 1). All four gates
+clean (`ruff check .`, `ruff format --check .`, `mypy` — 52 files, `pytest`).
+
+### Major 1 — the resolver retirement claim was false; corrected to name three real retirements and leave the resolver surface to its own payload
+
+Verified the reviewer's measurement independently before touching anything: `grep -rn
+'coerce_scalars' src/units.py` returns nothing, `_from_resolver` (`units.py:438`) projects
+`attributes={a: unit.attributes[a] …}` with no coercion, and
+`_decode_parquet(_encode_parquet([{"unit": "u1", "site": np.str_("north"), "v": 1.0}]))` returns
+`[{'unit': 'u1', 'site': 'north', 'v': 1.0}]` — a resolver-yielded `np.str_` attribute writes
+cleanly today and wrote cleanly before this task. It was never refused, so "used to be refused" is
+false under any reading; it does not now coerce either, since nothing calls `coerce_scalars` on a
+roster attribute value until a later task's coercion lands.
+
+**Deleted the false clause rather than rewording it** (`docs/reference.md` § Steps and artifacts,
+the paragraph naming the mechanism and its exceptions). The sentence now names exactly three
+retirements — `io.record`/a step's return/`aggregate`/a derived metric all moving from
+`E-STEP-RETURN-TYPE` to a coerced value (verified by mutation (i) below, which fails the arms
+covering all four call sites), the apparatus fact retirement, and the `Estimate.n` retirement
+(Minor 1) — and closes with an explicit sentence that a resolver-yielded attribute value retires
+nothing: nothing coerces it today, it already wrote cleanly uncoerced before and after this
+commit, and coercing it belongs to whichever later task builds that call site. No task or plan
+task number is cited inside `reference.md` itself, consistent with this repo's citation-by-section
+convention — the carry-forward is named in this report instead, below.
+
+### Minor 1 — `Estimate.n` stated as a third retirement, and pinned by a new arm
+
+`_coerce_estimate` calls `_coerce_one` on `n`, and `n` is held to no numeric rule
+(`_is_number` is never applied to it) — so a `str`-subclass `n` does not move to a narrower code
+the way `value`/`ci95` do; it simply stops being refused. Verified by running against the
+pre-task code (mutation (i) applied): `Estimate(value=0.5, n=np.str_("612 pairs"))` raised
+`E-STEP-RETURN-TYPE`; unmutated it returns the string `'612 pairs'`.
+
+Added `test_an_estimates_n_retires_the_refusal_a_str_subclass_used_to_draw` in
+`tests/test_coercion.py`, asserting `type(got.n) is str` and `got.n == "612 pairs"`. Named as the
+third retirement in the corrected `reference.md` sentence (Major 1's fix).
+
+### Minor 2 — the module docstring's paraphrase updated to match the edited `reference.md` paragraph
+
+`src/publishable/coercion.py`'s module docstring said "which is why `__len__` is the refusal
+test" as an unqualified general statement — now false, since `np.str_` has `__len__` and is
+coerced rather than refused. Rewrote the sentence to say the guard is the refusal test "for
+everything with a length" and added one sentence naming `np.str_` as the one carve-out from that
+guard rather than a counterexample to it, pointing to `_coerce_one`'s own comments for which
+ground each of `np.str_`/`np.bytes_` rests on. Verified by reading the result against
+`reference.md:1238`'s corrected paragraph — the two now agree, where before this fix only the
+document had been updated in-commit and the paraphrase had not (the exact drift shape `CLAUDE.md`
+§ Habits warns about: a comment/docstring left behind when its source moves).
+
+### Minor 3 — the ordering constraint's enforcement scope stated where a reader meets it, and the remaining hole named for task 6
+
+Added a comment directly after the `str`-by-inheritance branch in `_coerce_one`, stating plainly
+that the branch's placement here is what closes the window correction 6 named for the *shared
+function*, and that the mutation pin (i)/(ii) proves only that — it proves nothing about
+`units.py`, which does not call this function yet. Named the remaining gap as the coercion call
+site's own job "once one exists," rather than claiming it closed. This is prose stating scope, not
+a new guard — no additional pin was invented for a surface that does not exist yet, per this
+task's own file list.
+
+### Carry-forwards named explicitly, as requested
+
+- **To task 6** (roster attribute coercion, Decision 6): the ordering constraint from plan
+  correction 6 is enforced today only at the shared `coerce_scalars`/`_coerce_one` function
+  (mutations (i)/(ii), 6 tests each after this fix round). Nothing pins the resolver surface
+  itself — `grep -rn 'np.str_' tests/` still returns hits only in `tests/test_coercion.py` and
+  `tests/test_apparatus.py`. Task 6's own Fixture R is what must close that hole, and
+  `reference.md`'s corrected sentence (Major 1) now makes it load-bearing rather than
+  informational, since the document asserts the "no retirement here" property and Fixture R is
+  what the property depends on holding.
+- **To task 12** (filings): the reviewer found that `Estimate.method` is exempt from the shared
+  scalar rule — `_coerce_estimate` returns `method=value.method` uncoerced, guarded only by a
+  truthiness check — and that `docs/superpowers/spec-defects.md:1914`'s RESOLVED note ("the
+  exemption also had to coerce the `Estimate`'s own fields") is therefore a **stale closed
+  claim**: true of `value`, `ci95`, and `n`, and false of `method`. Verified independently by
+  reading `_coerce_estimate`'s return statement and running
+  `coerce_scalars({"d": Estimate(value=0.5, ci95=[0.1, 0.9], method=np.str_("bootstrap"))}, "s",
+  scope="summary")["d"].method` — still `np.str_`, and `yaml.safe_dump` on it raises
+  `RepresenterError`. This is pre-existing, not created or widened by task 10, and is out of this
+  task's file list (`coercion.py`'s `_coerce_estimate` fields beyond `value`/`ci95`/`n` were never
+  task 10's surface). Not fixed here; routed to task 12 by name, which owns "file what H5a leaves
+  open," alongside the already-noted half-stale `np.str_`/`np.bytes_` OPEN row at
+  `spec-defects.md:1923`.
+
+### Mutations re-run after the fix round, against the full unfiltered suite, reverted by editing back and diffed byte-identical against a saved pre-mutation copy
+
+**(i) Remove the branch.** FAIL — **6** of 9+1 new tests failed (2849 passed / 6 failed / 2855
+total): the same 5 as fix round 0 (3 direct coercion tests, 2 `_coerce_estimate` value/ci95 tests,
+1 apparatus test) **plus** the new `Estimate.n` test — the failure text for the new arm is
+`ContractError: step04_agreement gave 'd.n' a str_; values must be a scalar …`, i.e. the guard
+this branch exists to bypass. Property-preserving arms (`np.bytes_`, plain `bytes`, both array
+controls) are unaffected, as before.
+
+**(ii) Move the branch after the `__len__` guard.** FAIL — the identical 6 tests fail, with the
+identical failure text, confirming placement (not presence) is still the whole of the fix after
+this round's edits.
+
+**(iii) Replace `str.__str__(value)` with `str(value)`.** FAIL — exactly **1** test fails (the
+enum arm, `'Color.RED' != 'red'`); the new `Estimate.n` arm and the `np.str_` arm both still pass,
+because `str()` and `str.__str__()` agree on `np.str_` and on a plain, non-overriding `str` value
+— only a `str` subclass whose own `__str__` disagrees (the enum) discriminates the two
+constructors.
+
+All three reverted by copying the saved pre-mutation file back; `diff` against the same saved copy
+confirmed byte-identical after each revert; full suite re-run green (2855/1/2) after the final
+revert.
+
+**No count of zero disagreements is reported here** — two concerns were raised in the original
+report and both checked out (attack 8a/8b in the review); this fix round names four findings, all
+closed or explicitly routed, and no fifth was found beyond what the review already named.
