@@ -2834,3 +2834,200 @@ def test_h5a_step7_local_pin_parquet_coerces_numpy_float64_beside_float(
     rows = _decode_parquet(path.read_bytes())
     assert rows == [{"v": 1.5}, {"v": 1.5}]
     assert all(type(r["v"]) is float for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# H5a task 11: Fixture W, Fixture E, Fixture B's cross-spelling arm, and the
+# whole-branch mutation re-run (`docs/superpowers/plans/2026-08-21-artifacts-
+# write-side.md` task 11). Nothing below is new production code — the only
+# product of this task is pins, and the mutation re-run is reported in
+# `.superpowers/sdd/2026-08-21-artifacts-write-side/task-11-report.md`.
+#
+# Both encoders were measured directly (not assumed) before writing any of
+# this, at the commit this task started from:
+#   - `.parquet` decodes to the INPUT ROWS AS COERCED (int/float promoted to
+#     float via `_check_column_types`'s grouping plus pyarrow's own table
+#     construction; a NumPy scalar unwrapped to its Python counterpart).
+#   - `.csv` decodes every cell to `str(coerced_value)` — measured for every
+#     arm below, including int-beside-float, which does NOT promote for
+#     `.csv`: `_encode_csv` never calls `_check_column_types` at all
+#     (§ Corrections, correction 8 — cross-row unification is a `.parquet`
+#     rule only), so the two formats disagree on this arm for a second,
+#     independent reason from correction 2's `str()` rule.
+# ---------------------------------------------------------------------------
+
+_H5A_FIXTURE_W_ARMS: dict[str, list[dict[str, Any]]] = {
+    "homogeneous_float": [{"v": 1.5}, {"v": 2.5}],
+    "np_float64_beside_float": [{"v": np.float64(1.5)}, {"v": 2.5}],
+    "np_str_beside_str": [{"v": np.str_("a")}, {"v": "b"}],
+    "np_bool_beside_bool": [{"v": np.bool_(True)}, {"v": False}],
+}
+
+
+def test_h5a_fixture_w_parquet_round_trip_per_arm(tmp_path: Path):
+    """Fixture W, `.parquet` half. Rows built here, written through a real
+    `StepIO.write`, read back through the registered reader, and compared to
+    the INPUT ROWS AS COERCED — never to a hand-written expectation, so the
+    claim is the round trip and not a literal someone typed. `coerce_scalars`
+    is called directly on each arm's own rows to compute the expectation,
+    which is the same coercion `_coerced_rows(keep_structural=True)` applies
+    before handing rows to pyarrow.
+
+    Four arms here share one rule (decoded == coerced, type for type); the
+    fifth arm, int-beside-float, promotes and gets its own test below because
+    the promoted value is no longer equal to the merely-coerced one.
+    """
+    from publishable.artifacts import _decode_parquet
+    from publishable.coercion import coerce_scalars
+
+    io_ = make_io(tmp_path)
+    for name, rows in _H5A_FIXTURE_W_ARMS.items():
+        path = io_.write(f"fixture_w_{name}.parquet", rows)
+        decoded = _decode_parquet(path.read_bytes())
+        expected = [coerce_scalars(dict(row), "fixture w") for row in rows]
+        assert decoded == expected, name
+        for d_row, e_row in zip(decoded, expected, strict=True):
+            assert type(d_row["v"]) is type(e_row["v"]), name
+
+
+def test_h5a_fixture_w_parquet_int_beside_float_promotes(tmp_path: Path):
+    """Fixture W's fifth `.parquet` arm: `int` beside `float`. Every decoded
+    value is asserted to be a `float` **by `isinstance` over the decoded
+    rows** — the promotion, computed rather than written down as a literal —
+    and the decoded values equal the coerced rows with each promoted to
+    `float`, also computed rather than hand-typed.
+    """
+    from publishable.artifacts import _decode_parquet
+    from publishable.coercion import coerce_scalars
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": 1}, {"v": 2.5}]
+    path = io_.write("fixture_w_int_beside_float.parquet", rows)
+    decoded = _decode_parquet(path.read_bytes())
+    coerced = [coerce_scalars(dict(row), "fixture w") for row in rows]
+    promoted = [{"v": float(row["v"])} for row in coerced]
+    assert decoded == promoted
+    assert all(isinstance(row["v"], float) for row in decoded)
+
+
+def test_h5a_fixture_w_csv_round_trip_compares_to_str_of_coerced(tmp_path: Path):
+    """Fixture W, `.csv` half. **Correction 2**: `_decode_csv` returns a
+    `str` for every value — measured: `[{"v": 1.0}]` reads back
+    `[{'v': '1.0'}]` — so this compares each decoded cell to
+    `str(coerced_value)`, never to the coerced value itself. Asserting
+    equality with the coerced value would fail for every arm here, because
+    `.csv`'s reader gives back a string regardless of what was written
+    (`docs/reference.md` § Steps and artifacts' split `.csv`/`.parquet` row).
+
+    This covers all FIVE arms, including int-beside-float: unlike
+    `.parquet`, `.csv` never promotes — `_encode_csv` does not call
+    `_check_column_types` — so `1` stays `str(1) == '1'` rather than
+    `str(1.0) == '1.0'`, measured directly before writing this assertion.
+    """
+    from publishable.artifacts import _decode_csv
+    from publishable.coercion import coerce_scalars
+
+    arms = dict(_H5A_FIXTURE_W_ARMS)
+    arms["int_beside_float"] = [{"v": 1}, {"v": 2.5}]
+
+    io_ = make_io(tmp_path)
+    for name, rows in arms.items():
+        path = io_.write(f"fixture_w_{name}.csv", rows)
+        decoded = _decode_csv(path.read_bytes())
+        coerced = [coerce_scalars(dict(row), "fixture w") for row in rows]
+        expected = [{"v": str(row["v"])} for row in coerced]
+        assert decoded == expected, name
+
+
+def test_h5a_fixture_b_cross_spelling_true_by_construction_not_a_pin(tmp_path: Path):
+    """Fixture B — the NumPy-spelled and Python-spelled versions of one
+    column, written to two artifacts, and the two files' **bytes** compared.
+    Both formats.
+
+    **Declared weak here, on purpose, because it is:** after coercion, the
+    NumPy-spelled row set and the Python-spelled one become the SAME coerced
+    rows, so byte equality between the two artifacts is true BY CONSTRUCTION
+    — this arm can only fail if coercion is absent, which is exactly what
+    Fixture W's own arms above already catch by a more direct route (a round
+    trip against a real expectation, not a same-input-twice comparison). This
+    arm discriminates *coercion present* from *coercion deleted* and nothing
+    finer.
+
+    **The claim "a legal run's artifacts are byte-identical" (controller
+    requirement 2) is pinned by task 13's arms A, B1 and B2, and by NOTHING
+    here.** Written down so this arm is never read as satisfying that
+    requirement — `docs/superpowers/plans/2026-08-21-artifacts-write-side.md`
+    § Corrections, correction 2, names task 13's arms as the only ones that
+    capture bytes BEFORE this slice's change, which is the only thing that
+    can pin a claim about what MOVED.
+    """
+    rows_np = [{"v": np.float64(1.5)}, {"v": np.float64(2.5)}]
+    rows_py = [{"v": 1.5}, {"v": 2.5}]
+
+    io_csv = make_io(tmp_path)
+    p_np_csv = io_csv.write("fixture_b_np.csv", rows_np)
+    p_py_csv = io_csv.write("fixture_b_py.csv", rows_py)
+    assert p_np_csv.read_bytes() == p_py_csv.read_bytes()
+
+    io_pq = make_io(tmp_path)
+    p_np_pq = io_pq.write("fixture_b_np.parquet", rows_np)
+    p_py_pq = io_pq.write("fixture_b_py.parquet", rows_py)
+    assert p_np_pq.read_bytes() == p_py_pq.read_bytes()
+
+
+def test_h5a_fixture_e_empty_row_list_writes_an_empty_table_and_raises_nothing(
+    tmp_path: Path,
+):
+    """Fixture E, first arm: an empty row list writes an empty table and
+    raises nothing. Both formats. This is one of the arms a coercion change
+    is most likely to break silently — an empty sequence never reaches a
+    single value-coercing branch, so a walk that assumed at least one row
+    could raise on `rows[0]` or similar and this is the arm that would catch
+    it. Asserted on the decoded rows.
+    """
+    from publishable.artifacts import _decode_csv, _decode_parquet
+
+    io_ = make_io(tmp_path)
+    csv_path = io_.write("fixture_e_empty.csv", [])
+    assert _decode_csv(csv_path.read_bytes()) == []
+    pq_path = io_.write("fixture_e_empty.parquet", [])
+    assert _decode_parquet(pq_path.read_bytes()) == []
+
+
+def test_h5a_fixture_e_all_none_column_parquet_round_trips_as_none(tmp_path: Path):
+    """Fixture E, second arm, `.parquet` half: a column whose every value is
+    `None` round-trips as `None` in every row, asserted on the decoded rows.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": None}, {"v": None}]
+    path = io_.write("fixture_e_none.parquet", rows)
+    assert _decode_parquet(path.read_bytes()) == [{"v": None}, {"v": None}]
+
+
+def test_h5a_fixture_e_all_none_column_csv_round_trips_as_empty_string_not_none(
+    tmp_path: Path,
+):
+    """Fixture E, second arm, `.csv` half — and a THIRD instance of
+    correction 2's asymmetry, found by measuring rather than by trusting the
+    design's own wording. § The discriminating fixtures' Fixture E says a
+    `None` column "round-trips as `None` in every row. Both formats" — that
+    is false of `.csv`, measured directly: `csv.DictWriter` writes a `None`
+    cell as an empty string (not the text `"None"`, and not `None` itself),
+    and `csv.DictReader` gives that empty string straight back. So the
+    `.csv` decoded row is `{"v": ""}`, never `{"v": None}`. This is not
+    `str()` of the coerced value either (`str(None) == "None"`, not `""`) —
+    it is the `csv` module's own special-casing of `None`, a THIRD distinct
+    `.csv` behaviour beyond correction 2's `str()` rule and correction 8's
+    "no cross-row unification," found here because Fixture E's own claim was
+    checked against the code rather than carried. Filed for task 12 to
+    correct in the design/plan text; not edited here, since editing the
+    development record is not this task's job.
+    """
+    from publishable.artifacts import _decode_csv
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": None}, {"v": None}]
+    path = io_.write("fixture_e_none.csv", rows)
+    assert _decode_csv(path.read_bytes()) == [{"v": ""}, {"v": ""}]
