@@ -8579,3 +8579,30 @@ uncoded conversion that H5a's per-format ruling makes visible without settling.
 batch 8, recorded in the ledger as *"filed for task 12"*, named by the controller in task 12's dispatch —
 and **still not filed**, caught only by task 12's review. *A ledger line saying "filed" is not a filing*,
 and neither is a dispatch line.
+
+## OPEN — an unencodable object in a `.parquet` cell raises a bare `pyarrow.lib.ArrowInvalid` rather than a coded diagnostic — **Owner: unassigned, same reason as the two entries above**
+
+**Found by H5a's whole-branch review and measured at `270ff73`; it predates the branch**, verified by
+tracing the identical code path on `main`:
+
+```
+_encode_parquet([{'v': <an arbitrary object>}])
+  → pyarrow.lib.ArrowInvalid: Could not convert <…> with type C: did not recognize Python value type
+```
+
+The coercion H5a built refuses what it can **name** — a structural cell, a `bytes` cell, a NumPy scalar it
+cannot encode — with `E-STEP-RETURN-TYPE` or `E-ARTIFACT-UNWRITABLE`. An object that is none of those
+reaches `pyarrow` and its own exception escapes uncoded, so a user sees a third-party traceback where every
+neighbouring fault gives a diagnostic with an `E-` identifier.
+
+**Why H5a did not close it.** The slice's charter is the write-side integrity of the per-unit tables and
+the recorded-row contract, and a step returning an arbitrary object is already refused at the step-return
+boundary by `coerce_scalars`; this path is reachable through `io.write` with a hand-built row, which is the
+same surface as the two entries above.
+
+**Owner: unassigned, with the reason** — no remaining slice (H5b, H6, H9, H3c-3's remaining 14) charters
+`io.write`'s uncoded-fault surface. **This is the fourth entry of one shape**, and they should be taken
+together: a bare traceback for nested NumPy scalars through `.yaml`/`.json`/`.jsonl`, a non-`str` column
+key, a `None` cell silently becoming `''` through `.csv`, and this. Each is a place where *"a writer
+accepts what it can give back"* is true of the writer's **named** refusals and silent or uncoded outside
+them.
