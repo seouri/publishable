@@ -388,7 +388,7 @@ I first wrote it wrong, which is how the wrong name was caught.
 
 ## Fix round, 2026-08-22 — appended after an advisory review, editing nothing above
 
-Commit `<this round>`. No test file, no `src/` file, no gate figure moves.
+Commit `bc50409`. No test file, no `src/` file, no gate figure moves.
 
 **1. The H9 filing's reproduce was a scratch path, and a scratch path is not a reproduce.** The filing
 cited a session-scoped file under `/private/tmp/.../scratchpad/`, which will not exist for a reader —
