@@ -113,6 +113,17 @@ This project has ruled twice that an additive change to a shipped surface is fin
 existing key reports is not (H7d Part B, H8b Decision 7), so the behaviour-change exposure is **H5b's
 alone**, and H5a went first.
 
+**Correction to this amendment, same day, from H5b's scoping.** Two claims in the paragraph above are
+wrong and this replaces them. **H5a was 9 tasks in `H5-SCOPING.md` and 13 in its approved plan** — the
+size above was copied from the charter being tested rather than from the plan that shipped, which is the
+exact move the sentence below this one warns about. And **the behaviour-change exposure was not H5b's
+alone**: H5a's own task 9 changed a shipped surface — both row-shaped writers coerce, a non-mapping row is
+refused, and `io.write` names the artifact — and its design says so under a heading of its own. What is
+true, and what the split actually rested on, is narrower: **H5b changes what an existing key may contain
+(`aggregated`), and H5a's change was additive to what `io.write` accepts and reports.** H5b's scoping then
+measured that even *that* is not additive in the ordinary sense — admitting a unit widens the inference
+base, so values move in columns that hold no non-numeric data at all.
+
 **The general point, which is why this amendment exists at all.** Both splits were recorded in `CLAUDE.md`
 and in the slice's own dated scoping, and **neither reached this table** — so the table read as a nine-row
 charter while the work had become fourteen slices. A scoping expires and a spec does not, but a spec whose
