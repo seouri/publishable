@@ -457,3 +457,123 @@ def test_h8b_covered_config_does_not_mutate_input():
     }
     covered_config(config)
     assert config == before
+
+
+# ---------------------------------------------------------------------------
+# H6a's guard pin — arms D and E, captured in batch 1 BEFORE any code task
+# runs. Arms A, B and C are in `tests/test_cli.py`, arm F in
+# `tests/test_validate.py`, and arm N in `tests/test_diff.py`.
+#
+# These two arms bring the first `git init` into this module: `grep -c
+# "git init\|subprocess" tests/test_hashes.py` was 0 before them. Arm D needs
+# real repositories because the property it holds — tracked or not — is not
+# observable through `code_hash` today and becomes observable at task 5.
+
+# Fixture D's and Fixture E's shared digest, computed here by building both
+# trees and calling the shipped `code_hash`. The plan's `6ddb8634…` is NOT
+# reproducible from the design's own stated tree (§ Corrections 5: the `.pyd`'s
+# bytes are never stated and nine candidates were tried), so no task asserts
+# it; the bytes are fixed at `X` and this is what they produce.
+_H6A_TRACKED_PYD_DIGEST = "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+# The zero-file digest: `sha256` of the empty string.
+_H6A_EMPTY_DIGEST = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def _h6a_commit(root: Path, *paths: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+    subprocess.run(["git", "add", "-f", *paths], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "pin"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not(tmp_path: Path):
+    """Arm D. NO AUTHORIZED EDITOR — a passing arm IS the proof.
+
+    Two trees, one digest. Fixture D commits `src/pkg/loose.pyd` with
+    `git add -f`, so it is **tracked** while matching the scaffold's own
+    `*.py[cod]` pattern: git does not skip a tracked file, so neither does the
+    hash — the second of § How the three are computed's four cases. Fixture E
+    adds a **tracked** `src/pkg/__pycache__/keep.py` on top, which the fixed
+    skip set drops before git is asked anything — the first case, and the
+    positive control for § Templates' *"unconditionally"*.
+
+    **Why the arm is built on the AFTER value.** The design's own table has the
+    untracked-`.pyd` tree carrying the *same* digest in the *today* column,
+    because today's `code_hash` cannot tell tracked from untracked at all. An
+    assertion on the today column would therefore pass under a mutation that
+    drops tracked files too. `eec1541e…` is the after value; that it is also
+    the today value is what lets this arm be captured green now, and it is the
+    coincidence a fixture must not be built on.
+
+    There is no editor who could make this arm pass another way: after task 5
+    the same two trees must still produce the same one digest.
+    """
+    d_tree = tmp_path / "fixture_d"
+    write(d_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(d_tree, "src/pkg/step.py", "a = 1\n")
+    write(d_tree, "templates/t.py", "b = 2\n")
+    write(d_tree, "src/pkg/loose.pyd", "X")
+    _h6a_commit(d_tree, ".gitignore", "src/pkg/step.py", "templates/t.py", "src/pkg/loose.pyd")
+    assert code_hash(d_tree) == _H6A_TRACKED_PYD_DIGEST
+
+    e_tree = tmp_path / "fixture_e"
+    write(e_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(e_tree, "src/pkg/step.py", "a = 1\n")
+    write(e_tree, "templates/t.py", "b = 2\n")
+    write(e_tree, "src/pkg/loose.pyd", "X")
+    write(e_tree, "src/pkg/__pycache__/keep.py", "k = 1\n")
+    _h6a_commit(
+        e_tree,
+        ".gitignore",
+        "src/pkg/step.py",
+        "templates/t.py",
+        "src/pkg/loose.pyd",
+        "src/pkg/__pycache__/keep.py",
+    )
+    # Both files really are tracked — otherwise this arm would be two
+    # statements about untracked files, which today's hash treats identically
+    # and which would make the whole arm blind after task 5.
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=e_tree, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" in tracked
+    assert "src/pkg/__pycache__/keep.py" in tracked
+    assert code_hash(e_tree) == _H6A_TRACKED_PYD_DIGEST
+
+
+def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_digest(
+    tmp_path: Path,
+):
+    """Arm E. **TASK 3 IS THE SOLE AUTHORIZED EDITOR.**
+
+    `code_hash` of a directory that does not exist returns the `sha256` of the
+    empty string, and it must keep doing so: H6a's zero-file refusal is
+    `E-CODE-EMPTY` **at the caller** (`cli.command_run`), never here. Two
+    shipped tests in this module rest on that value as a **negative control** —
+    `test_code_hash_skip_list_matches_relative_path_not_absolute` and
+    `test_code_hash_handles_a_dot_git_intermediate_path_component`, both of
+    which compare a real tree's digest against `code_hash(tmp_path /
+    "nonexistent_empty_repo")`. Grepped for, not assumed: `grep -n
+    "nonexistent_empty_repo" tests/test_hashes.py` names those two and nothing
+    else, and neither states the digest as a literal, which is why this arm
+    states it as a standalone claim.
+
+    **Task 3's only edit here is adding the literal `None` argument** where the
+    call is made, in this test and at the 13 `code_hash(` call sites this
+    module already has. **No assertion in this arm changes**; a task 3 diff
+    that touches an `assert` line here is a finding.
+    """
+    assert code_hash(tmp_path / "nonexistent_empty_repo") == _H6A_EMPTY_DIGEST
+    # Not implied by the line above: an existing directory holding nothing the
+    # two trees cover resolves to the same digest, which is the reachable half
+    # of the zero-file case and the reason the refusal cannot live here.
+    (tmp_path / "empty_repo" / "src").mkdir(parents=True)
+    assert code_hash(tmp_path / "empty_repo") == _H6A_EMPTY_DIGEST

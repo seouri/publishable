@@ -36,7 +36,7 @@ from publishable.diagnostics import (
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
-from publishable.hashes import design_digest
+from publishable.hashes import code_hash, design_digest
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
@@ -18737,3 +18737,366 @@ def test_task_13_the_silent_drop_cannot_be_mistaken_for_the_fix(tmp_path, capsys
     assert block["value"] == 5.0
     assert block["n"]["completed"] == 8
     assert block["ci95"] == [2.0, 8.0]
+
+
+# ---------------------------------------------------------------------------
+# H6a's guard pin — arms A, B and C, captured in batch 1 BEFORE any code task
+# runs. Every literal below was COMPUTED here, by building the tree and calling
+# the shipped `code_hash`, or by reading a real run's own artifacts back — none
+# is transcribed from the plan, whose Fixture D literal was measured
+# unreproducible (§ Corrections 5) and whose Fixture F could not catch its own
+# mutation (§ Corrections 4). Arms D and E are in `tests/test_hashes.py`, arm F
+# in `tests/test_validate.py`, and arm N in `tests/test_diff.py`.
+#
+# THE DISAGREEMENT WITH THE PLAN THESE THREE ARMS RECORD. The plan's arms A and
+# B name ONE tree — `src/pkg/step.py` = `a = 1\n` plus `templates/t.py` =
+# `b = 2\n` — and ask for both a direct `code_hash` call and an end-to-end
+# `run` over it. That tree cannot be run: `templates/t.py` is discovered by
+# path as a project-local template, imports cleanly, registers nothing, and
+# `validate` refuses the config with `E-TEMPLATE-LOAD` (measured — the refusal
+# names the file and says every file under `templates/` that is not a template
+# must be `__`-prefixed). Any file that would make it runnable — a registering
+# template, a `__`-prefixed helper, an experiment package under `src/` — is a
+# different path or different bytes, and the digest is a function of exactly
+# those. So each of arms A and B holds its two halves over TWO trees, each
+# asserting its own tree's digest beside its own consequence:
+#
+#   * the DIRECT half keeps the plan's tree and the plan's literals
+#     (`71bf339c…`, `ebc5ee53…`), which tasks 3, 5 and 8 also build against;
+#   * the END-TO-END half uses `_h6a_pin_project` below — a real project whose
+#     hashed trees hold exactly `src/pkg/step.py`, its experiment package
+#     imported from a directory outside both trees the way the scoping's own
+#     zero-file probe reached one — and carries its own two literals.
+#
+# `run_a_project` is deliberately NOT the driver: its `_env_file` writes at the
+# project ROOT, which is in neither hashed tree (§ Corrections 11), and its
+# scaffold's digest would move with any future edit to the generators.
+_H6A_BASE_STEP = "a = 1\n"
+_H6A_BASE_TEMPLATE_FILE = "b = 2\n"
+_H6A_ENV = "OPENAI_API_KEY=sk-live-1\n"
+
+# The plan's tree, hashed by a direct call. Committed, so both files are
+# TRACKED: after task 5 a tracked file is hashed whatever an exclude pattern
+# says, which is the second of § How the three are computed's four cases.
+_H6A_BASE_DIGEST = "sha256:71bf339cc9463f4c776c711f3d65ccf9b3bc1e18d383b78ae7d4e5170b526c2b"
+# The same tree plus an untracked, git-excluded `src/pkg/.env`. TODAY's value.
+_H6A_BASE_WITH_ENV_DIGEST = (
+    "sha256:ebc5ee53ac39bbab63d5270475271068dc67e6f34ead9db648bad114845b1cce"
+)
+
+# The runnable project's two digests, both computed by building it here.
+_H6A_RUN_DIGEST = "sha256:f6a935cfc29196b2a5f5a7f873096c4ab3ee077ff3152afedafeb34fb919078a"
+_H6A_RUN_WITH_ENV_DIGEST = "sha256:a74f3d44dc1dd9e905550b5a7b59220da26c95db2e96f235c3cd3c3743eb17bc"
+
+_H6A_OUTSIDE_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Summarize(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for unit in units:
+            io.record(unit.key, {"present": True})
+        return {"n_units": len(units)}
+
+
+class PinExperiment(BaseExperiment):
+    steps = [Summarize]
+"""
+
+# Hand-written rather than materialized: `materialize_config`'s text is a
+# generator's output and would carry every future edit to it into
+# `parameters_hash`, which arm C pins as a literal with no authorized editor.
+# `input_dir`/`output_dir` are substituted per run and are the two fields
+# `parameters_hash` excludes, so the host's paths cannot reach the digest.
+_H6A_PIN_CONFIG = """\
+schema_version: "1.0"
+experiment_type: generic
+template_version: "1.0.0"
+plugin: null
+
+metadata:
+  name: pin
+  description: "H6a's guard pin — the runnable project"
+  authors: ["Kyungjoon Lee"]
+  institution: ""
+
+entrypoint: "pin_outside.experiment:PinExperiment"
+
+data:
+  input_dir: INPUT_DIR
+  output_dir: OUTPUT_DIR
+  input_manifest_policy: hash_all
+  units:
+    from: index.csv
+    key: patient_id
+    attributes: [arm]
+    allocation: between
+    assign: {arm: {method: by_attribute}}
+    cluster_by: null
+    weight_by: null
+    measurements: null
+    holdout: null
+
+parameters:
+  analysis:
+    method: pearson
+    min_samples: 30
+    confidence: 0.95
+    drop_missing: true
+
+sweep:
+  groups: [{by: arm, levels: [control, treatment]}]
+
+replication:
+  repeats:
+    - {kind: seed, n: 2}
+  order: as_declared
+  rationale: "two seeds, so the ledger carries more than one execution per condition"
+
+statistics:
+  correction: holm
+
+limits:
+  max_executions: 500
+  max_failed_fraction: 0.2
+  max_ineligible_fraction: 0.5
+  min_units_per_cell: 10
+  min_clusters: 10
+  min_reported_n: 5
+
+hypotheses: []
+"""
+
+# `input_manifest_hash` covers each input file's `mtime` in nanoseconds, so it
+# is a literal only if the mtime is one. Fixed here rather than left to the
+# clock — a figure arm C asserts must be the same on every machine and every
+# run, and a recomputation from the record would assert the function equals
+# itself.
+_H6A_FIXED_MTIME_NS = 1_700_000_000_000_000_000
+
+
+def _h6a_base_tree(root: Path, *, with_env: bool) -> Path:
+    """The plan's Fixture A tree, committed — plus Fixture B's `.env` when asked.
+
+    The `.env` is written AFTER the commit and matches the scaffold's own first
+    `.gitignore` line, so it is untracked and git-excluded exactly as a real
+    project's credentials file is.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".gitignore").write_text(".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    (root / "src" / "pkg").mkdir(parents=True)
+    (root / "src" / "pkg" / "step.py").write_text(_H6A_BASE_STEP)
+    (root / "templates").mkdir()
+    (root / "templates" / "t.py").write_text(_H6A_BASE_TEMPLATE_FILE)
+    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "base"],
+        cwd=root,
+        check=True,
+    )
+    if with_env:
+        (root / "src" / "pkg" / ".env").write_text(_H6A_ENV)
+    return root
+
+
+def _h6a_pin_project(tmp_path: Path, monkeypatch, *, with_env: bool) -> Path:
+    """A runnable project whose hashed trees hold exactly `src/pkg/step.py`.
+
+    The experiment package lives in a sibling directory on `sys.path`, so it is
+    outside both hashed trees: `load_experiment` prepends `<repo>/src` but
+    `importlib.import_module` still resolves anything already importable, which
+    is the route the H6 scoping's own zero-file probe used. `pyproject.toml`
+    and `uv.lock` are hand-written at the project root — in neither hashed tree
+    — because `command_run` copies both into `environment/` and their absence
+    is an `E-IO-FAILED`; the lockfile's fixed bytes are what make
+    `uv_lock_hash` a literal.
+    """
+    import os
+
+    proj = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    outside = tmp_path / "outside"
+    for path in (proj, data, results, outside):
+        path.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"u{i:02d},{'control' if i <= 10 else 'treatment'}\n" for i in range(1, 21))
+    index = data / "index.csv"
+    index.write_text("patient_id,arm\n" + rows)
+    os.utime(index, ns=(_H6A_FIXED_MTIME_NS, _H6A_FIXED_MTIME_NS))
+    package = outside / "pin_outside"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "experiment.py").write_text(_H6A_OUTSIDE_EXPERIMENT)
+    monkeypatch.syspath_prepend(str(outside))
+
+    (proj / ".gitignore").write_text(".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    (proj / "pyproject.toml").write_text('[project]\nname = "pin-project"\nversion = "0.1.0"\n')
+    (proj / "uv.lock").write_text('version = 1\nrequires-python = ">=3.11"\n')
+    (proj / "src" / "pkg").mkdir(parents=True)
+    (proj / "src" / "pkg" / "step.py").write_text(_H6A_BASE_STEP)
+    cfg = proj / "configs" / "pin" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        _H6A_PIN_CONFIG.replace("INPUT_DIR", str(data)).replace("OUTPUT_DIR", str(results))
+    )
+    subprocess.run(["git", "init", "-q", "."], cwd=proj, check=True)
+    subprocess.run(["git", "add", "."], cwd=proj, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "pin"],
+        cwd=proj,
+        check=True,
+    )
+    if with_env:
+        (proj / "src" / "pkg" / ".env").write_text(_H6A_ENV)
+    return cfg
+
+
+def test_h6a_arm_a_the_ordinary_path_does_not_move(tmp_path: Path, monkeypatch):
+    """Arm A. NO AUTHORIZED EDITOR — a passing arm IS the proof.
+
+    A tree carrying no excluded file under either hashed tree hashes to the
+    same digest before and after H6a, and a real `run` over such a tree carries
+    that digest's first seven hex characters in its `run_id` and in its run
+    directory's name.
+
+    **A task that finds this arm failing has found the ordinary path moving,
+    which this slice says it does not.** The response is to stop and report,
+    never to edit a literal here: no task in H6a is authorized to change one
+    character of this test, and there is no editor who could make it pass
+    another way.
+
+    Both halves were measured. The end-to-end half was also driven through the
+    installed console script (`uv run publishable run`, with the outside
+    package on `PYTHONPATH`) and produced the same run directory name, so the
+    digest is the shipped command's and not an artifact of calling `main`
+    in-process.
+    """
+    base = _h6a_base_tree(tmp_path / "base", with_env=False)
+    assert code_hash(base) == _H6A_BASE_DIGEST
+
+    cfg = _h6a_pin_project(tmp_path / "runnable", monkeypatch, with_env=False)
+    root = cfg.parents[2]
+    assert code_hash(root) == _H6A_RUN_DIGEST
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
+    assert run_dir.name.endswith("_f6a935c")
+    assert yaml.safe_load((run_dir / "run.yaml").read_text())["code_hash"] == _H6A_RUN_DIGEST
+
+
+def test_h6a_arm_b_an_excluded_env_file_moves_the_hash_today(tmp_path: Path, monkeypatch):
+    """Arm B. **TASK 5 IS THE SOLE AUTHORIZED EDITOR**, and what it may edit is
+    written out here in advance.
+
+    Today a git-excluded `src/pkg/.env` — the one file the scaffold promises is
+    never committed — moves `code_hash` and therefore moves the `run_id`. After
+    task 5 it does not, and each digest below becomes arm A's own for the same
+    tree.
+
+    **Exactly four literals move, and no others:**
+
+      * `_H6A_BASE_WITH_ENV_DIGEST` `ebc5ee53…` → `_H6A_BASE_DIGEST` `71bf339c…`
+      * `_H6A_RUN_WITH_ENV_DIGEST` `a74f3d44…` → `_H6A_RUN_DIGEST` `f6a935cf…`
+      * the run directory suffix `_a74f3d4` → `_f6a935c`
+      * the recorded `code_hash`, which is the same constant as the second
+
+    The plan names two because it names one tree; this arm holds two trees for
+    the reason the header above states, and each contributes its own digest and
+    (for the runnable one) its own `run_id` suffix. **An edit to anything else
+    in this test is a finding**, not a literal to refresh.
+
+    **This arm carries NO copy of the seven unmoved figures.** They are arm C's
+    alone, so no list is pinned twice and task 5 — this arm's sole editor — has
+    nothing of arm C's to reach. Two slices pinned one list twice and edited
+    both; that is what this sentence exists to prevent.
+    """
+    base = _h6a_base_tree(tmp_path / "base", with_env=True)
+    assert code_hash(base) == _H6A_BASE_WITH_ENV_DIGEST
+    assert (base / "src" / "pkg" / ".env").read_text() == _H6A_ENV
+
+    cfg = _h6a_pin_project(tmp_path / "runnable", monkeypatch, with_env=True)
+    root = cfg.parents[2]
+    assert code_hash(root) == _H6A_RUN_WITH_ENV_DIGEST
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
+    assert run_dir.name.endswith("_a74f3d4")
+    assert yaml.safe_load((run_dir / "run.yaml").read_text())["code_hash"] == (
+        _H6A_RUN_WITH_ENV_DIGEST
+    )
+
+
+def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, monkeypatch):
+    """Arm C. NO AUTHORIZED EDITOR — zero lines change in this slice.
+
+    *Exactly one hash moves* is the whole claim of H6a's § The value change,
+    and this arm is what makes it a pin rather than a sentence. Every figure
+    below was read off a real run of arm B's project — the one whose
+    `code_hash` DOES move — and each is asserted as the literal it printed.
+    None is recomputed from the config or the artifact it came from: a test
+    that recomputes `parameters_hash` and compares would assert the function
+    equals itself and stay green under any change to both sides.
+
+    **Three of the ten figures § The value change enumerates are ABSENCES on
+    this project and are deliberately not here**, because a control asserting
+    only absences passes identically if nothing ran: `provenance.apparatus`
+    (`generic` declares no probe), the upstream copies of `code_hash` and
+    `parameters_hash` (no `io.reuse_from` here — **Fixture M is what covers
+    that pair**, and it is the only fixture exercising that carrier), and the
+    derived seeds, which are never published as digests at all.
+
+    **`manifest/input.json` holds exactly one file here**, so "the per-file
+    digests" is one digest and is asserted as one — the plural in the design's
+    list is not coverage this arm has.
+
+    **`input_manifest_hash` covers `mtime` in nanoseconds**, which is why the
+    roster's mtime is fixed by `_h6a_pin_project`. Without that the figure is
+    not a literal on any machine, and the arm would have had to recompute it.
+
+    **Not duplicated here, deliberately:** `run.yaml`'s top-level key list and
+    its `provenance` key list are already pinned whole, by H8a's own guard pin
+    — `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit` and
+    `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` in this file.
+    Grepped for before writing this arm rather than assumed absent.
+    """
+    cfg = _h6a_pin_project(tmp_path, monkeypatch, with_env=True)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next((tmp_path / "results").glob("run_*"))
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    provenance = run_doc["provenance"]
+
+    # The positive control: a run that died before writing anything would have
+    # no `run.yaml` to read, and one that refused would have no `completed`.
+    assert run_doc["status"] == "completed"
+    # The figure that DOES move, asserted here too so this arm cannot be read
+    # as green over a run whose code_hash was never the one arm B pins.
+    assert run_doc["code_hash"] == _H6A_RUN_WITH_ENV_DIGEST
+
+    assert run_doc["parameters_hash"] == (
+        "sha256:0e55a047167d30e2caa3acefe8cff398e391a19d801add5932f95b1e2eb7232e"
+    )
+    assert provenance["input_manifest_hash"] == (
+        "sha256:15d29dcab933c4824f78ff18c7ed7a3b2b83fe693c2faaa405cd54e92bdc3dc1"
+    )
+    assert provenance["environment"]["uv_lock_hash"] == (
+        "sha256:c0b8db057b9b36718982fea80396ba000fd75dd36ff2262bbbca881af07e341e"
+    )
+    assert provenance["units_hash"] == (
+        "sha256:29c8190c878f0ef063976719429b96a0811c255dd7d4d9d25c14cf43e02e2ec2"
+    )
+    assert provenance["allocation_hash"] == (
+        "sha256:27924889ef569abc53b382bfa5698e64f6fffd5693ed6f50b33e647b4789c093"
+    )
+
+    manifest = json.loads((run_dir / "manifest" / "input.json").read_text())
+    assert list(manifest["files"]) == ["index.csv"]
+    assert manifest["files"]["index.csv"]["sha256"] == (
+        "1eda4dffe5d97175b61dbccc3b56c314fe5c760fd808f78cd5a2b953c3e3e269"
+    )
+
+    sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
+    assert sweep_doc["design_digest"] == (
+        "sha256:73966ce7e98da4d01daf38263842f7751f9db17d2c82e0c349f94a9ad5d99d8e"
+    )

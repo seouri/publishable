@@ -14474,3 +14474,45 @@ def test_no_apparatus_change_policy_knob_can_be_written(tmp_path: Path) -> None:
 
     assert "limits.allow_apparatus_change" not in without_knob
     assert "limits.allow_apparatus_change" in with_knob
+
+
+# ---------------------------------------------------------------------------
+# H6a's guard pin — arm F, captured in batch 1 BEFORE any code task runs. Arms
+# A, B and C are in `tests/test_cli.py`, arms D and E in `tests/test_hashes.py`,
+# and arm N in `tests/test_diff.py`.
+
+
+def test_h6a_arm_f_the_template_version_warning_message_is_pinned_whole(write_config):
+    """Arm F. **TASK 11 IS THE SOLE AUTHORIZED EDITOR, AND ZERO CHARACTERS
+    CHANGE.**
+
+    Task 11 extracts `_check_versions`' unset-and-defaulted comprehension into
+    a helper shared with the new `W-PARAM-UNSET` check. That extraction is
+    behaviour-preserving or it is wrong, and this arm is how the difference is
+    visible: the whole message is asserted as one string, so deleting the
+    unset clause, reordering its paths, or changing one word of the wording
+    fails here rather than passing a substring test.
+
+    **Grepped rather than assumed.** `grep -rn "but the template reports|unset
+    here and left to" tests/ src/ docs/*.md` finds the two f-strings in
+    `validate.py` and **no test at all**: the nearest existing test,
+    `test_a_moved_template_version_names_a_parameter_the_config_leaves_unset`
+    above, asserts `"analysis.confidence" in ...` and `"analysis.method" not
+    in ...` — two substrings of this message, neither of which can see the
+    wording between them or the order of a multi-path list.
+
+    The config declares `template_version: "0.9.0"` against `generic`'s
+    reported `1.0.0` and omits exactly one of the template's four defaulted
+    parameters, so the clause names exactly one path — which is what makes the
+    string short enough to assert whole and still discriminating.
+    """
+    path = write_config({"template_version": "0.9.0", "parameters.analysis.confidence": _DELETE})
+    c = Collector()
+    validate_config(path, c)
+    warnings = [f for f in c.findings if f.code == "W-TEMPLATE-VERSION"]
+    assert len(warnings) == 1
+    assert warnings[0].path == "template_version"
+    assert warnings[0].message == (
+        "is 0.9.0 but the template reports 1.0.0; unset here and left to the "
+        "template's default: analysis.confidence"
+    )
