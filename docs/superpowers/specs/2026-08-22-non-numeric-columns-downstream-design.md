@@ -842,3 +842,41 @@ has to be made **once**, over the whole set of moving keys, or it is not an argu
 - **Whether any project in the wild reads `aggregated` for a column this slice newly admits**, which
   is unknowable and is why § The behaviour change states the `diff` gap rather than claiming a
   mitigation.
+
+---
+
+## Controller ruling, 2026-08-22 — the cost-if-wrong is real but its carrier already exists
+
+**The design's unmitigated cost reads: two runs of the same config, data and seed across this slice
+publish different `aggregated` numbers with `code_hash`, `parameters_hash` and `input_manifest_hash` all
+`identical` and no `diff` row pointing at the change. The last clause is too strong, and the correction
+is the reason to ship rather than to hedge.**
+
+**`uv.lock` *is* that row.** The three-hash split is deliberate about exactly this case:
+`code_hash` covers `src/**` and `templates/**` — *the code your repo supplies* — and **core's own version
+is pinned by `uv.lock` instead**, which `reference.md` § Templates states in as many words when it
+explains why a plugin's template is pinned there and a project-local one is hashed. So a core upgrade that
+moves a number is carried by `provenance.environment.uv_lock_hash`, and `diff` reads it — both verified in
+this design rather than assumed. The gap is not *"no row points at it"*; it is **"the row that points at it
+is the one a reader is least likely to read"**, which is a smaller and different claim.
+
+**Two consequences for this slice.**
+
+1. **The disclosure obligation stands and is not weakened by the above.** Seven moving keys with computed
+   before/after literals, and four things that newly stop or newly warn, go in the ledger and in
+   `CLAUDE.md`'s slice entry. A reader comparing two runs across this boundary needs to be told the
+   numbers moved; being *able* to derive it from a lockfile hash is not being told.
+2. **Nothing is minted to make the change more visible, and that is a decision rather than an omission.**
+   A fourth hash, a core-version key in the record, or a `diff` row of its own would each add a second
+   source of truth for something `uv.lock` already answers — and the argument against a separate defaults
+   file applies unchanged. **If this ruling is wrong, the symptom is a user who diffs two runs, sees
+   `uv.lock DIFFERS` beside changed numbers, and cannot tell whether the lockfile move *caused* the
+   change** — which is a reason to make `diff`'s `uv.lock` detail lines name the moved package, filed
+   against H9 (`reproduce` is what reads the environment back) rather than built here.
+
+**What does not change: the answer to the not-additive question.** The numbers this slice moves are wrong
+on the record's own terms today — one mapping publishing `completed: 4` while `attrition` over the same
+executions says `completed: 6`, and `n_valid: 0.0` over six `True` rows carrying `ci95: [0.0, 0.0]` with
+2000 resample draws. **A published number that contradicts another published number in the same record is
+not a behaviour worth preserving**, and the two prior rulings (H7d Part B, H8b Decision 7) both turn on a
+*correct* behaviour moving quietly. Ship it, and say loudly that it moved.
