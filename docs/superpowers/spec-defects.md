@@ -776,6 +776,15 @@ documents that a bool/int clash raises. **Owner: H5 Artifacts** (spine § The ha
 which owns `units.parquet` integrity and is the slice that also lands non-numeric recorded columns
 — the change that makes this column-typing question load-bearing rather than latent.
 
+**CLOSED by H5a task 1 (2026-08-22), in half.** `reference.md` § The per-unit tables now states the
+rule this entry's live half named as missing — int/float promotion, and the bool/int and str/int
+clashes, each with its own worked sentence and a note that the rule is checked only for `.parquet`
+(`.csv` writes each row's own `str()` without unifying). **Struck: the S5 prediction that the same
+slice "also lands non-numeric recorded columns."** That is a different question — a column that
+never disagrees on type within itself but is not numeric at all — and it is **H5b's**, not H5a's;
+H5a's task 1 documents an existing, pinned behaviour and adds nothing to it. See the S4a residue
+table entry below for that question's own status.
+
 ## ANSWERED in S2: a single completed unit reports no interval
 
 The open question was what a design with no dispersion reports. S2's answer, applied to
@@ -1918,14 +1927,29 @@ Recorded rather than fixed, each with the reason and where it lands.
 
 | Carried | Status |
 |---|---|
-| The `aggregate` table omits declared unit attributes and non-numeric columns | **Half closed, half open.** Task 13 landed the attributes half — `cli.py` now carries declared unit attributes into the table, with the collapse rule and the namespace fact stated in `reference.md` § Templates; that task's own reframing is worth keeping, since the document was already right and the code was wrong, so this was closing a divergence rather than adding a feature. **The non-numeric-column half is open: owner H5 Artifacts** |
+| The `aggregate` table omits declared unit attributes and non-numeric columns | **Half closed, half open.** Task 13 landed the attributes half — `cli.py` now carries declared unit attributes into the table, with the collapse rule and the namespace fact stated in `reference.md` § Templates; that task's own reframing is worth keeping, since the document was already right and the code was wrong, so this was closing a divergence rather than adding a feature. **The non-numeric-column half is open — RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b**, by name and with the reason: H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") states that a non-numeric column reaching `collapse_repeats`, `summarize_step` or `aggregate`'s table is H5b tasks 11–13's, and H5a "collapses nothing and needs none" of that machinery |
 | `limits.max_ineligible_fraction` read by nothing | **CLOSED.** Read by `cli.py`; `W-DATA-INELIGIBLE` exists and has a row in `reference.md` § Warnings core reports |
-| `np.str_` / `np.bytes_` refused by `coerce_scalars`'s `__len__` guard | **OPEN. Owner H5 Artifacts**, which the row itself already pairs it with ("the two share a slice") — non-numeric columns are exactly what makes a string scalar arrive |
+| `np.str_` / `np.bytes_` refused by `coerce_scalars`'s `__len__` guard | **CLOSED by H5a task 10 (2026-08-22), and the pairing this row drew turned out to bind two different grounds.** Measured against `src/publishable/coercion.py`: `np.str_` is now **admitted**, not refused — it is a `str` by inheritance, and `_coerce_one` admits anything already one of the four scalar types before the `__len__` guard runs at all. `np.bytes_` stays **refused**, and correctly: `bytes` is not one of the four scalar types `CLAUDE.md`'s invariant names (`str`/`int`/`float`/`bool`), so it falls through to the same `__len__` guard a NumPy array does. The row's own "the two share a slice" was right about the routing and wrong to imply one fix — one ground closes a refusal, the other confirms one that was never a bug |
 | Bootstrap-vs-analytic tolerance 0.02 against a 0.0198 worst case | **No slice; closed.** Deliberately not loosened; carried as a comment the test still wants |
 | `tests/test_cli.py` monkeypatches `STARTER_STEP` | **No slice; closed.** Test ergonomics; inventing a production seam for it would be worse |
 | `materialize.py` emits none of the four `statistics` sub-blocks, untested end to end | **Superseded.** Now tracked as a real gap on "The generated config calls itself 'the complete parameter set'" above, since two of the four are built features — **owner H4** |
 | A `summary` step's `Estimate` needs a coercion exemption | **CLOSED by S5a**, as the row already records |
 | `W-STATS-AGGREGATE-FAILED` covers two events | **No slice; closed.** Verified mutually exclusive per metric and disambiguated by message |
+
+**AMENDED 2026-08-22 (H5a task 12): the "CLOSED by S5a" row above overstates what S5a built, and the
+overstatement is corrected rather than the row rewritten.** S5a's own line just above it says the
+exemption "had to coerce the `Estimate`'s own fields" — measured against `_coerce_estimate` in
+`src/publishable/coercion.py`, that is true of `value` and each `ci95` bound (each passed through
+`_coerce_one`) and **false of `method`**: the function's return statement is `method=value.method`,
+verbatim, with no call to `_coerce_one` at all. Reproduced: `coerce_scalars({"v": Estimate(value=1.0,
+ci95=[0.5, 1.5], method=np.str_("t_over_units"))}, "test", scope="summary")` returns an `Estimate`
+whose `.method` is still `numpy.str_`, and `yaml.safe_dump` on that value raises the identical bare
+`RepresenterError` this module exists to prevent. **No config-reachable trigger is known** — a
+template's `aggregate` chooses its own `method` string as a Python literal, so a NumPy-typed one
+would take an unusual template to produce — which is why this is filed rather than fixed; H5a's own
+charter is the per-unit table and recorded-row contract, and a `summary`-step `Estimate`'s `method`
+field is neither. **Owner: unassigned, with that reason** — no remaining slice (H5b, H6, H9, H3c-3's
+remaining 14) has `coercion.py`'s `Estimate` exemption as its surface.
 
 ## New error identifier: `E-STATS-CONTRAST-WITHIN`
 
@@ -2569,7 +2593,7 @@ work — non-numeric recorded columns — belongs to **H5 Artifacts**.
 
 | Carried | Owner |
 |---|---|
-| The second empty-level gate in `cli`'s stratum loop is unpinned | **H5 Artifacts.** The gate goes live exactly when non-numeric recorded columns land, which is H5's work; the test attaches there, and the gate is not deleted in the meantime |
+| The second empty-level gate in `cli`'s stratum loop is unpinned | **RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b, by name.** H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") routes "the second empty-level gate in `cli.py`'s stratum loop" to H5b task 15 by that description; the gate goes live exactly when non-numeric recorded columns land, which H5a does not build, and the gate is not deleted in the meantime |
 | A `report_by` whose every level is empty produces no `by` block and no diagnostic | **H4 Statistics**, which owns `report_by` hardening. A new warning identifier, so it is H4's to mint and to add to `reference.md` § Warnings core reports |
 | `E-STATS-CONTRAST-UNKNOWN` renders with `!r` where `E-STATS-REPORTBY-UNKNOWN` does not | **No slice; closed as deliberate.** The row already argues it: showing the repr distinguishes `1` from `"1"` where the value has not been narrowed to `str` |
 | A stratum level whose every resample draw is degenerate records `resample_draws: 0` with no console warning | **H4 Statistics.** The record carries the count, so only the disclosure is missing; the parent-level sibling `W-STATS-AGGREGATE-FAILED` already warns, and H4 owns both sides of that asymmetry |
@@ -3313,6 +3337,39 @@ refusing the declaration at `validate` — **mints a new `E-` identifier**, whic
 work to be done first, not discovered late. Second, `RESERVED_FIELDS` currently means "field names
 on `Unit`" and the fix needs it to mean "names an attribute may not take", which are two different
 sets; conflating them is how the next reserved column gets missed.
+
+**CLOSED by H5a tasks 5 and 8 (2026-08-22), for every config; the value hijack survives for a
+direct caller, filed separately below.** Task 5 minted `E-UNITS-ATTR-COLUMN` and gave
+`RESERVED_COLUMNS = ("unit", "measurement", "by")` — a set of column names, not `Unit` field names,
+exactly the distinction this entry's second note asked for — a single reader in `units.py`'s three
+`_from_table`/`_from_glob`/`_from_resolver` roster builders; `data.units.attributes: [unit]` now
+refuses at `validate`, and `run` meets the same refusal through `validate`'s gate before its own
+`resolve_units` call, so there is one emit path rather than two. This closes the entry for **every
+config that validates clean**, which is what the entry's own severity note bounded. Task 8's
+one-line dedupe in `_finalize_columns` separately closes the **list** half — `columns` no longer
+carries `"unit"` twice — a fix that does not depend on task 5's refusal to be correct, since
+`finalize` is called with whatever `UnitList` its caller constructs and `Unit` is on
+`reference.md` § The importable surface.
+
+**The severity bound was too narrow, not merely inexact — struck rather than rewritten.** "The
+damage is confined to the published `units.parquet`" is false of `read_condition`: § Steps and
+artifacts documents a `summary` step reading every condition's own `units.parquet` back through
+`io.read_condition(condition, "step02_score", "units.parquet")`, so a shadowed identity column
+would also corrupt what such a step computes from — not only what an outside reader trusts. Task 5
+closes this path the same way, at `validate`, so the wider bound is retired along with the entry
+rather than left live.
+
+**The prediction that the fix "touches `reference.md` § Errors core raises" was wrong, and it is
+struck rather than repeated.** Measured: `E-UNITS-ATTR-COLUMN` is documented in § Errors `validate`
+reports and in § Validation, and does not appear in § Errors core raises at all — `validate` is
+what reports it, the same ground correction 11 of the H5a plan gives for the identical prediction
+made about the sibling `E-UNITS-ATTR-RESERVED` filing.
+
+**Residual, filed separately: a directly constructed `Unit` whose attribute is named `unit`.** Task
+5's refusal runs at `validate`, over a roster `validate_config` resolves from a config's declared
+source; it does not run over a `Unit` a caller builds by hand and hands to `finalize` directly.
+Task 8's docstring in `src/publishable/artifacts.py` (`_finalize_columns`) states this in code; see
+the entry below for the filing.
 
 ## Six `provenance` and `results` keys in the `run.yaml` example that no code writes
 
@@ -8412,3 +8469,77 @@ made in the open.
 
 **Cost while unclaimed:** any run whose step records only non-numeric columns for some units publishes
 intervals over a silently smaller table, with `n` and `resample_draws` both asserting otherwise.
+
+## OPEN — three writers raise a bare traceback instead of a diagnostic for a NumPy scalar nested inside a mapping or list — **Owner: unassigned, no remaining slice has this as its surface**
+
+**Measured at `d2caacf` and reconfirmed at `478639a`, quoted from
+`docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md` Decision 5.** `coercion.py`'s own
+docstring states its purpose as preventing "a traceback rather than a diagnostic" when a NumPy scalar
+reaches a writer — but the walk it backs is flat, over one mapping's top-level values, and three
+writers take *any nesting* rather than a flat row set:
+
+- `io.write("x.yaml", {"v": np.float64(1.0)})` raises a bare `yaml.RepresenterError`.
+- `io.write("x.json", {"v": np.int64(1)})` and `io.write("x.json", {"v": np.bool_(True)})` each raise
+  a bare `TypeError` — `Object of type int64/bool is not JSON serializable`.
+- The same two shapes raise identically through `.jsonl`, which encodes one such mapping per line.
+- `np.float64` and `np.str_` happen to survive `json.dumps` unraised, because `json` accepts a `float`
+  or `str` subclass on sight — which is why only two of the four coerced types are visibly excluded
+  here rather than all four.
+
+This is the exact traceback-instead-of-diagnostic class `coercion.py` says it exists to prevent, now
+**visibly excluded** rather than merely unaddressed — H5a's own coercion work (tasks 6, 9, 10) widened
+`coerce_scalars`'s callers but did not touch `.yaml`/`.json`/`.jsonl`'s own encoders, which take a
+parsed structure of unbounded depth rather than a flat row.
+
+**Route, not a fix:** one recursive walk over the structure, applied before each of the three
+encoders, coercing a NumPy scalar wherever it sits and raising `ContractError` on anything else the
+existing flat rule already refuses — one decision, not three, because the three writers share the
+same "anything a NumPy scalar arrived through a library as" argument `coercion.py`'s docstring already
+makes for the flat case.
+
+**Owner: unassigned, with the reason.** No slice remaining in the charter (`docs/superpowers/specs/
+2026-08-08-implementation-spine-design.md` § The hardening slices — H5b, H6 Hashes and provenance, H9,
+H3c-3's remaining 14) has `.yaml`/`.json`/`.jsonl`'s nested-structure encoding as its surface; H5a's own
+charter is the write-side integrity of the **per-unit tables and the recorded-row contract**, not of a
+writer that takes arbitrary nesting.
+
+## OPEN — a non-`str` column key writes silently through `.csv` and raises a bare `TypeError` through `.parquet` — **Owner: unassigned, same reason**
+
+**Measured at `d2caacf` and reconfirmed at `478639a`, this plan's own find and named in no design.**
+`io.write("x.parquet", [{1: "a"}])` raises a bare `TypeError: expected bytes, int found` out of
+`_encode_parquet`, uncoded — the same traceback-instead-of-diagnostic class the entry above names, but
+for a **column name** rather than a cell value. `io.write("x.csv", [{1: "a"}])` **writes**,
+successfully, `b'1\na\n'` — `csv.DictWriter` stringifies a key the same way it stringifies a value.
+
+**Why this is not the same gap H5a's contract sentence closes.** § Steps and artifacts' "a writer
+accepts what it can give back" and H5a's own `_check_column_types` speak to a column's **values**; a
+column's **name** is a different question the design named in no decision, and folding it into H5a's
+scope would have been scope creep beyond what any task here was chartered to build.
+
+**Owner: unassigned, with the same reason as the entry above** — no remaining slice names non-`str`
+column keys as its surface, and it shares the recursive-walk-versus-flat-rule shape closely enough
+that whoever takes either should read both.
+
+## OPEN — a directly constructed `Unit` whose attribute is named `unit` still hijacks the identity column — **Owner: unassigned, no remaining slice has `Unit` direct construction as its surface**
+
+**The residual left by the entry above on `finalize`'s `unit`-shadow, closed by H5a tasks 5 and 8 for
+every config.** Task 5's refusal (`E-UNITS-ATTR-COLUMN`) runs at `validate`, over a roster
+`validate_config`/`resolve_units` builds from a config's declared `data.units.from`; it does not run
+over a `Unit` a caller constructs directly and hands to `StepIO.finalize`. `Unit` is on
+`reference.md` § The importable surface, so this is reachable — not from any config this project's
+`validate` can see, but from Python that imports `publishable.Unit` and builds a roster by hand.
+
+**Measured against `src/publishable/artifacts.py`'s `StepIO.finalize` and `_finalize_columns`'s own
+docstring** (added by H5a task 8): the attribute-merge loop still does `merged[name] =
+owner.attributes.get(name)` for every declared attribute name, unconditionally, so a `Unit(key=...,
+attributes={"unit": "HIJACK", ...})` built directly still publishes `[{"unit": "HIJACK", ...}]` in
+place of the identity — the dedupe task 8 built fixes the column **list**, not this **value**.
+
+**No guard is built for it, deliberately** — H5a's plan (correction 5) names this as "a fifth stoppage
+nobody argued": refusing a directly constructed `Unit` at `finalize` time would be a new refusal with
+no config-reachable trigger to test it against, decided by no one.
+
+**Owner: unassigned, with the reason.** No remaining slice (H5b, H6, H9, H3c-3's remaining 14) charters
+work on direct `Unit` construction bypassing a config's roster resolution; closing this wants a design
+decision — whether `finalize` should defend against a hand-built `Unit` at all — that no slice has been
+asked to make.
