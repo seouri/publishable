@@ -2165,3 +2165,52 @@ are **documented rules with no code behind them** — the misreading `CLAUDE.md`
 live in the installed `superpowers` plugin, not in this repository, and the `.gitignore` clobber is a real
 observed behaviour with a wrong path attached. **The controller fixes `CLAUDE.md` directly; no task here
 touches it for this reason**, and no task may cite `scripts/` as a repo path.
+
+---
+
+## Controller rulings, second set — 2026-08-22, from batch 2's review
+
+**Ruling 5 — Ruling 1's "warning naming the count" becomes `W-STATS-COLUMN-THIN`, checked against
+`limits.min_reported_n` at `run` time.** Batch 2 shipped Ruling 1's contributing count and not its
+warning, and the review is right that code and both document passages then diverge from the ruling
+together. **The ruling is amended rather than enforced as written**, on grounds the ruling itself did not
+have:
+
+- **Its own justification is now satisfied by the count.** Ruling 1 argued the warning was *not optional*
+  because *"an interval over five values published beside a `completed` of two hundred is a precision
+  claim no later reader can catch."* Measured at HEAD, `run.yaml` publishes `n.completed: 3` for a column
+  three of six units carry — **so the record no longer makes that claim**, and the warning's job shrinks
+  from *preventing a lie* to *telling the person who never opens `run.yaml`*.
+- **An unconditional warning is the wrong shape for an ordinary event.** A step that measures only what it
+  can measure and records `None` otherwise is normal; warning on every such column would fire on runs with
+  nothing wrong, which is how a warning becomes noise a reader learns to skip.
+- **`limits.min_reported_n` is already this floor, and three shipped rows use it exactly this way** —
+  `W-STATS-CONTRAST-THIN` at `run` against a realized denominator, `W-STATS-STRATUM-THIN` at `run` against
+  what completed, and `W-STEP-ESTIMATE-N` citing it as *"the disclosure risk `limits.min_reported_n` exists
+  to catch."* **The sibling that already got it right is the first place to look**, and a second threshold
+  for the same hazard would be a second source of truth.
+
+So: **one warning per (condition, step, column) whose contributing count is below `limits.min_reported_n`,
+naming the column and the count.** Cost if wrong: a project declaring a floor of 1 gets no warning for a
+column one unit carries — and the honest `n` is then the only signal, which is the state batch 2 already
+shipped, so the downside is bounded by what exists today.
+
+**Ruling 6 — the § Warnings row's granularity must match the loop.** *"Once per (condition, step)"* is
+false of the code: the emit site iterates columns and a two-disagreeing-column step prints two. **Fix the
+row, not the loop** — per column is the useful granularity, and the row is the thing that was wrong.
+
+**Ruling 7 — delete the false premise, do not rewrite it.** `W-STATS-REPEATS-DISAGREE`'s message says a
+mixed numeric/string column *"is not a number"* and that *"those units carry no value for it"* while the
+record publishes a value for them; `reference.md`'s § Warnings row states the same premise normatively;
+and `repeats_disagreeing`'s own docstring contradicts both. **Delete the clauses that make the false
+claim.** *A rewrite invents; a deletion cannot* — and the same applies to `_across_repeats`'s ground
+*"because `summarize_step` requires all carried values numeric"*, which task 6's own gate change
+falsified and which its own docstring contradicts three paragraphs later.
+
+**Ruling 8 — the two unpinned changes get pins, and the ninth moving-key class gets an arm.** The empty-
+record admission (`n_rows` 4.0 → 6.0) and `_repeats_disagree`'s `(is-numeric, value)` tuple are both live
+behaviour with **no test that fails when they are removed** — that is the *five slices weakening a pin
+quietly* shape arriving as *never pinned at all*. And the `report_by` stratum path is a **ninth** moving-key
+class the enumeration omits, carrying a **third** distinct `resample_draws` literal; it needs an arm, even
+though `level_collapsed` is a projection with no separate code path. **A key that moves and appears in no
+arm is precisely what the guard pin exists to catch.**
