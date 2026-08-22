@@ -84,6 +84,7 @@ from publishable.stats import (
     paired_t_over_units_clustered,
     permutation_over_contrast,
     repeat_spread,
+    repeats_disagreeing,
     resample_seed,
     summarize_step,
     unit_table_from_rows,
@@ -2874,6 +2875,18 @@ def command_run(config_path: Path) -> int:
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
                     )
+                    for column, units_count in repeats_disagreeing(
+                        results, step_name, cond.index, fold_members=fold_members
+                    ).items():
+                        aggregate_c.warn(
+                            "W-STATS-REPEATS-DISAGREE",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: recorded column "
+                            f"{column!r} is not a number and disagrees across the repeats of "
+                            f"{units_count} unit(s), so those units carry no value for it; "
+                            "declare data.units.measurements.collapse if the within-unit "
+                            "collapse is what you meant",
+                        )
                     counts = _condition_counts(
                         results,
                         eval_roster,

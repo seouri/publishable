@@ -37,6 +37,7 @@ from publishable.stats import (
     permutation_over_units,
     permutation_over_units_clustered,
     repeat_spread,
+    repeats_disagreeing,
     resample_seed,
     summarize_step,
     t_over_units,
@@ -471,25 +472,29 @@ def test_collapse_ignores_other_steps_and_non_repeat_scopes():
     assert collapse_repeats(condition_scoped, "analyze", condition_index=0) == {}
 
 
-@pytest.mark.xfail(
-    reason=(
-        "H5b task 4: this pinned the unit drop wearing the name of a column "
-        "drop — 'p0' was absent from `collapsed` entirely, not merely missing "
-        "'flag' (§ Corrections 12). After task 4, 'p0' is admitted and its "
-        "disagreeing 'flag' column collapses to `None` rather than being "
-        "dropped, so `'flag' not in collapsed['p0']` is now false. Task 5 "
-        "replaces this test with Fixture C, which asserts the correct shape: "
-        "the key present and the value `None`, plus the disagreement warning."
-    ),
-    strict=True,
-)
-def test_collapse_drops_a_bool_column_rather_than_averaging_it():
+def test_a_disagreeing_bool_column_collapses_to_none_not_dropped():
+    """H5b task 5, Fixture C. REPLACES
+    `test_collapse_drops_a_bool_column_rather_than_averaging_it`, kept
+    discoverable under that name here: that test pinned the unit drop wearing
+    the name of a column drop — `p0` was absent from `collapsed` entirely, not
+    merely missing `flag` (§ Corrections 12) — so it passed today for the
+    wrong reason. This is a CORRECT move, not a weakening: after task 4, `p0`
+    is admitted and its disagreeing `flag` column collapses to `None` rather
+    than being dropped, and the disagreement is disclosed by
+    `W-STATS-REPEATS-DISAGREE` rather than by silence.
+
+    Two assertions on the direct call, not one: the key is PRESENT and the
+    value is `None`. `values[0]` is `True` (seed17 recorded first), so a
+    mutant carrying the first value instead of `None` gives `True`, which
+    `is None` separates from the correct answer.
+    """
     results = [
         _result("seed17", [{"unit": "p0", "flag": True}]),
         _result("seed42", [{"unit": "p0", "flag": False}]),
     ]
     collapsed = collapse_repeats(results, "analyze", condition_index=0)
-    assert "flag" not in collapsed.get("p0", {})
+    assert "flag" in collapsed["p0"]
+    assert collapsed["p0"]["flag"] is None
 
 
 def test_collapse_never_pools_across_conditions():
@@ -6105,3 +6110,73 @@ def test_fixture_m_repeat_spread_unmoved_under_the_widened_keys():
     wide_spread = repeat_spread(results, "analyze", 0, levels, "score", keys=wide_keys)
     assert narrow_spread == [{"std": 1.0, "n": 2, "kind": "seed"}]
     assert wide_spread == narrow_spread
+
+
+# --- H5b task 5: Fixture D (a recorded None vs. a collapsed disagreement) ---
+# --- and Fixture L (the mixed column across repeats) ------------------------
+
+
+def test_fixture_d_arm_1_a_recorded_none_that_agrees_draws_no_warning():
+    """H5b task 5, Fixture D, arm 1 — the control Decision 3 rests on. Two
+    repeats BOTH recording `{"valid": None}`: the cell is `None` (agreement,
+    not disagreement — `_repeats_disagree` compares `(is_numeric, value)`
+    pairwise and both are `(False, None)`), and `repeats_disagreeing` must
+    report nothing for it."""
+    results = [
+        _result("seed17", [{"unit": "p0", "valid": None}]),
+        _result("seed42", [{"unit": "p0", "valid": None}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
+    assert collapsed["p0"]["valid"] is None
+    assert repeats_disagreeing(results, "analyze", condition_index=0) == {}
+
+
+def test_fixture_d_arm_2_a_genuine_disagreement_bit_identical_to_arm_1s_cell():
+    """H5b task 5, Fixture D, arm 2 — the one Decision 3 is actually about.
+    One repeat recorded `{"valid": None}`, another `{"valid": True}`: a
+    genuine disagreement whose collapsed cell is `None`, bit-identical to
+    arm 1's. The two arms differ ONLY in the rows, never in the collapsed
+    value, so a rule answering from the cell (`value is None`) would give one
+    answer to both and must fail one of them — this one must warn."""
+    results = [
+        _result("seed17", [{"unit": "p0", "valid": None}]),
+        _result("seed42", [{"unit": "p0", "valid": True}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
+    assert collapsed["p0"]["valid"] is None
+    assert repeats_disagreeing(results, "analyze", condition_index=0) == {"valid": 1}
+
+
+def test_fixture_l_a_mixed_numeric_string_column_keeps_its_mean_and_warns():
+    """H5b task 5, Fixture L (§ Corrections 5). One unit, two repeats,
+    recording `{"score": 4.0}` and `{"score": "n/a"}`. This is the fixture
+    that separates the prescribed rule from the plausible wrong one: under
+    *mixed -> `None`*, the cell would be `None` and — measured at `ee8085e`
+    (probe `p3`) — one `None` cell costs the WHOLE column its metric block
+    for every unit, a published column silently deleted that no decision
+    argues for. Under the prescribed rule the cell is unmoved (today's
+    arithmetic: the mean of the numeric subset) and the disclosure is the
+    warning alone.
+    """
+    results = [
+        _result("seed17", [{"unit": "p0", "score": 4.0}]),
+        _result("seed42", [{"unit": "p0", "score": "n/a"}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
+    assert collapsed["p0"]["score"] == 4.0
+    summarized = summarize_step(collapsed, {"completed": 1}, seed=7)
+    assert "score" in summarized  # the column KEEPS its metric block
+    assert repeats_disagreeing(results, "analyze", condition_index=0) == {"score": 1}
+
+
+def test_fixture_l_arm_2_both_repeats_numeric_draws_no_warning():
+    """H5b task 5, Fixture L, the can-fail control: the same column with BOTH
+    repeats numeric collapses to their mean and draws no warning at all —
+    proving the warning above is about the mix, not about the column."""
+    results = [
+        _result("seed17", [{"unit": "p0", "score": 4.0}]),
+        _result("seed42", [{"unit": "p0", "score": 6.0}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
+    assert collapsed["p0"]["score"] == 5.0
+    assert repeats_disagreeing(results, "analyze", condition_index=0) == {}

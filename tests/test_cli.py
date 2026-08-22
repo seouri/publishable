@@ -17652,3 +17652,142 @@ def test_fixture_h_the_all_non_numeric_level_is_absent_the_numeric_one_present(t
     assert "a" in by_grp
     assert by_grp["a"]["score"]["value"] == 10.0
     assert by_grp["a"]["n_rows"]["value"] == 2.0
+
+
+# --- H5b task 5: Fixture C's real-run half — the warning names the column --
+
+_FIXTURE_C_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        flag = _counter["n"] % 2 == 0
+        for unit in io.units:
+            io.record(unit.key, {{"flag": flag}})
+        return {{}}
+"""
+
+
+def test_fixture_c_the_disagreement_warning_names_the_column_on_stdout(tmp_path, capsys):
+    """H5b task 5, Fixture C's real-run half. The default replication is five
+    seed repeats; the step's module-level counter alternates `flag`
+    True/False across them, so every unit disagrees deterministically (never
+    relying on an RNG that might coincidentally agree). `W-STATS-REPEATS-
+    DISAGREE` must name `flag` on stdout — the stream every shipped assertion
+    on a run finding reads (`tests/test_cli.py` already carries `assert
+    "W-STATS-STRATUM-SHADOWED" in doc["stdout"]`, grepped and reused here).
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=3, _starter_step=_FIXTURE_C_STEP)
+    assert "W-STATS-REPEATS-DISAGREE" in doc["stdout"]
+    assert "flag" in doc["stdout"]
+
+
+# --- H5b task 5, step 6: the measurements interaction, observed not reasoned -
+
+_MEASUREMENTS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(
+                unit.key, {{"score": 1.0, "valid": True, "tag": "a"}}, measurement="r1"
+            )
+            io.record(
+                unit.key, {{"score": 2.0, "valid": True, "tag": "b"}}, measurement="r2"
+            )
+        return {{}}
+"""
+
+
+def test_the_two_levels_do_not_interact_a_declared_collapse_never_disagrees(tmp_path, capsys):
+    """H5b task 5, step 6. The design's § What could not be measured said a
+    `measurements.parquet` from a real run was never inspected — this plan
+    built one. `data.units.measurements: {by: read_id, collapse: first}`; the
+    step records two measurements per unit, `tag` differing (`"a"`/`"b"`).
+
+    All four literals observed at `ee8085e`: `measurements.parquet` holds both
+    rows with both `tag` values (the uncollapsed axis, written unconditionally
+    once a step passes `measurement=`); `units.parquet` (one execution's
+    finalized table, what `_gather_repeats` reads per repeat) holds `tag: 'a'`
+    — the declared collapse's answer, `first` meaning earliest recorded; and no
+    `W-STATS-REPEATS-DISAGREE` fires, because the declared collapse ran INSIDE
+    each execution (`_collapse_measurements`, at `finalize`) before
+    `collapse_repeats` ever sees a row, so every repeat hands the across-repeat
+    rule a constant `'a'` — nothing to disagree about.
+
+    A numeric declared rule cannot reach this path at all:
+    `_collapse_measurements` calls `rule_for` then `coerce_for_rule`, which
+    refuses a non-numeric value under a numeric rule before the repeat rule is
+    ever reached (see
+    `tests/test_artifacts.py::test_a_numeric_rule_coerces_a_recorded_string_before_applying`,
+    cited rather than restated) — only `first` and `mode` get here.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=2,
+        _starter_step=_MEASUREMENTS_STEP,
+        units_overrides={"measurements": {"by": "read_id", "collapse": "first"}},
+    )
+    meas_path = next(doc["run_dir"].rglob("measurements.parquet"))
+    meas_rows = _decode_parquet(meas_path.read_bytes())
+    assert {row["tag"] for row in meas_rows} == {"a", "b"}
+    assert {row["unit"] for row in meas_rows} == {"p1", "p2"}
+
+    units_path = next(doc["run_dir"].rglob("units.parquet"))
+    units_rows = _decode_parquet(units_path.read_bytes())
+    assert {row["tag"] for row in units_rows} == {"a"}
+
+    assert "W-STATS-REPEATS-DISAGREE" not in doc["stdout"]
+
+    # The collapsed table's own answer, mirroring what every one of this run's
+    # five identical seed-repeat executions finalizes to `units.parquet` above
+    # (each collapses its own two measurements to `tag: 'a'` independently, so
+    # the across-repeat collapse never sees anything but agreement). Built
+    # locally rather than imported from `tests/test_stats.py` — the two test
+    # modules don't share fixtures across files.
+    from publishable.runner import ExecutionResult
+    from publishable.scope import Execution
+    from publishable.stats import collapse_repeats
+
+    class _Step:
+        pass
+
+    repeated_row = {"unit": "p1", "score": 1.0, "valid": True, "tag": "a"}
+    executions = [
+        ExecutionResult(
+            execution=Execution(
+                step_cls=_Step,  # type: ignore[arg-type]
+                step_name="analyze",
+                scope="repeat",
+                condition_index=0,
+                condition_label=None,
+                repeat_label=f"seed{i}",
+            ),
+            status="completed",
+            started_at="2026-08-22T00:00:00Z",
+            wall_seconds=0.0,
+            returned={},
+            error=None,
+            recorded=frozenset({"p1"}),
+            skipped=frozenset(),
+            rows=(repeated_row,),
+        )
+        for i in range(5)
+    ]
+    collapsed = collapse_repeats(executions, "analyze", 0)
+    assert collapsed["p1"]["tag"] == "a"

@@ -2685,6 +2685,40 @@ def _is_anonymous_level(level: "RepeatLevel") -> bool:
     return level.kind == "seed" and level.n == 1 and level.members[0].label == ""
 
 
+def repeats_disagreeing(
+    results: "list[ExecutionResult]",
+    step_name: str,
+    condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
+) -> dict[str, int]:
+    """Column name -> how many admitted units disagreed about it across their repeats.
+
+    Asks the ROWS, not the collapsed cell. A recorded `None` and a collapsed
+    disagreement are the same cell (`coerce_scalars` leaves `None` alone, and
+    `reference.md` § The per-unit tables makes an all-`None` column legal), so a
+    scan of `collapsed` would answer this question with a proxy and give one answer
+    to two different facts.
+
+    The same four arguments `collapse_repeats` takes, over the same `_gather_repeats`
+    walk, so membership has one implementation. Sorted keys, so the warning order is
+    a property of the roster rather than of the shuffle — the reason
+    `_gather_repeats` sorts.
+
+    A column whose values are all numbers never appears here: unequal numbers are
+    what averaging is for. A column that is numeric in some repeats and a string in
+    others DOES appear, and its collapsed cell is still the mean of the numbers —
+    the disclosure is the warning, not the loss of the column (`_across_repeats`
+    says why).
+    """
+    gathered = _gather_repeats(results, step_name, condition_index, fold_members)
+    counts: dict[str, int] = {}
+    for cols in gathered.values():
+        for column, values in cols.items():
+            if _repeats_disagree(values):
+                counts[column] = counts.get(column, 0) + 1
+    return {column: counts[column] for column in sorted(counts)}
+
+
 def repeat_spread(
     results: "list[ExecutionResult]",
     step_name: str,
