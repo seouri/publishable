@@ -8816,11 +8816,32 @@ uv.lock            DIFFERS
   sha256:45cd… → sha256:2d84…
 ```
 
-`pkg-a` appears nowhere in the output, at exit `0`. Reproduce with a scratch test built on
-`tests/test_diff.py`'s own `build` helper — scaffold a project, commit a `uv.lock`, `run`, rewrite the
-lockfile, commit, `run` again, and call `command_diff(run_a, run_b)`. The shipped
+`pkg-a` appears nowhere in the output, at exit `0`. **The recipe, inline, because a scratch path is not a
+reproduce:** in a test module beside `tests/test_diff.py` (or with the repo root on `PYTHONPATH`),
+
+```python
+from tests.test_diff import build          # scaffolds a project, a config and a results dir
+from publishable.cli import main, EXIT_OK
+from publishable.diff import command_diff  # NOT publishable.cli — that import fails
+
+def test_repro(tmp_path, capsys):
+    root, cfg, results = build(tmp_path)
+    for pin in ("1.0.0", "2.0.0"):                       # one package's pin moves
+        (root / "uv.lock").write_text(f"# lock: pkg-a=={pin}\n")
+        subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+        subprocess.run(["git", "-c", "user.email=t@e.com", "-c", "user.name=t",
+                        "commit", "-qm", "lock"], cwd=root, check=True)
+        assert main(["run", str(cfg)]) == EXIT_OK         # two runs, two lockfiles
+    a, b = sorted(results.glob("run_*"))
+    capsys.readouterr()
+    command_diff(a, b)
+    assert "pkg-a" not in capsys.readouterr().out        # passes — that is the gap
+```
+
+A `uv.lock` must be **committed before** each run or the row takes `not captured` instead, which is why
+the commits are part of the recipe. The shipped
 `test_h8b_fixture_l_the_lockfile_rows_non_null_path` already builds that state and asserts the exit code
-and the two digests' inequality; **it captures no output**, which is why the missing detail was never
+and the two digests' inequality; **it takes no `capsys`**, which is why the missing detail was never
 visible to it.
 
 **The symptom this leaves for a user**, which is what makes it worth a filing rather than a note: a

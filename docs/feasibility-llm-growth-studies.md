@@ -1739,9 +1739,11 @@ dependency a config can declare its way out of, which is why it met E5 — the c
 row 4's `1` — as squarely as the other eight. **Reached in the analysis' own shown `aggregate`, not only
 in principle:** its first statement is `rows = [r for r in units if r.get("valid")]`, and with `valid`
 dropped before the table is built that filter selects **nothing**, so `sensitivity` and every other
-binary metric returns `None` for a run in which every unit answered. Under `output.kind: probability` the
-same slice of the same defect is louder — `units.truth` is a bool column, and a column no row holds is
-`E-STEP-COLUMN-UNKNOWN`, contained as `W-STATS-AGGREGATE-FAILED`, costing the whole `derived` mapping.
+binary metric returns `None` for a run in which every unit answered. That is read from the `aggregate`
+body and the payload this analysis shows, and from the collapse they are handed — **not run**, the plugin
+not existing — and it is the whole of what is claimed here: no second consequence is derived for a name
+this analysis both records and declares as a unit attribute, a declared attribute reaching the table by
+its own route.
 **The set arithmetic behind the `1` is unchanged**: E5 is the only config in neither row 2's six
 (E3, E4, E6, C1, C2, C3) nor row 3's seven (E1, E2, E4, E6, C1, C2, C3), and this slice closes a
 dependency that was in neither row and met all nine.
@@ -1755,8 +1757,8 @@ returns are drawn from `report.metrics` (`sensitivity`, `specificity`, `ppv`, `i
 `brier`, `cost_usd`) and the recorded payload is `pred`, `prob`, `truth`, `valid`, `invalid_reason`,
 `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `latency_ms`, `attempts`, `finish_reason`. And
 the contained-raise case is not met either: the shown `aggregate` reads `r.get("valid")` rather than
-indexing, and one `io.record` call writes every payload key for a unit, so an admitted row carries every
-column the others do.
+indexing, and the shown step has exactly one `io.record` call site, writing a fixed key set — so nothing
+in the code this analysis shows indexes a column some rows may lack.
 
 **The `truth` collision is an analysis-side obligation and changes no core-side count.** E5's step
 records `"truth": unit.consensus_label` while the E-family declares

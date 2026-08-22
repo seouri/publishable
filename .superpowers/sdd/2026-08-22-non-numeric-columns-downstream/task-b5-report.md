@@ -383,3 +383,60 @@ I first wrote it wrong, which is how the wrong name was caught.
    edit.
 4. **No `src/` or `tests/` file moved in this batch**, so the suite figure is evidence about the branch
    rather than about these two commits; that is stated rather than implied.
+
+---
+
+## Fix round, 2026-08-22 — appended after an advisory review, editing nothing above
+
+Commit `<this round>`. No test file, no `src/` file, no gate figure moves.
+
+**1. The H9 filing's reproduce was a scratch path, and a scratch path is not a reproduce.** The filing
+cited a session-scoped file under `/private/tmp/.../scratchpad/`, which will not exist for a reader —
+every other reproduce in `spec-defects.md` is a direct call, a grep, or a shipped test name. The recipe
+is now **inlined as executable text**: the `build` call, the two lockfile writes with the package pin
+that moves, the two commits (a `uv.lock` must be committed *before* each run or the row takes
+`not captured` rather than `DIFFERS` — stated, because it is the part that silently defeats the recipe),
+the two `run`s, `command_diff(a, b)`, and the assertion whose **passing** is the gap. It also names the
+import trap I hit myself: `command_diff` is `publishable.diff`'s, not `publishable.cli`'s.
+
+**2. Two claims in task 16's row-4 paragraph were derived rather than run, and both are narrowed.**
+
+- **The `units.truth` / `E-STEP-COLUMN-UNKNOWN` clause is DELETED, not rewritten.** It was reasoned from
+  the code path and it is very likely **false**: `truth` is a **declared attribute** in the E-family, and
+  `cli._attributed` merges each unit's declared attributes into the rows `aggregate` receives — read at
+  `src/publishable/cli.py:721`, whose own docstring says the roster is merged in *"at the one boundary
+  where `aggregate` is called"* — so `units.truth` can resolve from the attribute regardless of the
+  recorded column. The `r.get("valid")` half carries the whole argument alone. *Prefer deleting a claim
+  to rewriting it*, and this one sat in the paragraph justifying a corrected published figure, which is
+  where this analysis' wrong claims have historically lived.
+- **"one `io.record` call writes every payload key for a unit, so an admitted row carries every column
+  the others do"** overstated what the shown code shows. Narrowed to *the shown step has exactly one
+  `io.record` call site, writing a fixed key set — so nothing in the code this analysis shows indexes a
+  column some rows may lack.*
+
+**3. The `CLAUDE.md` invariant edit is now checked against the CODE, not against `reference.md`'s prose.**
+A document sentence agreeing with my sentence is not the code agreeing. Read at
+`src/publishable/stats.py`: `collapse_repeats`'s docstring — *"`_gather_repeats` decides which units are
+admitted and **carries every value, raw**"* — and `_across_repeats`, which writes **`None` rather than
+omitting the key** precisely so the column stays visible in `summarize_step`'s `columns`. So *"the table
+carries every recorded column"* is true of the collapse, and *"beside every declared unit attribute"* is
+true of `_attributed`. Both halves of the invariant clause hold against the code.
+
+**4. The slugger my mechanical pass depends on is corroborated rather than assumed.** "Clean" is a claim
+about my slug function unless it agrees with GitHub's on the shapes this repo uses. The corroboration is
+volume: **1,100 relative/anchor links** across the five files resolve under it, including the shapes most
+likely to diverge (backticks, parentheses, dots and underscores — e.g.
+`## Creating a plugin (`publishable plugin new`)` → `#creating-a-plugin-publishable-plugin-new`, the
+target reference.md's own links use). A divergence would surface as a broken anchor rather than as
+silence, and there are none.
+
+**5. A sixth disagreement, which belongs in the list rather than only in a count.** The design's
+§ The records this slice owes instructs the spine append to record *"its H5b row says '(10)' and this
+slice is **15**"*. **I wrote 16 and overrode that instruction**, because 16 is what shipped
+(`grep -c '^## Task '` over the plan → 16) and the design's own body says *"The scoping's 15 stand"*
+before the plan split one of them. Recorded here as an **overruled brief/design instruction** rather than
+as a bare count discrepancy — the append names both figures and which one shipped.
+
+**Re-verified after these edits:** mechanical pass `MECHANICAL: clean (5 files checked)`;
+`ruff check` / `ruff format --check` clean; `mypy` clean. No test moved, so the suite figure above stands
+(2931 passed, 1 skipped, 2 xfailed).
