@@ -1634,3 +1634,37 @@ file it.**
   `output_dir` holds no run directory, its failure shape is described in advance, and task 11 re-runs
   the mutation on the finished branch where the full *every execution paid for* shape is observable.
 - **The four-row table is repeated unchanged, no fifth number appears, and row 4 is left to H5b.**
+
+---
+
+## Correction appended 2026-08-22 — the second controller ruling post-dates this plan, and its task text carries the pre-ruling reading
+
+**This plan was written before the design's SECOND controller ruling**, which narrowed Decision 5 after
+measuring that `.parquet` round-trips a structural cell and a `bytes` cell **intact** while `.csv` does
+not. Several task texts here therefore describe the **pre-ruling** scope — most visibly task 3's *"a
+written `.csv` or `.parquet` row whose value is not a scalar or whose rows disagree on a column's type"*,
+which read literally would have `.parquet` refusing a structural cell.
+
+**Task 3's implementer found the ambiguity, resolved it correctly by binding each clause to one format,
+and flagged that it could find no passage stating that binding as plainly for the first clause as for the
+second.** That flag is why this correction exists.
+
+**The binding rule, for every task after this line.** *A writer accepts what it can give back* — **one
+rule, different answers per format:**
+
+- **`.csv` refuses** a structural or `bytes` cell, because it cannot return one (it returns `'[1, 2]'` and
+  `"b'x'"`).
+- **`.parquet` accepts both**, byte-faithfully, and that acceptance is a **capability pinned by batch 1's
+  arm E**, whose `.parquet` half has **no authorized editor.**
+- **Cross-row type disagreement is a separate question** from cell structure, and correction 8 measured
+  that unification for `.csv` is **not built** — so a row about it must be worded for the format it is
+  true of.
+
+**Tasks 7, 9 and 11 are the ones this reaches**, since they own the recorded-side guard, the encoder
+coercion and the cross-format matrix. **Read this correction before their briefs' wording, not after.**
+
+**And this is the fourth variant of one failure this project keeps recording.** A finding carried *into* a
+brief still needs verifying; a ruling that *overrules* a brief must reach the brief; an instruction living
+*only* in a dispatch can be outweighed by the brief; and now — **a ruling that post-dates a plan leaves
+every later task's text carrying the superseded reading.** The remedy is the same in all four: **put the
+correction where the brief is extracted from.**
