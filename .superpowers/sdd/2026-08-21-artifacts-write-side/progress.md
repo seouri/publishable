@@ -137,3 +137,43 @@ extracted from.**
 **And batch 3 declined to report zero disagreements**, naming two concerns instead — both of which checked
 out. That phrasing has been wrong **eight** times here; this is the first batch in a while to avoid it by
 construction rather than by correction.
+
+## Batch 4 — task 10 — the one scalar rule, and H5a's first `src/` change
+
+Commits `91a338f` (the `str`-by-inheritance branch), `b55e3a3`, `27b5959` (fix round). Suite 2845 →
+2854 → **2855**. **Both verdicts PASS; one Major, three Minors, all closed.**
+
+**Decision 7 is built as specified and its reasoning is grounded rather than asserted:** `np.str_` coerces
+because `str` is in `_SCALARS`, `np.bytes_` refuses because `bytes` is not and plain `bytes` raises the
+same code — all three verified by running. **`str.__str__` rather than `str()`**, because
+`str(SomeStrEnum.RED)` is `'Color.RED'` and would corrupt the value silently.
+
+**The `noqa: UP042` decline is load-bearing, not stylistic**, and the reviewer confirmed it: ruff wanted
+`enum.StrEnum`, whose `__str__` returns the value directly — **which would silence the exact corruption
+the fixture exists to demonstrate.** A linter suggestion that defeats a test's purpose is worth declining
+with a written reason.
+
+**The Major is a retirement that never happened.** The shipped sentence said a resolver-yielded `np.str_`
+attribute *"used to be refused as structural … and now coerces instead"* — and `units.py` calls
+`coerce_scalars` **nowhere**, `_from_resolver` projects attributes **uncoerced**, and the value
+round-trips cleanly. **That path went pass-through → coerced, never through a refusal.** Documents-lead
+present tense cannot rescue it, because the claim is about the **past**.
+
+**And the implementer had the correct measurement in its own authorities.** **Plan correction 6 — the
+correction that ordered this task first — measured that same value as "which works today."** Writing *used
+to be refused* contradicts the reason the task sits where it does in the order.
+
+**A third unstated retirement surfaced** (`Estimate.n`), and **a module docstring was left behind when the
+`reference.md` paragraph it paraphrases moved** — the same mechanism that produced batch 2's interlocking
+false clauses.
+
+**The blast-radius review earned its keep on something nobody asked about.** `Estimate.method` is **exempt
+from the shared rule** — `method=value.method` is uncoerced — so an `np.str_` `method` survives and makes
+`yaml.safe_dump` raise on a value written into `run.yaml`. Pre-existing; but **an existing filing's
+RESOLVED note claims all those fields are coerced, which is false.** **A stale *closed* claim is worse
+than an open gap, because a struck entry stops anyone looking.** Routed to task 12 by name.
+
+**And correction 6's ordering rule is enforced only at the shared function** — displacing the branch fails
+five tests, but **nothing pins the resolver surface**, so the constraint that orders three tasks has no
+test of its own. **Task 6's Fixture R inherits an enforcement obligation, not just a fixture**, and now
+carries it by name.
