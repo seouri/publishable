@@ -245,6 +245,13 @@ literal in every fixture below was computed by running something, and the task t
 
 ## Task 1: the guard pin — five arms, captured before anything moves
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Runs FIRST, before every other task. Surface: direct calls to `stats.summarize_step` for arms B and
 D, a real `run` through `main` for arms A, C and E.** H5b moves published numbers, and a literal
 captured after a task has run records the move rather than the baseline. **Two arms have no authorized
@@ -458,6 +465,13 @@ where six consecutive slices' reports claimed zero disagreements and all six wer
 
 ## Task 2: § Templates states what the collapsed table carries
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: documents.** Design Decision 10. **The sentence is not narrowed — it is made true for the
 first time**, so no argument against `design-principles.md` is owed. `H5-SCOPING` task 10's premise
 (*"narrowing it needs an argument"*) was wrong, and the design says so.
@@ -506,6 +520,13 @@ docs/reference.md` returns exactly one line, and that paragraph is the target (�
 ---
 
 ## Task 3: § The per-unit tables' routed question decided, § Statistical reporting, and `W-STATS-REPEATS-DISAGREE` minted
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: documents. Runs before any code reports the warning** — the documents lead, and a § Warnings
 row is normative specification rather than a build claim.
@@ -583,6 +604,13 @@ row is normative specification rather than a build claim.
 ---
 
 ## Task 4: the collapse carries every recorded value and admits every unit it was handed
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **THE BEHAVIOUR CHANGE. Surface: a direct call and a real `run`, both.** Design Decisions 1, 5 and 6.
 This task also **carries Fixtures E, H and K and the pins the scoping put in tasks 10 and 11** — a live
@@ -865,6 +893,13 @@ change); pin arms A, C and D (**no authorized editor**).
 
 ## Task 5: the disagreement is disclosed from the ROWS, never from the collapsed cell
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: a direct call and a real `run`.** Design Decisions 2 and 3.
 
 **The obvious design is wrong and was measured wrong.** A first draft said *a `None` value can only be
@@ -1030,6 +1065,13 @@ column that disagrees across repeats, so this task cannot reach it, and an edit 
 
 ## Task 6: `summarize_step`'s deleted clause, and where the projection sits
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: a direct call, plus one deleted docstring sentence.** Design Decision 4. **`summarize_step`
 ships NO code change** — measured: it publishes the numeric column and the derived metrics over a
 `collapsed` carrying `valid: True` and raises nothing, because the column loop's existing `if not raw or
@@ -1078,6 +1120,13 @@ column out of `aggregated`*) is already true of the shipped code.
 ---
 
 ## Task 7: the contrast guard — the naive fix destroys a run record, and this is the pin that makes it happen
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: a direct call and a real `run`.** Design Decision 7. **This is the task the controller singled
 out**: *a non-numeric value reaching the contrast subtraction hits an unguarded subtraction in `cli.py`,
@@ -1201,6 +1250,13 @@ describe a different set than the pool `paired_percentile_of_derived` draws from
 
 ## Task 8: the `paired_keys` ruling, documented
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: documents.** Design Decision 6. The scoping named this as the fourth question the filing did
 not ask, and it is **record-visible** — `vs_baseline…mean_score.n_paired` moves 4 → 6, pinned in task 1's
 arm E.
@@ -1239,6 +1295,13 @@ arm E.
 ---
 
 ## Task 9: the `by` arbitration answers from the recorded-column set, and `_attributed`'s two falsified grounds are deleted
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: a real `run`.** Design Decision 9.
 
@@ -1343,6 +1406,13 @@ task 6 the non-numeric column still never reaches `step_summary`, so the gate mu
 
 ## Task 10: the derived-key collision, made real
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: a direct call, and one § Errors row asserted rather than edited.** Design Decision 8. **No new
 code**: measured, `summarize_step({u: {"score": …, "valid": True}}, …, derived={"valid": 1.0})` **raises**
 `E-STEP-KEY-COLLISION` today, because the check is `collision = set(derived) & set(columns)` with
@@ -1396,6 +1466,13 @@ code**: measured, `summarize_step({u: {"score": …, "valid": True}}, …, deriv
 
 ## Task 11: the second empty-level gate's document and record halves
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: documents and records. Its PIN is task 4's Fixture H** — a live overruling of the scoping's
 task list, made by the design so the pin lands in the batch where the behaviour goes live.
 
@@ -1430,6 +1507,13 @@ task list, made by the design so the pin lands in the batch where the behaviour 
 ---
 
 ## Task 12: `E-STEP-COLUMN-UNKNOWN` pinned in both directions
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: a direct call and a real `run`.** The scoping's task 17. This is the behaviour the slice
 narrows **around** and must not narrow **away**.
@@ -1467,6 +1551,13 @@ narrows **around** and must not narrow **away**.
 
 ## Task 13: the silent case's discriminating test
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
+
 **Surface: a real `run`.** The scoping's task 16. **A fixture whose numbers agree with the bug is the
 trap**: `n_valid: 0.0` over six `True` rows is a plausible value, and so is `n_rows: 4.0` over six units.
 
@@ -1499,6 +1590,13 @@ trap**: `n_valid: 0.0` over six `True` rows is a plausible value, and so is `n_r
 ---
 
 ## Task 14: `report` and `study` pinned as readers of `aggregated`, and three shipped docstrings re-derived
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: two real commands.** The scoping's task 14 and the design's Fixture J. `report.py` and
 `study.py` both walk `aggregated` — the key this slice changes — and the scoping's own instruction was
@@ -1552,6 +1650,13 @@ ruling requires.
 ---
 
 ## Task 15: the records
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: records and documents. Runs against the finished branch.** `spec-defects.md` is a live list, so
 a closed gap is **struck** rather than deleted; every other tracked record is **appended to, never
@@ -1650,6 +1755,13 @@ retro-edited**.
 ---
 
 ## Task 16: the § Executability entry — row 4 re-derived, `1 → 0 → 1`
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is exactly how batch
+> 1 shipped a Critical, and this pointer is the fix. **Ruling 1 (the mixed column) is the one most likely
+> to change what you build.**
 
 **Surface: one appended section in a non-normative analysis.** H5a design Decision 11 ruled that this
 re-derivation *"must be appended regardless of which slice does it"*; the entry dated 2026-08-22 against
@@ -2007,6 +2119,20 @@ not `completed`.** Grounds, measured rather than reasoned:
   lie no later reader can detect from the record. The four-way `n` (`resolved`/`completed`/`ineligible`/
   `failed`) is not widened — this is a per-metric contributing count, reported where the metric is.
 
+**Amendment to this ruling, same day, from batch 1's review — the reachable case, named.** Batch 1
+shipped an all-or-nothing read sentence that this ruling rejects, and repairing it turned up the
+distinction the ruling should have drawn in the first place. **There are three mixtures, not one:**
+
+| The column holds | What reaches `aggregated` | Why |
+|---|---|---|
+| Non-numeric for **every** unit (a `str` column, a `bool` column) | **No metric block**, and the column still reaches `aggregate`'s table | There is no mean of strings. This is H5b's main case and the all-or-nothing wording is **correct here** |
+| A number for some units, `None` for others | **A block computed over the units that carried a number**, with the contributing count reported and a warning naming it | This ruling's case. `None` is a legal recorded value, and a `None` cell means *this unit has no value for this metric* — which is the partial-coverage case the rest of the system already handles by counting the unit out |
+| `str` **beside** a number | **Cannot occur.** `_check_column_types` refuses it at `finalize` — measured: *"column 'v' recorded both a float (unit 'row 0') and a str (unit 'row 1')"* | So a read rule for it describes an unreachable state, and a document that states one invites a later reader to build against it |
+
+**The all-or-nothing sentence is therefore not wholly wrong — it is right about the first row and wrong
+about the second**, which is why it read as plausible and passed its own task. The repair keeps its first
+clause and replaces the second.
+
 **Cost if wrong:** a metric whose coverage is a twentieth of the roster publishes an interval that reads
 like every other metric's, distinguished only by a number a reader has to notice. **That is why the warning
 is not optional and must name the count**, and why a task may not downgrade it to a silent computation.
@@ -2039,3 +2165,52 @@ are **documented rules with no code behind them** — the misreading `CLAUDE.md`
 live in the installed `superpowers` plugin, not in this repository, and the `.gitignore` clobber is a real
 observed behaviour with a wrong path attached. **The controller fixes `CLAUDE.md` directly; no task here
 touches it for this reason**, and no task may cite `scripts/` as a repo path.
+
+---
+
+## Controller rulings, second set — 2026-08-22, from batch 2's review
+
+**Ruling 5 — Ruling 1's "warning naming the count" becomes `W-STATS-COLUMN-THIN`, checked against
+`limits.min_reported_n` at `run` time.** Batch 2 shipped Ruling 1's contributing count and not its
+warning, and the review is right that code and both document passages then diverge from the ruling
+together. **The ruling is amended rather than enforced as written**, on grounds the ruling itself did not
+have:
+
+- **Its own justification is now satisfied by the count.** Ruling 1 argued the warning was *not optional*
+  because *"an interval over five values published beside a `completed` of two hundred is a precision
+  claim no later reader can catch."* Measured at HEAD, `run.yaml` publishes `n.completed: 3` for a column
+  three of six units carry — **so the record no longer makes that claim**, and the warning's job shrinks
+  from *preventing a lie* to *telling the person who never opens `run.yaml`*.
+- **An unconditional warning is the wrong shape for an ordinary event.** A step that measures only what it
+  can measure and records `None` otherwise is normal; warning on every such column would fire on runs with
+  nothing wrong, which is how a warning becomes noise a reader learns to skip.
+- **`limits.min_reported_n` is already this floor, and three shipped rows use it exactly this way** —
+  `W-STATS-CONTRAST-THIN` at `run` against a realized denominator, `W-STATS-STRATUM-THIN` at `run` against
+  what completed, and `W-STEP-ESTIMATE-N` citing it as *"the disclosure risk `limits.min_reported_n` exists
+  to catch."* **The sibling that already got it right is the first place to look**, and a second threshold
+  for the same hazard would be a second source of truth.
+
+So: **one warning per (condition, step, column) whose contributing count is below `limits.min_reported_n`,
+naming the column and the count.** Cost if wrong: a project declaring a floor of 1 gets no warning for a
+column one unit carries — and the honest `n` is then the only signal, which is the state batch 2 already
+shipped, so the downside is bounded by what exists today.
+
+**Ruling 6 — the § Warnings row's granularity must match the loop.** *"Once per (condition, step)"* is
+false of the code: the emit site iterates columns and a two-disagreeing-column step prints two. **Fix the
+row, not the loop** — per column is the useful granularity, and the row is the thing that was wrong.
+
+**Ruling 7 — delete the false premise, do not rewrite it.** `W-STATS-REPEATS-DISAGREE`'s message says a
+mixed numeric/string column *"is not a number"* and that *"those units carry no value for it"* while the
+record publishes a value for them; `reference.md`'s § Warnings row states the same premise normatively;
+and `repeats_disagreeing`'s own docstring contradicts both. **Delete the clauses that make the false
+claim.** *A rewrite invents; a deletion cannot* — and the same applies to `_across_repeats`'s ground
+*"because `summarize_step` requires all carried values numeric"*, which task 6's own gate change
+falsified and which its own docstring contradicts three paragraphs later.
+
+**Ruling 8 — the two unpinned changes get pins, and the ninth moving-key class gets an arm.** The empty-
+record admission (`n_rows` 4.0 → 6.0) and `_repeats_disagree`'s `(is-numeric, value)` tuple are both live
+behaviour with **no test that fails when they are removed** — that is the *five slices weakening a pin
+quietly* shape arriving as *never pinned at all*. And the `report_by` stratum path is a **ninth** moving-key
+class the enumeration omits, carrying a **third** distinct `resample_draws` literal; it needs an arm, even
+though `level_collapsed` is a projection with no separate code path. **A key that moves and appears in no
+arm is precisely what the guard pin exists to catch.**

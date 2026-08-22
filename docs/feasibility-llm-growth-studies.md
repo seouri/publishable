@@ -1703,3 +1703,112 @@ silently dropped, filed in [`spec-defects.md`](superpowers/spec-defects.md), and
 change to what an existing key (`aggregated`) may contain, so when it lands it is the first slice since
 H7d Part B with real behaviour-change exposure on a shipped surface — and it is the slice that could move
 a row here, in either direction.
+
+### Measured on 2026-08-22 against commit `56aad22` — after H5b
+
+**A non-numeric recorded column now reaches `aggregate`.** `collapse_repeats` carries every recorded
+value and admits every unit it was handed; a column earns a metric block when it carries a real number
+for at least one unit, computed over those units and reporting **that** contributing count as its own
+`n.completed`; a column no unit carries a number for earns none and still reaches the table a template's
+`aggregate` receives. Two warnings are new — `W-STATS-REPEATS-DISAGREE` (a recorded column disagreeing
+across one unit's repeats) and `W-STATS-COLUMN-THIN` (a contributing count below
+`limits.min_reported_n`) — and four things newly stop or newly warn: `E-STEP-KEY-COLLISION` for a derived
+key colliding with a **non-numeric** recorded column (re-reported as `W-STATS-AGGREGATE-FAILED`),
+`W-STATS-STRATUM-SHADOWED` for a recorded column named `by` whatever it holds, a contained raise from an
+`aggregate` that assumes every row carries its numeric column (`W-STATS-AGGREGATE-FAILED`), and
+`W-STATS-RESAMPLE-THIN` for a purely numeric derived metric whose draws are now sometimes degenerate.
+**The commit pinned above is the branch tip these figures were derived against**; tasks 15 and 16 move no
+file under `src/` or `tests/`, so it names the same executable tree as the batch-4 tip that shipped the
+behaviour.
+
+**This entry corrects a published figure: row 4's `1`, published by the entry above dated 2026-08-22
+against `71f3c6e`.** That entry repeated the H8a table character for character and left row 4 at **1**
+while naming, in its own closing paragraph, the very dependency that falsified it — *"what a non-numeric
+recorded column does once it flows downstream … is silently dropped … owned by H5b."* A row whose
+predicate is *"free of every core-side dependency this analysis can name"* cannot read `1` in the same
+entry that names a core-side dependency meeting every config. **So row 4's history is `1 → 0 → 1`**:
+`1` as published, `0` as it should have read from H5a's landing until this slice, and `1` again now. The
+earlier entry is not edited — this appends and says what it replaces, the same way the two corrections
+earlier in this section do.
+
+**Row 4 re-derived, in this entry's own prose rather than carried.** The named dependency is **a
+non-numeric recorded column vanishing between the write and `aggregate`**, and it meets **all nine**
+configs, not some subset: all nine record through one request step whose `io.record` payload carries
+`valid` (a bool), `invalid_reason` and `finish_reason` (strings) beside its numeric columns. It is not a
+dependency a config can declare its way out of, which is why it met E5 — the config that was the whole of
+row 4's `1` — as squarely as the other eight. **Reached in the analysis' own shown `aggregate`, not only
+in principle:** its first statement is `rows = [r for r in units if r.get("valid")]`, and with `valid`
+dropped before the table is built that filter selects **nothing**, so `sensitivity` and every other
+binary metric returns `None` for a run in which every unit answered. That is read from the `aggregate`
+body and the payload this analysis shows, and from the collapse they are handed — **not run**, the plugin
+not existing — and it is the whole of what is claimed here: no second consequence is derived for a name
+this analysis both records and declares as a unit attribute, a declared attribute reaching the table by
+its own route.
+**The set arithmetic behind the `1` is unchanged**: E5 is the only config in neither row 2's six
+(E3, E4, E6, C1, C2, C3) nor row 3's seven (E1, E2, E4, E6, C1, C2, C3), and this slice closes a
+dependency that was in neither row and met all nine.
+
+**This slice's own four new stoppages were checked against the nine before the row was written, and none
+of them meets one.** No config records a column named `by` — `grep -c '"by"'` over this file returns
+**0**, and every `report_by` target these designs declare (`sex`, `age_band`, `visit_density`,
+`count_stratum`, `dx_family`, `record_source`) is a declared **attribute**, so
+`W-STATS-STRATUM-SHADOWED` cannot fire. No `aggregate` return key collides with a recorded column: the
+returns are drawn from `report.metrics` (`sensitivity`, `specificity`, `ppv`, `invalid_rate`, `auroc`,
+`brier`, `cost_usd`) and the recorded payload is `pred`, `prob`, `truth`, `valid`, `invalid_reason`,
+`prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `latency_ms`, `attempts`, `finish_reason`. And
+the contained-raise case is not met either: the shown `aggregate` reads `r.get("valid")` rather than
+indexing, and the shown step has exactly one `io.record` call site, writing a fixed key set — so nothing
+in the code this analysis shows indexes a column some rows may lack.
+
+**The `truth` collision is an analysis-side obligation and changes no core-side count.** E5's step
+records `"truth": unit.consensus_label` while the E-family declares
+`attributes: [truth, sex, age_band, …]`, so `io.record` refuses it with `E-STEP-KEY-COLLISION` — a defect
+in this analysis' own shown plugin code, fixable by renaming one key with no change to core. It does
+**not** pre-empt the core-side dependency: row 4's predicate names core-side dependencies only, and
+letting an analysis-side defect in would answer *would this config as literally written run?* under a
+heading that asks about core, pinning the row at `0` until this file is edited. That is the same
+treatment the H8a entry gave E3's `summary`-step obligation. **What this pass established and what it
+did not:** the payload, the attribute list and the `aggregate` body were **quoted from this analysis**;
+**the plugin was never run, because it does not exist** — neither `growth_screen` nor
+`publishable-llm` is installable in any build.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**Rows 1, 2 and 3 above are the H8a entry's, character for character, for the fourth consecutive
+entry** — copied from the immediately preceding entry and diffed against it rather than retyped, and
+**row 3 is not this slice's and is not folded in**: the `report_by`-under-`resample` gap is H4
+Statistics', still live on seven configs, and nothing here touches it. **No fifth number is minted.**
+Row 4's cell text is repeated unchanged too, which is not a no-op: the figure it publishes is the same
+character and a different derivation, and the entry above is where the wrong one was published.
+
+**The two things the corrections earlier in this section require, in this entry's own words.** **Do not
+quote a single figure for this analysis' executability** — quote the table. And **name the dependency**:
+`io.reuse_from`'s plugin-side call for six, the `report_by`-under-`resample` gap for seven, the
+non-numeric column drop for nine before this slice and none after it, and **8 of 8 validating clean,
+which is the only figure `validate` can see.** Every wrong figure this analysis has carried was made the
+same way — a slice retired or added one thing and the summary phrase was carried forward without
+re-deriving what it counted — and row 4's `1` is now the second one made by **repeating a table** rather
+than by rewriting a phrase, which is worth recording: character-for-character repetition protects a row
+from drift and not from having been wrong when it was written.
+
+### Correction, dated 2026-08-22, against the H5b whole-branch review at commit `14b816e`
+
+**The entry above says "four things newly stop or newly warn." The correct count is five.** Measured by
+running one project twice — once against a `main` worktree and once against this branch, same project
+commit, same seed — a fifth thing newly fires and appears in neither this entry nor the four-thing
+enumeration it repeats: **`W-STATS-CONTRAST-RESAMPLE-THIN`**, at a comparison whose declared `resample`
+now draws over a table admitting units it used to drop. It is the contrast-side sibling of item (iv)'s
+`W-STATS-RESAMPLE-THIN` — same mechanism, admitting units creates degenerate draws — but at a **different
+emit site** (`cli.py:1659`, the contrast arm) from item (iv)'s (`cli.py:3257`), under a **different
+existing code** that already carries its own § Warnings row in `reference.md`, which rules the two are
+two facts on the same disclosure ground ("neither the `n_paired` denominator nor a thin pool are the same
+fact"). This slice's own nine of nine configs still meet no new stoppage: none declares a `statistics.
+contrasts` entry with `resample` over a column this analysis' non-numeric drop touches, so **row 4 is
+unmoved by this correction** — it corrects the count of newly-firing things, not the executability table.
+**No fifth row is minted here either**, matching the earlier correction's own rule: this is a count in
+prose, and the table above takes no fifth number.

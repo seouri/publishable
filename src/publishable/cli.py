@@ -71,6 +71,7 @@ from publishable.scope import Execution, build_plan
 from publishable.secrets import credential_values, load_env
 from publishable.stats import (
     UnitTable,
+    _is_numeric,
     cohens_ds,
     cohens_dz,
     collapse_repeats,
@@ -84,6 +85,7 @@ from publishable.stats import (
     paired_t_over_units_clustered,
     permutation_over_contrast,
     repeat_spread,
+    repeats_disagreeing,
     resample_seed,
     summarize_step,
     unit_table_from_rows,
@@ -737,10 +739,8 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     containment around `summarize_step` costs it every metric it computed. And
     a *numeric* attribute (an age, a dose) would be published as a metric with
     its own `ci95` and its own seat in the correction family, and handed a
-    repeat-dispersion figure for a value that cannot vary across repeats — not
-    reachable while every roster attribute arrives from `csv.DictReader` as a
-    string, and the reason not to depend on that staying true. Here an
-    attribute reaches `aggregate` and nothing else.
+    repeat-dispersion figure for a value that cannot vary across repeats. Here
+    an attribute reaches `aggregate` and nothing else.
 
     An attribute is carried through **unchanged**: it comes from the roster
     rather than from an execution, so unlike a recorded numeric column it has
@@ -750,12 +750,10 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     must not be the thing that papers over that collision, which is why the
     attributes are applied last rather than first.
 
-    `unit` is restored after the merge because nothing refuses an attribute
-    *named* `unit` (`units.py` reserves `key`, `paths` and `attributes`, the
-    fields of `Unit` itself), and the unit key column must survive: a bootstrap
-    draw duplicates units on purpose, and `percentile_of_derived` keeps the real
-    keys inside every draw precisely so a template reading `unit` sees the
-    roster it was drawn from.
+    `unit` is restored after the merge because the unit key column must survive:
+    a bootstrap draw duplicates units on purpose, and `percentile_of_derived`
+    keeps the real keys inside every draw precisely so a template reading `unit`
+    sees the roster it was drawn from.
 
     Row-level, so the four operations the table promises are untouched and
     `columns` — derived from the rows — names the attributes for free.
@@ -822,7 +820,7 @@ def _comparison_step_blocks(
     *,
     roster: "UnitList",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -1161,7 +1159,54 @@ def _comparison_step_blocks(
                     col_keys = [
                         k
                         for k in base_keys
-                        if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
+                        if metric_key in of_collapsed[k]
+                        and metric_key in against_collapsed[k]
+                        # The guard at the subtraction, not at another function's
+                        # output. **Two cases, and only one of them is a future
+                        # one.**
+                        #
+                        # LIVE, reachable from a validated config: a column
+                        # NUMERIC for some units and `None` for others. Ruling 1
+                        # publishes a perfectly good mean for such a column, so it
+                        # legitimately becomes a `metric_key` on both sides — the
+                        # convention below is INTACT — and the subtraction is then
+                        # reached with `k` a unit both sides carry `None` for.
+                        # Measured end to end: `TypeError` outside every `try`, run
+                        # directory complete, every execution paid for, no
+                        # `run.yaml`. That is the crash this guard closes; its pin
+                        # is the ragged-`None` blast-radius test in
+                        # `tests/test_cli.py`, which H5b task 6 shipped as a strict
+                        # `xfail` naming this guard as its remover.
+                        #
+                        # FUTURE, the convention-breaks case: a column non-numeric
+                        # for EVERY unit reaches no `metric_key` today, because
+                        # `of_summary` is `aggregated`'s step block and the column
+                        # loop publishes no block for it — a convention at another
+                        # function's output, not a guard, and **a rule enforced
+                        # only by another function's output is not a guard.**
+                        #
+                        # It SKIPS rather than raising: the two core-bookkeeping
+                        # `ValueError`s above both sit before any interval is
+                        # built, while a raise here loses the `run.yaml` this guard
+                        # exists to protect. A unit dropped here is dropped exactly
+                        # as a unit missing the column is dropped, and `n_paired`
+                        # reports what remains — `0` already means *pairing
+                        # failed*, so an all-dropped metric publishes
+                        # `n_paired: 0` and `ci95: null`, a shape a reader can
+                        # already read. **No new code is minted**, and not on the
+                        # ground that this path is unreachable — the live case
+                        # above is reachable. The disclosure is the narrowed
+                        # `n_paired` itself, which is unconditional and always in
+                        # the record. The condition-side `W-STATS-COLUMN-THIN`
+                        # is NOT a standing second disclosure here: it fires only
+                        # when the contributing count falls below
+                        # `limits.min_reported_n` (Controller ruling 5), so a
+                        # project declaring a floor of 1 — or no floor at all —
+                        # gets none, and `n_paired` is then the only signal. That
+                        # gap is the ruling's own named cost, not a reason to mint
+                        # a second warning here for the contrast side.
+                        and _is_numeric(of_collapsed[k][metric_key])
+                        and _is_numeric(against_collapsed[k][metric_key])
                     ]
                     diffs = [
                         of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
@@ -1306,9 +1351,17 @@ def _comparison_step_blocks(
                         "correction": None,
                     }
                 else:
-                    of_col = [k for k in of_side_keys if metric_key in of_collapsed[k]]
+                    of_col = [
+                        k
+                        for k in of_side_keys
+                        if metric_key in of_collapsed[k]
+                        and _is_numeric(of_collapsed[k][metric_key])
+                    ]
                     against_col = [
-                        k for k in against_side_keys if metric_key in against_collapsed[k]
+                        k
+                        for k in against_side_keys
+                        if metric_key in against_collapsed[k]
+                        and _is_numeric(against_collapsed[k][metric_key])
                     ]
                     of_values = [of_collapsed[k][metric_key] for k in of_col]
                     against_values = [against_collapsed[k][metric_key] for k in against_col]
@@ -1650,7 +1703,7 @@ def _compute_vs_baseline(
     conditions: "list[Condition]",
     roster: "UnitList | None",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -1731,7 +1784,7 @@ def _compute_declared_contrasts(
     conditions: "list[Condition]",
     roster: "UnitList | None",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -2844,7 +2897,7 @@ def command_run(config_path: Path) -> int:
             # time: the per-unit table, what `aggregate` returned by name, and
             # the resample closure `_make_resample_fn` built for it, one entry
             # per (condition, recording step) actually seen this run.
-            collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]] = {}
+            collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]] = {}
             derived_by_key: dict[tuple[int, str], dict[str, Any] | None] = {}
             resample_fns_by_key: dict[
                 tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -2874,6 +2927,18 @@ def command_run(config_path: Path) -> int:
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
                     )
+                    for column, units_count in repeats_disagreeing(
+                        results, step_name, cond.index, fold_members=fold_members
+                    ).items():
+                        aggregate_c.warn(
+                            "W-STATS-REPEATS-DISAGREE",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: recorded column "
+                            f"{column!r} disagrees across the repeats of "
+                            f"{units_count} unit(s); "
+                            "declare data.units.measurements.collapse if the within-unit "
+                            "collapse is what you meant",
+                        )
                     counts = _condition_counts(
                         results,
                         eval_roster,
@@ -3216,6 +3281,62 @@ def command_run(config_path: Path) -> int:
                     # `reference.md`'s single-level examples; a nested design's list
                     # of >1 entries is left as a list.
                     recorded_columns = {col for cols in collapsed.values() for col in cols}
+                    # `W-STATS-COLUMN-THIN` (Controller ruling 5, 2026-08-22):
+                    # one warning per (condition, step, recorded column) whose
+                    # CONTRIBUTING count — `summarize_step`'s per-column
+                    # `n.completed`, the number of units that carried a real
+                    # number for it, not the condition-wide figure — falls below
+                    # `limits.min_reported_n`. Ruling 1 asked for a warning
+                    # naming the count on every partially-covered column; ruling
+                    # 5 narrowed it to this floor, because a step that measures
+                    # only what it can measure is ordinary and an unconditional
+                    # warning would fire on runs with nothing wrong.
+                    #
+                    # `limits.min_reported_n` rather than a threshold of its own:
+                    # `W-STATS-CONTRAST-THIN` (a realized `n_paired`/`n_of`) and
+                    # `W-STATS-STRATUM-THIN` (a level's realized `completed`)
+                    # already read this floor at `run` time against a realized
+                    # denominator, and a second source of truth for one hazard is
+                    # what that ruling refuses. The guard is theirs verbatim:
+                    # `check_envelope` is what reports a wrong-typed floor, and a
+                    # `True` would otherwise drive "below limits.min_reported_n
+                    # (True)".
+                    #
+                    # Two scope decisions, both deliberate. A column that earned
+                    # NO block is skipped: it has no contributing count to name,
+                    # and `W-STATS-REPEATS-DISAGREE` (or nothing at all, for a
+                    # column no unit ever recorded a number for) is what covers
+                    # it. And a `report_by` LEVEL's columns are not checked here:
+                    # `W-STATS-STRATUM-THIN` below already names a thin level
+                    # against the same floor, and per-column-per-level would
+                    # multiply one fact by the number of columns.
+                    #
+                    # Sited after both `summarize_step` calls have converged on
+                    # `step_summary`, so the `except ContractError` retry above is
+                    # covered by this one site — a diagnostic's unit of work is
+                    # every place it reports, and one code gets one row.
+                    column_floor = (doc.get("limits") or {}).get("min_reported_n")
+                    if isinstance(column_floor, (int, float)) and not isinstance(
+                        column_floor, bool
+                    ):
+                        for column in sorted(recorded_columns):
+                            block = step_summary.get(column)
+                            if block is None:
+                                continue
+                            contributing = (block.get("n") or {}).get("completed")
+                            if not isinstance(contributing, (int, float)) or isinstance(
+                                contributing, bool
+                            ):
+                                continue
+                            if contributing < column_floor:
+                                aggregate_c.warn(
+                                    "W-STATS-COLUMN-THIN",
+                                    "limits.min_reported_n",
+                                    f"condition {cond.index}, step {step_name!r}: recorded "
+                                    f"column {column!r} carries a number for "
+                                    f"{int(contributing)} unit(s), below "
+                                    f"limits.min_reported_n ({column_floor})",
+                                )
                     for column in recorded_columns:
                         if column not in step_summary:
                             continue
@@ -3461,15 +3582,32 @@ def command_run(config_path: Path) -> int:
                     # `aggregate_where`, not `statistics.report_by`: the fault
                     # is the recorded column, and there may be no `report_by`
                     # key in the file to point at.
-                    if "by" in step_summary:
+                    #
+                    # The question is *did any unit record a column called
+                    # `by`?*, and `recorded_columns` — built above from
+                    # `collapsed`, for the `repeat_spread` walk — is that
+                    # question's own answer. `step_summary` was a PROXY for it:
+                    # a NON-numeric `by` column never reaches `summarize_step`'s
+                    # published keys, so it drew no warning while
+                    # `units.parquet` carried the column and `run.yaml` carried
+                    # a `by` strata block — the two-meanings-under-one-name case
+                    # the reserved name exists to prevent. The move is only a
+                    # widening: `by` in `step_summary` implies `by` in
+                    # `recorded_columns`, because a DERIVED `by` is refused in
+                    # `summarize_step` (`RESERVED_METRIC_NAMES`) and the
+                    # containment retry above passes no `derived` at all, so the
+                    # only route into `step_summary` is the column loop over
+                    # this same `collapsed`.
+                    if "by" in recorded_columns:
                         aggregate_c.warn(
                             "W-STATS-STRATUM-SHADOWED",
                             aggregate_where,
                             f"condition {cond.index} step {step_name!r}: 'by' is a "
                             "reserved metric name — it holds the key the reporting "
                             "strata are attached under — so the recorded column of "
-                            "that name keeps its value but gets no contrast delta, "
-                            "and no strata are reported for this step",
+                            "that name gets no contrast delta and no seat in the "
+                            "correction family, and no strata are reported for this "
+                            "step",
                         )
                     # Absent, not empty, the rule `vs_baseline` and `contrasts`
                     # already follow: a `by: {}` would claim a stratification

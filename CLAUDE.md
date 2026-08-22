@@ -25,12 +25,14 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H5b, H6 Hashes and provenance, H9, then H3c-3's remaining
-14 — the H4, H7 and H8 families are all complete, and H5a merged on 2026-08-22.** H5 split two ways on
-the write/downstream seam and **only H5b carries behaviour-change exposure**; H5b and H6 are chartered as
-**independent** in the spine design and were omitted from this sentence for several slices while it was
-narrowed around the families being worked; `spec-defects.md` carries live entries owned by each, which is
-how the omission was caught. **The spine design's own nine-row charter table was never amended for either
+**Order of the slices that remain: H6 Hashes and provenance, H9, then H3c-3's remaining
+14 — the H4, H5, H7 and H8 families are all complete, H5a and H5b both having merged on 2026-08-22.**
+H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
+exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
+rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
+H5a's change was additive to what `io.write` accepts.** **H6 is chartered as independent** in the spine
+design and was omitted from this sentence for several slices while it was narrowed around the families
+being worked; `spec-defects.md` carries live entries owned by it, which is how the omission was caught. **The spine design's own nine-row charter table was never amended for either
 H8's three-way split or H5's two-way one** — it read as nine slices while the work had become fourteen,
 and an appended amendment dated 2026-08-22 now records both. Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
@@ -187,6 +189,87 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H5b (non-numeric columns downstream to `aggregate`) merged on 2026-08-22 — the last of H5's two, and
+the first behaviour change since H7d Part B to what an existing key *reports*.** A recorded column that is
+not a number is carried through `collapse_repeats` into the table a template's `aggregate` receives, and
+**every unit the collapse is handed is admitted** — where a unit whose every recorded value was
+non-numeric used to vanish from the unit table entirely, so six units all recording `valid: True`
+published `n_valid: {value: 0.0, ci95: [0.0, 0.0], resample_draws: 2000}` at exit 0 with no diagnostic.
+A column earns a metric block when it carries a real number for at least one unit, computed over the
+units that carried one and reporting **that** contributing count as its own `n.completed`; a column no
+unit carries a number for earns none and still reaches `aggregate`'s table, where a template that knows
+what the values mean can read it. **It retires no refusal and no config's declaration changes** — and it
+is the first slice in a while to **move a row** of
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md)' four-row table rather than repeat it:
+row 4 is re-derived **`1 → 0 → 1`**, rows 1–3 are repeated character for character, and **the table stays
+four rows wide.** Quote that table or name the dependency; do not quote one number for that analysis'
+executability.
+
+**The exposure is an enumeration, not a phrase, and a count is not an enumeration.** Nine classes of key
+move, each pinned in a guard pin arm captured before anything moved. **Seven keys in one direct-call
+fixture** (`seed=7`, `draws=2000`, six units of which four recorded a `score`): `n_valid.value`
+`0.0 → 6.0` and `.ci95` `[0.0, 0.0] → [6.0, 6.0]`; `n_rows.value` `4.0 → 6.0` and `.ci95`
+`[4.0, 4.0] → [6.0, 6.0]`; `mean_score.n.completed` `4 → 6`; `mean_score.ci95`
+`[0.5, 2.5] → [0.3333333333333333, 2.5]`; `mean_score.resample_draws` `2000 → 1998` — while
+`mean_score.value` stays `1.5` and every `score.*` literal stays put, which is what lets that fixture
+tell *the table widened* from *the metric changed*. **An eighth class:** a derived metric's `p_value`
+(`0.846307385229541 → 0.812375249500998` at `seed=7, n=500`) and, through the family, its
+`p_value_corrected` — a `permutation_of_derived` draw rebuilds its table from whole rows, so admitting
+units widens the null too. **A ninth:** every `report_by` level's own keys, a projection with no code path
+of its own, found by a review rather than by the design's own enumeration. **And a correction family
+moves in a two-condition run**: `n_paired` `4 → 6`, with `mean_score` and `score` trading Holm's levels
+(`0.025`/`0.05`), so **a column holding no non-numeric value anywhere gets a different `ci95_corrected`**
+— the least intuitive thing here and the reason it is a pin arm rather than prose.
+`resample_draws` is **seed-dependent and not a constant**: four distinct literals were measured in this
+slice (`1998`, `1999`, `1997`, `1927`), two of them pinned, and no literal is reused across arms.
+
+**Five things newly stop or newly warn, and two warnings are minted.** (i) a derived key colliding with a
+**non-numeric** recorded column is refused (`E-STEP-KEY-COLLISION`, re-reported as
+`W-STATS-AGGREGATE-FAILED`), where both were published under one name; (ii) a step recording a
+non-numeric column named `by` loses that step's `report_by` strata and earns
+`W-STATS-STRATUM-SHADOWED`, where the strata were published silently beside the recorded column; (iii) an
+`aggregate` that assumes every row carries its numeric column now meets rows that do not and **may
+raise** — contained, costing that step's `derived` mapping; (iv) a **purely numeric** derived metric newly
+draws `W-STATS-RESAMPLE-THIN`, because admitting units creates degenerate draws (`2000 → 1998` on the
+direct-call fixture, `2000 → 1927` per level on a two-level `report_by` run) — an existing code at an
+existing site (`cli.py:3257`) seeing a wider input, so **no § Warnings row moves**; (v) a **comparison's**
+declared `resample` newly draws `W-STATS-CONTRAST-RESAMPLE-THIN` at a different existing site
+(`cli.py:1659`), for the same reason — admitting units widens the contrast's own resample too, and
+`reference.md`'s row for it already rules the two are two facts, since neither the `n_paired`
+denominator nor a thin pool is the other's fact — so this too moves no § Warnings row. Minted: **`W-STATS-REPEATS-DISAGREE`**
+(a recorded column disagreeing across one unit's repeats) and **`W-STATS-COLUMN-THIN`** (a contributing
+count below `limits.min_reported_n`, per condition, step and column) — two things that newly *fire*, so
+the list does not read as if nothing new appears. **`uv.lock` is the carrier of all of it**: two runs of
+one config across the upgrade have `code_hash`, `parameters_hash` and `input_manifest_hash` all
+`identical`, and the one row that moves prints two digests and never names the package — filed against H9,
+because being *able* to derive a statistics change from a lockfile hash is not being told.
+
+Four things worth carrying. **A rule with three cases invites a two-case sentence at every site that
+mentions it, because two cases sound complete** — this slice shipped one three times, as a Critical then
+two Majors, in three different files, each caught by someone sweeping for the *claim* rather than for the
+file it was first noticed in. The three mixtures, and the amendment table is now the single authority
+every site links to instead of restating: non-numeric for **every** unit (no block, the column still
+reaching the table), a number for some units and `None` for others (a block over the contributors, with
+the contributing count and `W-STATS-COLUMN-THIN` below the floor), and `str` **beside** a number, which
+**cannot occur** — `_check_column_types` refuses it at `finalize`, so a read rule for it would describe an
+unreachable state and invite someone to build against it. **A binding ruling reached the reviewers and
+never the implementer**, because it was appended to the plan under a preamble asserting that a brief
+carries it — and `task-brief` extracts one `## Task N` section and nothing else; fixed by opening every
+task section with a pointer saying the rulings post-date it and win. **And a ruling was then amended by
+the code**: Ruling 1 called the coverage warning *not optional* because an interval over five values
+beside a `completed` of two hundred is a precision claim no reader can catch — the shipped contributing
+count made that claim impossible, so the warning became conditional on `limits.min_reported_n`, the floor
+three shipped rows already read at `run` time against a realized denominator. **A strict `xfail`
+asserting the CORRECT post-fix behaviour is a disclosure that cannot be forgotten**: batch 2's gate made
+an unguarded subtraction reachable — a contrast over a ragged `None` column gave a raw `TypeError` with a
+complete run directory, ten executions paid for and **no `run.yaml`** — so it shipped as
+`xfail(strict=True)` naming its remover, and the suite goes red the moment the gap closes; the conversion
+kept both assertions byte-identical and added one. And **two live behaviours were never pinned at all**
+while a ninth moving-key class appeared in no arm — the *pin weakened quietly* shape arriving as *never
+pinned in the first place* — alongside five false grounds and clauses **deleted rather than rewritten**,
+in `report.py`'s two structural predicates, `cli._attributed`'s docstring, a warning's own message and a
+normative § Warnings row. *A rewrite invents; a deletion cannot.*
 
 **H5a (write-side integrity and the reserved-column namespace) merged on 2026-08-22 — the first of
 H5's two.** Scalars are coerced on the write side; `RESERVED_COLUMNS` splits the *fields on `Unit`* from
@@ -425,7 +508,7 @@ These are load-bearing across all four documents; contradicting one in a single 
 - **`input_dir`/`output_dir` may never resolve inside the git repo**, checked at generate, at validate, and by every command that executes (`run`, `draft`, `resume`). Which repo is decided by a walk-up from the path the command was given, not from the working directory.
 - **Condition vs. repeat.** A condition is a difference being measured; a repeat is a difference being averaged over. Statistics aggregate *within* a condition and compare *across* conditions — never the reverse.
 - **A repeat is an execution, so the kinds are exactly the three things a re-execution can change: `seed` (RNG state), `fold` (which units it sees), `batch` (the state of the apparatus it measures through — see § The apparatus core can only observe).** A `batch` takes no field but `n`, executes in order with `order: randomized` shuffling inside it, and `validate` warns when no step sets `nondeterministic = True`. Resampling and permutation are `statistics.resample`/`statistics.null_test` over the unit table (thousands of executions otherwise, and an all-permuted design has no unpermuted value to test); technical replication is `data.units.measurements`, collapsed at unit resolution (re-running an identical step recomputes the same answer); a fixed holdout is `data.units.holdout`. `validate` rejects `bootstrap`, `permutation`, `technical`, `biological`, and `holdout` as kinds by name.
-- **Units are the inference base; repeats never are.** Every interval core reports is computed from the per-unit table, `n` counts units (`resolved`/`completed`/`ineligible`/`failed`, where `io.skip` declares the third and `max_failed_fraction` guards only the fourth), and repeat dispersion is reported separately as `repeat_spread`. A metric that exists only as a step-returned scalar is `basis: repeats` and gets **no** `ci95`; the one interval core stores without computing is an `Estimate` returned by a `summary` step, marked `reported: true`, outside the correction family and never recomputed. A hypothesis may name one — it takes no `compare` — and the verdict records `verdict_rests_on: reported` rather than `computed`. Pairing is over units, never over repeats, and a contrast — `vs_baseline` or a declared `statistics.contrasts` entry — is computed over the intersection of both sides' completed units, recorded as `n_paired` — and its interval is its own construction over that intersection (`paired_t_over_units`, `paired_percentile_over_units` drawing once for both sides, or the `welch_`/`unpaired_` counterparts), never a difference of the two sides' intervals. Holm ranks on the point estimate over half the raw `ci95` width, because the family often carries no p-value at all, which is also why `fdr_bh` over such a family warns. `data.units.weight_by` weights an enriched sample's estimates and records `weighted_by`; `statistics.report_by` repeats metrics over strata without adding executions or joining the correction family; a subgroup you want to *test* is a contrast with `within`, which does join it. Contrasts compare conditions and do not nest: anything comparing two contrasts — a dose-response ordering, a difference-in-differences, a nested mean over cells — is an interaction and stays a `summary`-step `Estimate`. The table `aggregate` receives supports exactly four operations — row iteration, column access, `len`, `columns` — deliberately not a `DataFrame`, so core can change what backs it without breaking every plugin. (`reference.md` § The unit table is the inference base, § Templates)
+- **Units are the inference base; repeats never are.** Every interval core reports is computed from the per-unit table, `n` counts units (`resolved`/`completed`/`ineligible`/`failed`, where `io.skip` declares the third and `max_failed_fraction` guards only the fourth), and repeat dispersion is reported separately as `repeat_spread`. A metric that exists only as a step-returned scalar is `basis: repeats` and gets **no** `ci95`; the one interval core stores without computing is an `Estimate` returned by a `summary` step, marked `reported: true`, outside the correction family and never recomputed. A hypothesis may name one — it takes no `compare` — and the verdict records `verdict_rests_on: reported` rather than `computed`. Pairing is over units, never over repeats, and a contrast — `vs_baseline` or a declared `statistics.contrasts` entry — is computed over the intersection of both sides' completed units, recorded as `n_paired` — and its interval is its own construction over that intersection (`paired_t_over_units`, `paired_percentile_over_units` drawing once for both sides, or the `welch_`/`unpaired_` counterparts), never a difference of the two sides' intervals. Holm ranks on the point estimate over half the raw `ci95` width, because the family often carries no p-value at all, which is also why `fdr_bh` over such a family warns. `data.units.weight_by` weights an enriched sample's estimates and records `weighted_by`; `statistics.report_by` repeats metrics over strata without adding executions or joining the correction family; a subgroup you want to *test* is a contrast with `within`, which does join it. Contrasts compare conditions and do not nest: anything comparing two contrasts — a dose-response ordering, a difference-in-differences, a nested mean over cells — is an interaction and stays a `summary`-step `Estimate`. The table `aggregate` receives supports exactly four operations — row iteration, column access, `len`, `columns` — deliberately not a `DataFrame`, so core can change what backs it without breaking every plugin, and it carries **every** recorded column — a non-numeric one included, which earns no metric block because there is no mean of strings — beside every declared unit attribute. A metric over a column only some units carry a number for is computed over those units and reports **that** contributing count as its own `n.completed`, which is what makes the interval honest; the four-way `n` above is not widened by it. (`reference.md` § The unit table is the inference base, § Templates)
 - **One import root, one registration, one return shape.** Everything a user writes against is imported from `publishable` itself — `publishable.templates` and every other submodule are implementation detail, and `reference.md` § The importable surface is the enumerated list. The entry-point key *is* a plugin artifact's registered name and the `@register_*` argument is checked against it (so `validate` resolves a name without importing the package); a collision or a shadow of a core name fails at load rather than being resolved by install order. `io.write` dispatches on the longest registered suffix of the name's last component, and each core writer takes exactly what its reader gives back — rows as mappings for `.csv`/`.parquet`/`.jsonl`, any parsed structure for `.json`/`.yaml`, `bytes` or `str` for everything else, never a `DataFrame` or an object core would have to guess at. A step's `run` and a template's `aggregate` both return a flat mapping of scalars — the same set `io.record` takes — with a NumPy scalar coerced, anything structural a `ContractError`, and an `Estimate` at `summary` scope the one exception. Core raises `PublishableError` → `ContractError` / `ArtifactError` → `ArtifactExistsError`, each carrying the same stable `E-` identifier a diagnostic prints. (`reference.md` § The importable surface, § Steps and artifacts, § Creating a plugin)
 - **What core hands a step is minimal and immutable on purpose.** `io.units` supports three operations — iterate, `len`, index — plus `.train`, on the same argument `aggregate`'s four-operation table rests on; a `Unit` is frozen and hashable by `key`, because one roster is resolved per run and shared across every condition. `cfg` is dot-access with no methods at all (so no parameter name can be shadowed) — the one exception being the root node's single `raw` accessor, which `validate` and a template's `validate(config)` need and which costs the one top-level name core already owns — raising `ContractError` on a path the config doesn't hold and `AttributeError` on an underscore-prefixed name. `self.rng` is the generator to draw from — core also seeds the `random` and legacy `numpy.random` globals, but only so an unreachable library is covered, and a concurrent step must give each worker its own stream. `scope` is read from the class before any instance exists, and `__init__` is core's. (`reference.md` § The importable surface, § The unit list is three operations, § Randomness)
 - **`parameter_spec` is the single source of truth** for what `init` writes, what its inline comments say, and what `validate` enforces. There is deliberately no separate defaults file. `Param` types are `str`/`int`/`float`/`bool`/`list` (with `item_type`); omitting `default` is what makes a parameter required, and `default=None` requires `nullable=True`. `requires_env` is the one thing a `Param` carries that isn't a constraint on its value — it needs `choices` and must be total over them, and it stays out of the closed constraint vocabulary for that reason.

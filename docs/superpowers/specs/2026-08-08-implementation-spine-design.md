@@ -129,6 +129,26 @@ and in the slice's own dated scoping, and **neither reached this table** — so 
 charter while the work had become fourteen slices. A scoping expires and a spec does not, but a spec whose
 table is never amended stops describing the plan it exists to hold.
 
+**Second correction to this amendment, 2026-08-22, appended as H5b completes — this replaces the H5b row's
+size and the exposure sentence's phrasing, and edits neither.** The row above sizes **H5b** at **(10)**,
+which is the figure `H5-SCOPING.md` carried; **H5b shipped 16 tasks**, in five batches, every batch
+reviewed. Its own design says *"The scoping's 15 stand"* and the approved plan then split one of them, so
+the count disagrees with the design as well as with the charter —
+`grep -c '^## Task ' docs/superpowers/plans/2026-08-22-non-numeric-columns-downstream.md` returns **16**.
+This is the same direction every re-scoping in this file has moved: a charter size copied from the
+document being tested rather than from the plan that shipped, which is what the correction above this one
+was already about, for H5a's 9-versus-13.
+
+**And the exposure is not a phrase but an enumeration**, which is the part a reader of this table alone
+would most likely under-read. It is what H5b's design's § The behaviour change enumerates, and the
+enumeration is what the guard pin holds: **seven keys move in one direct-call fixture** (`n_valid.value`
+and `.ci95`, `n_rows.value` and `.ci95`, `mean_score.n.completed`, `mean_score.ci95`,
+`mean_score.resample_draws`), **a whole correction family moves in a second** — two metrics trading Holm's
+levels, so a column holding no non-numeric value anywhere gets a different `ci95_corrected` — a derived
+metric's **`p_value`** moves in a third, every **`report_by` level's** keys move in a fourth, and **four
+things newly stop or newly warn**. *A count is not an enumeration, and the exposure of a
+behaviour-changing slice is the enumeration.*
+
 ### Order, amended against outside evidence
 
 **AMENDMENT, 2026-08-14, from an executability measurement of

@@ -3056,8 +3056,13 @@ def _first_contrast(run: dict[str, Any], label: str) -> dict[str, Any] | None:
 def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     """`vs_baseline` is where `resolve_contrasts`'s auto-generated,
     condition-against-baseline comparisons land. The scaffold's own step
-    records only a bool (`{"present": True}`, filtered by `_is_numeric`), so
-    this uses `_METHOD_VARYING_STEP` — a per-unit value that genuinely
+    records only a bool (`{"present": True}`) — carried through the
+    collapse unfiltered since H5b's task 4, but still refused a metric
+    block of its own by `stats.summarize_step`'s own per-column
+    `_is_numeric` gate (H5b task 12/13's re-derivation of this docstring:
+    the right predicate, previously misattributed to the collapse rather
+    than to this loop) — so this uses `_METHOD_VARYING_STEP` — a per-unit
+    value that genuinely
     differs by condition and has real within-condition variance — to get a
     real numeric column to difference, rather than `_AGGREGATE_STEP`'s
     `float(i)` (identical under both conditions, so `delta` and `cohens_d`
@@ -6958,6 +6963,99 @@ def test_a_recorded_by_column_warns_even_with_no_report_by_declared(tmp_path, ca
     assert _first_contrast(run, "method=spearman")["family_size"] == 1
 
 
+# --- H5b task 9: Fixture F — a NON-numeric `by` column ----------------------
+
+_RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"pred": float(i), "by": "lvl%d" % (i % 2)}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_non_numeric_recorded_by_column_warns_and_suppresses_the_strata(
+    tmp_path, capsys, monkeypatch
+):
+    """Fixture F. The gate answers from the **recorded-column set**, not from
+    `step_summary` — so a `by` column no unit recorded a number for draws the
+    warning and loses its strata, exactly as the numeric one does.
+
+    Before this task the gate read `if "by" in step_summary`, and a non-numeric
+    `by` column never reaches `summarize_step`'s published keys (H5b task 6
+    leaves the column in `collapsed`, and the column loop still publishes no
+    block for it): so the run went **silent** and published the `cohort` strata
+    under the very name `units.parquet` was already using for a measured
+    column — two meanings under one name, which is the whole reason `by` is
+    reserved. § Steps and artifacts states the consequence without
+    qualification: *"no strata are reported for the step at all."*
+
+    **This is not the reserved-NAME-for-a-structural-fact fault.** There the
+    question was *is this entry a stratum?* and the answer given was a name;
+    here the question **is** whether a column of that name was recorded, so
+    `recorded_columns` is the direct answer rather than a proxy for one. The
+    proxy was `step_summary`, and this test is what it could not see.
+
+    `"by" not in step_block` carries both halves at once, because the strata
+    block and the metric block would occupy the same key: a non-numeric column
+    has no metric block to keep, and the strata are suppressed. `pred` is the
+    can-fail half — a run publishing nothing at all would satisfy the `by`
+    assertion for free.
+
+    The structural assertion sits **before** the stdout one deliberately:
+    pytest stops at the first failure, and the published record is the
+    load-bearing claim. Both were measured to fail under the
+    gate-back-to-`step_summary` mutation, by running it in each order — under
+    that mutant `step_block["by"]` holds the `cohort` strata while
+    `units.parquet` holds a measured `by` column, which is the defect
+    itself."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "by" not in step_block
+    assert step_block["pred"]["value"] == pytest.approx(19.5)
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+
+
+def test_a_non_numeric_by_column_still_reaches_the_unit_table(tmp_path, capsys, monkeypatch):
+    """The other half of the ruling, and the reason the suppression is not a
+    drop: the column is gone from `aggregated` and still present in
+    `units.parquet`, so nothing was lost — only the two-meanings-under-one-name
+    publication was refused. Read from the artifact rather than from the record,
+    which is where the two claims differ."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_NON_NUMERIC_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    from publishable.artifacts import _decode_parquet
+
+    tables = sorted(doc["run_dir"].rglob("units.parquet"))
+    assert tables
+    rows = _decode_parquet(tables[0].read_bytes())
+    assert {row["by"] for row in rows} == {"lvl0", "lvl1"}
+
+
 # --- Task 6: `W-STATS-STRATUM-THIN` at run time --------------------------------
 
 _SKIP_MOST_OF_COHORT_A_STEP = """\
@@ -10661,11 +10759,17 @@ def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, c
       would have been asserting a fact about a document this build does not
       write, so it is replaced with a plain status check.
     - The scaffold's one auto-generated step never yields a real `aggregated`
-      metric on its own: it records `present: True`, and `stats.summarize_step`
-      drops a bool column outright ("skipped entirely... a string, or a bool").
-      So the un-narrowed `run_a_project(tmp_path, units=10)` call produces
-      `aggregated == {"step01_summarize_units": {}}` — non-empty at the top
-      level, empty where the pin needs to look, which is exactly the
+      metric on its own: `GenericTemplate` inherits `BaseTemplate.aggregate`,
+      which returns `{}` regardless of what `collapsed` holds (Decision 12) —
+      true before and after H5b, and true whether `present` were a bool or a
+      number. `stats.summarize_step` never even reaches the point of dropping
+      `present` as a bool column here (H5b task 12/13's re-derivation of this
+      docstring: it does not receive an empty table from the collapse either —
+      `present` is carried on every row after task 4 — the derived side is
+      `{}` because the template's own `aggregate` is, independent of the
+      column). So the un-narrowed `run_a_project(tmp_path, units=10)` call
+      produces `aggregated == {"step01_summarize_units": {}}` — non-empty at
+      the top level, empty where the pin needs to look, which is exactly the
       "assertion implied by another" trap: the `assert aggregated` guard would
       have passed while the loop beneath it never executed. `aggregate_returns`
       is used instead, the same helper every other end-to-end test in this
@@ -17168,3 +17272,1468 @@ def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
     """
     text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
     assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]
+
+
+# --- H5b task 1: the guard pin, arms A and E --------------------------------
+#
+# Captured BEFORE any H5b task moves anything (H5b plan task 1), against
+# `ee8085e`. Every literal below was produced by running the real console
+# path through `run_a_project`, twice each, and diffing the two runs for
+# byte-identical `results` — not read from the plan's prose.
+
+
+def test_a_numeric_only_run_is_untouched_by_h5b_no_editor(tmp_path):
+    """H5b's guard pin, arm A (H5b plan task 1, step 1). **NO AUTHORIZED
+    EDITOR — no task in this slice may edit this test.** A passing arm A
+    after every later task is the proof that the numeric-only path did not
+    move.
+
+    `_AGGREGATE_STEP` records `{"pred": float(i)}` and nothing else — a
+    single numeric column, no bool — so `aggregate_returns="total"` is used
+    rather than the default `STARTER_STEP` (which records `{"present":
+    True}`, a bool, and would falsify this arm's own premise for the wrong
+    reason).
+
+    **If a second recorded column of any non-numeric type is ever added to
+    this fixture, that FALSIFIES this arm rather than failing it** — the
+    rule this pins is that identity holds when no non-numeric column exists
+    ANYWHERE in the same correction family (Holm ranks across the family,
+    so one metric's interval width moves another's corrected interval),
+    not merely that this one column stayed a number. Arm E is the
+    measurement that a numeric-only column's OWN corrected interval still
+    moves when a *different* column in the family admits more units — the
+    reason this arm's fixture must stay strictly numeric rather than
+    merely unedited.
+
+    Two-condition (`pearson` baseline vs. `spearman`), two-seed, Holm
+    correction (the generated default), 40 units. The whole `results`
+    mapping is asserted against a literal — reproduced twice via
+    `run_a_project` and diffed byte-identical before being pinned here.
+    """
+    doc = run_a_project(
+        tmp_path,
+        units=40,
+        aggregate_returns="total",
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    assert run["results"] == {
+        "conditions": [
+            {
+                "aggregated": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [15.761212085024908, 23.23878791497509],
+                            "correction": None,
+                            "method": "t_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "repeat_spread": {"kind": "seed", "n": 2, "std": 0.0},
+                            "value": 19.5,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [16.025, 23.025],
+                            "cohens_d": None,
+                            "correction": None,
+                            "method": "percentile_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "resample_draws": 2000,
+                            "value": 19.5,
+                        },
+                    }
+                },
+                "index": 0,
+                "is_baseline": True,
+                "label": "baseline",
+                "per_repeat": {
+                    "step01_summarize_units": {"seed40": {"n_units": 40}, "seed47": {"n_units": 40}}
+                },
+                "values": {"analysis.method": "pearson"},
+            },
+            {
+                "aggregated": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [15.761212085024908, 23.23878791497509],
+                            "correction": None,
+                            "method": "t_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "repeat_spread": {"kind": "seed", "n": 2, "std": 0.0},
+                            "value": 19.5,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [16.025, 23.025],
+                            "cohens_d": None,
+                            "correction": None,
+                            "method": "percentile_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "resample_draws": 2000,
+                            "value": 19.5,
+                        },
+                    }
+                },
+                "index": 1,
+                "is_baseline": False,
+                "label": "method=spearman",
+                "per_repeat": {
+                    "step01_summarize_units": {"seed40": {"n_units": 40}, "seed47": {"n_units": 40}}
+                },
+                "values": {"analysis.method": "spearman"},
+                "vs_baseline": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [0.0, 0.0],
+                            "ci95_corrected": [0.0, 0.0],
+                            "cohens_d": None,
+                            "correction": "holm",
+                            "correction_level": 0.025,
+                            "delta": 0.0,
+                            "family": {"comparisons": 1, "metrics": 2},
+                            "family_size": 2,
+                            "method": "paired_t_over_units",
+                            "n_paired": 40,
+                            "paired": True,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [0.0, 0.0],
+                            "ci95_corrected": [0.0, 0.0],
+                            "cohens_d": None,
+                            "correction": "holm",
+                            "correction_level": 0.05,
+                            "delta": 0.0,
+                            "family": {"comparisons": 1, "metrics": 2},
+                            "family_size": 2,
+                            "method": "paired_percentile_over_units",
+                            "n_paired": 40,
+                            "paired": True,
+                        },
+                    }
+                },
+            },
+        ],
+        "summary": {},
+    }
+
+
+_ARM_E_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        thr = {{"pearson": 0.5, "spearman": 0.4}}.get(cfg.parameters.analysis.method, 0.5)
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i) + thr, "valid": True}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def _arm_e_aggregate(self, units, cfg):
+    """Row-dict access (`"score" in row`), never `units.valid` — the
+    unpatched (TODAY) collapse never carries a `valid` column at all, and
+    an attribute read would raise `E-STEP-COLUMN-UNKNOWN`."""
+    scores = [row["score"] for row in units if "score" in row]
+    return {
+        "n_rows": float(len(units)),
+        "mean_score": sum(scores) / len(scores) if scores else None,
+    }
+
+
+def _arm_e_widened_collapse(results, step_name, condition_index, fold_members=None):
+    """The AFTER shape this plan ships — every unit admitted, every
+    recorded value carried, a disagreeing non-numeric column collapsing to
+    `None` — installed as a monkeypatch on `publishable.cli.collapse_repeats`
+    so the correction-family measurement below is captured by RUNNING the
+    console path with the after-behaviour in place, per Corrections 9 and
+    Ruling 3. **This function does not ship**: the committed test asserts
+    only the TODAY (unpatched) column, and a later task flips it."""
+    from publishable.stats import _is_numeric, handed_to
+
+    recording = [
+        r
+        for r in results
+        if r.execution.step_name == step_name
+        and r.execution.scope == "repeat"
+        and r.execution.condition_index == condition_index
+    ]
+    if not recording:
+        return {}
+    rows_by_label: dict[str, list[dict[str, Any]]] = {}
+    recorded_by_label: dict[str, set[str]] = {}
+    for r in recording:
+        label = r.execution.repeat_label or ""
+        rows_by_label.setdefault(label, []).extend(r.rows)
+        recorded_by_label.setdefault(label, set()).update(r.recorded)
+    labels = list(recorded_by_label)
+    candidates: set[str] = set()
+    for keys in recorded_by_label.values():
+        candidates |= keys
+    gathered: dict[str, dict[str, list[Any]]] = {}
+    for key in sorted(candidates):
+        mine = handed_to(key, labels, fold_members)
+        if not mine or any(key not in recorded_by_label[lb] for lb in mine):
+            continue
+        for lb in mine:
+            for row in rows_by_label[lb]:
+                if row["unit"] != key:
+                    continue
+                for column, value in row.items():
+                    if column == "unit":
+                        continue
+                    gathered.setdefault(key, {}).setdefault(column, []).append(value)
+    out: dict[str, dict[str, Any]] = {}
+    for key, cols in gathered.items():
+        row: dict[str, Any] = {}
+        for col, vals in cols.items():
+            if all(_is_numeric(v) for v in vals):
+                row[col] = sum(float(v) for v in vals) / len(vals)
+            elif len(set(vals)) == 1:
+                row[col] = vals[0]
+            else:
+                row[col] = None
+        out[key] = row
+    return out
+
+
+def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_path):
+    """H5b's guard pin, arm E (H5b plan task 1, step 3; Corrections 9;
+    Ruling 3). **Sole authorized editor: task 4.** Re-measured by running
+    the console path — not copied from the scoping's prose.
+
+    A two-condition run (`pearson` baseline, `spearman` grid), six units,
+    default five seeds, `correction: holm` (the generated default), whose
+    step records a `score`+`valid` pair for `i < 4` and `valid` alone
+    otherwise, with `thr` `0.5` under pearson and `0.4` under spearman.
+    The template's `aggregate` returns `n_rows` and `mean_score`.
+
+    **Flipped to the AFTER column by task 4.** The scoping measured the AFTER
+    shape by installing `_arm_e_widened_collapse` on
+    `publishable.cli.collapse_repeats` and running the same fixture again,
+    before this task's `collapse_repeats` existed; task 4's real
+    `collapse_repeats` now produces that shape directly, no monkeypatch
+    needed, and this run reproduces all three of the scoping's cited
+    literals (`n_paired` 4 -> 6; the `correction_level` swap between
+    `mean_score` and `score`; `score.ci95_corrected` moving in its last
+    digits) plus two the scoping's own paragraph does not name: the
+    derived contrast's (`mean_score`) own `ci95` and `ci95_corrected`, and
+    both conditions' `aggregated...mean_score.ci95`/`n_rows.*`.
+    `_arm_e_widened_collapse` is left in place as the record of how the
+    AFTER shape was measured before it shipped; it is not called here.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(GenericTemplate, "aggregate", _arm_e_aggregate)
+        doc = run_a_project(
+            tmp_path,
+            units=6,
+            _starter_step=_ARM_E_STEP,
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    baseline, spearman = run["results"]["conditions"]
+
+    baseline_step = baseline["aggregated"]["step01_summarize_units"]
+    spearman_step = spearman["aggregated"]["step01_summarize_units"]
+    assert baseline_step["n_rows"]["value"] == 6.0
+    assert baseline_step["n_rows"]["n"]["completed"] == 6
+    assert baseline_step["n_rows"]["ci95"] == [6.0, 6.0]
+    assert spearman_step["n_rows"]["value"] == 6.0
+    assert spearman_step["n_rows"]["n"]["completed"] == 6
+    assert spearman_step["n_rows"]["ci95"] == [6.0, 6.0]
+
+    assert baseline_step["mean_score"]["n"]["completed"] == 6
+    assert baseline_step["mean_score"]["ci95"] == [0.8333333333333334, 3.1666666666666665]
+    assert spearman_step["mean_score"]["n"]["completed"] == 6
+    assert spearman_step["mean_score"]["ci95"] == [0.7333333333333334, 3.0666666666666664]
+
+    vs_baseline = spearman["vs_baseline"]["step01_summarize_units"]
+    assert vs_baseline["mean_score"]["n_paired"] == 6
+    # The correction_level SWAP (Corrections 9): admitting u4/u5 changes
+    # which family member ranks narrowest, so `mean_score` and `score`
+    # trade Holm's two non-median levels between them.
+    assert vs_baseline["mean_score"]["correction_level"] == 0.05
+    assert vs_baseline["mean_score"]["ci95"] == [-0.10000000000000053, -0.09999999999999964]
+    assert vs_baseline["mean_score"]["ci95_corrected"] == [
+        -0.10000000000000053,
+        -0.09999999999999964,
+    ]
+    assert vs_baseline["score"]["correction_level"] == 0.025
+    assert vs_baseline["score"]["ci95_corrected"] == [-0.10000000000000017, -0.09999999999999995]
+
+    # Must not move (across TODAY/AFTER, within each condition — measured
+    # identical for both when the AFTER monkeypatch was installed).
+    assert vs_baseline["score"]["n_paired"] == 4
+    assert vs_baseline["score"]["ci95"] == [-0.10000000000000014, -0.09999999999999998]
+    assert vs_baseline["n_rows"]["correction_level"] == 0.016666666666666666
+    assert baseline_step["score"] == {
+        "basis": "units",
+        "value": 2.0,
+        "n": {"completed": 4, "failed": 0, "ineligible": 0, "resolved": 6},
+        "ci95": [-0.0542602567605206, 4.054260256760521],
+        "method": "t_over_units",
+        "correction": None,
+        "repeat_spread": {"kind": "seed", "n": 5, "std": 0.0},
+    }
+    assert spearman_step["score"] == {
+        "basis": "units",
+        "value": 1.9,
+        "n": {"completed": 4, "failed": 0, "ineligible": 0, "resolved": 6},
+        "ci95": [-0.1542602567605207, 3.9542602567605205],
+        "method": "t_over_units",
+        "correction": None,
+        "repeat_spread": {"kind": "seed", "n": 5, "std": 0.0},
+    }
+
+
+# --- H5b task 4: Fixture B (the scaffold's own run, end to end) -------------
+
+
+def test_fixture_b_the_scaffolds_own_run_is_unchanged_by_h5b(tmp_path, capsys):
+    """H5b task 4, Fixture B. `STARTER_STEP` unmodified records `{"present":
+    True}` for every unit — a bool, no numeric column at all.
+
+    `GenericTemplate` inherits `BaseTemplate.aggregate`, which returns `{}`
+    regardless of what `collapsed` holds (Decision 12), so
+    `aggregated.step01_summarize_units == {}` **before and after H5b** — the
+    scaffold's own symptom does not move, because there is no `aggregate` to
+    read the newly-carried `present` column at all.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg == {}
+
+
+_FIXTURE_B_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("present_counter")\n'
+    "class PresentCounter(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_present": float(len([r for r in units if r.get("present")]))}\n'
+)
+
+_FIXTURE_B_ABSENT_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("absent_reader")\n'
+    "class AbsentReader(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_broken": float(len(units.nothing_ever_records_this))}\n'
+)
+
+
+def test_fixture_b_a_project_local_template_now_sees_the_bool_column(tmp_path, capsys):
+    """H5b task 4, Fixture B, second half. A project-local template's
+    `aggregate` counts `present` via row-dict `.get` — no attribute read, so
+    this arm alone cannot tell whether the harness ever raises. Today (before
+    H5b) `present` is absent from every unit's collapsed row, so `.get`
+    silently returns `None` for all six and the metric is `0.0` at exit 0.
+    After H5b's task 4, `present` is carried for every admitted unit, so the
+    same read reports `6.0`, and no `W-STATS-AGGREGATE-FAILED` appears on
+    stdout — the stream every shipped assertion on a run finding reads.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _local_template=_FIXTURE_B_TEMPLATE,
+        experiment_type="present_counter",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_present"]["value"] == 6.0
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+
+
+def test_fixture_b_control_an_attribute_read_of_a_genuinely_absent_column_still_warns(
+    tmp_path, capsys
+):
+    """H5b task 4, Fixture B's can-fail control. Without this, the previous
+    test's absence-of-warning assertion would pass identically whether
+    `aggregate` ran at all: a template reading `units.nothing_ever_records_this`
+    (a name no unit, before or after H5b, ever carries) still earns
+    `E-STEP-COLUMN-UNKNOWN`, contained and disclosed as
+    `W-STATS-AGGREGATE-FAILED` on stdout — proving the harness this fixture
+    relies on is actually exercised end to end.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _local_template=_FIXTURE_B_ABSENT_TEMPLATE,
+        experiment_type="absent_reader",
+        parameters={},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" in doc["stdout"]
+
+
+# --- H5b task 4: Fixture H (the stratum's empty level) ----------------------
+
+_FIXTURE_H_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key in ("p1", "p2"):
+                io.record(unit.key, {{"score": 10.0}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_FIXTURE_H_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("h_rows")\n'
+    "class NRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_rows": float(len(list(units)))}\n'
+)
+
+
+def test_fixture_h_the_all_non_numeric_level_is_absent_the_numeric_one_present(tmp_path, capsys):
+    """H5b task 4, Fixture H. `report_by: [grp]` over a roster where `grp=a`'s
+    units carry a numeric `score` and `grp=b`'s carry only a bool `valid`. A
+    project-local template's `aggregate` (`n_rows`, needing no particular
+    column) succeeds on both levels.
+
+    Before H5b, `grp=b`'s level_collapsed is `{}` (every unit's only column was
+    non-numeric and dropped by the old collapse), so `cli.py`'s `if not
+    level_collapsed: continue` drops it before the second gate is ever
+    reached. After task 4, `grp=b`'s units ARE admitted (each carrying `valid`),
+    so `level_collapsed` is non-empty and the run reaches the second gate this
+    fixture actually pins: `level_summary` there holds nothing but the derived
+    `n_rows` (the bool column earns no recorded-column block), so
+    `set(level_summary) - set(level_derived or {})` is empty and the level is
+    STILL correctly excluded — `cli.py` needed no change for this, but nothing
+    exercised the path until task 4 made `grp=b`'s units admissible at all.
+
+    The presence half is what stops this from being an absence-only control:
+    `grp=a` has a genuine recorded column (`score`), so its `level_summary`
+    holds more than its derived keys and it survives into `by`.
+    """
+    roster_csv = "patient_id,grp\np1,a\np2,a\np3,b\np4,b\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_FIXTURE_H_STEP,
+        _local_template=_FIXTURE_H_TEMPLATE,
+        units_overrides={"attributes": ["grp"]},
+        statistics={"report_by": ["grp"]},
+        experiment_type="h_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by_grp = agg["by"]["grp"]
+    assert "b" not in by_grp
+    assert "a" in by_grp
+    assert by_grp["a"]["score"]["value"] == 10.0
+    assert by_grp["a"]["n_rows"]["value"] == 2.0
+
+
+# --- H5b task 5: Fixture C's real-run half — the warning names the column --
+
+_FIXTURE_C_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        flag = _counter["n"] % 2 == 0
+        for unit in io.units:
+            io.record(unit.key, {{"flag": flag}})
+        return {{}}
+"""
+
+
+def test_fixture_c_the_disagreement_warning_names_the_column_on_stdout(tmp_path, capsys):
+    """H5b task 5, Fixture C's real-run half. The default replication is five
+    seed repeats; the step's module-level counter alternates `flag`
+    True/False across them, so every unit disagrees deterministically (never
+    relying on an RNG that might coincidentally agree). `W-STATS-REPEATS-
+    DISAGREE` must name `flag` on stdout — the stream every shipped assertion
+    on a run finding reads (`tests/test_cli.py` already carries `assert
+    "W-STATS-STRATUM-SHADOWED" in doc["stdout"]`, grepped and reused here).
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=3, _starter_step=_FIXTURE_C_STEP)
+    assert "W-STATS-REPEATS-DISAGREE" in doc["stdout"]
+    assert "flag" in doc["stdout"]
+
+
+# --- H5b task 5, step 6: the measurements interaction, observed not reasoned -
+
+_MEASUREMENTS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(
+                unit.key, {{"score": 1.0, "valid": True, "tag": "a"}}, measurement="r1"
+            )
+            io.record(
+                unit.key, {{"score": 2.0, "valid": True, "tag": "b"}}, measurement="r2"
+            )
+        return {{}}
+"""
+
+
+def test_the_two_levels_do_not_interact_a_declared_collapse_never_disagrees(tmp_path, capsys):
+    """H5b task 5, step 6. The design's § What could not be measured said a
+    `measurements.parquet` from a real run was never inspected — this plan
+    built one. `data.units.measurements: {by: read_id, collapse: first}`; the
+    step records two measurements per unit, `tag` differing (`"a"`/`"b"`).
+
+    All four literals observed at `ee8085e`: `measurements.parquet` holds both
+    rows with both `tag` values (the uncollapsed axis, written unconditionally
+    once a step passes `measurement=`); `units.parquet` (one execution's
+    finalized table, what `_gather_repeats` reads per repeat) holds `tag: 'a'`
+    — the declared collapse's answer, `first` meaning earliest recorded; and no
+    `W-STATS-REPEATS-DISAGREE` fires, because the declared collapse ran INSIDE
+    each execution (`_collapse_measurements`, at `finalize`) before
+    `collapse_repeats` ever sees a row, so every repeat hands the across-repeat
+    rule a constant `'a'` — nothing to disagree about.
+
+    A numeric declared rule cannot reach this path at all:
+    `_collapse_measurements` calls `rule_for` then `coerce_for_rule`, which
+    refuses a non-numeric value under a numeric rule before the repeat rule is
+    ever reached (see
+    `tests/test_artifacts.py::test_a_numeric_rule_coerces_a_recorded_string_before_applying`,
+    cited rather than restated) — only `first` and `mode` get here.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=2,
+        _starter_step=_MEASUREMENTS_STEP,
+        units_overrides={"measurements": {"by": "read_id", "collapse": "first"}},
+    )
+    meas_path = next(doc["run_dir"].rglob("measurements.parquet"))
+    meas_rows = _decode_parquet(meas_path.read_bytes())
+    assert {row["tag"] for row in meas_rows} == {"a", "b"}
+    assert {row["unit"] for row in meas_rows} == {"p1", "p2"}
+
+    units_path = next(doc["run_dir"].rglob("units.parquet"))
+    units_rows = _decode_parquet(units_path.read_bytes())
+    assert {row["tag"] for row in units_rows} == {"a"}
+
+    assert "W-STATS-REPEATS-DISAGREE" not in doc["stdout"]
+
+    # The collapsed table's own answer, mirroring what every one of this run's
+    # five identical seed-repeat executions finalizes to `units.parquet` above
+    # (each collapses its own two measurements to `tag: 'a'` independently, so
+    # the across-repeat collapse never sees anything but agreement). Built
+    # locally rather than imported from `tests/test_stats.py` — the two test
+    # modules don't share fixtures across files.
+    from publishable.runner import ExecutionResult
+    from publishable.scope import Execution
+    from publishable.stats import collapse_repeats
+
+    class _Step:
+        pass
+
+    repeated_row = {"unit": "p1", "score": 1.0, "valid": True, "tag": "a"}
+    executions = [
+        ExecutionResult(
+            execution=Execution(
+                step_cls=_Step,  # type: ignore[arg-type]
+                step_name="analyze",
+                scope="repeat",
+                condition_index=0,
+                condition_label=None,
+                repeat_label=f"seed{i}",
+            ),
+            status="completed",
+            started_at="2026-08-22T00:00:00Z",
+            wall_seconds=0.0,
+            returned={},
+            error=None,
+            recorded=frozenset({"p1"}),
+            skipped=frozenset(),
+            rows=(repeated_row,),
+        )
+        for i in range(5)
+    ]
+    collapsed = collapse_repeats(executions, "analyze", 0)
+    assert collapsed["p1"]["tag"] == "a"
+
+
+# --- H5b task 6: Controller ruling 1's blast radius — the crash it opens up -
+
+_RULING1_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 3:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{"score": None}})
+        return {{}}
+"""
+
+
+def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_no_longer_crashes(
+    tmp_path, capsys
+):
+    """H5b task 6's disclosure, closed by task 7 — the same body and the same
+    two assertions this test shipped with, with its `xfail(strict=True)`
+    decorator removed and one assertion ADDED.
+
+    What it disclosed: Controller ruling 1's gate relaxation (a column numeric
+    for some units and `None` for others keeps a block, task 6) made such a
+    column enter `summarize_step`'s published keys for the FIRST time, so it
+    reached `cli.py`'s per-metric contrast loop
+    (`sorted((set(of_summary) & set(against_summary)) - {'by'})`) and then the
+    unguarded `of_collapsed[k][metric_key] - against_collapsed[k][metric_key]`
+    subtraction with `k` a unit both sides carry `None` for — `TypeError`,
+    uncaught, outside every `try`: run directory complete, every execution
+    paid for, no `run.yaml`. It asserted the CORRECT behaviour rather than
+    `pytest.raises(TypeError)`, so it failed loudly the moment task 7's guard
+    landed instead of pinning the bug as intended.
+
+    **Task 7's guard is the fix**, and the conversion strengthens the pin
+    rather than weakening it: the two original assertions are unchanged, and
+    the `vs_baseline` assertion below is new. It goes from *did the run keep
+    its record* to *did the run keep its record AND is the narrowing right* —
+    `n_paired: 3` is the three units that carried a number, measured by
+    running, not the six the intersection holds (Decision 6 leaves
+    `paired_keys` wide on purpose; the recorded column's own `col_keys` is
+    where the narrowing lives).
+
+    The blast radius was and is narrower than 'any ragged column': an
+    all-`None` column cannot reach it (empty numeric subset -> the column is
+    skipped -> never enters `of_summary`/`against_summary` at all), and a
+    ragged column with no `None` cannot reach it either — the guard pin's own
+    arm E (`test_the_correction_family_measurement_arm_e_no_editor_except_task_4`)
+    computes a live paired `score` contrast at `n_paired: 4` over a `score`
+    only 4 of 6 units carry, with no crash, which also confirms
+    `ExecutionResult.rows` carries un-unioned per-execution rows rather than
+    `finalize`'s union-with-nulls — if it were the union every ragged column
+    in every run would hit this, not only one carrying an explicit `None`.
+    The trigger was exactly: a column numeric for some units and `None` for
+    others, in a run that computes a contrast over it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_RULING1_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert doc["run_dir"] is not None
+    assert (doc["run_dir"] / "run.yaml").exists()
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["conditions"][1]["vs_baseline"]["step01_summarize_units"]["score"]
+    assert entry["n_paired"] == 3
+
+
+# --- H5b task 7: Fixture G — the contrast guard, both ends ------------------
+
+_STR_COLUMN_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"score": float(i), "tag": "a"}})
+        return {{}}
+"""
+
+
+def test_fixture_g_the_paired_contrast_guard_skips_a_str_column_instead_of_raising():
+    """Fixture G, direct call, paired arm. **This call drives a state
+    production cannot reach**, and the guard exists anyway.
+
+    Production cannot reach it two ways over. A wholly non-numeric column
+    never enters `aggregated` at all (`summarize_step`'s column loop skips it),
+    so it never becomes a `metric_key` in
+    `sorted((set(of_summary) & set(against_summary)) - {'by'})`; and a `str`
+    cell beside a number in the same column is refused at `finalize` by
+    `_check_column_types` (Controller ruling 1, row 3). So today the only thing
+    keeping the subtraction safe is a *convention at another function's
+    output*, and **a rule enforced only by another function's output is not a
+    guard**. The scoping measured the cost when the convention broke:
+    `TypeError: unsupported operand type(s) for -: 'str' and 'str'` at
+    `of_collapsed[k][metric_key] - against_collapsed[k][metric_key]`, outside
+    every `try` — run directory complete, every execution paid for, no
+    `run.yaml`.
+
+    **What it asserts is Decision 7's shape, not the brief's.** Task 7 step 5
+    says the guard publishes *no entry* for the key; measured, the entry is
+    published with `n_paired: 0` and `ci95: null`, because
+    `metric_block[metric_key] = {...}` in this branch is unconditional and an
+    empty `col_keys` simply gives `mean_of([])` and `paired_t_over_units([])`.
+    That is Decision 7's own stated shape — *"an all-dropped metric publishes
+    `n_paired: 0` and `ci95: null`, which is the shape a reader can already
+    read"* — and it is asserted here rather than made true by an unchartered
+    skip branch. Reported as a disagreement between the brief and the code.
+
+    `delta is None` rather than `0.0` is `mean_of([])`'s own answer, so the
+    record cannot be read as *no difference*."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i}") for i in range(6)])
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=roster,
+        aggregated={1: {"s": {"tag": "hi"}}, 0: {"s": {"tag": "lo"}}},
+        collapsed_by_key={
+            (1, "s"): {f"u{i}": {"tag": "hi"} for i in range(6)},
+            (0, "s"): {f"u{i}": {"tag": "lo"} for i in range(6)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=x", values={"analysis.method": "x"}),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["tag"]
+    assert entry["n_paired"] == 0
+    assert entry["ci95"] is None
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert [m.metric for m in members] == ["tag"]
+
+
+_G_OF = [20.0, 21.0, 22.0, "n/a", "n/a"]
+_G_AGAINST = [10.0, 12.0, 14.0, "n/a", "n/a"]
+
+
+def test_fixture_g_the_unpaired_contrast_guard_narrows_of_col_so_n_of_matches_the_vector():
+    """Fixture G, direct call, unpaired arm — a **separate comprehension** from
+    the paired arm's `col_keys`, which is why this fixture has both ends: a
+    mutation in one is invisible to an assertion on the other.
+
+    **The column is ragged rather than wholly non-numeric, deliberately.** With
+    every cell a `str` the narrowed vectors would be empty, no interval would
+    compute, and § Corrections 2's mutation — moving the filter from
+    `of_col`/`against_col` into `of_values`/`against_values` — would have no
+    observable difference to catch. Three numeric cells and two `str` cells per
+    side give `n_of`/`n_against` of `3` against a wide `5`, so the count and
+    the vector disagree under that mutant and agree under the fix. No cluster
+    is declared, so a length mismatch in `[of_clusters[k] for k in of_col]`
+    cannot fail this for the wrong reason.
+
+    § Corrections 2's four consumers, read at `_comparison_step_blocks`: `n_of`
+    is `len(of_col)`, `n_against` is `len(against_col)`, `of_clusters`/
+    `against_clusters` are built by keying off them, and
+    `permutation_over_contrast` reads `[of_clusters[k] for k in of_col]`. So
+    the filter goes where the KEYS are chosen, not where the values are read.
+
+    `cohens_d == 5.692099788303082` is `cohens_ds([20.0, 21.0, 22.0], [10.0,
+    12.0, 14.0])` — computed by calling it, and asserted because a *d*s over a
+    mixed vector cannot be computed at all: the pooled sd would raise. So this
+    is the assertion that says the effect size came from the narrowed vectors
+    rather than from a vector the guard did not reach."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(len(_G_OF))]
+    against_keys = [f"c{i:02d}" for i in range(len(_G_AGAINST))]
+    roster = UnitList([Unit(key=k) for k in of_keys + against_keys])
+    block, _ = _comparison_step_blocks(
+        Comparison(id="arm_effect", of=1, against=0, declared=True),
+        roster=roster,
+        aggregated={1: {"s": {"m": 21.0}}, 0: {"s": {"m": 12.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(of_keys, _G_OF, strict=True)},
+            (0, "s"): {k: {"m": v} for k, v in zip(against_keys, _G_AGAINST, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=control",
+                values={"arm": "control"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1,
+                label="arm=treatment",
+                values={"arm": "treatment"},
+                selectors=frozenset({"arm"}),
+            ),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 3
+    assert entry["n_against"] == 3
+    assert entry["delta"] == pytest.approx(9.0)
+    assert entry["cohens_d"] == pytest.approx(5.692099788303082)
+
+
+def test_fixture_g_a_real_run_recording_a_str_column_writes_its_run_yaml(tmp_path, capsys):
+    """Fixture G, end to end — the claim about **production**, stated
+    separately from the two direct-call claims about the guard.
+
+    A wholly non-numeric column never enters `aggregated`, so it never becomes
+    a `metric_key` and `vs_baseline` holds no entry for it. **This arm passes
+    before task 7's guard as well as after**, and is named as what it is: a
+    production control, not a discriminating test. The arm that crashed at
+    HEAD and writes its `run.yaml` after is
+    `test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_no_longer_crashes`
+    above, whose `str`-free ragged column is the reachable trigger.
+
+    The `run.yaml`-exists assertion is on the FILE rather than on the exit
+    code, because *every execution paid for, the record lost* is a fact about
+    the file: the crash the guard closes left a complete run directory behind
+    and only the record missing, so an exit-code assertion alone would not see
+    it. `score` beside `tag` is the can-fail half — a run publishing neither
+    would satisfy a `tag not in ...` assertion by publishing nothing at all."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_STR_COLUMN_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert doc["run_dir"] is not None
+    assert (doc["run_dir"] / "run.yaml").exists()
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    vs = run["results"]["conditions"][1]["vs_baseline"]["step01_summarize_units"]
+    assert "tag" not in vs
+    assert "score" in vs
+
+
+# --- H5b batch 2 fix round: Controller ruling 1 row 2 end to end (m1), and ---
+# --- Controller ruling 5's `W-STATS-COLUMN-THIN` (M3) -----------------------
+
+
+def test_ruling_1_row_2_publishes_the_contributing_count_in_run_yaml(tmp_path, capsys):
+    """H5b batch 2 fix round, Minor m1. Ruling 1's amendment row 2 shipped as
+    a figure in `run.yaml` and was pinned only by direct calls to
+    `summarize_step`, in
+    `test_ruling_1_a_column_numeric_for_some_units_and_none_for_others_keeps_a_block`
+    in `tests/test_stats.py` (grepped, it exists and asserts
+    `n["completed"] == 1` on a two-unit hand-built table). The shipped
+    behaviour change is what a reader of the record sees, so it is pinned
+    where the reader reads it.
+
+    One condition, six units, three recording `{"score": float(i)}` and three
+    recording `{"score": None}` — `_RULING1_CONTRAST_STEP`, reused rather than
+    copied. Single-condition deliberately: the two-condition form is the
+    `TypeError` its own `xfail` pin discloses, and this claim is about the
+    published count, not the contrast.
+
+    `value == 1.0` is mean(0.0, 1.0, 2.0) over the CONTRIBUTING units alone; a
+    mean over six with the `None`s coerced to zero would be `0.5`, and the
+    condition-wide count sits beside it as `resolved: 6`, so the two figures
+    cannot be confused for each other in the record.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_RULING1_CONTRAST_STEP)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["value"] == 1.0
+    assert score["n"]["completed"] == 3
+    assert score["n"]["resolved"] == 6
+
+
+def test_a_thin_recorded_column_warns_column_thin_naming_the_column_and_the_count(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M3 / Controller ruling 5. The generated
+    `limits.min_reported_n` is `10` (`materialize.py` writes it), the column
+    carries a number for three of six units, so `W-STATS-COLUMN-THIN` must
+    fire once naming both the column and the contributing count.
+
+    Asserted on stdout, the stream `command_run` prints `validate`'s and the
+    run's findings to — the same stream `assert "W-STATS-STRATUM-THIN" in
+    doc["stdout"]` already reads in this file (grepped: three occurrences in
+    the task-6 `W-STATS-STRATUM-THIN` section above).
+
+    The message, not only the code: a code assertion alone passes on a
+    warning that names the condition-wide `6` instead of the contributing
+    `3`, which is the whole point of the ruling.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_RULING1_CONTRAST_STEP)
+    assert "W-STATS-COLUMN-THIN" in doc["stdout"]
+    assert "recorded column 'score' carries a number for 3 unit(s)" in doc["stdout"]
+    assert "below limits.min_reported_n (10)" in doc["stdout"]
+
+
+def test_a_recorded_column_at_the_floor_draws_no_column_thin_warning(tmp_path, capsys):
+    """H5b batch 2 fix round, ruling 5's can-fail control, and the boundary
+    itself. The identical project with `limits.min_reported_n: 3` — the
+    contributing count exactly — must draw nothing: the comparison is `<`,
+    not `<=`, so a column meeting the declared floor is not thin. Without
+    this arm the test above passes identically under an unconditional warning,
+    which is the shape ruling 5 replaced.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_RULING1_CONTRAST_STEP,
+        limits={"min_reported_n": 3},
+    )
+    assert "W-STATS-COLUMN-THIN" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["n"]["completed"] == 3
+
+
+# --- H5b batch 2 fix round: M1 and M2 — the warning's own text, and its ------
+# --- granularity, both pinned end to end ------------------------------------
+
+_MIXED_ACROSS_REPEATS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        value = 4.0 if _counter["n"] % 2 else "n/a"
+        for unit in io.units:
+            io.record(unit.key, {{"score": value}})
+        return {{}}
+"""
+
+
+def test_a_disagreeing_column_that_still_publishes_a_value_is_not_told_it_carries_none(
+    tmp_path, capsys
+):
+    """H5b batch 2 fix round, Major M1 (Controller ruling 7). The shipped
+    `W-STATS-REPEATS-DISAGREE` message asserted two things that are false of
+    exactly this run: that the column *"is not a number"*, and that the
+    disagreeing units *"carry no value for it"*. Both clauses are deleted
+    rather than rewritten.
+
+    The fixture is the case that falsifies them. Five seed repeats, a
+    module-level counter alternating `4.0` and `"n/a"` — legal, because
+    `artifacts._check_column_types` is per file and each repeat writes its own
+    `units.parquet`, so no single file holds a `str` beside a float. Every
+    unit's repeats therefore disagree, and `_across_repeats` still returns the
+    mean of the numeric subset, so `run.yaml` publishes `score` with a value.
+
+    The two presence assertions are what stop the two absence assertions from
+    passing on a run where nothing warned at all, and the `run.yaml` reads are
+    what make the deletion true rather than merely quieter: the record and the
+    diagnostic now agree.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=4, _starter_step=_MIXED_ACROSS_REPEATS_STEP)
+    assert "W-STATS-REPEATS-DISAGREE" in doc["stdout"]
+    assert "recorded column 'score' disagrees across the repeats of 4 unit(s)" in doc["stdout"]
+    # The deleted clauses. Restoring either one fails here.
+    assert "is not a number" not in doc["stdout"]
+    assert "carry no value" not in doc["stdout"]
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    score = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    assert score["value"] == 4.0
+    assert score["n"]["completed"] == 4
+
+
+_TWO_DISAGREEING_COLUMNS_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_counter = {{"n": 0}}
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _counter["n"] += 1
+        even = _counter["n"] % 2 == 0
+        for unit in io.units:
+            io.record(unit.key, {{"flag": even, "tag": "b" if even else "a"}})
+        return {{}}
+"""
+
+
+def test_two_disagreeing_columns_in_one_step_warn_twice_once_per_column(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M2 (Controller ruling 6). The § Warnings
+    row said *"once per (condition, step)"*; the emit site iterates
+    `repeats_disagreeing(...).items()`, which is one entry per COLUMN. The row
+    was the thing that was wrong, and this is what it now claims: one step,
+    one condition, two disagreeing columns, two warnings.
+
+    Counted on the code string rather than asserted as a membership, because
+    membership passes identically at one occurrence — which is the reading the
+    row shipped.
+    """
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=4, _starter_step=_TWO_DISAGREEING_COLUMNS_STEP
+    )
+    assert doc["stdout"].count("W-STATS-REPEATS-DISAGREE") == 2
+    assert "recorded column 'flag' disagrees" in doc["stdout"]
+    assert "recorded column 'tag' disagrees" in doc["stdout"]
+    assert doc["stdout"].count("condition 0 step 'step01_summarize_units'") >= 2
+
+
+# --- H5b batch 2 fix round: M6's published half, and arm G — the ninth -------
+# --- moving-key class, the `report_by` stratum path --------------------------
+
+_EMPTY_RECORD_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{}})
+        return {{}}
+"""
+
+_EMPTY_ROWS_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("empty_rows")\n'
+    "class EmptyRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_rows": float(len(list(units)))}\n'
+)
+
+
+def test_an_empty_record_is_a_row_the_template_counts(tmp_path, capsys):
+    """H5b batch 2 fix round, Major M6's published half (Controller ruling 8).
+    Six units, four recording `{"score": float(i)}` and two calling
+    `io.record(unit.key, {})` — a settled unit that recorded nothing.
+
+    The review measured this figure moving `4.0 -> 6.0` between `668cb05` and
+    HEAD and found it in no pin and in no moving-key list. It is the published
+    consequence of task 4's admission gate: the two empty-record units are
+    rows in the table `aggregate` is handed, so a template counting rows sees
+    six. `score` still reports the four that carried a number, which is what
+    keeps this from being a fixture where every number moves together.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_EMPTY_RECORD_STEP,
+        _local_template=_EMPTY_ROWS_TEMPLATE,
+        experiment_type="empty_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_rows"]["value"] == 6.0
+    assert agg["score"]["n"]["completed"] == 4
+    assert agg["score"]["value"] == 1.5
+
+
+_ARM_G_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        scores = {{"p1": 1.0, "p2": 3.0, "p4": 2.0, "p5": 6.0}}
+        for unit in io.units:
+            if unit.key in scores:
+                io.record(unit.key, {{"score": scores[unit.key]}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_ARM_G_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("g_by_rows")\n'
+    "class ByRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        scores = [row["score"] for row in units if "score" in row]\n'
+    "        return {\n"
+    '            "n_rows": float(len(list(units))),\n'
+    '            "mean_score": sum(scores) / len(scores) if scores else None,\n'
+    "        }\n"
+)
+
+
+def test_arm_g_the_report_by_stratum_path_moves_with_the_widened_collapse(tmp_path, capsys):
+    """H5b's guard pin, **arm G** — added by the batch 2 fix round under
+    Controller ruling 8, which found the `report_by` stratum path to be a
+    ninth moving-key class in neither the batch report's table nor any arm.
+    Fixture H is the only other fixture that exercises `by`, and it pins only
+    literals that did not move (its level `a`'s two units were always
+    admitted).
+
+    Six units in two cohorts of three; in each cohort two record a numeric
+    `score` and the third records only a bool `valid`. Before H5b that third
+    unit was dropped from `collapsed` entirely, so each level's table held two
+    rows; after task 4 it is admitted carrying its bool, so `level_collapsed`
+    — `{k: v for k, v in collapsed.items() if k in keys}`, a projection of
+    `collapsed` with no code path of its own — holds three. The level survives
+    the second gate because `score` gives it a recorded-column block, which is
+    what makes it a moving level rather than an absent one.
+
+    The moved keys are the same class the review's `668cb05`-vs-HEAD diff
+    found: each level's `n_rows.value`/`.ci95`, its `mean_score.n.completed`
+    and `ci95`, and its `mean_score.resample_draws`. **The pre-H5b values are
+    not re-measured here and are not asserted** — the narrow collapse no
+    longer exists to run — so what this arm pins is the moved state plus the
+    pair that makes the move visible inside one run: a level table of three
+    rows beside a `score` contributed by two.
+
+    **`resample_draws` is pinned and is not a constant**: it is
+    `resample_seed(digest)`-dependent, so it is this fixture's own number at
+    this fixture's own config and it moves if that config's shape does. It is
+    the **fourth** distinct such literal measured in this slice, beside arm B's
+    `1998` (direct call, `seed=7`), plan correction 7's `1999`, and the batch 2
+    review's own `1997` — which is the comparison Minor m2 was about, and the
+    reason this arm carries a labelled literal rather than arm E gaining one.
+    A draw that samples only rows carrying no `score` recomputes `mean_score`
+    as `None` and is degenerate, which is why the count is below the requested
+    2000 at all — and why `W-STATS-RESAMPLE-THIN` is expected on stdout rather
+    than a surprise.
+
+    `score`'s own per-level figures must NOT move: its numeric subset is
+    unchanged by admitting a unit that carries no number.
+    """
+    roster_csv = "patient_id,cohort\np1,a\np2,a\np3,a\np4,b\np5,b\np6,b\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_ARM_G_STEP,
+        _local_template=_ARM_G_TEMPLATE,
+        units_overrides={"attributes": ["cohort"]},
+        statistics={"report_by": ["cohort"]},
+        experiment_type="g_by_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = agg["by"]["cohort"]
+    assert set(by) == {"a", "b"}
+
+    # The MOVED keys, per level. Each level's table is three rows because the
+    # bool-only unit is admitted; `score` contributes two. Those two figures
+    # sitting side by side in one record are the move, expressed without a
+    # second run to compare against.
+    for level in ("a", "b"):
+        assert by[level]["n_rows"]["value"] == 3.0
+        assert by[level]["n_rows"]["ci95"] == [3.0, 3.0]
+        assert by[level]["n_rows"]["resample_draws"] == 2000
+        assert by[level]["mean_score"]["n"]["completed"] == 3
+        assert by[level]["score"]["n"]["completed"] == 2
+
+    assert by["a"]["mean_score"]["value"] == 2.0
+    assert by["a"]["mean_score"]["ci95"] == [1.0, 3.0]
+    assert by["b"]["mean_score"]["value"] == 4.0
+    assert by["b"]["mean_score"]["ci95"] == [2.0, 6.0]
+    # The fourth distinct `resample_draws` literal of this slice, at this
+    # fixture's own `resample_seed(digest)` — 73 of 2000 draws sampled only
+    # rows carrying no `score` and recomputed `None`.
+    assert by["a"]["mean_score"]["resample_draws"] == 1927
+    assert by["b"]["mean_score"]["resample_draws"] == 1927
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+
+    # Must NOT move: `score`'s own numeric subset is untouched by admitting a
+    # unit that carries no number, so its value, interval and method are the
+    # figures a pre-H5b run over the same two contributing units produced.
+    assert by["a"]["score"]["value"] == 2.0
+    assert by["a"]["score"]["ci95"] == [-10.706204736174694, 14.706204736174694]
+    assert by["a"]["score"]["method"] == "t_over_units"
+    assert by["b"]["score"]["value"] == 4.0
+    assert by["b"]["score"]["ci95"] == [-21.41240947234939, 29.41240947234939]
+
+
+# --- H5b task 12: `E-STEP-COLUMN-UNKNOWN` pinned in both directions ---------
+
+_TASK12_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_TASK12_ATTR_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("attr_reader")\n'
+    "class AttrReader(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_valid": float(sum(1 for v in units.valid if v))}\n'
+)
+
+
+def test_task_12_step1_an_attribute_read_of_a_now_carried_column_stops_firing(tmp_path, capsys):
+    """H5b task 12, step 1. Six units: `p1`-`p4` record only a numeric
+    `score`, `p5`-`p6` record only a non-numeric `valid`. `AttrReader.aggregate`
+    reads `units.valid` by ATTRIBUTE (`UnitTable.__getattr__`), not row-dict
+    `.get` — the read Fixture B's own templates deliberately avoid.
+
+    Before H5b's task 4, `_gather_repeats` admitted a unit into `collapsed`
+    only when it had recorded at least one real number anywhere — measured by
+    the scoping's task 17, end to end — so `p5`/`p6` (numeric-free) were
+    dropped from the table entirely and `valid` never appeared in any
+    surviving row: an attribute read of `units.valid` raised
+    `E-STEP-COLUMN-UNKNOWN`, contained as `W-STATS-AGGREGATE-FAILED`. After
+    task 4, every admitted unit's every recorded value is carried regardless
+    of type, so `p5`/`p6` stay in the table and `valid` is a real column:
+    `units.valid` returns `[None, None, None, None, True, True]` and
+    `n_valid` is `2.0`.
+
+    Asserting the derived value, not only the absence of the warning, is
+    required: a test that only checked the warning's absence would pass
+    identically if `aggregate` had never run at all.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_TASK12_STEP,
+        _local_template=_TASK12_ATTR_TEMPLATE,
+        experiment_type="attr_reader",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_valid"]["value"] == 2.0
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" not in doc["stdout"]
+
+
+_TASK12_ABSENT_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("absent_containment")\n'
+    "class AbsentContainment(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_broken": float(len(units.nothing_ever_records_this))}\n'
+)
+
+
+def test_task_12_step2_still_fires_for_a_genuinely_absent_column_with_containment(tmp_path, capsys):
+    """H5b task 12, step 2 (real-run half). `AbsentContainment.aggregate`
+    reads `units.nothing_ever_records_this`, a name no unit, before or after
+    H5b, has ever carried — `E-STEP-COLUMN-UNKNOWN` still raises, contained
+    as `W-STATS-AGGREGATE-FAILED` on stdout, exit 0, `run.yaml` written.
+
+    The containment's own promise, asserted rather than assumed: `cli.py`
+    calls `template.aggregate` exactly once per step inside one `try`, so a
+    raise there fails the WHOLE `derived` dict (there is no partial result) —
+    but the RECORDED column `score`'s own `t_over_units` block is computed
+    independently, in `summarize_step`'s column loop, straight from
+    `collapsed`, and never touches `aggregate` at all. It must be present
+    and correct even though the derived call blew up.
+
+    The direct-call half of this step — `E-STEP-COLUMN-UNKNOWN` still raises
+    for a name no row holds, on a table that DOES hold other columns, so the
+    fixture cannot fire on an empty table instead — already exists as pin arm
+    D(i), `tests/test_stats.py::test_an_unknown_column_raises`
+    (`UnitTable({"u1": {"pred": 1.0}})`, `t.nope`raises `E-STEP-COLUMN-UNKNOWN`):
+    grepped (`grep -rn 'E-STEP-COLUMN-UNKNOWN' tests/*.py`), read, and it
+    already covers exactly this shape — a third copy here would be the thing
+    this step's brief warns against.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_TASK12_STEP,
+        _local_template=_TASK12_ABSENT_TEMPLATE,
+        experiment_type="absent_containment",
+        parameters={},
+    )
+    assert doc["run_dir"] is not None
+    run_yaml = doc["run_dir"] / "run.yaml"
+    assert run_yaml.exists()
+    run = yaml.safe_load(run_yaml.read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "n_broken" not in agg
+    assert agg["score"]["value"] == 1.5
+    assert agg["score"]["method"] == "t_over_units"
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" in doc["stdout"]
+
+
+# --- H5b task 13: the silent case's discriminating test ---------------------
+
+_TASK13_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 3:
+                io.record(unit.key, {{"flag": True}})
+            elif i < 5:
+                io.record(unit.key, {{"flag": True, "score": float(i)}})
+            else:
+                io.record(unit.key, {{"score": float(i)}})
+        return {{}}
+"""
+
+_TASK13_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("flag_counter")\n'
+    "class FlagCounter(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_flag": float(sum(1 for row in units if row.get("flag") is True))}\n'
+)
+
+
+def test_task_13_the_silent_drop_cannot_be_mistaken_for_the_fix(tmp_path, capsys):
+    """H5b task 13, the discriminating test — separate from task 4's Fixture A
+    because a fixture whose numbers agree with the bug is the trap this task
+    exists to rule out.
+
+    Eight units, one repeat. `p1`-`p3` record ONLY a bool `flag: True` (no
+    numeric column at all); `p4`-`p5` record BOTH `flag: True` and a numeric
+    `score`; `p6`-`p8` record ONLY `score`. `FlagCounter.aggregate` counts
+    `flag` via row-dict `.get`, over `UnitTable` iteration — never an
+    attribute read, so a raised `E-STEP-COLUMN-UNKNOWN` cannot substitute for
+    a wrong number here (that is task 12's shape, not this one).
+
+    Deliberately placed so the units with NO numeric column are EXACTLY the
+    ones that carry the bool (`p1`-`p3`): before H5b's task 4, a unit was
+    admitted into `collapsed` only when it recorded at least one real number
+    ANYWHERE — measured by the scoping's task 17 — so `p1`-`p3` were dropped
+    from the table entirely and their `flag: True` never reached any row,
+    while `p4`-`p5` (numeric AND bool) were admitted with `flag` intact
+    (that admission rule did not filter individual values, only whole rows).
+    Counting `flag` over the buggy table therefore reports `2.0` (`p4`,
+    `p5`), computed by running the mutation below — NOT a round number a
+    reader would accept as a coincidence, and different from the honest
+    `5.0` (`p1`-`p5`) task 4 made correct. If the two carriers had NOT
+    coincided with the numeric-free units, both readings would report `5.0`
+    and this test would prove nothing — which is why `test_fixture_a...`
+    (task 4/1) cannot stand in for this one.
+
+    Three facts a single wrong number cannot all match at once: the derived
+    value itself, `n.completed` (`len(collapsed)`, `8` correct vs. `5`
+    buggy — a derived metric's own `n` is the whole table's row count, not a
+    per-column figure), and the bootstrap interval around the value, `[2.0,
+    8.0]` correct vs. `[0.0, 4.0]` buggy (computed by running both ways,
+    including with the mutation below).
+
+    **Deviation from the brief's literal third fact, disclosed rather than
+    silently substituted.** The brief names `resample_draws` not equalling
+    the full `draws` as the third fact; measured both ways, it is `2000`
+    (the requested default) under both the correct and the buggy code,
+    because `percentile_of_derived` only drops a draw when `compute` returns
+    `None`/`nan` or raises (`stats.py`'s own docstring), and a plain
+    `sum(1 for row in units if ...)` over a bootstrap draw that always
+    contains exactly `len(units)` rows can never do any of the three — unlike
+    `mean_score` in Fixture A/arm B, which divides by a possibly-empty
+    numeric subset. `resample_draws` cannot discriminate this construction,
+    so the interval itself is the third fact instead, and it is a stronger
+    one: a buggy point estimate of `2.0` would still have to reproduce the
+    correct construction's own `[2.0, 8.0]` interval to be mistaken for it,
+    and it does not.
+
+    **What this test does NOT pin.** Nothing about the correction family
+    (arm E's Holm/`fdr_bh` measurement), nothing about a column that
+    disagrees non-numerically across repeats (Fixture C/L's territory), and
+    nothing about `report` or `study` rendering this shape (task 14's). A
+    green run of this test is evidence about the admission rule alone.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=8,
+        _starter_step=_TASK13_STEP,
+        _local_template=_TASK13_TEMPLATE,
+        experiment_type="flag_counter",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["n_flag"]
+    assert block["value"] == 5.0
+    assert block["n"]["completed"] == 8
+    assert block["ci95"] == [2.0, 8.0]

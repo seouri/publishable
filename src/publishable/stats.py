@@ -1572,7 +1572,7 @@ def percentile_over_units_clustered(
 
 
 def percentile_of_derived(
-    collapsed: dict[str, dict[str, float]],
+    collapsed: dict[str, dict[str, Any]],
     compute: "Callable[[UnitTable], float | None]",
     seed: int,
     draws: int = 2000,
@@ -1745,7 +1745,7 @@ def percentile_of_derived(
 
 
 def percentile_of_derived_clustered(
-    collapsed: dict[str, dict[str, float]],
+    collapsed: dict[str, dict[str, Any]],
     clusters: dict[str, str],
     compute: "Callable[[UnitTable], float | None]",
     seed: int,
@@ -1832,7 +1832,7 @@ def percentile_of_derived_clustered(
 
 
 def permutation_of_derived(
-    collapsed: dict[str, dict[str, float]],
+    collapsed: dict[str, dict[str, Any]],
     labels: dict[str, str],
     compute: "Callable[[UnitTable, dict[str, str]], float | None]",
     seed: int,
@@ -1918,8 +1918,8 @@ def permutation_of_derived(
 
 
 def paired_delta_of_derived(
-    of: dict[str, dict[str, float]],
-    against: dict[str, dict[str, float]],
+    of: dict[str, dict[str, Any]],
+    against: dict[str, dict[str, Any]],
     keys: list[str],
     compute_of: "Callable[[UnitTable], float | None]",
     compute_against: "Callable[[UnitTable], float | None]",
@@ -2101,8 +2101,8 @@ def _draw_pools(
 
 
 def paired_percentile_of_derived(
-    of: dict[str, dict[str, float]],
-    against: dict[str, dict[str, float]],
+    of: dict[str, dict[str, Any]],
+    against: dict[str, dict[str, Any]],
     keys: list[str],
     compute_of: "Callable[[UnitTable], float | None]",
     compute_against: "Callable[[UnitTable], float | None]",
@@ -2269,8 +2269,8 @@ def _side_content(
 
 
 def unpaired_percentile_of_sides(
-    of: dict[str, dict[str, float]],
-    against: dict[str, dict[str, float]],
+    of: dict[str, dict[str, Any]],
+    against: dict[str, dict[str, Any]],
     of_keys: list[str],
     against_keys: list[str],
     compute_of: "Callable[[UnitTable], float | None]",
@@ -2395,6 +2395,72 @@ def _is_numeric(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _across_repeats(values: list[Any]) -> Any:
+    """One unit's values for one column, collapsed across the repeats it was handed.
+
+    Three cases, and the third is the one that keeps a published number where it is.
+
+    - Every value a real number: the mean, which is what this function has always
+      done and the only case a purely numeric run reaches.
+    - SOME values numbers: the mean of those, which is EXACTLY today's arithmetic —
+      today's inner loop skipped the non-numeric ones and averaged the rest. The
+      disagreement is disclosed instead, by `repeats_disagreeing`.
+    - NO value a number: the value itself when the repeats agreed, `None` when they
+      did not. `first` and `mode` are rules the user declared for `measurements` and
+      never for repeats, and both are order-dependent here — `_gather_repeats`
+      iterates in execution order, which `order: randomized` shuffles — so picking
+      one would put the shuffle into a published column, the exact fault
+      `sorted(candidates)` exists to keep out.
+
+    `None` rather than omitting the key: omission would remove the column from
+    `summarize_step`'s `columns` list when every unit disagreed, and `columns` is
+    what the derived-key collision check reads — so omission reopens the silent
+    coexistence defect through a second door. `_is_numeric(None)` is `False`, so a
+    `None` cell keeps the column visible and unpublishable when every unit's cell
+    for it is `None` — the case this was measured on. A column where SOME units
+    carry a number and others carry `None` is a different case `summarize_step`'s
+    own gate decides (Controller ruling 1): the column keeps a block computed over
+    the units that carried a number.
+
+    `reference.md` § What isn't a repeat's *"Attributes constant within a key
+    collapse to that value with no rule needed"* is the rule reused here, and
+    `units.apply_rule` is the sibling that implements it for `measurements`. It is
+    deliberately NOT called: it takes a rule name, every name it accepts returns a
+    value on disagreement, and there is no declared rule for repeats to pass it.
+    """
+    numeric = [float(v) for v in values if _is_numeric(v)]
+    if numeric:
+        return sum(numeric) / len(numeric)
+    if _repeats_disagree(values):
+        return None
+    return values[0]
+
+
+def _repeats_disagree(values: list[Any]) -> bool:
+    """Whether a unit's repeats disagreed about a non-numeric column.
+
+    Pairwise against the first value, on `(is-it-a-number, the value)` rather than on
+    the value alone: `True == 1.0` in Python, so a column recorded as `True` in one
+    repeat and `1.0` in another would read as constant and its disagreement would go
+    **unreported**. That, and only that, is what the tuple buys — the published cell
+    does not move either way. Measured, both orders: `_across_repeats([True, 1.0])`
+    and `_across_repeats([1.0, True])` both return `1.0`, because the numeric branch
+    in that function runs ahead of its disagreement branch, so the earlier claim that
+    the cell would "collapse to whichever arrived first — order-dependent" was false
+    of this code (H5b batch 2 review, M5). The pin is
+    `test_a_bool_in_one_repeat_and_a_float_in_another_disagrees_in_both_orders`.
+    Compared pairwise rather than through a set, so nothing here depends on a
+    recorded value being hashable.
+
+    All-numeric columns are excluded: unequal numbers are what averaging is for, and
+    reporting them as a disagreement would fire on every honest run.
+    """
+    if all(_is_numeric(v) for v in values):
+        return False
+    first = values[0]
+    return any((_is_numeric(v), v) != (_is_numeric(first), first) for v in values)
+
+
 def handed_to(
     unit_key: str, labels: list[str], fold_members: dict[str, frozenset[str]] | None
 ) -> list[str]:
@@ -2419,18 +2485,18 @@ def handed_to(
     return [lb for lb in labels if set(lb.split(LABEL_JOIN)) & mine]
 
 
-def collapse_repeats(
+def _gather_repeats(
     results: "list[ExecutionResult]",
     step_name: str,
     condition_index: int,
-    fold_members: dict[str, frozenset[str]] | None = None,
-) -> dict[str, dict[str, float]]:
-    """Average each unit's numeric columns across the repeats that recorded it,
-    within one condition.
+    fold_members: dict[str, frozenset[str]] | None,
+) -> dict[str, dict[str, list[Any]]]:
+    """Every value each admitted unit recorded for each column, across the repeats
+    it was handed — raw, uncoerced, in the order `sorted(candidates)` fixes.
 
-    This is the collapse the inference base rests on: repeats are a variance
-    component, not the inference base, so a unit's repeats are averaged into one
-    row *before* any interval is computed over units.
+    One walk, two readers: `collapse_repeats` turns it into one row per unit, and
+    `repeats_disagreeing` asks it which columns disagreed. A second walk would be a
+    second implementation of the membership rule, and the two would drift.
 
     `condition_index` is required, not defaulted, on purpose: core aggregates
     within each condition and never pools across conditions, which would be
@@ -2445,7 +2511,7 @@ def collapse_repeats(
     condition's rows never enter this table.
 
     Only a unit recorded in every repeat it was *handed* (within this condition)
-    enters the table at all — the same intersection `runner.attrition` takes for
+    is admitted at all — the same intersection `runner.attrition` takes for
     `completed`, and for the same reason: a unit present in three of five seeds
     would otherwise enter the average on a different number of observations than
     its neighbours, which is a ragged table dressed as a rectangular one. A unit
@@ -2453,27 +2519,11 @@ def collapse_repeats(
     exactly as it is excluded from `completed` there, so the `n` reported beside
     this table's interval is never a lie about how many observations went into it.
 
-    "Handed" is what `fold_members` narrows. Without a fold it is every repeat,
-    which is the rule above unchanged. With one, `reference.md` § The per-unit
-    tables is explicit that intersecting over *every* repeat "would report
-    `completed: 0` for any design containing a fold, because no unit is ever in
-    more than one of them" — so the intersection is taken over that unit's own
-    fold's repeats instead. The average follows from the same set, which is what
-    makes the collapse **inner-to-outer** (`reference.md` § How a metric becomes
-    a number): under `fold` alone a unit has one handed label and its value
-    passes through unchanged, so folds *concatenate* into the union of the
-    partitions; under `fold × seed` the handed labels are that fold's seeds, so
-    the seeds average within the fold before the folds are combined. Flattening
-    all 30 executions of a 10 × 3 design would average numbers that are not
-    exchangeable, and averaging across folds would divide each unit's single
-    observation by one — both produce plausible values and neither raises, which
-    is why this is stated at length.
-
-    A non-numeric value (a string, or a bool — `bool` is an `int` subclass but
-    never a quantity to average) is dropped from the column for that unit rather
-    than averaged; a unit that recorded a column as a string in every repeat
-    simply has no entry for that column in the collapsed table, which
-    `summarize_step` then correctly omits rather than reporting a bogus mean.
+    "Handed" is what `fold_members` narrows. Without a fold it is every repeat.
+    With one, `reference.md` § The per-unit tables is explicit that intersecting
+    over *every* repeat "would report `completed: 0` for any design containing a
+    fold, because no unit is ever in more than one of them" — so the intersection
+    is taken over that unit's own fold's repeats instead.
     """
     recording = [
         r
@@ -2504,7 +2554,7 @@ def collapse_repeats(
     for keys in recorded_by_label.values():
         candidates |= keys
 
-    gathered: dict[str, dict[str, list[float]]] = {}
+    gathered: dict[str, dict[str, list[Any]]] = {}
     # `sorted`, and load-bearing rather than incidental: `summarize_step` derives a
     # metric's column order from this dict's values, so a ragged table's `run.yaml`
     # column order follows this loop. Encounter order varies with `order: randomized`
@@ -2517,23 +2567,62 @@ def collapse_repeats(
         # partition — rather than letting `all()` over an empty set admit it.
         if not mine or any(key not in recorded_by_label[lb] for lb in mine):
             continue
+        # The unit passed the membership gate, so it IS a unit. It gets a row even
+        # when every value it recorded is non-numeric, and even when it recorded no
+        # column at all — `io.record(key, {})` settles a unit and records nothing,
+        # which is reachable (measured). `runner.attrition` already counts such a
+        # unit `completed`; this was the one place in the program that did not.
+        gathered.setdefault(key, {})
         for lb in mine:
             for row in rows_by_label[lb]:
                 if row["unit"] != key:
                     continue
                 for column, value in row.items():
-                    if column == "unit" or not _is_numeric(value):
+                    # `unit` is the key, not a measurement. `cli._attributed` is what
+                    # puts the key column back for a bootstrap draw that duplicates
+                    # units; it is never a column of `collapsed`.
+                    if column == "unit":
                         continue
-                    gathered.setdefault(key, {}).setdefault(column, []).append(float(value))
+                    gathered[key].setdefault(column, []).append(value)
+    return gathered
+
+
+def collapse_repeats(
+    results: "list[ExecutionResult]",
+    step_name: str,
+    condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Collapse each admitted unit's repeats into one row, within one condition.
+
+    This is the collapse the inference base rests on: repeats are a variance
+    component, not the inference base, so a unit's repeats are averaged into one
+    row *before* any interval is computed over units. `_gather_repeats` decides
+    which units are admitted and carries every value, raw; `_across_repeats`
+    decides what one unit's values for one column collapse to — see its own
+    docstring for the three cases.
+
+    "Handed" is what `fold_members` narrows, and the average follows from the
+    same set, which is what makes the collapse **inner-to-outer**
+    (`reference.md` § How a metric becomes a number): under `fold` alone a unit
+    has one handed label and its value passes through unchanged, so folds
+    *concatenate* into the union of the partitions; under `fold × seed` the
+    handed labels are that fold's seeds, so the seeds average within the fold
+    before the folds are combined. Flattening all 30 executions of a 10 × 3
+    design would average numbers that are not exchangeable, and averaging across
+    folds would divide each unit's single observation by one — both produce
+    plausible values and neither raises, which is why this is stated at length.
+    """
+    gathered = _gather_repeats(results, step_name, condition_index, fold_members)
     return {
-        key: {col: sum(vals) / len(vals) for col, vals in cols.items()}
+        key: {col: _across_repeats(vals) for col, vals in cols.items()}
         for key, cols in gathered.items()
     }
 
 
 def paired_keys(
-    of: dict[str, dict[str, float]],
-    against: dict[str, dict[str, float]],
+    of: dict[str, dict[str, Any]],
+    against: dict[str, dict[str, Any]],
     allowed: set[str] | None,
 ) -> list[str]:
     """The units both sides completed, narrowed by a `within` stratum if given.
@@ -2552,8 +2641,8 @@ def paired_keys(
 
 
 def unpaired_keys(
-    of: dict[str, dict[str, float]],
-    against: dict[str, dict[str, float]],
+    of: dict[str, dict[str, Any]],
+    against: dict[str, dict[str, Any]],
     allowed: set[str] | None,
 ) -> tuple[list[str], list[str]]:
     """Each side's own completed units, narrowed by a `within` stratum if given.
@@ -2597,6 +2686,40 @@ def _is_anonymous_level(level: "RepeatLevel") -> bool:
     *declared* `{kind: seed, n: 1}` still reports `{std: 0.0, n: 1, ...}`.
     """
     return level.kind == "seed" and level.n == 1 and level.members[0].label == ""
+
+
+def repeats_disagreeing(
+    results: "list[ExecutionResult]",
+    step_name: str,
+    condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
+) -> dict[str, int]:
+    """Column name -> how many admitted units disagreed about it across their repeats.
+
+    Asks the ROWS, not the collapsed cell. A recorded `None` and a collapsed
+    disagreement are the same cell (`coerce_scalars` leaves `None` alone, and
+    `reference.md` § The per-unit tables makes an all-`None` column legal), so a
+    scan of `collapsed` would answer this question with a proxy and give one answer
+    to two different facts.
+
+    The same four arguments `collapse_repeats` takes, over the same `_gather_repeats`
+    walk, so membership has one implementation. Sorted keys, so the warning order is
+    a property of the roster rather than of the shuffle — the reason
+    `_gather_repeats` sorts.
+
+    A column whose values are all numbers never appears here: unequal numbers are
+    what averaging is for. A column that is numeric in some repeats and a string in
+    others DOES appear, and its collapsed cell is still the mean of the numbers —
+    the disclosure is the warning, not the loss of the column (`_across_repeats`
+    says why).
+    """
+    gathered = _gather_repeats(results, step_name, condition_index, fold_members)
+    counts: dict[str, int] = {}
+    for cols in gathered.values():
+        for column, values in cols.items():
+            if _repeats_disagree(values):
+                counts[column] = counts.get(column, 0) + 1
+    return {column: counts[column] for column in sorted(counts)}
 
 
 def repeat_spread(
@@ -2718,7 +2841,7 @@ def _beside_n_copy(beside_n: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def summarize_step(
-    collapsed: dict[str, dict[str, float]],
+    collapsed: dict[str, dict[str, Any]],
     counts: dict[str, float],
     derived: dict[str, Any] | None = None,
     seed: int | None = None,
@@ -2751,10 +2874,23 @@ def summarize_step(
     roster a condition drew from, not any one column, and every column in the
     table shares that one roster.
 
-    A column is skipped entirely — not coerced, not defaulted — when any unit's
-    value for it is not a real number (a string, or a `bool`, which is an `int`
-    subclass but never a quantity to average). Averaging a bool would silently
-    read as a proportion; this refuses that rather than doing it quietly.
+    A column is skipped entirely — not coerced, not defaulted — when NO unit
+    that carries it holds a real number (a string, a `bool` — which is an
+    `int` subclass but never a quantity to average — or `None`). Averaging a
+    bool would silently read as a proportion; this refuses that rather than
+    doing it quietly.
+
+    Controller ruling 1 (2026-08-22): when SOME units carry a number and
+    others don't — a `None` from Decision 1's disagreement return, or a unit
+    that simply recorded `None` — the column is not skipped. Its block is
+    computed over the units that carried a number alone, and `n.completed`
+    below is that CONTRIBUTING count rather than the condition-wide figure,
+    for the same reason a ragged column's `completed` already differs from
+    `counts`': an interval over five values published beside a `completed` of
+    two hundred is a precision claim no later reader could catch. A `str`
+    beside a number cannot reach this function at all —
+    `artifacts._check_column_types` refuses it at `finalize` — so this is not
+    a third case to project, only the one ruling 1 actually names.
 
     `derived` is what a template's `aggregate` returned for this step, name →
     scalar, already computed once over the whole table for the reported
@@ -2781,10 +2917,9 @@ def summarize_step(
     resampling was attempted and failed, and a caller (`cli.py`) that only
     checked `ci95: null` could not otherwise tell which happened.
 
-    A derived key colliding with a recorded column — even one dropped above for
-    being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
-    `artifacts.py` raises for the sibling case: one name cannot hold both a
-    column's mean and a derived value.
+    A derived key colliding with a recorded column is refused with the same
+    `E-STEP-KEY-COLLISION` `artifacts.py` raises for the sibling case: one
+    name cannot hold both a column's mean and a derived value.
 
     `beside_n` is core-supplied context copied verbatim into every metric block —
     `technical_n`, `weighted_by`, and `resample` today (`_beside_n_copy`, not a
@@ -2998,9 +3133,21 @@ def summarize_step(
         # One pass over `(key, value)`, so the weights below cannot be filtered
         # or ordered differently from the values they weight.
         carried = [(key, cols[column]) for key, cols in collapsed.items() if column in cols]
-        raw = [value for _, value in carried]
-        if not raw or not all(_is_numeric(v) for v in raw):
+        # Ruling 1 (Controller rulings, 2026-08-22): filtered to the NUMERIC
+        # subset here, not gated all-or-nothing on `raw`. A column non-numeric
+        # for every unit that carries it has an empty subset and is skipped
+        # below exactly as before; a column numeric for some units and `None`
+        # for others (Decision 1's disagreement return, or a unit that simply
+        # recorded `None`) now keeps a block computed over the units that
+        # contributed a number, with `n.completed` below reporting that
+        # CONTRIBUTING count rather than the condition-wide figure — the
+        # precision an interval over five values beside a `completed` of two
+        # hundred would otherwise misstate. `str` beside a number cannot reach
+        # here at all: `_check_column_types` refuses it at `finalize`.
+        carried = [(key, value) for key, value in carried if _is_numeric(value)]
+        if not carried:
             continue
+        raw = [value for _, value in carried]
         values = [float(v) for v in raw]
         # The column's own keys, taken from the same pass the values were: the
         # cluster of a unit is looked up by key, so a vector filtered or ordered
@@ -3229,7 +3376,7 @@ class UnitTable:
     The same reasoning that keeps `io.units` to three operations.
     """
 
-    def __init__(self, collapsed: dict[str, dict[str, float]]) -> None:
+    def __init__(self, collapsed: dict[str, dict[str, Any]]) -> None:
         self._rows = [{"unit": key, **values} for key, values in collapsed.items()]
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
