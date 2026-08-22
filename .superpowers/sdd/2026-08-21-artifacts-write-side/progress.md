@@ -245,3 +245,37 @@ the artifact, and its guarantee is a property of **the list handed to the writer
 is why the pin is a spy on the column list rather than an assertion on output, and it is the honest form
 of a **dimension no assertion can see**: the assertion was moved to where the behaviour is, instead of
 being written where the test happened to look.
+
+## Batch 7 — task 9 alone — the behaviour change
+
+Commit `eeebd89`, review `8bc0395`, report correction `e6e94ec`. Suite 2879 → **2884**. **PASS on one
+Major, which was a reporting defect rather than a code defect.**
+
+**The second controller ruling survived contact with the code, and the deviation it required was
+disclosed rather than silent.** The brief's own steps 1, 5 and 7 carried the **superseded** pre-ruling
+reading — `.parquet` refusing structural and `bytes` cells alongside `.csv` — because the ruling
+post-dates the plan. The task built to the ruling and **said so**; the reviewer re-measured both formats
+rather than taking the controller's paragraph on trust, and *"a writer accepts what it can give back",
+applied per format* is what shipped: `.csv` refuses a structural or `bytes` cell with the artifact named,
+`.parquet` round-trips both byte-faithfully and keeps its capability. **This is the one place in the slice
+where the plan's appended correction did the job it was appended for** — the whole point of writing an
+overruling into the plan is that the ledger reaches the controller and the brief reaches the implementer.
+
+**The spurious refusal is retired end-to-end**: an `np.float64` recorded beside a plain `float` no longer
+fails a column's type check, verified through the installed console script and not only by direct call.
+A non-mapping row earns `E-ARTIFACT-UNWRITABLE` **naming the row rather than the artifact**, which is what
+the document says, and a decoy on `io.write`'s new artifact-naming prefix was tried: no other part of that
+message contains the name, so the assertion is not one neighbouring output could satisfy.
+
+**The Major is worth carrying for its shape, not its severity.** Mutation 5 — widening `io.write`'s
+`except` to the whole body — was reported as **1 failure** and is really **4**: widening the `try` also
+converts the `else`-branch and non-mapping `ArtifactError`s into `ContractError`, breaking three
+`pytest.raises(ArtifactError)` pins. The code is unaffected; the wrapper as built is dispatch-only. But
+an **under-reported mutation count is the same fault as reading a mutation's silence as confirmation** —
+a reader of *"1 failed"* concludes one test guards that boundary and feels free to move the other three.
+The correction is **appended to the report** rather than edited into it, for exactly that reason.
+
+**Both `§ Errors` clauses this task inherited were already true**, re-derived by the reviewer from every
+emit site rather than accepted as a claim. That is the second batch running where the one-row-per-code
+question was answered with *nothing to do* — and the first where the answer had to be **checked**, because
+the plan said those clauses described code that did not exist when they were written.
