@@ -134,3 +134,85 @@ this reading against whatever code Decision 5 (as narrowed) actually produces.
 2. The ambiguity resolved above (the `.csv`/`.parquet` format binding in task 3's own brief text)
    is worth the controller's attention — if my reading is wrong, the § Errors row I wrote needs a
    correction once task 9's actual code is in hand.
+
+---
+
+## Fix round 1
+
+Review at `.superpowers/sdd/2026-08-21-artifacts-write-side/task-b3-review.md`. Both verdicts were
+PASS with two Majors and four Minors to close. Both tasks' own reasoning (documents-lead order,
+disclosed concerns, format-ambiguity resolution) were confirmed correct by the reviewer and needed
+no change. All fixes are in `docs/reference.md`'s single `E-STEP-RETURN-TYPE`/`E-STEP-KEY-COLLISION`
+row and `docs/superpowers/plans/2026-08-21-artifacts-write-side.md`'s task 12 step 4. No `src/` or
+`tests/` file touched, confirmed by `git status --short` before committing.
+
+**Major 1 — the seventh raise site, `stats.py:3115`.** Read the site directly (a derived key taking
+the reserved metric name `by`, `RESERVED_METRIC_NAMES = frozenset({"by"})`) before editing, per the
+review's instruction to trust the enumeration already done over the brief's incomplete claim. Added
+"a derived key taking the reserved metric name `by`" to the row's collision-clause list, alongside
+the four already named. Verified by re-running `grep -rn "E-STEP-KEY-COLLISION" src/` and confirming
+the row's clause count now matches all seven sites across five faults (two faults with two sites
+each — `unit` in both `record` branches, attribute-shadow in both branches — plus the three
+single-site faults: `measurement`, recorded-column collision, and this reserved-metric-name one).
+
+**Major 2 — both containment annotations.** Added one sentence to the same row, on `:1120`'s own
+precedent ("all three are also reported by `validate` under the same codes"): *"a template's
+`aggregate` return and a derived key against a recorded column are both caught and re-reported at
+`run` as `W-STATS-AGGREGATE-FAILED` instead, this code interpolated into the warning's own message
+rather than propagated as an exception."* Verified by re-reading the four confirmations the review
+already ran (`cli.py:2922-2937`'s `except Exception` → `aggregate_c.warn(...)`, `cli.py:3014-3037`'s
+`except ContractError` with its own comment, `reference.md:386`'s `W-STATS-AGGREGATE-FAILED` row,
+`tests/test_cli.py:2709`/`:2738` pinning `status: completed` + warning) — did not re-run the
+monkeypatch probe myself since the review's own run against real `run_a_project` output already
+demonstrated it and no code changed since. Kept both sites in the enumeration; did not narrow the
+containment, per the review's explicit instruction.
+
+**Minor 3 — "once coerced" undisclosed narrowing, closed by disclosure, not by a doc edit.** The
+review's own remedy for this one is disclosure, not a text change: the clause is correct
+post-task-9 (Decision 8's scope) and task 12 step 4 already owns the re-read. Recording here, so the
+concerns list in the original report is no longer incomplete: **at HEAD, before task 9's coercion
+lands, `_check_column_types` runs over raw types, so a pair like `np.float64` beside `float` still
+raises today** (`"column 'v' recorded both a float64 … and a float …"`) even though the two would
+not disagree once coerced. The row's "once coerced" clause is therefore narrower than today's shipped
+code for that one pairing, in the same direction as the two already-disclosed unbuilt clauses, and
+carries the same task-9/task-12 re-read obligation.
+
+**Minor 4 — the step-return clause now covers both faults at that surface.** Changed "a step's `run`
+returning anything but a mapping or `None`" to "a step's `run` return", matching the surface-phrasing
+the sibling items already use ("`io.record`'s values", "a template's `aggregate` return") and now
+covering both `runner.py:783`'s shape check and `runner.py:785`'s `coerce_scalars` pass over the
+return's values (`coercion.py:226`) under the umbrella "a returned value core can't record" already
+governs. Verified by re-reading both lines in `runner.py` in sequence.
+
+**Minor 5 — the "today" hedge restored.** Changed "since a `.csv` write never unifies a column's
+type across rows" to "since a `.csv` write does not unify a column's type across rows today",
+matching task 1's own sibling sentence at `reference.md:998` and correction 8's framing (not built,
+not impossible). No re-measurement needed; this is a tense fix aligning two rows about one fact.
+
+**Minor 6 — task 12's sweep list gains its fourth home.** Edited
+`docs/superpowers/plans/2026-08-21-artifacts-write-side.md` task 12 step 4's `E-UNITS-ATTR-COLUMN`
+bullet to name `experimental-designs.md` § Mistakes core prevents alongside the three `reference.md`
+sections, with the reason stated inline: that passage carries a `CLAUDE.md` cross-document invariant
+(structurally impossible in the schema, not merely discouraged) and is false of the code until
+task 5 lands, so it needs the same re-reader the three `reference.md` homes already have.
+
+**Verification run, this round.** `uv run ruff check .` → all checks passed. `uv run ruff format
+--check .` → 93 files already formatted. `uv run mypy` → no issues, 52 source files. `uv run pytest`,
+foreground, `__pycache__` and stale `pytest-of-*` cleared first → **2845 passed, 1 skipped,
+2 xfailed** (183.77s), the expected unchanged count. Mechanical pass re-run over both edited files
+(anchor resolution, duplicate-anchor check, trailing whitespace, tabs) — clean — and **proven able
+to fail** on a scratch copy of `reference.md` with four injected faults (a duplicated heading, a
+`(#no-such-anchor-xyz)` link, a trailing-space line, a tab line): all four were caught by the same
+script before it was run clean against the real files. `git status --short` before committing shows
+only `docs/reference.md` and the plan file — no `src/` or `tests/` path.
+
+**Finding not closed, and why:** none. All six findings (two Majors, four Minors) are closed above,
+either by a doc/plan edit or, for Minor 3, by the disclosure the review itself specified as the
+remedy.
+
+**On the reviewer's structural observation** (no docs↔code `E-` registry test in `tests/`, so only
+prose — task 9 step 9, task 12 step 4 — forces these rows to land what they promise): carrying it
+forward rather than acting on it, since building such a test is outside a documents-only task's
+surface and outside this batch's charter. It is the same shape of gap as `spec-defects.md`'s pattern
+of unenforced filings, and worth the controller's attention across sub-slices rather than a fix
+inside H5a task 3/4's own scope.

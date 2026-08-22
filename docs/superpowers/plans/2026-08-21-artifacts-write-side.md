@@ -1418,9 +1418,12 @@ the one whose output no later batch reads.
       files; never glob `*.md`; **filter the file list, never the output** — a reviewer checking this
       exact rule once lost a true hit to `grep -v superpowers` because the matching line contained
       that path. Prove each sweep can fail. The classes that actually drift here:
-      - **`E-UNITS-ATTR-COLUMN` appears in § Validation, § Errors `validate` reports and § Steps and
-        artifacts**, and nowhere claims a scope narrower than its code. **One row per code, every
-        site** — the shape that was a whole-branch Major on H8a and H8b and shipped twice inside H8c.
+      - **`E-UNITS-ATTR-COLUMN` appears in § Validation, § Errors `validate` reports, § Steps and
+        artifacts, and `experimental-designs.md` § Mistakes core prevents** — its fourth home, since
+        that passage carries a `CLAUDE.md` cross-document invariant (structurally impossible in the
+        schema, not merely discouraged) and is false of the code until task 5 lands — and nowhere
+        claims a scope narrower than its code. **One row per code, every site** — the shape that was
+        a whole-branch Major on H8a and H8b and shipped twice inside H8c.
       - **The reserved-metric sentence in § Steps and artifacts still says its set is one.** Grep for
         "set of one" and check the surrounding paragraph distinguishes the two namespaces.
       - **§ Templates' "whatever the step recorded plus every declared unit attribute" must NOT have
