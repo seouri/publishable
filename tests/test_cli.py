@@ -19055,6 +19055,15 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     roster's mtime is fixed by `_h6a_pin_project`. Without that the figure is
     not a literal on any machine, and the arm would have had to recompute it.
 
+    **One line here reads arm B's constant by NAME, and that is deliberate.**
+    The `code_hash` assertion below is `_H6A_RUN_WITH_ENV_DIGEST`, arm B's own
+    module-level constant, not a second copy of the string: task 5's
+    authorized edit to that constant therefore carries into this arm with
+    **zero lines of this test changing**, which is the arm staying green rather
+    than the arm being edited. It is asserted at all so this arm cannot be read
+    as green over some other run whose `code_hash` was never the one arm B
+    pins — and it is the one figure here that is *expected* to move.
+
     **Not duplicated here, deliberately:** `run.yaml`'s top-level key list and
     its `provenance` key list are already pinned whole, by H8a's own guard pin
     — `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit` and
@@ -19070,8 +19079,7 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     # The positive control: a run that died before writing anything would have
     # no `run.yaml` to read, and one that refused would have no `completed`.
     assert run_doc["status"] == "completed"
-    # The figure that DOES move, asserted here too so this arm cannot be read
-    # as green over a run whose code_hash was never the one arm B pins.
+    # The figure that DOES move — arm B's constant by name, per the docstring.
     assert run_doc["code_hash"] == _H6A_RUN_WITH_ENV_DIGEST
 
     assert run_doc["parameters_hash"] == (

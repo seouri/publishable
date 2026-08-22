@@ -1,6 +1,7 @@
 # Batch 1 — tasks 1, 2, 7, 10 — report
 
-**Commits:** task 1 `c863e3e`, task 2 `ad59bdd`, task 7 `76efc72`, task 10 `13ae83c`.
+**Commits:** task 1 `c863e3e`, task 2 `ad59bdd`, task 7 `76efc72`, task 10 `13ae83c`, plus one
+fix round closing two findings this report's own review raised (see § The fix round).
 **Suite:** `2931 passed, 1 skipped, 2 xfailed` at the batch's start and after task 1 and task 10;
 `2937` after task 2 (+6, one per pin arm); `2939` after task 7 (+2, arm N and its control). Every run
 was in the foreground, after clearing `pytest-of-joon` and `__pycache__`. `ruff check`,
@@ -178,6 +179,15 @@ these tasks' prose names.
   `code_hash` docstring says *"Read from the working tree, not from git"*** — true today and false after
   task 5. It is **not** this batch's to edit (task 1 is documents-only) and Decision 3 already assigns
   `hashes.py`'s docstring the link to the four-case table; flagged here so task 3 or 5 closes it.
+- **What the mechanical pass actually checked, and what it did not.** The throwaway checker covers
+  every relative link and `#anchor` resolving, duplicate heading anchors, table rows against their
+  header's column count, empty rows, trailing whitespace, tabs and invisible unicode, with fenced blocks
+  skipped — clean. `×`-versus-`x` and en dashes were checked **separately, over this batch's added lines
+  only**: `git diff 6aec85a..HEAD -- docs/reference.md | grep '^+'` carries **no** en dash and no
+  `<digit> x <digit>`, and no anchor this batch writes or links to contains one. The table checker
+  reports **four** `COLS` mismatches, all pre-existing and all caused by an escaped `\|` inside a cell
+  which the checker does not parse; their line numbers were compared before and after each insertion and
+  none sits in a table this batch touched.
 - **Task 10's sweep, newline-insensitive and proven able to fail.** Needles `normalized to what`,
   `would have materialized`, `a difference with nothing to print`,
   `hashes identically to one that spells it out`, `an omitted \`cluster_by\``, `normaliz` — each file's
@@ -188,6 +198,31 @@ these tasks' prose names.
   strike safe. The sweep was proven able to fail by running it against `Does not normalize`, a string
   known present, which it found. The feasibility analysis's six `normaliz` hits are the word
   *abnormalizing* in a domain hypothesis and are untouched, as is the whole file (task 13's).
+
+---
+
+## The fix round — two findings, both in the pin, both closed
+
+**1. Arm N's control had a test whose NAME claimed the guarantee its assertion denied.** Its first block
+built a pair from the same digest twice, diffed one of them against the *original* run — a genuinely
+differing pair — and asserted `DIFFERS`, inside a test named
+`..._control_two_records_agreeing_on_code_hash_print_identical`. It also carried
+`assert same_a == same_b`, an assertion satisfied by construction rather than a check. That block is
+**deleted** rather than rewritten; the control now copies the run once, carrying the run's **own**
+`code_hash`, and asserts `identical` plus the printed digest. `_h6a_record_pair` was split so the
+control takes a single-copy helper rather than a pair helper it half-used.
+
+Its docstring's mutation claim was then measured rather than asserted, and it had been wrong: inverting
+`_render_row`'s `figure_a == figure_b` fails **both** arm N tests, while forcing it to `True` fails the
+`DIFFERS` arm and **passes** the control. The docstring now states that asymmetry, which is what makes
+the pair rather than either test the pin.
+
+**2. Arm C's `code_hash` assertion reads arm B's constant, and "zero lines change" needed saying
+precisely.** Arm C asserts `_H6A_RUN_WITH_ENV_DIGEST` — arm B's module-level constant by **name**, not a
+second copy of the digest string — so task 5's authorized edit to that constant carries into arm C with
+zero lines of arm C changing. Without that sentence a reviewer would see a no-editor arm's value move and
+read the pin as broken. Arm C's docstring now says it, and says why the moving figure is asserted there
+at all.
 
 ---
 

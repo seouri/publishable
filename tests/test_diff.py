@@ -1602,32 +1602,34 @@ _H6A_OLD_DEFINITION_HASH = "sha256:ebc5ee53ac39bbab63d5270475271068dc67e6f34ead9
 _H6A_NEW_DEFINITION_HASH = "sha256:71bf339cc9463f4c776c711f3d65ccf9b3bc1e18d383b78ae7d4e5170b526c2b"
 
 
-def _h6a_record_pair(run_dir: Path, hash_a: str, hash_b: str) -> tuple[Path, Path]:
-    """Two copies of one real run, differing only in `code_hash` and `run_id`.
+def _h6a_record_copy(run_dir: Path, digest: str) -> Path:
+    """One copy of a real run, carrying `digest` as its `code_hash`.
 
     Copied from a run this module already knows how to produce rather than
     hand-written from scratch: every other field — `parameters_hash`, the
     embedded config, the whole `provenance` block, `execution`, `results` — is
-    a real run's own, so the pair differs in exactly what the arm is about.
-    Each copy's `run_id` suffix is rewritten to its own digest's first seven
-    hex characters, and so is its directory name, the way `allocate_run_dir`
-    would have written them.
+    a real run's own, so a pair of these differs in exactly what the arm is
+    about. The copy's `run_id` suffix is rewritten to its own digest's first
+    seven hex characters, and so is its directory name, the way
+    `allocate_run_dir` would have written them.
     """
     import shutil
 
-    out = []
-    for digest in (hash_a, hash_b):
-        short = digest.split(":", 1)[1][:7]
-        target = run_dir.parent / f"run_2026-08-22T00-00-00Z_{short}"
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(run_dir, target)
-        doc = yaml.safe_load((target / "run.yaml").read_text())
-        doc["code_hash"] = digest
-        doc["run_id"] = target.name
-        (target / "run.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
-        out.append(target)
-    return out[0], out[1]
+    short = digest.split(":", 1)[1][:7]
+    target = run_dir.parent / f"run_2026-08-22T00-00-00Z_{short}"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(run_dir, target)
+    doc = yaml.safe_load((target / "run.yaml").read_text())
+    doc["code_hash"] = digest
+    doc["run_id"] = target.name
+    (target / "run.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+    return target
+
+
+def _h6a_record_pair(run_dir: Path, hash_a: str, hash_b: str) -> tuple[Path, Path]:
+    """Two such copies, differing only in `code_hash` and `run_id`."""
+    return _h6a_record_copy(run_dir, hash_a), _h6a_record_copy(run_dir, hash_b)
 
 
 def test_h6a_arm_n_diff_prints_code_hash_differs_across_the_boundary(
@@ -1673,32 +1675,27 @@ def test_h6a_arm_n_control_two_records_agreeing_on_code_hash_print_identical(
 ):
     """Arm N's can-fail control, and it is what makes the arm above non-vacuous.
 
-    Without it, `"code_hash"` and `"DIFFERS"` appearing in one render would be
+    Without it, `code_hash` and `DIFFERS` appearing in one render would be
     satisfied by any `diff` that printed `DIFFERS` on that row unconditionally
-    — including one whose comparison had been neutered. The pair here is built
-    by the same helper, from the same run, with the **same** digest on both
-    sides, so the only difference between the two tests is the thing under
-    test.
+    — including one whose comparison had been neutered. The pair here comes
+    from the same helper and the same single run, and the copy carries the
+    run's **own** `code_hash`, so the only difference between this test and the
+    one above is the thing under test: the row reads `identical`.
+
+    Measured, and stated as measured: inverting `_render_row`'s
+    `figure_a == figure_b` fails **both** this test and the one above, while
+    forcing it to `True` — every row `identical` — fails the one above and
+    passes here, which is the asymmetry that makes the pair rather than either
+    test the pin.
     """
     doc = run_a_project(tmp_path, units=8)
-    same_a, same_b = _h6a_record_pair(
-        doc["run_dir"], _H6A_NEW_DEFINITION_HASH, _H6A_NEW_DEFINITION_HASH
-    )
-    assert same_a == same_b
+    own = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["code_hash"]
+    copy = _h6a_record_copy(doc["run_dir"], own)
 
     capsys.readouterr()
-    code = command_diff(same_a, doc["run_dir"])
+    assert command_diff(doc["run_dir"], copy) == EXIT_OK
     out = capsys.readouterr().out
-    assert code == EXIT_OK
-    assert re.search(r"^code_hash\s+DIFFERS", out, re.M)
-
-    # And the real pair: the run itself against a copy carrying the run's own
-    # digest, which is the identical arm this control exists to show.
-    identical, _ = _h6a_record_pair(
-        doc["run_dir"],
-        yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["code_hash"],
-        _H6A_NEW_DEFINITION_HASH,
-    )
-    capsys.readouterr()
-    assert command_diff(doc["run_dir"], identical) == EXIT_OK
-    assert re.search(r"^code_hash\s+identical", capsys.readouterr().out, re.M)
+    assert re.search(r"^code_hash\s+identical", out, re.M)
+    # Not implied by the line above: the digest itself is printed beside the
+    # verdict, so `identical` is a claim about this pair rather than a default.
+    assert f"sha256:{own.split(':', 1)[1][:4]}…" in out
