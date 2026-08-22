@@ -2403,10 +2403,7 @@ def _across_repeats(values: list[Any]) -> Any:
     - Every value a real number: the mean, which is what this function has always
       done and the only case a purely numeric run reaches.
     - SOME values numbers: the mean of those, which is EXACTLY today's arithmetic —
-      today's inner loop skipped the non-numeric ones and averaged the rest. Moving
-      this to `None` would cost the whole column its metric block, for every unit,
-      because `summarize_step` requires *all* carried values numeric (measured). That
-      is a published column deleted, which no decision here argues for; the
+      today's inner loop skipped the non-numeric ones and averaged the rest. The
       disagreement is disclosed instead, by `repeats_disagreeing`.
     - NO value a number: the value itself when the repeats agreed, `None` when they
       did not. `first` and `mode` are rules the user declared for `measurements` and
@@ -2444,10 +2441,16 @@ def _repeats_disagree(values: list[Any]) -> bool:
 
     Pairwise against the first value, on `(is-it-a-number, the value)` rather than on
     the value alone: `True == 1.0` in Python, so a column recorded as `True` in one
-    repeat and `1.0` in another would read as constant and collapse to whichever
-    arrived first — order-dependent, which is what this rule refuses. Compared
-    pairwise rather than through a set, so nothing here depends on a recorded value
-    being hashable.
+    repeat and `1.0` in another would read as constant and its disagreement would go
+    **unreported**. That, and only that, is what the tuple buys — the published cell
+    does not move either way. Measured, both orders: `_across_repeats([True, 1.0])`
+    and `_across_repeats([1.0, True])` both return `1.0`, because the numeric branch
+    in that function runs ahead of its disagreement branch, so the earlier claim that
+    the cell would "collapse to whichever arrived first — order-dependent" was false
+    of this code (H5b batch 2 review, M5). The pin is
+    `test_a_bool_in_one_repeat_and_a_float_in_another_disagrees_in_both_orders`.
+    Compared pairwise rather than through a set, so nothing here depends on a
+    recorded value being hashable.
 
     All-numeric columns are excluded: unequal numbers are what averaging is for, and
     reporting them as a disagreement would fire on every honest run.

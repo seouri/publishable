@@ -2882,8 +2882,8 @@ def command_run(config_path: Path) -> int:
                             "W-STATS-REPEATS-DISAGREE",
                             aggregate_where,
                             f"condition {cond.index} step {step_name!r}: recorded column "
-                            f"{column!r} is not a number and disagrees across the repeats of "
-                            f"{units_count} unit(s), so those units carry no value for it; "
+                            f"{column!r} disagrees across the repeats of "
+                            f"{units_count} unit(s); "
                             "declare data.units.measurements.collapse if the within-unit "
                             "collapse is what you meant",
                         )
@@ -3229,6 +3229,62 @@ def command_run(config_path: Path) -> int:
                     # `reference.md`'s single-level examples; a nested design's list
                     # of >1 entries is left as a list.
                     recorded_columns = {col for cols in collapsed.values() for col in cols}
+                    # `W-STATS-COLUMN-THIN` (Controller ruling 5, 2026-08-22):
+                    # one warning per (condition, step, recorded column) whose
+                    # CONTRIBUTING count — `summarize_step`'s per-column
+                    # `n.completed`, the number of units that carried a real
+                    # number for it, not the condition-wide figure — falls below
+                    # `limits.min_reported_n`. Ruling 1 asked for a warning
+                    # naming the count on every partially-covered column; ruling
+                    # 5 narrowed it to this floor, because a step that measures
+                    # only what it can measure is ordinary and an unconditional
+                    # warning would fire on runs with nothing wrong.
+                    #
+                    # `limits.min_reported_n` rather than a threshold of its own:
+                    # `W-STATS-CONTRAST-THIN` (a realized `n_paired`/`n_of`) and
+                    # `W-STATS-STRATUM-THIN` (a level's realized `completed`)
+                    # already read this floor at `run` time against a realized
+                    # denominator, and a second source of truth for one hazard is
+                    # what that ruling refuses. The guard is theirs verbatim:
+                    # `check_envelope` is what reports a wrong-typed floor, and a
+                    # `True` would otherwise drive "below limits.min_reported_n
+                    # (True)".
+                    #
+                    # Two scope decisions, both deliberate. A column that earned
+                    # NO block is skipped: it has no contributing count to name,
+                    # and `W-STATS-REPEATS-DISAGREE` (or nothing at all, for a
+                    # column no unit ever recorded a number for) is what covers
+                    # it. And a `report_by` LEVEL's columns are not checked here:
+                    # `W-STATS-STRATUM-THIN` below already names a thin level
+                    # against the same floor, and per-column-per-level would
+                    # multiply one fact by the number of columns.
+                    #
+                    # Sited after both `summarize_step` calls have converged on
+                    # `step_summary`, so the `except ContractError` retry above is
+                    # covered by this one site — a diagnostic's unit of work is
+                    # every place it reports, and one code gets one row.
+                    column_floor = (doc.get("limits") or {}).get("min_reported_n")
+                    if isinstance(column_floor, (int, float)) and not isinstance(
+                        column_floor, bool
+                    ):
+                        for column in sorted(recorded_columns):
+                            block = step_summary.get(column)
+                            if block is None:
+                                continue
+                            contributing = (block.get("n") or {}).get("completed")
+                            if not isinstance(contributing, (int, float)) or isinstance(
+                                contributing, bool
+                            ):
+                                continue
+                            if contributing < column_floor:
+                                aggregate_c.warn(
+                                    "W-STATS-COLUMN-THIN",
+                                    "limits.min_reported_n",
+                                    f"condition {cond.index}, step {step_name!r}: recorded "
+                                    f"column {column!r} carries a number for "
+                                    f"{int(contributing)} unit(s), below "
+                                    f"limits.min_reported_n ({column_floor})",
+                                )
                     for column in recorded_columns:
                         if column not in step_summary:
                             continue
