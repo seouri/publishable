@@ -8606,3 +8606,36 @@ together: a bare traceback for nested NumPy scalars through `.yaml`/`.json`/`.js
 key, a `None` cell silently becoming `''` through `.csv`, and this. Each is a place where *"a writer
 accepts what it can give back"* is true of the writer's **named** refusals and silent or uncoded outside
 them.
+
+## OPEN — whether `E-STEP-RETURN-TYPE` should ever be forgiving for a genuinely mixed `.parquet` column — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-22 by H5b task 3, discharging a question H5a's own design claimed was already filed.**
+§ The per-unit tables used to leave this open in its own prose — *"the more forgiving reading … is a live
+question … and is not decided here"* — and H5a's Decision 1 wrote of it *"Filed, not built, owner H5b."*
+**There was no such filing.** `grep -n 'more forgiving\|mixed column' docs/superpowers/spec-defects.md`
+returns **0 lines** at `ee8085e`; the control, `grep -c 'E-STEP-RETURN-TYPE' docs/superpowers/spec-defects.md`,
+returns **4** at the same commit, so the sweep for the phrase can hit when the phrase is really there. Both
+greps were re-run for this entry and reproduce. **A design line saying "Filed" is not a filing** — the same
+finding this file already records once, for a different gap, now made twice in one slice pair.
+
+**What H5b task 3 decided instead of filing.** The open question had two halves, and this slice answers
+both rather than deferring either: on the **read** side, a column reaches `aggregate`'s table regardless
+of the mixture, and is published as a metric only when every value carried for it is a real number — one
+`str` costs that column its own metric block and nothing else. On the **write** side, `E-STEP-RETURN-TYPE`
+stays exactly as strict as it is today: a column genuinely `str` for some units and a number for others,
+written across repeats, still refuses at the cost of the whole execution's record. `docs/reference.md`
+§ The per-unit tables and § Statistical reporting now say both halves in the present tense; this entry is
+what remains **open** underneath that decision.
+
+**The residual.** Whether the write side should ever be loosened — publishing a `str`-typed column instead
+of refusing the run when a step's per-unit values disagree on type — is a real design question the read-side
+decision above does not answer, and this slice deliberately did not reopen it: loosening the write would
+make a column's published-or-not status depend on the data a run happens to produce rather than on its
+config, which is the same cost the read/write split already states in `reference.md`. Reopening it is a
+write-side change, not a read-side one, and needs its own argument against the cost stated there.
+
+**Owner: unassigned, with the reason.** No remaining slice (H6, H9, H3c-3's remaining 14) charters the
+write side of the per-unit tables as its surface, and H5a — which built that write-side rule — is merged.
+Whoever reopens it should read it beside the write-side entries already filed above (the `.csv` null
+round-trip, the uncoded `.parquet` object, the uncoded NumPy nesting, the non-`str` column key): all are
+the same write-side surface, and this is a fifth entry of a related shape rather than an unrelated one.
