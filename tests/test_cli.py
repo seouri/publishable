@@ -17813,45 +17813,45 @@ class Step(BaseStep):
 """
 
 
-@pytest.mark.xfail(
-    reason=(
-        "H5b task 6's disclosure, not its fix. Controller ruling 1's gate "
-        "relaxation (a column numeric for some units and `None` for others "
-        "now keeps a block, task 6) makes such a column enter "
-        "`summarize_step`'s published keys for the FIRST time — before this "
-        "task it was dropped by the old all-or-nothing gate and so never "
-        "reached `cli.py`'s per-metric contrast loop "
-        "(`sorted((set(of_summary) & set(against_summary)) - {'by'})` at "
-        "cli.py). A two-condition run computing `vs_baseline` over such a "
-        "column now reaches cli.py's unguarded "
-        "`of_collapsed[k][metric_key] - against_collapsed[k][metric_key]` "
-        "subtraction with `k` a unit both sides carry `None` for — "
-        "`TypeError`, uncaught, outside every `try`: run directory complete, "
-        "every execution paid for, no `run.yaml`. Task 7 (`docs/superpowers/"
-        "plans/2026-08-22-non-numeric-columns-downstream.md` Task 7, "
-        "Fixture G) owns the guard and supersedes this pin — it should FAIL "
-        "(stop xfailing) the moment task 7's guard lands; strict=True makes "
-        "that loud rather than silent."
-    ),
-    strict=True,
-)
-def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_crashes(tmp_path, capsys):
-    """H5b task 6's disclosure. Asserts the CORRECT behaviour (exit 0,
-    `run.yaml` written) so this pin fails loudly — an `xfail` on
-    `pytest.raises(TypeError)` would pin the bug as intended instead of
-    flagging it for removal.
+def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_no_longer_crashes(
+    tmp_path, capsys
+):
+    """H5b task 6's disclosure, closed by task 7 — the same body and the same
+    two assertions this test shipped with, with its `xfail(strict=True)`
+    decorator removed and one assertion ADDED.
 
-    The blast radius is narrower than 'any ragged column': an all-`None`
-    column cannot reach it (empty numeric subset -> the column is skipped ->
-    never enters `of_summary`/`against_summary` at all), and a ragged column
-    with no `None` cannot reach it either — the guard pin's own arm E
-    (`test_the_correction_family_measurement_arm_e_no_editor_except_task_4`)
+    What it disclosed: Controller ruling 1's gate relaxation (a column numeric
+    for some units and `None` for others keeps a block, task 6) made such a
+    column enter `summarize_step`'s published keys for the FIRST time, so it
+    reached `cli.py`'s per-metric contrast loop
+    (`sorted((set(of_summary) & set(against_summary)) - {'by'})`) and then the
+    unguarded `of_collapsed[k][metric_key] - against_collapsed[k][metric_key]`
+    subtraction with `k` a unit both sides carry `None` for — `TypeError`,
+    uncaught, outside every `try`: run directory complete, every execution
+    paid for, no `run.yaml`. It asserted the CORRECT behaviour rather than
+    `pytest.raises(TypeError)`, so it failed loudly the moment task 7's guard
+    landed instead of pinning the bug as intended.
+
+    **Task 7's guard is the fix**, and the conversion strengthens the pin
+    rather than weakening it: the two original assertions are unchanged, and
+    the `vs_baseline` assertion below is new. It goes from *did the run keep
+    its record* to *did the run keep its record AND is the narrowing right* —
+    `n_paired: 3` is the three units that carried a number, measured by
+    running, not the six the intersection holds (Decision 6 leaves
+    `paired_keys` wide on purpose; the recorded column's own `col_keys` is
+    where the narrowing lives).
+
+    The blast radius was and is narrower than 'any ragged column': an
+    all-`None` column cannot reach it (empty numeric subset -> the column is
+    skipped -> never enters `of_summary`/`against_summary` at all), and a
+    ragged column with no `None` cannot reach it either — the guard pin's own
+    arm E (`test_the_correction_family_measurement_arm_e_no_editor_except_task_4`)
     computes a live paired `score` contrast at `n_paired: 4` over a `score`
     only 4 of 6 units carry, with no crash, which also confirms
     `ExecutionResult.rows` carries un-unioned per-execution rows rather than
     `finalize`'s union-with-nulls — if it were the union every ragged column
     in every run would hit this, not only one carrying an explicit `None`.
-    The trigger is exactly: a column numeric for some units and `None` for
+    The trigger was exactly: a column numeric for some units and `None` for
     others, in a run that computes a contrast over it.
     """
     doc = run_a_project(
@@ -17866,6 +17866,207 @@ def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_crashes(tmp
     )
     assert doc["run_dir"] is not None
     assert (doc["run_dir"] / "run.yaml").exists()
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["conditions"][1]["vs_baseline"]["step01_summarize_units"]["score"]
+    assert entry["n_paired"] == 3
+
+
+# --- H5b task 7: Fixture G — the contrast guard, both ends ------------------
+
+_STR_COLUMN_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"score": float(i), "tag": "a"}})
+        return {{}}
+"""
+
+
+def test_fixture_g_the_paired_contrast_guard_skips_a_str_column_instead_of_raising():
+    """Fixture G, direct call, paired arm. **This call drives a state
+    production cannot reach**, and the guard exists anyway.
+
+    Production cannot reach it two ways over. A wholly non-numeric column
+    never enters `aggregated` at all (`summarize_step`'s column loop skips it),
+    so it never becomes a `metric_key` in
+    `sorted((set(of_summary) & set(against_summary)) - {'by'})`; and a `str`
+    cell beside a number in the same column is refused at `finalize` by
+    `_check_column_types` (Controller ruling 1, row 3). So today the only thing
+    keeping the subtraction safe is a *convention at another function's
+    output*, and **a rule enforced only by another function's output is not a
+    guard**. The scoping measured the cost when the convention broke:
+    `TypeError: unsupported operand type(s) for -: 'str' and 'str'` at
+    `of_collapsed[k][metric_key] - against_collapsed[k][metric_key]`, outside
+    every `try` — run directory complete, every execution paid for, no
+    `run.yaml`.
+
+    **What it asserts is Decision 7's shape, not the brief's.** Task 7 step 5
+    says the guard publishes *no entry* for the key; measured, the entry is
+    published with `n_paired: 0` and `ci95: null`, because
+    `metric_block[metric_key] = {...}` in this branch is unconditional and an
+    empty `col_keys` simply gives `mean_of([])` and `paired_t_over_units([])`.
+    That is Decision 7's own stated shape — *"an all-dropped metric publishes
+    `n_paired: 0` and `ci95: null`, which is the shape a reader can already
+    read"* — and it is asserted here rather than made true by an unchartered
+    skip branch. Reported as a disagreement between the brief and the code.
+
+    `delta is None` rather than `0.0` is `mean_of([])`'s own answer, so the
+    record cannot be read as *no difference*."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i}") for i in range(6)])
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=1, against=0),
+        roster=roster,
+        aggregated={1: {"s": {"tag": "hi"}}, 0: {"s": {"tag": "lo"}}},
+        collapsed_by_key={
+            (1, "s"): {f"u{i}": {"tag": "hi"} for i in range(6)},
+            (0, "s"): {f"u{i}": {"tag": "lo"} for i in range(6)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 1",
+        where_id="cond:1",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            1: Condition(index=1, label="method=x", values={"analysis.method": "x"}),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["tag"]
+    assert entry["n_paired"] == 0
+    assert entry["ci95"] is None
+    assert entry["delta"] is None
+    assert entry["method"] is None
+    assert [m.metric for m in members] == ["tag"]
+
+
+_G_OF = [20.0, 21.0, 22.0, "n/a", "n/a"]
+_G_AGAINST = [10.0, 12.0, 14.0, "n/a", "n/a"]
+
+
+def test_fixture_g_the_unpaired_contrast_guard_narrows_of_col_so_n_of_matches_the_vector():
+    """Fixture G, direct call, unpaired arm — a **separate comprehension** from
+    the paired arm's `col_keys`, which is why this fixture has both ends: a
+    mutation in one is invisible to an assertion on the other.
+
+    **The column is ragged rather than wholly non-numeric, deliberately.** With
+    every cell a `str` the narrowed vectors would be empty, no interval would
+    compute, and § Corrections 2's mutation — moving the filter from
+    `of_col`/`against_col` into `of_values`/`against_values` — would have no
+    observable difference to catch. Three numeric cells and two `str` cells per
+    side give `n_of`/`n_against` of `3` against a wide `5`, so the count and
+    the vector disagree under that mutant and agree under the fix. No cluster
+    is declared, so a length mismatch in `[of_clusters[k] for k in of_col]`
+    cannot fail this for the wrong reason.
+
+    § Corrections 2's four consumers, read at `_comparison_step_blocks`: `n_of`
+    is `len(of_col)`, `n_against` is `len(against_col)`, `of_clusters`/
+    `against_clusters` are built by keying off them, and
+    `permutation_over_contrast` reads `[of_clusters[k] for k in of_col]`. So
+    the filter goes where the KEYS are chosen, not where the values are read.
+
+    `cohens_d == 5.692099788303082` is `cohens_ds([20.0, 21.0, 22.0], [10.0,
+    12.0, 14.0])` — computed by calling it, and asserted because a *d*s over a
+    mixed vector cannot be computed at all: the pooled sd would raise. So this
+    is the assertion that says the effect size came from the narrowed vectors
+    rather than from a vector the guard did not reach."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    of_keys = [f"t{i:02d}" for i in range(len(_G_OF))]
+    against_keys = [f"c{i:02d}" for i in range(len(_G_AGAINST))]
+    roster = UnitList([Unit(key=k) for k in of_keys + against_keys])
+    block, _ = _comparison_step_blocks(
+        Comparison(id="arm_effect", of=1, against=0, declared=True),
+        roster=roster,
+        aggregated={1: {"s": {"m": 21.0}}, 0: {"s": {"m": 12.0}}},
+        collapsed_by_key={
+            (1, "s"): {k: {"m": v} for k, v in zip(of_keys, _G_OF, strict=True)},
+            (0, "s"): {k: {"m": v} for k, v in zip(against_keys, _G_AGAINST, strict=True)},
+        },
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=400,
+        min_reported_n=None,
+        findings=Collector(),
+        where="contrast 'arm_effect'",
+        where_id="contrast:arm_effect",
+        conditions_by_index={
+            0: Condition(
+                index=0,
+                label="arm=control",
+                values={"arm": "control"},
+                selectors=frozenset({"arm"}),
+            ),
+            1: Condition(
+                index=1,
+                label="arm=treatment",
+                values={"arm": "treatment"},
+                selectors=frozenset({"arm"}),
+            ),
+        },
+        resample_columns=False,
+    )
+    entry = block["s"]["m"]
+    assert entry["n_of"] == 3
+    assert entry["n_against"] == 3
+    assert entry["delta"] == pytest.approx(9.0)
+    assert entry["cohens_d"] == pytest.approx(5.692099788303082)
+
+
+def test_fixture_g_a_real_run_recording_a_str_column_writes_its_run_yaml(tmp_path, capsys):
+    """Fixture G, end to end — the claim about **production**, stated
+    separately from the two direct-call claims about the guard.
+
+    A wholly non-numeric column never enters `aggregated`, so it never becomes
+    a `metric_key` and `vs_baseline` holds no entry for it. **This arm passes
+    before task 7's guard as well as after**, and is named as what it is: a
+    production control, not a discriminating test. The arm that crashed at
+    HEAD and writes its `run.yaml` after is
+    `test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_no_longer_crashes`
+    above, whose `str`-free ragged column is the reachable trigger.
+
+    The `run.yaml`-exists assertion is on the FILE rather than on the exit
+    code, because *every execution paid for, the record lost* is a fact about
+    the file: the crash the guard closes left a complete run directory behind
+    and only the record missing, so an exit-code assertion alone would not see
+    it. `score` beside `tag` is the can-fail half — a run publishing neither
+    would satisfy a `tag not in ...` assertion by publishing nothing at all."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_STR_COLUMN_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert doc["run_dir"] is not None
+    assert (doc["run_dir"] / "run.yaml").exists()
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    vs = run["results"]["conditions"][1]["vs_baseline"]["step01_summarize_units"]
+    assert "tag" not in vs
+    assert "score" in vs
 
 
 # --- H5b batch 2 fix round: Controller ruling 1 row 2 end to end (m1), and ---

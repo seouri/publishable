@@ -71,6 +71,7 @@ from publishable.scope import Execution, build_plan
 from publishable.secrets import credential_values, load_env
 from publishable.stats import (
     UnitTable,
+    _is_numeric,
     cohens_ds,
     cohens_dz,
     collapse_repeats,
@@ -1162,7 +1163,25 @@ def _comparison_step_blocks(
                     col_keys = [
                         k
                         for k in base_keys
-                        if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
+                        if metric_key in of_collapsed[k]
+                        and metric_key in against_collapsed[k]
+                        # The guard at the subtraction, not at another function's
+                        # output. Today the only thing keeping a non-numeric value
+                        # out of `metric_key` is that `of_summary` is `aggregated`'s
+                        # step block and `summarize_step` publishes numbers only —
+                        # a convention, not a guard, and when it breaks the
+                        # subtraction below raises `TypeError` outside every `try`,
+                        # losing a completed run its `run.yaml`. It SKIPS rather
+                        # than raising: the two core-bookkeeping `ValueError`s above
+                        # both sit before any interval is built, while a raise here
+                        # loses the `run.yaml` this guard exists to protect. A unit
+                        # dropped here is dropped exactly as a unit missing the
+                        # column is dropped, and `n_paired` reports what remains —
+                        # `0` already means *pairing failed*, so an all-dropped
+                        # metric publishes `n_paired: 0` and `ci95: null`, a shape a
+                        # reader can already read.
+                        and _is_numeric(of_collapsed[k][metric_key])
+                        and _is_numeric(against_collapsed[k][metric_key])
                     ]
                     diffs = [
                         of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
@@ -1307,9 +1326,17 @@ def _comparison_step_blocks(
                         "correction": None,
                     }
                 else:
-                    of_col = [k for k in of_side_keys if metric_key in of_collapsed[k]]
+                    of_col = [
+                        k
+                        for k in of_side_keys
+                        if metric_key in of_collapsed[k]
+                        and _is_numeric(of_collapsed[k][metric_key])
+                    ]
                     against_col = [
-                        k for k in against_side_keys if metric_key in against_collapsed[k]
+                        k
+                        for k in against_side_keys
+                        if metric_key in against_collapsed[k]
+                        and _is_numeric(against_collapsed[k][metric_key])
                     ]
                     of_values = [of_collapsed[k][metric_key] for k in of_col]
                     against_values = [against_collapsed[k][metric_key] for k in against_col]
