@@ -112,3 +112,55 @@ and `_repeats_disagree`'s `(is-numeric, value)` tuple, both removable with the s
 **third** distinct `resample_draws` literal; it has an arm now. **Four distinct seed-dependent
 `resample_draws` values are now labelled across the pin's arms** — which is the reason correction 7 said
 that number is not a constant.
+
+## Batch 3 — tasks 7, 8, 9, 10, 11 — the guards and the namespace
+
+Commits `848835e` (the contrast guard), `1e8cb51` (§ Statistical reporting), `b276704` (the `by`
+arbitration), `e613c11` (the derived-key collision), `1268c96` (the empty-level gate), `09954ea`,
+`3be2808` (an in-batch fix round), review `548cedd` (**tasks 7 and 9 FAIL — three Majors, three Minors, no
+Critical**), fix round `1f08b3e`. Suite 2920 → **2926**, with the xfail count moving **3 → 2**.
+
+**Every finding in this batch was a CLAIM defect. Nothing in `src/` moved** — the reviewer said so and the
+fix round verified it before touching anything, which is the right order.
+
+**Batch 2's disclosure device worked exactly as designed, and its conversion is the thing to carry.** The
+`xfail(strict=True)` that named task 7 as its remover was converted by removing the decorator, moving
+`reason=` into the docstring, keeping **both original assertions byte-identical**, adding **one**
+(`n_paired == 3`), and renaming `…_crashes` → `…_no_longer_crashes`. **It asserts strictly more than the
+xfail did**, verified by diffing before and after rather than by reading the account — and the underlying
+fix was proven by behaviour: guard removed gives a raw `TypeError`, a complete run directory, ten
+executions in the ledger and **no `run.yaml`**; guard restored writes `run.yaml` with `n_paired: 3`. **A
+strict xfail asserting the CORRECT post-fix behaviour is a disclosure that cannot be forgotten**, because
+the suite goes red the moment the gap closes.
+
+**The slice's signature defect shipped a third time, and this is the entry that names it.** *All-or-nothing
+wording over a rule that has three cases*: batch 1's Critical, batch 2's M1, and now § Warnings'
+`W-STATS-STRATUM-SHADOWED` row framing itself as exhaustive over *every value a number* / *no unit
+recorded a number* — with the **reachable middle case in neither.** Measured: `by` numeric for 20 of 40
+units publishes a full block (`value: 19.0`, `n.completed: 20`, `ci95: [13.46, 24.54]`, `t_over_units`,
+`repeat_spread`) **and** the warning. **Three times, three different files, each found by someone
+sweeping for the claim rather than the file.** The lesson is not *check this sentence* — it is that **a
+rule with three cases invites a two-case sentence at every site that mentions it**, because two cases
+sound complete. Ruling 1's amendment table is now the single authority every site links to instead of
+restating.
+
+**A conclusion can survive its ground being wrong, and then it needs a new ground rather than a note.**
+The guard's *corrected* comment asserted the column *"already earns"* a condition-side
+`W-STATS-COLUMN-THIN` — false under `limits.min_reported_n: 1`, which is exactly the case **Ruling 5's own
+cost-if-wrong paragraph names.** Mint-no-code stands, on the `n_paired` half; the comment now names
+`n_paired` as the unconditional disclosure and the warning as conditional on the floor. **That comment has
+now been wrong twice**, which is why the round was told to write a true ground or delete the sentence
+rather than add a third layer.
+
+**`W-STATS-COLUMN-THIN`'s blind spot is real and documented rather than absorbed.** Ruling 5 tied it to
+`limits.min_reported_n`; a project declaring a floor of 1 gets no warning for a column one unit carries.
+The ruling predicted that and the batch measured it — **the honest `n` is then the only signal, which is
+the state that shipped before the warning existed**, so the downside is bounded by the status quo.
+
+**And the miscounts reached five.** *"Grep reported, not a count asserted from memory"* was itself false —
+five lines across three files where the report claimed one; `85 insertions` was `93`; an enumeration named
+one file twice and omitted another; and a *"two lines"* grep **could not have found** the site it was
+offered as evidence about, whose docstring was line-wrapped, so the right sentence was *found by reading*.
+Every one corrected by **appending**. None changed a conclusion — and that is the pattern, not the excuse:
+**the numbers that get miscounted are exactly the ones nothing downstream depends on**, which is why
+nobody notices until a reader relies on one.
