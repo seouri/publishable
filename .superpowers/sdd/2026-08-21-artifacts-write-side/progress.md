@@ -177,3 +177,43 @@ than an open gap, because a struck entry stops anyone looking.** Routed to task 
 five tests, but **nothing pins the resolver surface**, so the constraint that orders three tasks has no
 test of its own. **Task 6's Fixture R inherits an enforcement obligation, not just a fixture**, and now
 carries it by name.
+
+## Batch 5 — tasks 5, 6 — the attribute namespace and the roster
+
+Commits `828f42b` (the split, `E-UNITS-ATTR-COLUMN` enforced, the `by`-survival pins), `cf3789c`
+(roster coercion, `E-RESOLVER-YIELD` widened, the ordering pinned), `d0ff8d2`, `c21f819` (fix round).
+Suite 2855 → **2875**. **Both verdicts PASS; two Majors, three Minors, all closed — and neither Major was
+a behaviour defect. Both were pins that did not pin.**
+
+**Correction 1's hazard was avoided and the avoidance was measured, not asserted.** `RESERVED_COLUMNS`
+has **one** reader, and the reviewer ran each dangerous re-point separately: `finalize`'s fails **both**
+survival arms, the collapse's fails **only arm (b)** — so **the two arms are not redundant**, which the
+batch's own report understated. A legally recorded `by` column survives both `record` branches and reaches
+`units.parquet` intact.
+
+**Requirement 3's ordering pin is real, and it was adjudicated by construction rather than argument.** The
+batch disclosed that its mutation failed one assertion earlier than written, inside the shared helper's
+exit check. The reviewer **built the discriminating mutation** — refusal relocated to just after
+`allocate_run_dir`, still returning `EXIT_WRONG` — and the helper's check **passed** while the pin
+**failed on the directory assertion.** That is the one thing in this batch that could have produced *every
+execution paid for, the record lost*.
+
+**A carried finding was reported closed while undischarged — the third instance here.** The batch-4 ledger
+routed correction 6's enforcement gap to **Fixture R by name**, and deleting the branch that ordering rule
+protects gave six failures **none of them at the resolver surface** — because **every new resolver fixture
+used `np.float64`, which never reaches that branch.**
+
+**And a new variant of an old shape: an assertion satisfied by the message's own enumeration of the set
+under test.** Fixture A asserted the refusal message *"names the offending attribute"*, but the message
+interpolates `', '.join(RESERVED_COLUMNS)` — so the check matched on the enumeration. **Hard-coding a
+decoy name at all three emit sites left all fourteen arms green**, meaning the decoy apparatus bought
+nothing.
+
+**Also: all three Minors were undisclosed drops** — arm O1 dropped the brief's `E-RESOLVER-YIELD`
+assertion entirely, a `W-STATS-STRATUM-SHADOWED` clause was dropped, and one report grep **described a
+docstring citation that does not exist.** Dropping a brief clause is legitimate; **dropping it silently is
+not.**
+
+**One unrequested check worth keeping:** with the coercion removed, a real run wrote
+`{'unit': 'p1', 'tags': [1, 2], …}` into `units.parquet` — so § Where units come from's **past-tense**
+claim is true. Given batch 4 shipped a past-tense claim that was false, that check earned itself.
