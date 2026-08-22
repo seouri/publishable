@@ -232,3 +232,39 @@ first run, by their authors, while checking for exactly that.
 *fourth* and the *third* distinct `resample_draws` literal. A records task **must not edit a pin arm's
 docstring** — that is the rule that keeps a pin from being adjusted by whoever last read it — so it was
 named, not fixed. Correct restraint; it is the gate's to close.
+
+## The whole-branch gate — HOLD on three Majors, all closed
+
+Review `9a462d5` (**HOLD**, three Majors, three Minors, no Critical), fix round `3bf55d9` / `9a3be3d`.
+Suite **2931 passed, 1 skipped, 2 xfailed** at both, against `main`'s 2891 — **+40, with the xfail count
+travelling 2 → 3 → 2** as batch 2's disclosure device was created and batch 3 converted it.
+
+**Every moved key is one of the nine, checked the only way that can establish it**: a two-condition,
+Holm-corrected, `report_by` config run across `main` and HEAD and diffed **key by key**. Every moved leaf
+landed in arm B's seven, arm E's correction family, or arm G's ninth class, and **no key name appeared or
+vanished.** Classes 8 and the `by` classes are unreachable from that config and rest on arms F and C,
+both mutation-tested.
+
+**The gate earned itself again, and on exactly the shape it exists for: a fifth thing a run newly earns,
+disclosed nowhere.** `W-STATS-CONTRAST-RESAMPLE-THIN` fires on HEAD and not on `main` for the same
+project, commit and seed — from **two** emit sites — while the design, `CLAUDE.md` and the feasibility
+entry each said **"four things newly stop or newly warn."** No per-batch review could see it: it is an
+interaction between the collapse admitting more units and a thinness check three modules away, and
+nothing in any single batch's diff mentions it. **"Four" had become the carried summary phrase**, which is
+the identical failure the feasibility analysis' two dated corrections were written about.
+
+**And this slice's signature defect had a FIFTH home.** The two-case sentence for Ruling 1's three-case
+rule lived in `spec-defects.md`, wrong twice over — a numeric-for-some column *is* published
+(`n.completed: 3`, measured), and `str`-beside-a-number was described as a **read** case when it exits 4
+at `finalize`. It was written by the same commit as the `reference.md` copy, and the earlier fix round
+**swept only `reference.md` and the plan.** Five homes, four rounds, every one found by someone sweeping
+for the **claim** rather than the file — and the last one only after a **newline-insensitive** sweep,
+because `grep -rF` cannot match a phrase that wrapped. The final sweep covered the four documents,
+`CLAUDE.md`, `spec-defects.md` and all 52 files in `src/`, with a control string proving it could fail.
+
+**Three claim defects, no wrong numbers.** All three Majors were sentences: the undisclosed fifth
+warning, the fifth home, and `report.py`'s ground *"a NON-numeric one keeps no metric block at all"*,
+false of a mixed `by` column that keeps a full block and renders as a `report` row. Each was closed by
+**deleting** the false clause rather than rewriting it. That is the slice's shape end to end: **the code
+this slice wrote was right and the sentences about it were wrong**, five times in five different files,
+because a rule with three cases invites a two-case sentence everywhere it is mentioned.
