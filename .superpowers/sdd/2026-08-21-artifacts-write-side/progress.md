@@ -217,3 +217,31 @@ not.**
 **One unrequested check worth keeping:** with the coercion removed, a real run wrote
 `{'unit': 'p1', 'tags': [1, 2], …}` into `units.parquet` — so § Where units come from's **past-tense**
 claim is true. Given batch 4 shipped a past-tense claim that was false, that check earned itself.
+
+## Batch 6 — tasks 7, 8 — the recorded side, no encoder in the picture
+
+Commits `44399fd` (the plain branch refuses `measurement`), `3b58442` (`finalize`'s `columns` deduped),
+`66d4581`, review `61f257f`. Suite 2875 → **2879**. **Both verdicts PASS with NO findings** — the first
+batch in this slice to close without one, and a control review is where that is least surprising: two
+guards on the recorded side with no encoder between them.
+
+**Decision 9's asymmetry is closed and closed end-to-end.** A plain `io.record` carrying a `measurement`
+column now earns `E-STEP-KEY-COLLISION` at `EXIT_FAILED` with no `units.parquet` written; the
+`measurement=` branch is unchanged; and a **plural** `measurements` column still writes — the third arm is
+the one that matters, because the guard is a substring away from swallowing it, and the reviewer
+reproduced that mutation independently. `reference.md`'s existing `E-STEP-KEY-COLLISION` row already
+covers the new site, so **no row moved** — the first time this slice has answered the one-row-per-code
+question with *nothing to do* rather than with an edit.
+
+**Correction 5 held, and the report neither overclaimed nor understated it.** The dedupe fixes the
+**list**, not the **value**: `finalize`'s attribute loop still overwrites `merged["unit"]`, so a
+**directly built** `Unit` carrying an attribute named `unit` hijacks the key column after the dedupe
+exactly as before. The reviewer built that case **before reading the fixture** and got
+`{'unit': 'HIJACK', …}`. It stays open and is routed to task 12 by name.
+
+**One thing worth carrying, and it is about the pin rather than the code.** Deduped and non-deduped column
+lists produce **byte-identical** `units.parquet` — 951 bytes either way — so the dedupe is unobservable in
+the artifact, and its guarantee is a property of **the list handed to the writer**, not of the file. That
+is why the pin is a spy on the column list rather than an assertion on output, and it is the honest form
+of a **dimension no assertion can see**: the assertion was moved to where the behaviour is, instead of
+being written where the test happened to look.
