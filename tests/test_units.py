@@ -4036,6 +4036,114 @@ def test_a_resolver_yielding_something_that_is_not_a_unit_is_refused(
     assert "dict" in str(excinfo.value)
 
 
+_YIELDS_A_STRUCTURAL_ATTRIBUTE = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="a1", attributes={"tags": [1, 2], "site": "north"})
+"""
+
+
+def test_a_resolver_yielding_a_structural_attribute_value_is_refused(
+    installed, registries, tmp_path
+):
+    """Fixture R's refusal arm — design Decision 6. `_from_resolver` projects
+    onto the declared list, so an UNDECLARED structural attribute is dropped
+    and never refuses (`test_a_resolver_roster_is_projected_onto_the_declared_
+    attributes` above); `tags` must be declared here for this arm to reach the
+    coercion at all."""
+    from publishable.config import Config
+
+    _install_resolver(installed, tmp_path, "structattr_r30", _YIELDS_A_STRUCTURAL_ATTRIBUTE)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["tags", "site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("structattr_r30", None)
+    assert excinfo.value.code == "E-RESOLVER-YIELD"
+    assert "tags" in str(excinfo.value)
+
+
+_YIELDS_A_NUMPY_SCALAR_ATTRIBUTE = """\
+import numpy as np
+
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="a1", attributes={"score": np.float64(1.5), "site": "north"})
+"""
+
+
+def test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_float(
+    installed, registries, tmp_path
+):
+    """Fixture R's POSITIVE CONTROL. `type(...) is float`, not `isinstance` —
+    `np.float64` passes `isinstance(v, float)`, so only an exact-type check
+    proves the coercion ran rather than merely that nothing refused. Without
+    this control, the refusal arm above would prove only that something was
+    refused, not that the ordinary numeric case still resolves and coerces."""
+    from publishable.config import Config
+
+    _install_resolver(installed, tmp_path, "npscalarattr_r30", _YIELDS_A_NUMPY_SCALAR_ATTRIBUTE)
+    try:
+        roster, _n, _columns = resolve_units(
+            {
+                "from": {"resolver": "plate_wells"},
+                "key": "well",
+                "attributes": ["score", "site"],
+            },
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("npscalarattr_r30", None)
+    assert type(roster[0].attributes["score"]) is float
+    assert roster[0].attributes["score"] == 1.5
+    assert roster[0].attributes["site"] == "north"
+
+
+def test_the_coercion_runs_after_the_uniqueness_check(installed, registries, tmp_path):
+    """Pins task 6 step 2's placement: a roster that is both duplicate-keyed
+    AND structurally-attributed must still report `E-UNITS-KEY-DUPLICATE`,
+    the fault about the roster's identity — not `E-RESOLVER-YIELD` for the
+    attribute, which is what mutation (iii) (moving the coercion above the
+    uniqueness loop) would report instead."""
+    from publishable.config import Config
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "dupplusattr_r30",
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='a1', attributes={'tags': [1, 2]})\n"
+        "    yield Unit(key='a1', attributes={'tags': [3, 4]})\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["tags"]},
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("dupplusattr_r30", None)
+    assert excinfo.value.code == "E-UNITS-KEY-DUPLICATE"
+
+
 def test_a_resolver_source_reached_with_no_cfg_refuses_rather_than_crashing(
     installed, registries, tmp_path
 ):

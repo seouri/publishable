@@ -12062,6 +12062,100 @@ def test_a_resolver_run_records_the_plugin_version_it_resolved_through(
     assert table_run["provenance"]["plugin_versions"] == {}
 
 
+_YIELDS_TEN_WITH_A_STRUCTURAL_ATTRIBUTE = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    for i in range(1, 11):
+        yield Unit(key=f"p{i}", attributes={"tags": [1, 2], "site": "north"})
+"""
+
+_YIELDS_TEN_WITH_A_NUMPY_SCALAR_ATTRIBUTE = """\
+import numpy as np
+
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    for i in range(1, 11):
+        yield Unit(key=f"p{i}", attributes={"score": np.float64(i), "site": "north"})
+"""
+
+
+def test_arm_o1_a_structural_resolved_attribute_pays_for_nothing_before_it_refuses(
+    installed, registries, tmp_path
+):
+    """THE ORDERING PIN, arm O1 — controller requirement 3. Coercing at
+    `resolve_units` exists so Decision 5 alone can't turn a completed run into
+    a late `ContractError` inside `finalize`, after every execution is paid
+    for. The exit code alone does not pin that: `EXIT_WRONG` is the same code
+    an unrelated refusal would also produce, so this asserts there is no
+    `run_*` directory and no `latest` pointer at all — nothing was paid for.
+    `test_arm_o2_...` below is the positive control this arm needs: without
+    it, this would pass identically if the run simply never started for a
+    reason that had nothing to do with this coercion."""
+    site = installed(
+        "dist-order-o1",
+        "1.0",
+        {"publishable.resolvers": {"plate_wells": "orderpin_o1_r30:resolve"}},
+    )
+    (site / "orderpin_o1_r30.py").write_text(_YIELDS_TEN_WITH_A_STRUCTURAL_ATTRIBUTE)
+    importlib.invalidate_caches()
+    try:
+        o1 = run_a_project(
+            tmp_path,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+            unit_attributes=["tags"],
+            expect_exit=EXIT_WRONG,
+        )
+    finally:
+        sys.modules.pop("orderpin_o1_r30", None)
+    assert o1["run_dir"] is None
+    output_dir = o1["results_dir"]
+    assert next(output_dir.glob("run_*"), None) is None, (
+        "arm O1's failure mode: a run_* directory now exists, which is what "
+        "the mutation that removes the coercion (task 6 step 7(i)) produces "
+        "— the run executed rather than being refused before it started"
+    )
+    assert not (output_dir / "latest").exists()
+    assert not (output_dir / "latest.txt").exists()
+
+
+def test_arm_o2_the_positive_control_for_the_ordering_pin_completes_and_coerces(
+    installed, registries, tmp_path
+):
+    """THE ORDERING PIN, arm O2 — the positive control `test_arm_o1_...` above
+    needs. Same project shape, a `np.float64` attribute in place of the
+    structural one: the run completes, a `run_*` directory exists, and
+    `units.parquet` holds the coerced attribute column."""
+    site = installed(
+        "dist-order-o2",
+        "1.0",
+        {"publishable.resolvers": {"plate_wells": "orderpin_o2_r30:resolve"}},
+    )
+    (site / "orderpin_o2_r30.py").write_text(_YIELDS_TEN_WITH_A_NUMPY_SCALAR_ATTRIBUTE)
+    importlib.invalidate_caches()
+    try:
+        o2 = run_a_project(
+            tmp_path,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+            unit_attributes=["score"],
+        )
+    finally:
+        sys.modules.pop("orderpin_o2_r30", None)
+    from publishable.artifacts import _decode_parquet
+
+    assert o2["run_dir"] is not None
+    assert next(o2["results_dir"].glob("run_*"), None) is not None
+    units_path = next(o2["run_dir"].rglob("units.parquet"))
+    units_table = _decode_parquet(units_path.read_bytes())
+    by_unit = {row["unit"]: row["score"] for row in units_table}
+    assert by_unit == {f"p{i}": pytest.approx(float(i)) for i in range(1, 11)}
+
+
 def test_a_hash_index_run_hashes_the_index_and_nothing_else(tmp_path, capsys):
     """End to end: `hash_index` names `index.csv` (the table `data.units.from`
     resolves), so the manifest's `sha256` for it must be a real digest — never

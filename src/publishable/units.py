@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from publishable.artifacts import ResolverIO
+from publishable.coercion import coerce_scalars
 from publishable.config import Config
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
@@ -664,7 +665,56 @@ def resolve_units(
                 code="E-UNITS-KEY-DUPLICATE",
             )
         seen[u.key] = 1
-    return UnitList(units), technical_n, columns
+    # Design Decision 6, plan task 6: every resolved unit's attribute mapping
+    # is run through the one scalar walk every other surface uses, so
+    # `Unit.attributes` values are guaranteed scalars for every consumer —
+    # `cluster_by`, `weight_by`, a fold's `stratify_by`, `holdout.from`, and
+    # `_attributed`'s merge all read them, which is an invariant this build
+    # does not otherwise have. `finalize` writes `units.parquet` through
+    # `self.write(...)`, and Decision 5's coercion runs there too (`_encode_csv`);
+    # WITHOUT this coercion here, a resolver-yielded structural attribute value
+    # would survive validation and every execution, then raise a
+    # `ContractError` inside `finalize` — AFTER every execution is paid for.
+    # This is the one thing standing between that and a refusal `validate`
+    # and `run` both meet before the first execution.
+    #
+    # Placed at the very end — after the source, after `collapse_measurements`
+    # (which can itself produce a numeric attribute value through
+    # `apply_rule`), and after the uniqueness loop directly above — so a
+    # roster that is both duplicate-keyed and structurally-attributed still
+    # reports `E-UNITS-KEY-DUPLICATE`, the fault about the roster's identity,
+    # exactly as it does today.
+    #
+    # Every `Unit` is rebuilt UNCONDITIONALLY, never only when a value
+    # actually needed coercion: `Unit` is frozen, `__post_init__` re-wraps
+    # `attributes` regardless of what it's given, and a conditional rebuild
+    # would add a branch whose two sides no fixture separates. Cost, stated
+    # here rather than left to be discovered: the `Unit` a resolver
+    # constructed is replaced by an equal-but-coerced one. `Unit` is frozen
+    # and hashable by `key` alone, so nothing promises object identity — but a
+    # resolver holding a reference to its own yielded object and expecting
+    # core to hand back that same object would be surprised.
+    #
+    # `E-RESOLVER-YIELD`, widened rather than a new mint — design Decision 4's
+    # own test: the fault does not differ. `E-RESOLVER-YIELD` already means
+    # "what this resolver yielded is not something core can build a roster row
+    # from," and a `Unit` carrying an unusable attribute value is that fault
+    # in a second shape. The coercion runs over every source's attribute
+    # values at this one site, but only a resolver can produce the fault a
+    # non-scalar attribute value is: a table source hands every value through
+    # `csv.DictReader` as a `str`, and a glob yields no attributes at all — so
+    # the code's family is right even though the check itself is source-blind.
+    # Message preserved from `coerce_scalars`'s own raise and only the code
+    # changed, the same catch-and-re-code `E-RESOLVER-SWEPT-PARAM` already
+    # makes over `E-STEP-SWEPT-PARAM`'s raise.
+    coerced_units: list[Unit] = []
+    for u in units:
+        try:
+            coerced_attrs = coerce_scalars(dict(u.attributes), f"unit {u.key!r}'s attributes")
+        except ContractError as exc:
+            raise ContractError(str(exc), code="E-RESOLVER-YIELD") from exc
+        coerced_units.append(Unit(key=u.key, paths=u.paths, attributes=coerced_attrs))
+    return UnitList(coerced_units), technical_n, columns
 
 
 def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
