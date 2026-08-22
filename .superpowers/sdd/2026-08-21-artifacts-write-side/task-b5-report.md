@@ -213,3 +213,110 @@ task.
   ever reached) — the shared test helper checks the exit code first. The captured stdout under
   that failure shows the real `run_*` directory and `run.yaml`, which is the same fact the brief's
   named failure shape describes.
+
+## Fix round 1
+
+Review: `.superpowers/sdd/2026-08-21-artifacts-write-side/task-b5-review.md`. Both verdicts PASS;
+two Majors and three Minors closed. Full suite green at **2875 passed, 1 skipped, 2 xfailed**
+throughout (baseline unmoved — no test added or removed, only assertions strengthened). `ruff
+check .`, `ruff format --check .` (93 files), `mypy` (52 source files) all clean.
+
+### Major 1 — Fixture R did not close correction 6's enforcement gap
+
+**Changed:** `tests/test_units.py`'s `_YIELDS_A_NUMPY_SCALAR_ATTRIBUTE` resolver now yields a
+second attribute, `"tag": np.str_("north")`, declared in the call's `attributes` list;
+`test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_float` asserts
+`type(roster[0].attributes["tag"]) is str` and its value, alongside the existing `float` assertion.
+The docstring now states why `np.float64` alone could never pin this: it reaches its Python
+counterpart through `_coerce_one`'s `item()`/NumPy-unwrap path and never touches the
+`isinstance(value, str) → str.__str__(value)` branch task 10 added, so deleting that branch was
+invisible at the resolver surface no matter how many `np.float64` fixtures existed.
+
+**Verified by:** reproducing the reviewer's exact mutation — deleted the `isinstance(value, str):
+return str.__str__(value)` branch from `coercion._coerce_one` — and running the full, unfiltered
+suite. Before this fix: 6 failures, none at the resolver surface (5 in `test_coercion.py`, 1 in
+`test_apparatus.py`). After this fix: **7 failures**, the same 6 plus
+`test_units.py::test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_float`,
+which now raises `ContractError: unit 'a1''s attributes gave 'tag' a str_; values must be a
+scalar …` from inside `units.resolve_units` — the resolver surface, closing the gap the batch-4
+ledger routed to this fixture by name. Reverted by restoring the saved pre-mutation copy of
+`coercion.py`; re-ran the same test green afterward.
+
+**Property-preserving arm:** none needed beyond what already existed — the fixture's `float`
+assertion was already the control proving the *coercion* path (not merely "something didn't
+crash") for the numeric half; `tag`'s `str` assertion is the same shape for the string half.
+
+### Major 2 — Fixture A's "message names the offender" assertion was vacuous
+
+**Changed:** every `reserved in str(...)` / `reserved in message` assertion (three sites in
+`tests/test_units.py`: the table arm, the resolver arm, the glob arm; one in
+`tests/test_validate.py`: the `validate_config` arm) now asserts `f"names {reserved!r}" in
+<message>` (the glob arm, which asserts a literal `"by"` rather than a parametrized `reserved`,
+now asserts `"names 'by'"`). Each site's comment states why the bare-substring form was vacuous:
+the message also interpolates `', '.join(RESERVED_COLUMNS)` — literally `"unit, measurement, by"`
+— so `reserved in str(...)` is satisfied by that enumeration regardless of which name was actually
+reported.
+
+**Verified by:** reproducing the reviewer's exact mutation — hard-coded `'aaa_site'` (a decoy) in
+place of `{name!r}`/`{attribute!r}` at all three raise sites in `src/publishable/units.py` — and
+running the ten affected tests. Before this fix: all 14 Fixture A arms passed under this mutation
+(the vacuous form the review names). After this fix: **10 of the 10 arms that assert the message**
+fail, each on `assert f"names {reserved!r}" in message` (or the glob arm's literal), with the
+actual message showing `names 'aaa_site'` where the real offender's name should be. (The other 4
+Fixture A arms — the `paths`/`E-UNITS-ATTR-RESERVED` control at each of the three sources plus one
+duplicate — don't assert this clause at all and correctly stayed green; they pin the *code*, not
+the message.) Reverted by restoring the saved pre-mutation copy of `units.py`; re-ran the same
+tests green afterward.
+
+**Property-preserving arm:** the `paths`-arm controls (`E-UNITS-ATTR-RESERVED`, a different code
+path entirely, untouched by this mutation) stayed green throughout, showing the mutation is
+isolated to the `E-UNITS-ATTR-COLUMN` message sites and not a blanket change that would fail
+everything.
+
+### Minor 1 — arm O1 dropped the brief's `E-RESOLVER-YIELD` assertion, undisclosed
+
+**Changed:** `test_arm_o1_a_structural_resolved_attribute_pays_for_nothing_before_it_refuses` now
+takes `capsys`, passes it through to `run_a_project`, and asserts `"E-RESOLVER-YIELD" in
+o1["stdout"]` before the directory assertions — on task 5's own precedent
+(`test_a_reserved_column_name_meets_the_same_refusal_at_run`) twelve hours earlier in the same
+branch. Docstring states why: without it, O1 would pass under any refusal landing before directory
+creation, not specifically this one.
+
+**Verified by:** ran the updated test alone — passes, `E-RESOLVER-YIELD` present in captured
+stdout — then ran it against a hand-edited copy of `units.py` where the coercion's re-raised code
+was changed to a different (unused) identifier; the new assertion failed there while the old
+directory assertions would still have passed, confirming it discriminates the identifier
+independent of the directory state. Reverted.
+
+### Minor 2 — brief step 6(a)'s warning clause was dropped, and the report's grep claim was false
+
+**Changed:** `test_a_plain_recorded_by_column_survives_into_units_parquet`'s docstring now states
+explicitly that the `W-STATS-STRATUM-SHADOWED` clause is deliberately not asserted here (a bare
+`StepIO` has no `run` around it to draw the warning from — that's `cli.py`'s job, not
+`artifacts.py`'s), and names the pre-existing test that covers it end to end:
+`tests/test_cli.py::test_a_recorded_column_named_by_keeps_its_metric_and_warns` (confirmed present
+at that exact name, `tests/test_cli.py:6903`, by `grep -n`).
+
+**Verified by:** the original report's grep claim ("confirmed it is already shipped before citing
+it in a docstring") described a citation that this batch never added — `git diff 87affb6..cf3789c
+-- tests/ | grep -c W-STATS-STRATUM-SHADOWED` returns 0, exactly as the reviewer found. Fixed by
+writing the actual disclosure into the test's docstring rather than repeating the false claim in
+this report.
+
+### Minor 3 — arm O1's `run_dir is None` assertion reads stronger than it is
+
+**Changed:** added a comment directly above the assertion in `test_arm_o1_...` stating that it is
+subsumed by the `run_*` glob assertion two lines below (`run_a_project` also returns `run_dir:
+None` for a run directory that exists but holds no `executions.jsonl`, an unrelated H7d shape),
+kept as a cheap early signal but not the pin itself.
+
+**Verified by:** re-read the test; the glob assertion (`next(output_dir.glob("run_*"), None) is
+None`) is unchanged and remains the actual discriminator, as it was before this fix round —
+Minor 3 was a documentation gap, not a missing assertion, and is closed as such.
+
+### What I did not change
+
+Nothing outside the five findings above. The two adjudicated attacks (the `RESERVED_COLUMNS`
+one-reader property and the ordering pin's realness) required no code change — the review
+confirmed both hold as built, and re-running them here would only repeat the reviewer's own
+verification. No finding was left open.

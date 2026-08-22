@@ -4799,7 +4799,12 @@ def test_a_reserved_column_name_is_reported_at_validate_with_decoys_on_each_side
     found = codes(path)
     assert "E-UNITS-ATTR-COLUMN" in found
     message = messages_by_code(path)["E-UNITS-ATTR-COLUMN"]
-    assert reserved in message
+    # `reserved in message` alone is satisfied by the message's own
+    # `', '.join(RESERVED_COLUMNS)` enumeration ("unit, measurement, by")
+    # regardless of which name was actually reported — Major 2. The
+    # offender's own `names {reserved!r}` clause is a string the enumeration
+    # cannot produce.
+    assert f"names {reserved!r}" in message
 
 
 def test_units_field_among_decoys_is_reserved_not_column_at_validate(write_config, tmp_path):

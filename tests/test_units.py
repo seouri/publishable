@@ -199,7 +199,12 @@ def test_a_reserved_column_name_is_refused_with_a_decoy_on_each_side(
             reserved_column_table,
         )
     assert e.value.code == "E-UNITS-ATTR-COLUMN"
-    assert reserved in str(e.value)
+    # `reserved in str(e.value)` alone would also be satisfied by the
+    # message's own `', '.join(RESERVED_COLUMNS)` enumeration ("unit,
+    # measurement, by" contains each member) regardless of which name the
+    # refusal actually reports — Major 2. Asserting the offender's own
+    # `names {reserved!r}` clause is a string the enumeration cannot produce.
+    assert f"names {reserved!r}" in str(e.value)
 
 
 def test_a_units_field_name_among_decoys_is_still_reported_reserved_not_column(
@@ -256,7 +261,10 @@ def test_a_resolver_yielding_a_reserved_column_attribute_is_refused(
     finally:
         sys.modules.pop(module, None)
     assert excinfo.value.code == "E-UNITS-ATTR-COLUMN"
-    assert reserved in str(excinfo.value)
+    # See the table-arm's comment above: the bare `reserved in str(...)` form
+    # is satisfied by the message's own enumeration regardless of which name
+    # was actually reported.
+    assert f"names {reserved!r}" in str(excinfo.value)
 
 
 def test_a_glob_source_reports_a_reserved_column_name(input_dir: Path):
@@ -268,7 +276,10 @@ def test_a_glob_source_reports_a_reserved_column_name(input_dir: Path):
     with pytest.raises(ContractError) as e:
         resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["by"]}, input_dir)
     assert e.value.code == "E-UNITS-ATTR-COLUMN"
-    assert "by" in str(e.value)
+    # `"by" in str(e.value)` alone is satisfied by the message's own
+    # `', '.join(RESERVED_COLUMNS)` enumeration regardless of which name was
+    # reported — the same vacuous form Major 2 named for the other arms.
+    assert "names 'by'" in str(e.value)
 
 
 def test_a_unit_is_frozen_and_hashable_by_key():
@@ -4082,18 +4093,32 @@ from publishable import Unit, register_resolver
 
 @register_resolver("plate_wells")
 def resolve(io, cfg):
-    yield Unit(key="a1", attributes={"score": np.float64(1.5), "site": "north"})
+    yield Unit(
+        key="a1",
+        attributes={"score": np.float64(1.5), "tag": np.str_("north"), "site": "north"},
+    )
 """
 
 
 def test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_float(
     installed, registries, tmp_path
 ):
-    """Fixture R's POSITIVE CONTROL. `type(...) is float`, not `isinstance` —
-    `np.float64` passes `isinstance(v, float)`, so only an exact-type check
-    proves the coercion ran rather than merely that nothing refused. Without
-    this control, the refusal arm above would prove only that something was
-    refused, not that the ordinary numeric case still resolves and coerces."""
+    """Fixture R's POSITIVE CONTROL. `type(...) is float`/`type(...) is str`,
+    not `isinstance` — `np.float64` passes `isinstance(v, float)` and
+    `np.str_` passes `isinstance(v, str)`, so only an exact-type check proves
+    the coercion ran rather than merely that nothing refused.
+
+    `tag` (an `np.str_`) is here to close batch 4's enforcement gap
+    (`progress.md`'s ledger: correction 6's ordering rule was pinned only at
+    the shared `coerce_scalars` function, never at the resolver surface).
+    `np.float64` alone cannot pin that: it reaches its Python counterpart
+    through `_coerce_one`'s `item()`/NumPy-unwrap path, never through the
+    `isinstance(value, str) → str.__str__(value)` branch task 10 added —
+    deleting that branch (the exact displacement correction 6 forbids)
+    changes nothing this resolver fixture observes unless `tag` is here to
+    reach it. Without `tag`, the refusal arm above would prove only that
+    something was refused, not that the ordinary numeric OR string case still
+    resolves and coerces."""
     from publishable.config import Config
 
     _install_resolver(installed, tmp_path, "npscalarattr_r30", _YIELDS_A_NUMPY_SCALAR_ATTRIBUTE)
@@ -4102,7 +4127,7 @@ def test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_fl
             {
                 "from": {"resolver": "plate_wells"},
                 "key": "well",
-                "attributes": ["score", "site"],
+                "attributes": ["score", "tag", "site"],
             },
             tmp_path,
             cfg=Config({}),
@@ -4111,6 +4136,8 @@ def test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_fl
         sys.modules.pop("npscalarattr_r30", None)
     assert type(roster[0].attributes["score"]) is float
     assert roster[0].attributes["score"] == 1.5
+    assert type(roster[0].attributes["tag"]) is str
+    assert roster[0].attributes["tag"] == "north"
     assert roster[0].attributes["site"] == "north"
 
 

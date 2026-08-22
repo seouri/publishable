@@ -12086,7 +12086,7 @@ def resolve(io, cfg):
 
 
 def test_arm_o1_a_structural_resolved_attribute_pays_for_nothing_before_it_refuses(
-    installed, registries, tmp_path
+    installed, registries, tmp_path, capsys
 ):
     """THE ORDERING PIN, arm O1 — controller requirement 3. Coercing at
     `resolve_units` exists so Decision 5 alone can't turn a completed run into
@@ -12096,7 +12096,13 @@ def test_arm_o1_a_structural_resolved_attribute_pays_for_nothing_before_it_refus
     `run_*` directory and no `latest` pointer at all — nothing was paid for.
     `test_arm_o2_...` below is the positive control this arm needs: without
     it, this would pass identically if the run simply never started for a
-    reason that had nothing to do with this coercion."""
+    reason that had nothing to do with this coercion.
+
+    `capsys` and the `E-RESOLVER-YIELD` assertion below close Minor 1: without
+    them this arm would pass under ANY refusal that lands before directory
+    creation, not specifically this one — the brief's own step 6 names the
+    diagnostic explicitly, alongside the directory state, as two separate
+    things to assert."""
     site = installed(
         "dist-order-o1",
         "1.0",
@@ -12107,12 +12113,18 @@ def test_arm_o1_a_structural_resolved_attribute_pays_for_nothing_before_it_refus
     try:
         o1 = run_a_project(
             tmp_path,
+            capsys=capsys,
             units_overrides={"from": {"resolver": "plate_wells"}},
             unit_attributes=["tags"],
             expect_exit=EXIT_WRONG,
         )
     finally:
         sys.modules.pop("orderpin_o1_r30", None)
+    assert "E-RESOLVER-YIELD" in (o1["stdout"] or "")
+    # Subsumed by the `run_*` glob assertion below (`run_a_project` also
+    # returns `run_dir: None` for a run directory that exists but holds no
+    # `executions.jsonl`, an unrelated H7d shape) — kept as a cheap early
+    # signal, but the glob two lines down is the actual ordering pin.
     assert o1["run_dir"] is None
     output_dir = o1["results_dir"]
     assert next(output_dir.glob("run_*"), None) is None, (

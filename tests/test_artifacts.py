@@ -664,7 +664,17 @@ def test_a_plain_recorded_by_column_survives_into_units_parquet(tmp_path: Path) 
     """Arm (a): a PLAIN `io.record` payload naming `by` reaches `units.parquet`
     with its value. `RESERVED_COLUMNS` is not consulted by `record`'s
     collision guards at all — only `unit` and `measurement` are, by literal —
-    so `by` is neither of the two names those guards refuse."""
+    so `by` is neither of the two names those guards refuse.
+
+    Brief step 6(a)'s second clause — that a real `run` also draws
+    `W-STATS-STRATUM-SHADOWED` for this column — is deliberately NOT asserted
+    here: a bare `StepIO` has no `run` around it to draw a warning from, and
+    that warning is `cli.py`'s, not `artifacts.py`'s. It is covered end to end
+    by the pre-existing `tests/test_cli.py::
+    test_a_recorded_column_named_by_keeps_its_metric_and_warns`, which runs a
+    real `run` recording `by` and asserts both the warning and the column's
+    own value and interval survive. This arm's job is narrower: only the
+    plain-record-reaches-`units.parquet` half, at the artifact layer."""
     sd = tmp_path / "run" / "s"
     sd.mkdir(parents=True)
     (tmp_path / "in").mkdir()
