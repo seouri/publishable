@@ -8543,3 +8543,39 @@ no config-reachable trigger to test it against, decided by no one.
 work on direct `Unit` construction bypassing a config's roster resolution; closing this wants a design
 decision — whether `finalize` should defend against a hand-built `Unit` at all — that no slice has been
 asked to make.
+
+## OPEN — the H5a design's Fixture E claims a `None` column round-trips as `None` in **both** formats; `.csv` gives back the empty string — **Owner: unassigned, no remaining slice has `.csv`'s null encoding as its surface**
+
+**Measured at `478639a`**, against the two encoders directly:
+
+```
+_encode_csv([{'v': None}, {'v': None}])      → b'v\n""\n""\n'   → decodes to [{'v': ''}, {'v': ''}]
+_encode_parquet([{'v': None}, {'v': None}])  →                     decodes to [{'v': None}, {'v': None}]
+```
+
+`csv.DictWriter` has no null: it writes `None` as an empty field, and `csv.DictReader` reads an empty
+field back as `''`. So a column of all `None` survives `.parquet` intact and comes back from `.csv` as a
+column of empty strings. The design's **Fixture E** section states it round-trips as `None` "in every row"
+for both, which is true of one format and false of the other — the same **per-format** asymmetry the
+slice's second controller ruling was issued about, met in a second place and not noticed when the ruling
+was written.
+
+**Why this is a filing rather than an edit.** A design records what was decided when it was written and
+is corrected by appending; the correction is appended to
+`docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md` and this entry is the live half. The
+**shipped code is not wrong** — `.csv` cannot represent a null and *"a writer accepts what it can give
+back"* is a statement about refusing what it would corrupt, not a promise that two formats agree. What is
+open is whether `.csv`'s null should be **refused** the way a `bytes` or a structural cell now is, since
+`None → ''` is exactly the silent lossy conversion that rule exists to prevent, and it is the one such
+conversion H5a left in place.
+
+**Owner: unassigned, with the reason.** No remaining slice (H5b, H6, H9, H3c-3's remaining 14) charters
+`.csv`'s null encoding: H5b's surface is non-numeric columns flowing downstream to `aggregate`, and the
+question here is a **write-side refusal** decision nobody has been asked to make. Whoever takes it should
+read it beside the two entries above — all three are the same shape, a format-specific lossy or
+uncoded conversion that H5a's per-format ruling makes visible without settling.
+
+**This entry is also the slice's own evidence for a rule it kept re-learning.** The gap was measured in
+batch 8, recorded in the ledger as *"filed for task 12"*, named by the controller in task 12's dispatch —
+and **still not filed**, caught only by task 12's review. *A ledger line saying "filed" is not a filing*,
+and neither is a dispatch line.

@@ -179,3 +179,23 @@ Ran over the four documents (`README.md`, `docs/design-principles.md`,
 - None found that block this task. The three newly filed gaps are all pre-existing behaviour (not
   introduced by H5a), reproduced directly rather than inferred, and each carries a stated reason for
   being unassigned rather than orphaned.
+
+## Correction, 2026-08-22, from review `7f1bc91`
+
+**Two things above are wrong.**
+
+**One, the § Errors audit's count for task 7's code.** It records that
+`grep -rn "E-STEP-KEY-COLLISION" src/publishable/` finds *"six raise sites"*. Re-run: the string appears
+in three files — `artifacts.py`, `stats.py`, `cli.py` — and there are **eight** `raise` sites, six in
+`artifacts.py` and two in `stats.py`; `cli.py`'s three mentions are comments, not sites. The audit's
+conclusion is unchanged (the § Errors row is written generically enough to cover all eight, and none is
+narrower than its code), but a number offered as the report's own verification evidence has to be the
+number the command prints.
+
+**Two, and this is the Critical: carry-forward 5 was not done and this report did not say so.** Batch 8
+measured that `.csv` writes a `None` cell as the **empty string**, contradicting the design's Fixture E
+wording; the ledger recorded it as *"filed for task 12"*; the controller's dispatch named it as a
+carry-forward. It was neither filed nor mentioned. It is filed now, in `docs/superpowers/spec-defects.md`,
+with the correction appended to the design. **A finding routed into a task and then reported neither
+closed nor open is worse than one never routed**, because the routing itself creates the expectation that
+it was handled.
