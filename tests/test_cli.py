@@ -18974,13 +18974,20 @@ def test_h6a_arm_a_the_ordinary_path_does_not_move(tmp_path: Path, monkeypatch):
     package on `PYTHONPATH`) and produced the same run directory name, so the
     digest is the shipped command's and not an artifact of calling `main`
     in-process.
+
+    **Task 3's one mechanical touch: `code_hash`'s two direct calls below gain
+    the literal `None`.** `include` becoming required breaks this test's
+    import, not merely its typing, since these two calls predate task 3 and
+    `hashed_files`/`code_hash`'s call from inside `main`'s own `run` path is a
+    separate, third call this arm does not reach directly. Neither digest
+    literal moves.
     """
     base = _h6a_base_tree(tmp_path / "base", with_env=False)
-    assert code_hash(base) == _H6A_BASE_DIGEST
+    assert code_hash(base, None) == _H6A_BASE_DIGEST
 
     cfg = _h6a_pin_project(tmp_path / "runnable", monkeypatch, with_env=False)
     root = cfg.parents[2]
-    assert code_hash(root) == _H6A_RUN_DIGEST
+    assert code_hash(root, None) == _H6A_RUN_DIGEST
     assert main(["run", str(cfg)]) == EXIT_OK
     run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
     assert run_dir.name.endswith("_f6a935c")
@@ -19012,14 +19019,18 @@ def test_h6a_arm_b_an_excluded_env_file_moves_the_hash_today(tmp_path: Path, mon
     alone, so no list is pinned twice and task 5 — this arm's sole editor — has
     nothing of arm C's to reach. Two slices pinned one list twice and edited
     both; that is what this sentence exists to prevent.
+
+    **Task 3's touch is the same mechanical `None` as arm A's**, on the two
+    direct `code_hash(...)` calls below — required for the module to import
+    once `include` is required, not a literal this task is claiming.
     """
     base = _h6a_base_tree(tmp_path / "base", with_env=True)
-    assert code_hash(base) == _H6A_BASE_WITH_ENV_DIGEST
+    assert code_hash(base, None) == _H6A_BASE_WITH_ENV_DIGEST
     assert (base / "src" / "pkg" / ".env").read_text() == _H6A_ENV
 
     cfg = _h6a_pin_project(tmp_path / "runnable", monkeypatch, with_env=True)
     root = cfg.parents[2]
-    assert code_hash(root) == _H6A_RUN_WITH_ENV_DIGEST
+    assert code_hash(root, None) == _H6A_RUN_WITH_ENV_DIGEST
     assert main(["run", str(cfg)]) == EXIT_OK
     run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
     assert run_dir.name.endswith("_a74f3d4")

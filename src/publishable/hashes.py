@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,18 @@ def short(hash_str: str) -> str:
     return hash_str.split(":", 1)[-1][:7]
 
 
-def hashed_files(repo_root: Path) -> list[tuple[str, Path]]:
-    """Sorted (repo-relative path, file) pairs across src/** and templates/**."""
+def hashed_files(
+    repo_root: Path, include: Callable[[list[str]], set[str]] | None
+) -> list[tuple[str, Path]]:
+    """Sorted (repo-relative path, file) pairs across src/** and templates/**.
+
+    `include` is handed EVERY candidate path that survived the fixed skip set,
+    as repo-relative posix strings, and returns the subset to keep. It is
+    positional and required: `None` is not a default, it is the explicit claim
+    `hash every file these trees hold`, which only a caller without a
+    repository can honestly make. See docs/reference.md § How the three are
+    computed for the four-case rule `include` is one half of.
+    """
     found: list[tuple[str, Path]] = []
     for tree in HASHED_TREES:
         base = repo_root / tree
@@ -34,23 +45,41 @@ def hashed_files(repo_root: Path) -> list[tuple[str, Path]]:
             if path.suffix in _SKIP_SUFFIXES:
                 continue
             found.append((path.relative_to(repo_root).as_posix(), path))
-    return sorted(found)
+    found.sort()
+    if include is None:
+        return found
+    kept = include([rel for rel, _ in found])
+    return [(rel, path) for rel, path in found if rel in kept]
 
 
-def code_hash(repo_root: Path) -> str:
-    """sha256 over the sorted list of (relative path, sha256 of contents) pairs.
+def code_hash_of(pairs: list[tuple[str, Path]]) -> str:
+    """The fold, over a file list the caller already holds.
 
-    Read from the working tree, not from git, so `run` and `draft` compute the
-    same function over a clean and a dirty tree alike.
+    sha256 over the sorted list of `(relative path, sha256 of contents)`
+    pairs, folded as `sha256(path) \\0 sha256(contents) \\n` and prefixed. This
+    is `code_hash`'s own construction, extracted so a caller who also needs
+    the file list (a zero-file guard, say) does not walk the two trees twice
+    to get both — see docs/reference.md § How the three are computed's
+    disclosure of what that duplication used to cost.
     """
     outer = hashlib.sha256()
-    for rel, path in hashed_files(repo_root):
+    for rel, path in pairs:
         inner = hashlib.sha256(path.read_bytes()).hexdigest()
         outer.update(rel.encode())
         outer.update(b"\0")
         outer.update(inner.encode())
         outer.update(b"\n")
     return _prefixed(outer.hexdigest())
+
+
+def code_hash(repo_root: Path, include: Callable[[list[str]], set[str]] | None) -> str:
+    """sha256 over the sorted list of (relative path, sha256 of contents) pairs.
+
+    Read from the working tree, not from git, so `run` and `draft` compute the
+    same function over a clean and a dirty tree alike. `include` narrows which
+    files under the two trees are read — see `hashed_files`.
+    """
+    return code_hash_of(hashed_files(repo_root, include))
 
 
 def _canonical(payload: Any) -> bytes:

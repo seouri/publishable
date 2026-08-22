@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from publishable.hashes import code_hash, covered_config, design_digest, parameters_hash, short
+from publishable.hashes import (
+    code_hash,
+    code_hash_of,
+    covered_config,
+    design_digest,
+    hashed_files,
+    parameters_hash,
+    short,
+)
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -12,26 +20,50 @@ def write(root: Path, rel: str, text: str) -> None:
 def test_code_hash_covers_src_and_templates_only(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
     write(tmp_path, "templates/mine.py", "b = 2\n")
-    before = code_hash(tmp_path)
+    before = code_hash(tmp_path, None)
     write(tmp_path, "docs/notes.md", "unrelated\n")
     write(tmp_path, "configs/c/config.yaml", "x: 1\n")
-    assert code_hash(tmp_path) == before, "changes outside the two trees must not move it"
+    assert code_hash(tmp_path, None) == before, "changes outside the two trees must not move it"
     write(tmp_path, "src/pkg/step.py", "a = 2\n")
-    assert code_hash(tmp_path) != before
+    assert code_hash(tmp_path, None) != before
 
 
 def test_code_hash_ignores_pycache(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path)
+    before = code_hash(tmp_path, None)
     write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path) == before
+    assert code_hash(tmp_path, None) == before
 
 
 def test_code_hash_is_prefixed_and_short_takes_seven(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    h = code_hash(tmp_path)
+    h = code_hash(tmp_path, None)
     assert h.startswith("sha256:")
     assert len(short(h)) == 7
+
+
+def test_code_hash_delegates_to_code_hash_of_over_hashed_files(tmp_path: Path):
+    """H6a task 3, step 3. Two implementations of one fold is what
+    `covered_config` was extracted to prevent (H8b task 7) — this is the same
+    property for `code_hash`/`code_hash_of`/`hashed_files`, pinned as an
+    identity rather than left to a docstring's claim.
+
+    Asserted on a bare `include=None` tree AND on a tree with a real,
+    non-trivial `include`, so the identity holds for both of `code_hash`'s
+    two behaviours — hashing everything, and narrowing to a caller's filter.
+    """
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    write(tmp_path, "src/pkg/other.py", "b = 2\n")
+    write(tmp_path, "templates/t.py", "c = 3\n")
+    assert code_hash(tmp_path, None) == code_hash_of(hashed_files(tmp_path, None))
+
+    def drop_other(candidates: list[str]) -> set[str]:
+        return {c for c in candidates if not c.endswith("other.py")}
+
+    assert code_hash(tmp_path, drop_other) == code_hash_of(hashed_files(tmp_path, drop_other))
+    # The filter actually narrowed something, or the second assertion would be
+    # indistinguishable from the first.
+    assert code_hash(tmp_path, drop_other) != code_hash(tmp_path, None)
 
 
 def test_parameters_hash_excludes_metadata_and_the_two_paths():
@@ -63,25 +95,25 @@ def test_code_hash_skip_list_matches_relative_path_not_absolute(tmp_path: Path):
     # components inside src/**  or templates/** may be excluded.
     repo = tmp_path / "__pycache__" / "repo"
     write(repo, "src/pkg/step.py", "a = 1\n")
-    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
-    h = code_hash(repo)
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo", None)
+    h = code_hash(repo, None)
     assert h != empty_digest
     write(repo, "src/pkg/step.py", "a = 2\n")
-    assert code_hash(repo) != h
+    assert code_hash(repo, None) != h
 
 
 def test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path)
+    before = code_hash(tmp_path, None)
     write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path) == before
+    assert code_hash(tmp_path, None) == before
 
 
 def test_code_hash_handles_a_dot_git_intermediate_path_component(tmp_path: Path):
     repo = tmp_path / ".git" / "repo"
     write(repo, "src/pkg/step.py", "a = 1\n")
-    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
-    assert code_hash(repo) != empty_digest
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo", None)
+    assert code_hash(repo, None) != empty_digest
 
 
 def test_parameters_hash_does_not_mutate_input():
@@ -513,6 +545,11 @@ def test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not(tm
 
     There is no editor who could make this arm pass another way: after task 5
     the same two trees must still produce the same one digest.
+
+    **Task 3's one mechanical touch here is the same as arm E's.** `include`
+    becoming required means this test's two `code_hash(...)` calls need the
+    literal `None` to keep importing at all — no `assert` line moves, and the
+    digest literal below is untouched.
     """
     d_tree = tmp_path / "fixture_d"
     write(d_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
@@ -520,7 +557,7 @@ def test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not(tm
     write(d_tree, "templates/t.py", "b = 2\n")
     write(d_tree, "src/pkg/loose.pyd", "X")
     _h6a_commit(d_tree, ".gitignore", "src/pkg/step.py", "templates/t.py", "src/pkg/loose.pyd")
-    assert code_hash(d_tree) == _H6A_TRACKED_PYD_DIGEST
+    assert code_hash(d_tree, None) == _H6A_TRACKED_PYD_DIGEST
 
     e_tree = tmp_path / "fixture_e"
     write(e_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
@@ -546,7 +583,7 @@ def test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not(tm
     ).stdout.split()
     assert "src/pkg/loose.pyd" in tracked
     assert "src/pkg/__pycache__/keep.py" in tracked
-    assert code_hash(e_tree) == _H6A_TRACKED_PYD_DIGEST
+    assert code_hash(e_tree, None) == _H6A_TRACKED_PYD_DIGEST
 
 
 def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_digest(
@@ -567,13 +604,24 @@ def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_dig
     states it as a standalone claim.
 
     **Task 3's only edit here is adding the literal `None` argument** where the
-    call is made, in this test and at the 13 `code_hash(` call sites this
-    module already has. **No assertion in this arm changes**; a task 3 diff
-    that touches an `assert` line here is a finding.
+    call is made, in this test and at the 13 `code_hash(` call sites the
+    six named tests in `test_code_hash_covers_src_and_templates_only` through
+    `test_code_hash_handles_a_dot_git_intermediate_path_component` already had
+    when task 3's brief was written. **No assertion in this arm changes**; a
+    task 3 diff that touches an `assert` line here is a finding.
+
+    **A stale count, corrected rather than trusted.** Batch 1 (task 2) added
+    this arm and arm D's test AFTER the brief's `grep -c "code_hash("` was
+    run, so the 13-plus-`cli.py` count of "no 15th site" no longer covers the
+    module: arm D's test and this one add four more calls
+    (`test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not`
+    and this test), all of which needed the same mechanical `None` for the
+    module to import at all — not just typecheck. None of the four is a 15th
+    *production* call site; `code_hash` still has exactly one in `src/`.
     """
-    assert code_hash(tmp_path / "nonexistent_empty_repo") == _H6A_EMPTY_DIGEST
+    assert code_hash(tmp_path / "nonexistent_empty_repo", None) == _H6A_EMPTY_DIGEST
     # Not implied by the line above: an existing directory holding nothing the
     # two trees cover resolves to the same digest, which is the reachable half
     # of the zero-file case and the reason the refusal cannot live here.
     (tmp_path / "empty_repo" / "src").mkdir(parents=True)
-    assert code_hash(tmp_path / "empty_repo") == _H6A_EMPTY_DIGEST
+    assert code_hash(tmp_path / "empty_repo", None) == _H6A_EMPTY_DIGEST

@@ -2340,7 +2340,11 @@ def command_run(config_path: Path) -> int:
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
-    ch = code_hash(repo_root)
+    # `None` here is a task 3 placeholder: it is the explicit "hash every file"
+    # claim `hashed_files`'/`code_hash`'s docstrings name for a caller with no
+    # predicate, and task 5 swaps it for the real git-backed `include` this
+    # command's repo makes available.
+    ch = code_hash(repo_root, None)
     ph = parameters_hash(doc)
     manifest = build_manifest(
         input_dir,
