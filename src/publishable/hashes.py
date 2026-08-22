@@ -68,12 +68,15 @@ def covered_config(config: dict[str, Any]) -> dict[str, Any]:
     are host paths, not declarations, and excluded for the same reason
     `metadata` is: neither is part of "same code, different parameters."
 
-    **Does not normalize.** § Three hashes' "Values are normalized to what
-    `init` would have materialized before hashing" is not implemented here —
-    see `docs/superpowers/spec-defects.md` §
-    "`parameters_hash` does not normalize to what `init` would have
-    materialized", an OPEN gap owned by H6. Closing it needs the template's
-    `parameter_spec`, which this function deliberately does not take.
+    **Does not normalize, by decision.** `parameters_hash` covers the config
+    as written, and § How the three are computed states both that rule and its
+    consequence: a hand-trimmed config and the file `init` wrote are two
+    declarations, they hash differently, and `diff` names the key that
+    differs. Normalizing was ruled against on three independent grounds (H6a,
+    Decision 9), the sharpest being that a config omitting a defaulted
+    parameter validates clean and then dies with `E-STEP-PARAM-UNKNOWN` at the
+    step that reads it — so normalizing would hand one identity claim to a
+    config that runs and a config that cannot.
     """
     covered = {k: v for k, v in config.items() if k != "metadata"}
     data = covered.get("data")
