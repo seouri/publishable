@@ -474,6 +474,40 @@ def derive_step_scopes_and_repeats(execution: dict[str, Any]) -> tuple[dict[str,
     return step_scopes, repeats
 
 
+def _finalize_columns(attribute_names: list[str], recorded: list[str]) -> list[str]:
+    """`units.parquet`'s column list: the unit key, then every declared
+    attribute, then every recorded key — deduped by name, first-seen order
+    preserved.
+
+    `recorded` already excludes `"unit"` (`finalize`'s own loop skips it), but
+    `attribute_names` does not, so `"unit", *attribute_names, *recorded` can
+    hold `"unit"` twice when a `Unit` carries an attribute of that name. Task 5's
+    refusal (`E-UNITS-ATTR-COLUMN`) makes that unreachable from a config, but
+    `finalize` is called with whatever `UnitList` its caller constructs, and
+    `Unit` is on `reference.md` § The importable surface — a caller can build one
+    directly. Deduping here is the one-line fix; it does not depend on task 5's
+    refusal to be correct.
+
+    **This fixes the LIST, not the VALUE.** The row this list becomes columns
+    for is still built by `finalize`'s attribute-merge loop, which overwrites
+    `merged["unit"]` with the attribute's value when a `Unit` carries one named
+    `unit` — so a directly constructed such `Unit` still publishes its
+    attribute's value in the unit-key column, the identity gone. Deduping the
+    column list changes nothing about that value hijack: it was never a list
+    defect (the per-row dict comprehension already collapses a duplicate
+    column name, so the file's *shape* was never wrong), and closing the value
+    hijack for a direct caller is not this function's job — `spec-defects.md`
+    carries it.
+    """
+    seen: set[str] = set()
+    columns: list[str] = []
+    for name in ("unit", *attribute_names, *recorded):
+        if name not in seen:
+            seen.add(name)
+            columns.append(name)
+    return columns
+
+
 class StepIO:
     def __init__(
         self,
@@ -812,7 +846,7 @@ class StepIO:
                 for key in row:
                     if key != "unit" and key not in recorded:
                         recorded.append(key)
-            columns = ["unit", *attribute_names, *recorded]
+            columns = _finalize_columns(attribute_names, recorded)
             rows = []
             for key, row in self._rows.items():
                 owner = by_key.get(key)

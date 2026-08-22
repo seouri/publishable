@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import yaml
 
-from publishable import ArtifactError, ArtifactExistsError, ContractError
+from publishable import ArtifactError, ArtifactExistsError, ContractError, artifacts
 from publishable.artifacts import (
     ReportIO,
     StepIO,
@@ -905,6 +905,78 @@ def test_finalize_writes_a_parquet_table_and_an_ineligible_ledger(tmp_path: Path
     assert rows[0]["extra"] is None, "a column absent from a row reads as null"
     lines = (sd / "ineligible.jsonl").read_text().splitlines()
     assert json.loads(lines[0]) == {"unit": "p2", "reason": "no baseline visit"}
+
+
+# Task 8 — Fixture D, design Decision 10, plan § Corrections correction 5.
+#
+# `finalize`'s `columns = ["unit", *attribute_names, *recorded]` can hold
+# `"unit"` twice when a directly constructed `Unit` carries an attribute named
+# `unit` — `recorded` excludes `"unit"` but `attribute_names` does not. The
+# per-row dict comprehension `finalize` builds already collapses a duplicate
+# column NAME (a Python dict cannot hold the same key twice), so an assertion
+# on the written parquet's column order passes identically whether or not the
+# list itself is deduped — measured, and why this fixture does not read the
+# file. The claim is about the LIST `finalize` builds, so the assertion is on
+# that list.
+#
+# `finalize`'s own signature is unchanged, so the list is reached by spying on
+# the module-level helper it now calls, `_finalize_columns` — chosen over
+# inlining the dedupe, per the brief, because a spy on a call `finalize` makes
+# is what catches BOTH ways this could regress: the helper's own body losing
+# the dedupe (the spy's return still holds the duplicate), and `finalize`
+# reverting to building the list inline without calling the helper at all (the
+# spy is never invoked). A test that only unit-tests `_finalize_columns` in
+# isolation would miss the second — "a mutation applied to a proxy" — because
+# nothing would ever call `finalize` through the helper in that test.
+def test_fixture_d_finalize_columns_is_deduped_by_name(tmp_path: Path, monkeypatch):
+    from publishable.units import Unit, UnitList
+
+    calls: list[tuple[list[str], list[str]]] = []
+    returned: list[list[str]] = []
+    real = artifacts._finalize_columns
+
+    def spy(attribute_names: list[str], recorded: list[str]) -> list[str]:
+        calls.append((list(attribute_names), list(recorded)))
+        result = real(attribute_names, recorded)
+        returned.append(result)
+        return result
+
+    monkeypatch.setattr(artifacts, "_finalize_columns", spy)
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    # A Unit built directly (not through resolve_units), carrying an attribute
+    # named `unit` — the shape task 5's E-UNITS-ATTR-COLUMN refuses for a
+    # config but cannot reach here, since `Unit` is on § The importable
+    # surface and this call constructs one by hand.
+    roster = UnitList([Unit(key="p0", attributes={"unit": "HIJACK", "site": "a"})])
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    io.record("p0", {"score": 1})
+    io.finalize()
+
+    # The call-site half: `finalize` must actually route through the helper,
+    # or the spy — and the dedupe it wraps — is never exercised at all.
+    assert len(calls) == 1
+    attribute_names, recorded = calls[0]
+    assert attribute_names == ["unit", "site"]
+    assert recorded == ["score"]
+
+    # The list half: the helper's return, as `finalize` actually used it, has
+    # `"unit"` exactly once, in first-seen (leading) position.
+    columns = returned[0]
+    assert columns.count("unit") == 1
+    assert columns == ["unit", "site", "score"]
+
+    # Documents the residual correction 5 names: the dedupe fixes the LIST,
+    # not the VALUE. The attribute merge still overwrites `merged["unit"]`
+    # with the attribute's value, so the published row's `unit` column carries
+    # the attribute's "HIJACK", not the real key "p0" — unchanged by this
+    # task, and not asserted as a passing behaviour here, only recorded as the
+    # open residual (filed by task 12 for a direct caller; no guard is built
+    # for it in this task).
+    rows = _read_parquet(io.step_dir / "units.parquet")
+    assert rows == [{"unit": "HIJACK", "site": "a", "score": 1}]
 
 
 def test_no_files_are_written_when_nothing_was_recorded_or_skipped(tmp_path: Path):
