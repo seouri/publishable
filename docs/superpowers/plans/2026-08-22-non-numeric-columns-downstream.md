@@ -1974,3 +1974,68 @@ implementer.** These are in the plan itself, above and here.
 - **No count phrase, positional row locator, call-site enumeration or line-number citation appears above**
   except where a count is the thing being pinned (the gate literals, the 20 annotation sites, the moving
   keys) or the thing being corrected.
+
+---
+
+## Controller rulings, 2026-08-22 — appended AFTER this plan was written, and they bind every task below
+
+**These are here because a ruling that overrules a brief has to reach the brief.** The ledger reaches the
+controller and the reviewers; it reaches no implementer. A brief extracted from this plan carries these
+paragraphs, so **no task may act on the superseded reading above.**
+
+### Ruling 1 — the mixed column: mean over the values that exist, and the `n` must be the contributing count
+
+**The question the plan leaves open** (its correction 5): a column that is numeric for some units and
+`None` for others. The plan measured that *mixed → `None`* deletes the whole column's published block for
+every unit, and proposed the mean of the numeric values with a warning.
+
+**Ruling: the mean over the units that recorded a value, and `n` reports the number that contributed —
+not `completed`.** Grounds, measured rather than reasoned:
+
+- **A mixed *type* column cannot reach this question at all.** `_check_column_types(rows, ["v"])` refuses
+  `float` beside `str` (*"column 'v' recorded both a float (unit 'row 0') and a str (unit 'row 1')"*) and
+  `bool` beside `float`, while `int` beside `float` is accepted and promotes. So the only mixed column that
+  survives H5a's write side is **numeric beside `None`**, which is exactly the case this ruling is about —
+  and `None` is a legal recorded value (`coerce_scalars({"valid": None})` returns it), which this design
+  established.
+- **Dropping the column because one unit recorded `None` IS the defect this slice exists to end.** A
+  silent drop that costs every unit its block because one cell is absent is the same fault at a different
+  granularity, and choosing it here would mean shipping the defect's own shape as the fix.
+- **`n` counting contributors rather than `completed` is what makes the interval true.** *Units are the
+  inference base* and every interval core reports is computed from the per-unit table; an interval over
+  five values published beside `n.completed: 240` is a lie about its own precision, and it is the kind of
+  lie no later reader can detect from the record. The four-way `n` (`resolved`/`completed`/`ineligible`/
+  `failed`) is not widened — this is a per-metric contributing count, reported where the metric is.
+
+**Cost if wrong:** a metric whose coverage is a twentieth of the roster publishes an interval that reads
+like every other metric's, distinguished only by a number a reader has to notice. **That is why the warning
+is not optional and must name the count**, and why a task may not downgrade it to a silent computation.
+The alternative — refusing the run outright — is rejected because a partially-recorded metric is ordinary
+(a step that measures only what it can measure is exactly what `io.skip` exists beside), and a refusal
+would make `None` unusable as the legal value H5a made it.
+
+### Ruling 2 — `W-STATS-REPEATS-DISAGREE`'s `where` follows its sibling in the same loop
+
+Use `aggregate_where`, the sibling row in the same loop, **and do not name `data.units.measurements` in
+the `where`**. Grounds: *the sibling that already got it right is the first place to look*, and the
+remedy-naming alternative points at a config field that **may not exist in the file being validated** —
+a `where` that names an absent path is a diagnostic pointing at nothing. Name the remedy in the message
+if it helps; the `where` locates the fault.
+
+### Ruling 3 — the correction-family measurement stays IN the pin, not in prose
+
+The plan asks whether the Holm/`fdr_bh` half of the moving-key measurement belongs in the guard pin at
+all. **It does.** Grounds: this slice's predecessor produced **three miscounts in three consecutive
+batches**, every one in a number carried as prose and framed as *read rather than estimated*. A
+correction-family effect is the single least intuitive thing this slice moves — a column with **no
+non-numeric value anywhere** gets a different `ci95_corrected` because admitting a unit flipped a rank —
+and prose is exactly the medium those three miscounts travelled in. Arms E and F stand as captured.
+
+### Ruling 4 — the `scripts/` finding is real, and it is not this slice's to fix
+
+The plan is right that `scripts/` does not exist in this repo, so `CLAUDE.md`'s claims that briefs are
+extracted by `scripts/task-brief` and that `scripts/sdd-workspace` rewrites `.superpowers/sdd/.gitignore`
+are **documented rules with no code behind them** — the misreading `CLAUDE.md` itself names. Both scripts
+live in the installed `superpowers` plugin, not in this repository, and the `.gitignore` clobber is a real
+observed behaviour with a wrong path attached. **The controller fixes `CLAUDE.md` directly; no task here
+touches it for this reason**, and no task may cite `scripts/` as a repo path.
