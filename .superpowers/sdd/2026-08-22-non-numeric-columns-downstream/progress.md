@@ -164,3 +164,36 @@ offered as evidence about, whose docstring was line-wrapped, so the right senten
 Every one corrected by **appending**. None changed a conclusion — and that is the pattern, not the excuse:
 **the numbers that get miscounted are exactly the ones nothing downstream depends on**, which is why
 nobody notices until a reader relies on one.
+
+## Batch 4 — tasks 12, 13, 14 — the pins and the readers
+
+Commits `29d0a0d` (`E-STEP-COLUMN-UNKNOWN` in both directions), `336ed45` (the silent case's
+discriminating test), `a855f91` (`report` and `study` as readers), `0cf71b8`, review `3856b76`. Suite
+2926 → **2931**. **All three PASS, no findings** — and this batch changed no `src/`, so every candidate
+finding in it was a pin that does not pin.
+
+**Both directions of the refusal are really pinned, verified by running one mutation per direction rather
+than by reading the claim.** Breaking the firing side fails one pair of tests and leaves the honouring
+side green; breaking the honouring side fails a different pair and leaves the firing side green. That
+separation is the whole content of *pinned in both directions* — this repo's most repeated dead check is
+*"`validate` refused bad `block_size` values while nothing checked the draw used a good one."*
+
+**A reconstructed mutation is a claim about history as well as about code, and this one was adjudicated
+rather than accepted.** The brief prescribed a mutation with **no literal line in the post-refactor
+code**; the task reconstructed the pre-H5b behaviour from two corrections' documented numbers, and the
+reviewer checked the reconstruction against **task 4's own commit**, which had applied the identical shape.
+**Sound, not invented** — but the general point is that a brief written before a refactor can prescribe a
+mutation that no longer exists, and the honest response is to reconstruct **and say so**, not to report
+the mutation as run.
+
+**A substituted fact was disclosed and both halves were checked.** Task 13's brief asked for
+`resample_draws` as the third discriminating fact; measured, it is `2000` either way, because a plain
+boolean count can never produce a degenerate bootstrap draw. The bootstrap interval (`[2.0, 8.0]` versus
+`[0.0, 4.0]`) went in instead. **A substitution disclosed is legitimate; one that is also blind is a
+Major** — so the reviewer verified the brief's fact is genuinely blind *and* the substitute genuinely
+discriminates. Both held.
+
+**And the three-case rule survived its fourth opportunity.** `report` and `study` were run end-to-end
+through the installed console script over a project carrying **all three** of Ruling 1's mixtures, and
+both rendered the correct two rows and no third. After a Critical and two Majors from stating a two-case
+version of that rule, the batch that had the most room to restate it did not.
