@@ -310,3 +310,39 @@ errors* against a measured **376 failed, 48 errors** — the second miscount in 
 whose own framing is *counts read, not estimated*. Neither changed a conclusion. Both are recorded
 because a number introduced as **read** is a claim like any other, and the reader who trusts one is the
 reader who later moves a pin it was supposed to guard.
+
+## Batch 9 — task 12 alone, and reviewed — the filings and both consistency passes
+
+Commit `c52ea38`, review `7f1bc91` (**FAIL**), fix round `ce6c1c1`. Suite unmoved at **2891 passed, 1
+skipped, 2 xfailed** — this batch touches `spec-defects.md`, the design's appended correction, and its own
+report, and nothing else.
+
+**Reviewing this batch was the right call and the review earned itself on the first finding.** Four
+filings closed and struck (each re-derived against the code rather than trusted), two rows re-owned to
+H5b **by name with citations**, three new gaps filed **unassigned with a reason**, both passes run with
+every sweep proven able to fail — and one Critical: **batch 8's `.csv`-null finding was never filed at
+all.**
+
+**The chain it fell out of is worth naming precisely, because every link held except the last.** The gap
+was **measured** in batch 8 (a `None` cell writes as the empty string, so the design's Fixture E wording
+is true of `.parquet` and false of `.csv`). It was **recorded in this ledger** as *"filed for task 12"*.
+It was **named in the controller's dispatch** as carry-forward 5 of five. And the task **neither filed it
+nor reported it open** — its report does not mention it. So: *a ledger line saying "filed" is not a
+filing*, **and neither is a dispatch line**, which is the sharper form. The rule this repo already had —
+*carrying a finding into a brief is necessary and not sufficient* — has a new failure mode: the finding
+never reached the **brief**, only the dispatch prose around it, and a report that lists five carry-forwards
+and discharges four reads as complete.
+
+Filed now, with the correction **appended** to the design rather than edited into it, and the live half in
+`spec-defects.md`: whether `.csv` should **refuse** a `None` cell the way it now refuses a `bytes` or a
+structural one, since `None → ''` is exactly the silent lossy conversion that rule exists to prevent and
+is **the one such conversion H5a left in place.** It sits beside two entries of identical shape — a
+format-specific lossy or uncoded conversion the per-format ruling made visible without settling.
+
+**The Major was the third miscount in three batches.** The § Errors audit reported *"six raise sites"* for
+`E-STEP-KEY-COLLISION`; the string appears in three files and there are **eight** raises — six in
+`artifacts.py`, two in `stats.py`, with `cli.py`'s three mentions being comments. The audit's conclusion
+survives (the row is generic enough to cover all eight, and none is narrower than its code), but **a
+number offered as verification evidence has to be the number the command printed.** Three batches, three
+miscounts, none of them changing a conclusion — which is exactly why they are recorded: the reader who
+trusts one is the reader who later moves a pin it was supposed to guard.
