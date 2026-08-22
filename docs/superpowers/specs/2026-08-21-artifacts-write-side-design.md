@@ -848,3 +848,64 @@ unassigned-with-a-reason is correct; **widening this slice to reach it would be 
 **Cost if this ruling is wrong:** a project whose steps write structural or `bytes` cells through
 `io.write` sees a refusal where it previously saw a silently mangled artifact — and finds out at write
 time rather than at analysis time. I would rather be wrong in that direction.
+
+---
+
+## Second ruling from the controller, 2026-08-21 — Decision 5 is narrowed, because my first ruling's ground held for one format only
+
+**The plan's correction 3 challenged my approval's stated ground and it was right to.** I approved
+Decision 5 on the grounds that refusing a structural or `bytes` cell *"converts silent corruption into a
+loud refusal."* **Measured at `d2caacf`, that is true of `.csv` and false of `.parquet`:** `.csv` returns a
+`bytes` cell as the string `"b'x'"` and `[1, 2]` as `'[1, 2]'`, while **`.parquet` round-trips both
+intact.** So for `.parquet` the refusal would take a **working** round trip away, which is not what I
+approved.
+
+**And a second measurement narrows it further: `io.record` ALREADY refuses both**, with
+`E-STEP-RETURN-TYPE`. So the unit table — the inference base, and the thing this slice's charter is
+about — **is already protected.** Everything Decision 5 would newly refuse is an **arbitrary `io.write`
+artifact**, not `units.parquet`.
+
+**Ruling: the rule is "a writer accepts what it can give back", applied per format — which is ONE rule
+producing different answers, not two rules.**
+
+- **`.csv` refuses a structural or `bytes` cell**, because it cannot return one. That is the corruption
+  case, and converting it to a refusal is what I approved.
+- **`.parquet` accepts both**, because it *can* return them, byte-faithfully. **No refusal is added
+  there.**
+
+**Grounds, in binding order.** § Steps and artifacts' promise — *"what a writer takes is what its reader
+gives back"* — is **inherently format-specific**, so honouring it cannot mean imposing the least capable
+format's limit on the most capable one. `CLAUDE.md` § Invariants groups `.csv`/`.parquet`/`.jsonl` by
+**row shape** (*"rows as mappings"*), and says nothing requiring a **cell** to be scalar. And the
+four-operation table contract that would justify a scalar rule governs **the table `aggregate` receives**,
+which is built from `io.record` and already guarded.
+
+**What this costs, said plainly.** The two formats now visibly differ in what they accept, and a user who
+switches a step from `.parquet` to `.csv` can meet a new refusal. That is the honest shape of the
+underlying fact — the formats *do* differ — and the alternative hides it by removing capability that
+works.
+
+**What the plan must change.** Decision 5's coercion belongs in **`_encode_csv` only**; `_encode_parquet`
+keeps its current acceptance. **Stoppage 1 shrinks to the `.csv` half**, so the four stoppages my first
+ruling's requirement 1 told you to document become **fewer, and the count must not be carried forward** —
+name what actually stops. The **`.parquet` round-trip becomes a pin**, not merely an unchanged behaviour:
+it is now a documented capability and *a correct behaviour left unpinned* is this project's seventh
+recurring failure.
+
+**Correction 1 stands and is the sharper of the two.** Re-pointing three guards at `RESERVED_COLUMNS`
+would break **a legally recorded `by` column** — `record` refusing it, and the collapse and `finalize`
+silently dropping it. That is **Decision 4 applied against Decision 3**, and it is exactly the hazard my
+first ruling named: *the refusal removes one producer of a `by` column, not the possibility.* **The plan's
+task-5 pin on the `by` column's survival in both `record` branches is the enforcement, and mutation (iv)
+is what makes it real.**
+
+**On correction 8 — cross-row unification for `.csv` would be a fifth, undisclosed stoppage.** Correct not
+to build it, and correct to word each row for the format it is true of. **An undisclosed stoppage is worse
+than a disclosed one**, and this ruling exists because one of four was disclosed under a ground that
+covered only half of it.
+
+**What I got wrong, recorded because the ledger is where that belongs.** I measured `.csv`'s corruption,
+found it real, and generalized from it to both formats without measuring the second — the same
+*answering from a proxy* move this project has now recorded six times, made by the person enforcing the
+rule. **The plan caught it by measuring what I asserted**, which is the behaviour the *code outranks both*
+rule exists to produce.
