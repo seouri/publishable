@@ -16678,3 +16678,223 @@ def test_h8c_arm_b_publishable_all_is_a_full_sorted_list(tmp_path: Path):
         "register_writer",
     ]
     assert list(publishable.__all__) == sorted(publishable.__all__)
+
+
+# ---------------------------------------------------------------------------
+# H5a task 13: the guard pin — arm A (a real run's `units.parquet`) and arm D
+# (the worked example's own numbers, as raw text). Captured by running, at
+# `804271c` (`main`, clean tree, before H5a's own first task). See
+# `docs/superpowers/plans/2026-08-21-artifacts-write-side.md` task 13 and
+# `docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md` (11
+# decisions plus two controller rulings). Arm B (both encoders' golden
+# bytes) and arm C (the two shipped type clashes through a real `io.write`)
+# live in `tests/test_artifacts.py`, next to the `_encode_parquet`-direct
+# pins arm C names by grep rather than duplicates.
+#
+# What this does NOT re-capture, and what was grepped to decide that:
+# `run.yaml`'s top-level and `provenance` key lists are already pinned, in
+# order, by `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`,
+# `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` and
+# `test_h8c_arm_a_the_records_field_level_shape` above (grep for
+# `keys()) ==` over this file), and `publishable.__all__` is pinned whole
+# by `test_h8c_arm_b_publishable_all_is_a_full_sorted_list` immediately
+# above. H5a exports no name and writes no new record key, so none of
+# those three is repeated here.
+# ---------------------------------------------------------------------------
+
+_H5A_ARM_A_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"present": True, "score": float(i)}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types(
+    tmp_path: Path,
+):
+    """Arm A — a real run's `units.parquet`: column order, decoded values,
+    and `type(v).__name__` per column. THE LOAD-BEARING ARM, because it is
+    version-robust — it catches `int` silently promoted to `float`, a `bool`
+    becoming an `int`, a `str` becoming its `repr`, a `None` becoming
+    something else, and any reordering, without depending on the locked
+    `pyarrow` the way arm B2 (`tests/test_artifacts.py`) does.
+
+    Driven by a real `run`: one declared attribute (`cohort`), ten units,
+    and a starter step recording a bool column (`present`) and a numeric
+    one (`score`) — together with `unit`/`cohort` (`str`), every base
+    scalar type this slice's coercion touches. No literal below is
+    transcribed from `artifacts.py`; every one is read back from the
+    parquet file this run actually wrote. `p1`'s and `p2`'s `cohort` values
+    are computed from `run_a_project`'s own roster formula
+    (`"ab"[i % 2]` for `patient_id == f"p{i}"`), not hand-copied.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H5A_ARM_A_STARTER_STEP,
+    )
+    parquet_path = next(doc["run_dir"].rglob("units.parquet"))
+    rows = _decode_parquet(parquet_path.read_bytes())
+    by_unit = {row["unit"]: row for row in rows}
+
+    assert list(rows[0].keys()) == ["unit", "cohort", "present", "score"]
+    assert len(rows) == 10
+
+    assert by_unit["p1"]["cohort"] == "ab"[1 % 2]
+    assert by_unit["p2"]["cohort"] == "ab"[2 % 2]
+    assert by_unit["p1"]["present"] is True
+    assert by_unit["p1"]["score"] == 0.0
+    assert by_unit["p10"]["score"] == 9.0
+
+    first = rows[0]
+    assert type(first["unit"]).__name__ == "str"
+    assert type(first["cohort"]).__name__ == "str"
+    assert type(first["present"]).__name__ == "bool"
+    assert type(first["score"]).__name__ == "float"
+
+
+_H5A_ARM_D_LITERALS = (
+    "0.581",
+    "0.488",
+    "0.661",
+    "0.607",
+    "0.412",
+    "0.026",
+    "−0.007",
+    "0.059",
+    "−0.169",
+    "0.014",
+    "8e21",
+    "1a2b",
+    "3d8a",
+    "6b1f",
+    "2f5c8d0",
+)
+
+_H5A_ARM_D_README_LINES = (
+    "  00_baseline           0.581   [0.488, 0.661]    —",
+    "  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]",
+    "  02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]",
+    "  intervals over 228 of 240 units (12 failed) · seed spread std 0.014",
+    "run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml",
+    "└── run_2026-08-07T09-14-03Z_8e21ab3/",
+    "        step03_analyze: {r: {value: 0.607, basis: units, n: {completed: 228},",
+    "                             ci95: [0.517, 0.683], repeat_spread: {std: 0.014}}}",
+    "        step03_analyze: {r: {delta: 0.026, paired: true, ci95: [-0.007, 0.059]}}",
+    "  code_hash: sha256:8e21…            # your src/** + templates/**, from a clean tree",
+    "  parameters_hash: sha256:1a2b…      # this exact parameter set",
+    "  input_manifest_hash: sha256:3d8a…  # the data it actually read",
+    "code_hash          identical    sha256:8e21…",
+    "input_manifest     identical    sha256:3d8a…",
+    "uv.lock            identical    sha256:6b1f…",
+)
+
+_H5A_ARM_D_DESIGN_PRINCIPLES_LINES = (
+    "code_hash          identical    sha256:8e21…",
+    "input_manifest     identical    sha256:3d8a…",
+    "uv.lock            identical    sha256:6b1f…",
+)
+
+_H5A_ARM_D_REFERENCE_LINES = (
+    "# <output_dir>/run_2026-08-06T14-02-11Z_8e21ab3/run.yaml",
+    "run_id: run_2026-08-06T14-02-11Z_8e21ab3      # <timestamp>_<short code_hash>",
+    "parameters_hash: sha256:1a2b...",
+    "code_hash: sha256:8e21...",
+    "    uv_lock_hash: sha256:6b1f...",
+    "  input_manifest_hash: sha256:3d8a...",
+    "          r: {value: 0.607, basis: units, method: percentile_over_units,",
+    "              repeat_spread: {std: 0.014, n: 5, kind: seed}}",
+    "          r: {delta: 0.026, basis: units, paired: true,",
+    "              ci95: [-0.007, 0.059],",
+    "              ci95_corrected: [-0.007, 0.059],      # rank 2 of 2 under holm: α/(m−i+1) = α",
+    "├── run_2026-08-06T14-02-11Z_8e21ab3/     # <timestamp>_<short code_hash>",
+    "├── run_2026-08-07T09-14-03Z_8e21ab3/     # a second run — collides with nothing",
+    "└── latest -> run_2026-08-07T09-14-03Z_8e21ab3",
+    "r: {value: 0.607, basis: units, weighted_by: sampling_weight,",
+    "r: {value: 0.607, basis: units, weighted_by: sampling_weight,",
+    "  value: 0.607",
+    "  repeat_spread: {std: 0.014, n: 5, kind: seed}   # how much the pipeline moved",
+    "  - {std: 0.014, n: 3, kind: seed}",
+    "**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have: **the point estimate over half the raw `ci95` width, largest first.** A member with no interval has no such ratio to compute — it is ranked in a tier below every member that does, ties within that tier breaking by declaration order the same way ties within the interval-carrying tier do, so the tier answers where such a member sorts without inventing an evidence value for it. It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by declaration order — the position the comparison and metric occupy in the config, an index assigned once as the family is built — so a rank is a function of the record rather than of an iteration order: a rank decides which α a member's corrected interval is built at, and an ordering that moved with a metric's name would change which interval got the tightest level the moment someone renamed a column. Ranking on a p-value where one exists and on this ratio elsewhere would leave a family whose intervals are built at a rank ordered by two statistics, which is not an ordering.",  # noqa: E501
+    "          r: {value: 0.581, basis: units, method: percentile_over_units,",
+    "              ci95: [0.488, 0.661],",
+    "          r: {value: 0.607, basis: units, method: percentile_over_units,",
+    "              repeat_spread: {std: 0.014, n: 5, kind: seed}}",
+    "          r: {delta: 0.026, basis: units, paired: true,",
+    "              ci95: [-0.007, 0.059],",
+    "              ci95_corrected: [-0.007, 0.059],      # rank 2 of 2 under holm: α/(m−i+1) = α",
+    "    r: {value: 0.607, basis: units, n: {resolved: 240, completed: 228, failed: 12}, ci95: [...]}",  # noqa: E501
+    "A  run record  run_2026-08-06T14-02-11Z_8e21ab3  completed",
+    "B  run record  run_2026-08-07T09-14-03Z_8e21ab3  completed",
+    "code_hash          identical    sha256:8e21…",
+    "input_manifest     identical    sha256:3d8a…",
+    "uv.lock            identical    sha256:6b1f…",
+    "parameters_hash    identical    sha256:1a2b…",
+    "      declared_in: parameters_hash sha256:1a2b...      # the config that predicted it",
+    "      observed: {delta: 0.026, ci95: [-0.007, 0.059],",
+    "                 ci95_corrected: [-0.007, 0.059]}       # corrected in the hypothesis family",
+    "      verdict_evaluated_on: observed                   # 0.026 against threshold 0.02",
+    "**In the worked example the two available answers differ, and the field is what makes that legible.** The observed delta of 0.026 clears the declared threshold of 0.02, so `h1` is supported on `observed` — while the same delta's interval over 228 units, [−0.007, 0.059], does not exclude zero, so the same hypothesis written `evaluate_on: ci95_lower` would come back `supported: false`. Neither verdict is wrong; they answer different questions, and a reader who can see which one was asked can decide what the run showed. A record that reported only `supported: true` would be the version worth distrusting. See [What a hypothesis is tested against](#what-a-hypothesis-is-tested-against) for when to declare which.",  # noqa: E501
+    "      declared_in: parameters_hash sha256:1a2b...",
+    "  main:        {file: main.run.yaml,        run_id: run_2026-08-06T14-02-11Z_8e21ab3}",
+    "  sensitivity: {file: sensitivity.run.yaml, run_id: run_2026-08-07T09-14-03Z_8e21ab3}",
+    "  ablation:    {file: ablation.run.yaml,    run_id: run_2026-08-07T16-40-12Z_8e21ab3}",
+    "2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so it can't collide with an existing checkout and doesn't need naming.",  # noqa: E501
+    "Prepared my-study_run_2026-08-06T14-02-11Z_8e21ab3/",
+    "  cd my-study_run_2026-08-06T14-02-11Z_8e21ab3",
+)
+
+_H5A_ARM_D_PATHS = {
+    "README": Path(__file__).resolve().parents[1] / "README.md",
+    "DESIGN_PRINCIPLES": (Path(__file__).resolve().parents[1] / "docs" / "design-principles.md"),
+    "REFERENCE": REFERENCE_MD,
+}
+
+_H5A_ARM_D_GOLDEN = {
+    "README": _H5A_ARM_D_README_LINES,
+    "DESIGN_PRINCIPLES": _H5A_ARM_D_DESIGN_PRINCIPLES_LINES,
+    "REFERENCE": _H5A_ARM_D_REFERENCE_LINES,
+}
+
+
+def _h5a_arm_d_lines_carrying_the_worked_example(text: str) -> tuple[str, ...]:
+    """Every line of `text` containing at least one of the worked example's
+    own interval/hash literals, in file order, kept whole and un-parsed —
+    located by the literal each line contains, never by an ordinal or an
+    nth-line index. Raw `str.split`, never a markdown or YAML reader: a
+    defect that lives in *how* the bytes are written must survive into the
+    comparison, the way a YAML-alias defect once shipped past a reader that
+    resolved it away first.
+    """
+    return tuple(
+        line for line in text.split("\n") if any(literal in line for literal in _H5A_ARM_D_LITERALS)
+    )
+
+
+@pytest.mark.parametrize("doc_name", ["README", "DESIGN_PRINCIPLES", "REFERENCE"])
+def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
+    """Arm D — the worked example's own numbers, as raw text. NO AUTHORIZED
+    EDITOR: no task in H5a edits a worked example, so a passing arm D is
+    the proof rather than the promise.
+
+    Each of the three golden tuples above was captured by scanning the
+    named file, at `804271c`, for every line containing one of
+    `_H5A_ARM_D_LITERALS` — the worked example's interval and hash literals
+    named in `docs/superpowers/plans/2026-08-21-artifacts-write-side.md`
+    task 13 — and keeping the whole line. This test re-scans the SAME file
+    now and compares the two tuples byte for byte.
+    """
+    text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
+    assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]

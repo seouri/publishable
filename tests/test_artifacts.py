@@ -1,4 +1,5 @@
 # tests/test_artifacts.py
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -2380,3 +2381,91 @@ def test_h8c_arm_c_read_condition_resolves_at_three_repeats_and_at_one(tmp_path:
     for built in (three, one):
         summary = built["record"]["results"]["summary"]["step03_compare"]
         assert summary == {"model_m": "pearson", "n_rows": 10}
+
+
+# ---------------------------------------------------------------------------
+# H5a task 13: the guard pin's arms B and C — both encoders' bytes through a
+# real `StepIO.write`, and the two shipped type-clash refusals through that
+# same real call rather than through `_encode_parquet` directly. Captured by
+# running, at `804271c` (`main`, clean tree, before H5a's own first task).
+# `docs/superpowers/plans/2026-08-21-artifacts-write-side.md` task 13;
+# `docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`.
+#
+# Arm A (a real run's `units.parquet`) and arm D (the worked example's own
+# text) live in `tests/test_cli.py`, because arm A needs a real `run` and
+# arm D needs no artifact at all — this file's fixtures build a `StepIO`
+# directly, which is the surface both arms below actually exercise.
+# ---------------------------------------------------------------------------
+
+_H5A_ARM_B_ROWS = [
+    {"i": 1, "f": 1.5, "s": "hello", "b": True, "n": None},
+    {"i": 2, "f": 2.5, "s": "world", "b": False, "n": None},
+]
+
+
+def test_h5a_arm_b1_the_csv_golden_bytes_never_move_in_this_slice(tmp_path: Path):
+    """Arm B1 — `.csv` GOLDEN BYTES. NEVER MOVE IN THIS SLICE.
+
+    One row set of Python scalars covering `int`, `float`, `str`, `bool` and
+    `None`, written through a real `StepIO.write` and read back as bytes.
+    Deterministic: `csv` is stdlib and no library version is in the path, so
+    this is the same guarantee `test_a_mixed_int_and_float_column_promotes_to_float_deliberately`
+    and its siblings already rest on, made a byte-level pin rather than a
+    round-trip assertion.
+    """
+    io = make_io(tmp_path)
+    path = io.write("golden.csv", _H5A_ARM_B_ROWS)
+    assert path.read_bytes() == (b"i,f,s,b,n\n1,1.5,hello,True,\n2,2.5,world,False,\n")
+
+
+def test_h5a_arm_b2_the_parquet_golden_sha256_is_a_tripwire(tmp_path: Path):
+    """Arm B2 — `.parquet` GOLDEN sha256. A TRIPWIRE, edit conditions STATED
+    IN ADVANCE and NOT left to judgement.
+
+    This hex is coupled to the `pyarrow` `uv.lock` pins, not to this file's
+    source. If it fails: arm A
+    (`test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types`
+    in `tests/test_cli.py`) is what tells you which fault you have — arm A
+    green and this red means the library moved; both red means the coercion
+    moved a legal artifact. It may be recaptured ONLY when `uv.lock`'s
+    `pyarrow` entry changed in the same commit, and only with arm A green.
+    NO TASK IN H5a MAY EDIT IT: no task in this slice touches `uv.lock`.
+    """
+    io = make_io(tmp_path)
+    path = io.write("golden.parquet", _H5A_ARM_B_ROWS)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == "c003934b92fed035aa70dc8e8ea04b336a9c27aedfa64196cba4b440dabcea3e"
+
+
+def test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write(tmp_path: Path):
+    """Arm C — the shapes that must keep raising, through a real `io.write`
+    rather than through `_encode_parquet` directly.
+
+    The bool/int and str/int refusals themselves are ALREADY pinned by
+    `test_a_bool_and_int_column_clash_raises_rather_than_coercing` and
+    `test_a_str_and_int_column_clash_raises_rather_than_coercing` above
+    (grepped, not assumed — both call `_encode_parquet` directly). What
+    this arm adds: the same two shapes through `StepIO.write`, so a later
+    `except ContractError` wrapper around `io.write`'s dispatch (task 9)
+    cannot swallow or re-code them — and the assertions are on the code and
+    on the column name and both type names as SUBSTRINGS, never on the whole
+    message, `startswith`, or the surface clause `"io.record's values, a
+    step's return, and a template's aggregate..."` — task 9 is authorized to
+    delete that clause and to prefix the artifact name onto the message, and
+    a golden literal here would fail an arm this plan gives no editor.
+    """
+    io_bool = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_bool:
+        io_bool.write("clash.parquet", [{"v": True}, {"v": 1}])
+    assert e_bool.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_bool.value)
+    assert "bool" in str(e_bool.value)
+    assert "int" in str(e_bool.value)
+
+    io_str = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_str:
+        io_str.write("clash.parquet", [{"v": "x"}, {"v": 1}])
+    assert e_str.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_str.value)
+    assert "str" in str(e_str.value)
+    assert "int" in str(e_str.value)
