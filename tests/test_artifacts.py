@@ -344,6 +344,61 @@ def test_recording_a_column_named_unit_is_a_key_collision(tmp_path: Path):
     assert "unit" in str(e.value)
 
 
+# Task 7 — Fixture M, design Decision 9. Measured at `d2caacf`: the plain branch
+# used to accept a `measurement` key and write it into `units.parquet`, while the
+# `measurement=` branch refused the identical key three lines away. Three arms:
+# the plain branch now refuses it (arm 1), the `measurement=` branch already did
+# and still does (arm 2 — kept so the symmetry is what the test asserts, not just
+# arm 1 in isolation), and a plain record naming the *plural* `measurements` still
+# writes (arm 3 — the control that stops a substring/prefix guard from passing).
+def test_fixture_m_plain_record_refuses_a_measurement_column(tmp_path: Path):
+    """Arm 1: the asymmetry this task closes."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"measurement": "HIJACK"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "measurement" in str(e.value)
+
+
+def test_fixture_m_measurement_branch_still_refuses_the_same_key(tmp_path: Path):
+    """Arm 2: already passing today, kept so the test asserts the symmetry
+    rather than only the new branch."""
+    io = _measuring_io(tmp_path)
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"measurement": "HIJACK"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_fixture_m_a_plural_measurements_column_still_writes(tmp_path: Path):
+    """Arm 3, the control: `measurements` (plural) is a different name from
+    `measurement` and must keep writing — a guard written as a substring or
+    prefix test over the key would swallow this too."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.record("p0", {"measurements": 3})
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p0", "measurements": 3}]
+
+
 def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
     tmp_path: Path,
 ):

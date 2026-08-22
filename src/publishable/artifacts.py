@@ -680,6 +680,25 @@ class StepIO:
                 "be named `unit`",
                 code="E-STEP-KEY-COLLISION",
             )
+        # The mirror of the `measurement=` branch's own `measurement` guard above:
+        # in one step's directory, `units.parquet` and `measurements.parquet` are
+        # siblings, and `_collapse_measurements` consumes the measurement axis on
+        # its way into `units.parquet` — the column is dropped there precisely
+        # because it has no meaning once the rows are one unit. Without this
+        # guard, a `measurement` column in `units.parquet` would mean "the axis,
+        # consumed" for a measured unit and "whatever the step recorded" for a
+        # plain one, in the same file, in the same column. This is unconditional
+        # — not gated on whether `data.units.measurements` is declared — because
+        # gating it would make one line of step code legal or illegal depending
+        # on a config block elsewhere: the same "depending on which call the step
+        # happened to make first" arbitrariness this docstring already argues
+        # against for the settle rules.
+        if "measurement" in values:
+            raise ContractError(
+                "`measurement` collides with the measurement column: a recorded "
+                "column may not be named `measurement`",
+                code="E-STEP-KEY-COLLISION",
+            )
         collision = self._declared_attributes() & values.keys()
         if collision:
             name = sorted(collision)[0]
