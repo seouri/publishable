@@ -165,6 +165,112 @@ def test_reserved_attribute_names_are_refused(input_dir: Path, reserved: str):
     assert e.value.code == "E-UNITS-ATTR-RESERVED"
 
 
+# Fixture A — the reserved COLUMN name (`unit`, `measurement`, `by`), with a
+# decoy sorting on EACH side (`aaa_site` before, `zzz_site` after). Design
+# Decision 4, plan task 5 step 5. Two names only ever distinguish two
+# answers: without a decoy on both sides, a fixture with the reserved name in
+# one position can't tell "reports the first offender" from "reports the
+# first name" or from an ordering that happens to agree. The table carries
+# `unit`, `measurement`, `by`, `aaa_site` AND `zzz_site` as REAL columns —
+# without that, every arm would fire on `E-UNITS-ATTR-MISSING` (a mutation
+# firing for the wrong reason) rather than on the reserved-name check this
+# fixture exists to pin.
+@pytest.fixture
+def reserved_column_table(tmp_path: Path) -> Path:
+    d = tmp_path / "colname_in"
+    d.mkdir()
+    (d / "index.csv").write_text(
+        "patient_id,aaa_site,unit,measurement,by,zzz_site\np1,a,u,m,b,z\np2,a,u,m,b,z\n"
+    )
+    return d
+
+
+@pytest.mark.parametrize("reserved", ["unit", "measurement", "by"])
+def test_a_reserved_column_name_is_refused_with_a_decoy_on_each_side(
+    reserved_column_table: Path, reserved: str
+):
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["aaa_site", reserved, "zzz_site"],
+            },
+            reserved_column_table,
+        )
+    assert e.value.code == "E-UNITS-ATTR-COLUMN"
+    assert reserved in str(e.value)
+
+
+def test_a_units_field_name_among_decoys_is_still_reported_reserved_not_column(
+    reserved_column_table: Path,
+):
+    """The fourth arm: `paths` is a `UNIT_FIELDS` member, not a `RESERVED_COLUMNS`
+    one, and this is what proves the two codes are told apart rather than one
+    swallowing the other. `reserved_column_table` doesn't carry a `paths`
+    column, but `UNIT_FIELDS` is checked first, so the missing-column check
+    below it is never reached."""
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["aaa_site", "paths", "zzz_site"],
+            },
+            reserved_column_table,
+        )
+    assert e.value.code == "E-UNITS-ATTR-RESERVED"
+
+
+@pytest.mark.parametrize("reserved", ["unit", "measurement", "by"])
+def test_a_resolver_yielding_a_reserved_column_attribute_is_refused(
+    installed, registries, tmp_path, reserved: str
+):
+    """The resolver arm of Fixture A. Unlike the table and glob arms, a
+    resolver's decoys are yielded attributes rather than table columns —
+    `_from_resolver` projects onto the union of what was yielded, so
+    `aaa_site`/`zzz_site` being present in `yielded` is what keeps this arm
+    from tripping `E-UNITS-ATTR-MISSING` instead."""
+    from publishable.config import Config
+
+    body = (
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='p1', attributes={'aaa_site': 'a', "
+        f"{reserved!r}: 'x', 'zzz_site': 'z'}})\n"
+    )
+    module = f"colreserved_{reserved}_r5"
+    _install_resolver(installed, tmp_path, module, body)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["aaa_site", reserved, "zzz_site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop(module, None)
+    assert excinfo.value.code == "E-UNITS-ATTR-COLUMN"
+    assert reserved in str(excinfo.value)
+
+
+def test_a_glob_source_reports_a_reserved_column_name(input_dir: Path):
+    """The glob arm is different and written differently: `_from_glob` refuses
+    EVERY declared attribute as unsourceable, so a leading decoy would raise
+    `E-UNITS-ATTR-MISSING` first rather than exercising this check at all — a
+    glob has no columns of its own for a decoy to occupy. So this arm
+    declares the reserved name alone."""
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["by"]}, input_dir)
+    assert e.value.code == "E-UNITS-ATTR-COLUMN"
+    assert "by" in str(e.value)
+
+
 def test_a_unit_is_frozen_and_hashable_by_key():
     u = Unit(key="p1", paths=(), attributes={"label": "1"})
     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError

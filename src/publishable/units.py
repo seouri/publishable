@@ -23,7 +23,35 @@ from publishable.config import Config
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
-RESERVED_FIELDS = ("key", "paths", "attributes")
+UNIT_FIELDS = ("key", "paths", "attributes")
+"""Can `unit.<name>` reach this attribute? `Unit` is a frozen dataclass whose
+`__getattr__` resolves attributes, so a field of the same name wins and the
+attribute is unreachable by the accessor the documents give for it. These
+cannot be freed: the accessor is the type's own API."""
+
+RESERVED_COLUMNS = ("unit", "measurement", "by")
+"""Would this attribute silently occupy a column that already means
+something? Each already names a column in a per-unit table (`unit`) or a
+block in the record (`measurement`, `by`). Any of these could be freed by
+renaming the column or the block — a different lifetime from `UNIT_FIELDS`
+above, which is the whole ground for two constants rather than one wider
+tuple (design Decision 3).
+
+**This constant has exactly ONE reader: the attribute-name check at the
+three attribute call sites below (`_from_table`, `_from_glob`,
+`_from_resolver`).** It must NOT be pointed at `io.record`'s collision
+guards, at `_collapse_measurements`' structural-column exclusion, or at
+`finalize`'s `key != "unit"` filter (plan § Corrections, correction 1):
+those three sites answer a *different* question — "may a RECORDED column be
+named this?" — whose answer for `by` is yes, on design Decision 4's own
+text: a step *recording* a column called `by` stays legal, because the
+retry that would refuse it re-runs against executions that already
+completed. Re-pointing any of the three at this constant would refuse (or
+silently drop from `units.parquet`) a legally recorded `by` column. This
+refusal removes one *producer* of a `by` column — a declared attribute —
+never the possibility of one, and is not license to identify a stratum by
+the name `by` anywhere: `report` already had to learn that lesson
+structurally (H8c), and this comment is what stops it being relearned here."""
 
 
 class _FrozenAttributes(Mapping[str, Any]):
@@ -208,11 +236,19 @@ def _from_table(
             code="E-UNITS-KEY-MISSING",
         )
     for name in attrs:
-        if name in RESERVED_FIELDS:
+        if name in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {name!r}, which is a field of `Unit` itself; "
-                f"{', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"{', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if name in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {name!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         if name not in columns:
             raise ContractError(
@@ -233,11 +269,19 @@ def _from_glob(
     # example. Ordered as `_from_table` orders it, reserved before unsourced, so
     # one declaration draws one code whichever source it sits under.
     for name in decl.get("attributes") or []:
-        if name in RESERVED_FIELDS:
+        if name in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {name!r}, which is a field of `Unit` itself; "
-                f"{', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"{', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if name in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {name!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         raise ContractError(
             f"`data.units.attributes` names {name!r}, which `from: {{glob: {pattern!r}}}` "
@@ -411,11 +455,19 @@ def _from_resolver(
                 "so the field a table would simply have carried has to be yielded",
                 code="E-UNITS-ATTR-MISSING",
             )
-        if attribute in RESERVED_FIELDS:
+        if attribute in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {attribute!r}, which is a field of `Unit` "
-                f"itself; {', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"itself; {', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if attribute in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         if attribute not in yielded:
             raise ContractError(

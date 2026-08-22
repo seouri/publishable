@@ -652,6 +652,51 @@ def test_no_measurements_parquet_when_no_step_measured(tmp_path: Path):
     assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "score": 10}]
 
 
+# Task 5 step 6 — the arms § Corrections correction 1 exists for. A recorded
+# `by` column is legal by design (design Decision 4: the refusal removes one
+# PRODUCER of a `by` column, an attribute declaration, never the possibility
+# of one), and `RESERVED_COLUMNS` must have exactly one reader for that to
+# stay true. Without these two pins, a later slice pointing `record`'s
+# collision guards or `_collapse_measurements`' structural-column exclusion
+# at the constant would refuse or silently drop a legally recorded `by`
+# column, with the suite green.
+def test_a_plain_recorded_by_column_survives_into_units_parquet(tmp_path: Path) -> None:
+    """Arm (a): a PLAIN `io.record` payload naming `by` reaches `units.parquet`
+    with its value. `RESERVED_COLUMNS` is not consulted by `record`'s
+    collision guards at all — only `unit` and `measurement` are, by literal —
+    so `by` is neither of the two names those guards refuse."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    io.record("p1", {"by": 2.0, "score": 10})
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "by": 2.0, "score": 10}]
+
+
+def test_a_measured_by_column_survives_the_collapse_into_units_parquet(tmp_path: Path) -> None:
+    """Arm (b): a `measurement=`-recorded column named `by` survives
+    `_collapse_measurements`. `collapse: "first"` is declared explicitly
+    (rather than leaving `by` a numeric value) because `_collapse_measurements`
+    calls `rule_for("by", collapse)` then `coerce_for_rule` — under a NUMERIC
+    rule a string `by` value would refuse before this arm could observe
+    survival at all, which is a fixture that fires for the wrong reason. Under
+    `first`, `coerce_for_rule` is a no-op and the earliest-recorded string
+    value survives untouched — which is also why `by`'s value here is a
+    string ("north") rather than a number: a numeric value under `first`
+    would pass even if `_collapse_measurements`' structural-column exclusion
+    HAD been re-pointed at `RESERVED_COLUMNS`, since `coerce_for_rule` would
+    silently produce a number either way. A string value is what makes this
+    arm distinguish "the column is excluded" from "the column collapsed"."""
+    io = _measuring_io(tmp_path, collapse="first")
+    io.record("p1", {"by": "north", "score": 10}, measurement="r1")
+    io.record("p1", {"by": "north", "score": 20}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p1", "by": "north", "score": 10}
+    ]
+
+
 def test_a_numeric_rule_coerces_a_recorded_string_before_applying(tmp_path: Path):
     """`coerce_scalars` guarantees a scalar, not a number: a step recording `"10"`
     reaches the collapse as a `str`, where `mean` would return the string `"10"`
