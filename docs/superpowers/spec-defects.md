@@ -8639,3 +8639,44 @@ write side of the per-unit tables as its surface, and H5a — which built that w
 Whoever reopens it should read it beside the write-side entries already filed above (the `.csv` null
 round-trip, the uncoded `.parquet` object, the uncoded NumPy nesting, the non-`str` column key): all are
 the same write-side surface, and this is a fifth entry of a related shape rather than an unrelated one.
+
+## STRUCK 2026-08-22 (H5b task 10) — CLOSED in the slice that found it: a derived key colliding with a non-numeric recorded column was not refused, and three shipped claims promised it was
+
+**Found and closed in the same slice, so it never lived as an open entry — recorded here because it was
+filed nowhere and three shipped claims stood in for the filing.** H5b's scoping measured that a derived
+key colliding with a **non-numeric** recorded column reached no refusal, because
+`summarize_step`'s check is `set(derived) & set(columns)` with `columns` built from `collapsed`, and
+`collapse_repeats` dropped from `collapsed` any unit whose every recorded value was non-numeric. A record
+carrying only a bool column collapsed to `{}`, so the column was in no `columns` set and the collision
+could not be seen.
+
+**The three claims that promised the refusal anyway**, each shipped and each unfalsifiable at the time:
+
+- `summarize_step`'s own docstring — *"A derived key colliding with a recorded column — even one dropped
+  above for being non-numeric — is refused."* The qualifier described nothing; H5b task 4 deleted it
+  rather than rewriting it, because after the collapse admits the record nothing is dropped above.
+- `reference.md` § Errors core raises' `E-STEP-KEY-COLLISION` row — *"a derived key against a recorded
+  column"*, unqualified, so the row read as covering the case it did not reach. **The row needed no
+  change here and got none:** the same emit site simply sees a wider input, and the row's five collision
+  phrases were re-checked against all eight emit sites (two in `stats.py` — the reserved `by` name and
+  the recorded-column collision; six in `artifacts.py` — `unit`, `measurement` and a declared attribute,
+  each in both the measured and the unmeasured branch of `io.record`) and cover every one.
+- **The test's own docstring named the hazard verbatim and proved nothing.**
+  `test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused` was green over a hand-built
+  `{f"u{i}": {"r": True}}` — a `collapsed` no production caller could produce, since the collapse
+  returned `{}` for exactly that record. **A green test whose docstring names the hazard is the worst of
+  the three**, because it is the one a later reader greps for and stops looking.
+
+**What closes it.** H5b task 4's collapse admits every unit it was handed, so the column is in
+`collapsed`, so it is in `columns`, so the existing check fires — **no new code**, verified by running the
+real `collapse_repeats` and then `summarize_step` rather than by reading the check. H5b task 10 renamed
+that test to `test_a_derived_key_colliding_with_a_non_numeric_recorded_column_is_refused` (the word
+*dropped* describes nothing now) and replaced its fixture with a real `collapse_repeats` output, keeping
+its assertion. It is distinct from task 4's Fixture E, which carries a numeric column beside the colliding
+one; this fixture carries **no numeric column at all**, which is the shape the collapse used to drop
+wholesale and the reason the test was unreachable.
+
+**What it closes upstream, and no more than that.** One corner of the H4b-2 Critical: a derived key
+colliding with a recorded column's name published an *unclustered* contrast interval, because the refusal
+could not see the column. **For a non-numeric column it now can.** The numeric case was already refused
+before this slice and is pinned as the guard pin's arm D(ii) — this entry claims nothing about it.

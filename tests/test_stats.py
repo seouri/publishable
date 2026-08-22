@@ -1095,12 +1095,36 @@ def test_a_compute_that_raises_valueerror_is_contained_the_same_as_zerodivisione
     assert draws_used == 0
 
 
-def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():
+def test_a_derived_key_colliding_with_a_non_numeric_recorded_column_is_refused():
     """The collision check runs against every recorded column, including one
-    dropped from `out` for being non-numeric — otherwise a bool column named
-    `r` plus a derived `r` would silently coexist as two different meanings
-    under one key."""
-    collapsed = {f"u{i}": {"r": True} for i in range(5)}
+    that earns no published metric block for being non-numeric — otherwise a
+    bool column named `r` plus a derived `r` would silently coexist as two
+    different meanings under one key.
+
+    **Renamed and re-driven, and the fixture is the point.** This test shipped
+    green over a hand-built `{f"u{i}": {"r": True}}` — a `collapsed` no
+    production caller could produce, because the collapse returned `{}` for a
+    record carrying no numeric column at all, so the seam it named was
+    unreachable and the assertion proved nothing. H5b task 4 admits the record,
+    and the fixture below is now the **output of a real `collapse_repeats`
+    call** over `_result`-built executions. Its assertion is unchanged.
+    Verified by running rather than by reading: the collapse returns exactly
+    the mapping this test used to hand-build, and the refusal fires with no new
+    code — the check is `set(derived) & set(columns)` with `columns` built from
+    `collapsed`, so admitting the record is the whole fix.
+
+    Its old name kept the word "dropped", which describes nothing after task 4;
+    the development record (`H5b-SCOPING.md`, this slice's plan and design)
+    still cites the old name, deliberately, because those files record what was
+    measured on their date and are not retro-edited.
+
+    Distinct from `test_fixture_e_a_collision_from_a_real_collapse_output_is_
+    refused`, which carries a numeric `score` beside `r`: this fixture carries
+    **no numeric column at all**, which is the shape the collapse used to drop
+    wholesale and the reason this test was unreachable in the first place."""
+    rows = [{"unit": f"u{i}", "r": True} for i in range(5)]
+    collapsed = collapse_repeats([_result("", rows)], "analyze", 0)
+    assert collapsed == {f"u{i}": {"r": True} for i in range(5)}
     with pytest.raises(ContractError) as exc:
         summarize_step(collapsed, {"completed": 5}, derived={"r": 1.0}, seed=7)
     assert exc.value.code == "E-STEP-KEY-COLLISION"
