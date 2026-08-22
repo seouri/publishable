@@ -1162,20 +1162,42 @@ def _comparison_step_blocks(
                         if metric_key in of_collapsed[k]
                         and metric_key in against_collapsed[k]
                         # The guard at the subtraction, not at another function's
-                        # output. Today the only thing keeping a non-numeric value
-                        # out of `metric_key` is that `of_summary` is `aggregated`'s
-                        # step block and `summarize_step` publishes numbers only —
-                        # a convention, not a guard, and when it breaks the
-                        # subtraction below raises `TypeError` outside every `try`,
-                        # losing a completed run its `run.yaml`. It SKIPS rather
-                        # than raising: the two core-bookkeeping `ValueError`s above
-                        # both sit before any interval is built, while a raise here
-                        # loses the `run.yaml` this guard exists to protect. A unit
-                        # dropped here is dropped exactly as a unit missing the
-                        # column is dropped, and `n_paired` reports what remains —
-                        # `0` already means *pairing failed*, so an all-dropped
-                        # metric publishes `n_paired: 0` and `ci95: null`, a shape a
-                        # reader can already read.
+                        # output. **Two cases, and only one of them is a future
+                        # one.**
+                        #
+                        # LIVE, reachable from a validated config: a column
+                        # NUMERIC for some units and `None` for others. Ruling 1
+                        # publishes a perfectly good mean for such a column, so it
+                        # legitimately becomes a `metric_key` on both sides — the
+                        # convention below is INTACT — and the subtraction is then
+                        # reached with `k` a unit both sides carry `None` for.
+                        # Measured end to end: `TypeError` outside every `try`, run
+                        # directory complete, every execution paid for, no
+                        # `run.yaml`. That is the crash this guard closes; its pin
+                        # is the ragged-`None` blast-radius test in
+                        # `tests/test_cli.py`, which H5b task 6 shipped as a strict
+                        # `xfail` naming this guard as its remover.
+                        #
+                        # FUTURE, the convention-breaks case: a column non-numeric
+                        # for EVERY unit reaches no `metric_key` today, because
+                        # `of_summary` is `aggregated`'s step block and the column
+                        # loop publishes no block for it — a convention at another
+                        # function's output, not a guard, and **a rule enforced
+                        # only by another function's output is not a guard.**
+                        #
+                        # It SKIPS rather than raising: the two core-bookkeeping
+                        # `ValueError`s above both sit before any interval is
+                        # built, while a raise here loses the `run.yaml` this guard
+                        # exists to protect. A unit dropped here is dropped exactly
+                        # as a unit missing the column is dropped, and `n_paired`
+                        # reports what remains — `0` already means *pairing
+                        # failed*, so an all-dropped metric publishes
+                        # `n_paired: 0` and `ci95: null`, a shape a reader can
+                        # already read. **No new code is minted**, and not on the
+                        # ground that this path is unreachable — the live case
+                        # above is reachable. The disclosure is the narrowed
+                        # `n_paired` itself, beside the condition-side
+                        # `W-STATS-COLUMN-THIN` that the same column already earns.
                         and _is_numeric(of_collapsed[k][metric_key])
                         and _is_numeric(against_collapsed[k][metric_key])
                     ]

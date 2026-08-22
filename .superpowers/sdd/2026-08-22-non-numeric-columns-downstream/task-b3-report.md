@@ -70,6 +70,30 @@ the end-to-end arm** — a wholly non-numeric column never enters `aggregated`, 
 Also verified while there: the `Member` built on that path takes empty `diffs` without raising, so
 the fix does not trade a `TypeError` for a `ValueError` outside every `try`.
 
+### The guard's own comment: TWO cases, and only one of them is a future one
+
+The comment task 7 step 4 asks for was first written as a single convention-breaks story, and **the
+test converted in the same commit falsifies that framing**, which is this repo's most-recorded habit
+appearing in exactly the place the brief put the reasoning. Corrected before review, and the
+correction is the substance of the guard:
+
+- **LIVE, reachable from a validated config** — a column numeric for some units and `None` for
+  others. Ruling 1 publishes a good mean for such a column, so it **legitimately** becomes a
+  `metric_key` on both sides: **the convention is intact**, and the subtraction is reached anyway
+  with `k` a unit both sides carry `None` for. That is the crash the converted xfail measured, and
+  what the guard closes.
+- **FUTURE, the convention-breaks case** — a column non-numeric for **every** unit reaches no
+  `metric_key` today, because `of_summary` is `aggregated`'s step block and the column loop publishes
+  nothing for it. **Verified by running rather than asserted**: a real console-script run recording
+  `{"pred": float(i), "tag": "a"}` publishes a `pred` contrast and **no `tag` entry**, exit `0`. The
+  clause holds.
+
+The comment now says both, and states that no code is minted **not** on the ground that the path is
+unreachable — the live case is reachable — but because the disclosure already exists: the narrowed
+`n_paired` in the record, beside the condition-side `W-STATS-COLUMN-THIN` the same column earns.
+Decision 7's *unreachable from a validated config* ground is true of the `str` case only, and saying
+so is part of the deliverable rather than an open question for the reviewer.
+
 ### § Corrections 2 verified against the code before building on it
 
 `n_of` is `len(of_col)`, `n_against` is `len(against_col)`, `of_clusters`/`against_clusters` are
@@ -380,9 +404,22 @@ mutation being blind for the test it names, because that arm lives in Fixture E 
 
 ## Guard pins
 
-No pin arm was edited. Arms A–E and arm G were untouched; arms with no authorized editor (A, C, D)
-all passed on every full-suite run, and arm C's two bodies have **zero** lines changed, shown
-mechanically by the 85-insertions-0-deletions diff. No arm with no authorized editor fired.
+No pin arm was edited. Arms A, B, C, D, E, **F** and G were untouched; arms with no authorized
+editor (A, C, D) all passed on every full-suite run, and arm C's two bodies have **zero** lines
+changed, shown mechanically by the 85-insertions-0-deletions diff. No arm with no authorized editor
+fired.
+
+**Arm F is worth more than bookkeeping, and an earlier draft of this report omitted it — an
+enumeration that omits a class, which is this slice's own plan's named failure mode.** Arm F
+(`test_a_derived_metrics_permutation_p_value_widens_but_a_recorded_columns_never_gets_one`, sole
+editor task 4) exists because of § Corrections 16, and its docstring flags one half of its own claim
+as **read rather than run**: *"a CONTRAST's p-value comes from `permutation_over_contrast` over
+`of_values`/`against_values` in the unpaired recorded-column arm, which a later task narrows rather
+than widens — that half was read, not run, here."* **Task 7 is that later task**, and its narrowing
+of `of_col`/`against_col` — which is what `permutation_over_contrast`'s
+`[of_clusters[k] for k in of_col]` reads — is what keeps arm F's `p_value`/`null_draws` literals
+unmoved. Arm F passing on every full-suite run of this batch is the **first time that prediction was
+run rather than reasoned.**
 
 ## Gates
 
@@ -392,19 +429,28 @@ batch and restored from `HEAD` before the first commit; verified intact before e
 
 ## Concerns
 
-1. **Task 7's warning-message edit in task 9 is a behaviour change to a shipped diagnostic's text**,
+1. **Task 9 shipped TWO tests where Fixture F names one, disclosed rather than folded in.**
+   `test_a_non_numeric_by_column_still_reaches_the_unit_table` is beyond what the design specified:
+   the suppression is not a drop, and reading `units.parquet` rather than `run.yaml` is the only
+   place those two claims differ. Defensible, and still a widening — *a task that quietly widens its
+   scope is a finding even when the code is right*, so this one does not do it quietly. Elsewhere in
+   this report the phrase "Fixture F's two arms" is shorthand for the two tests, not a claim that the
+   design named two.
+2. **Task 9's warning-message edit is a behaviour change to a shipped diagnostic's text**,
    beyond what task 9's brief asked for. It was necessary — the deleted clause was false of the case
    task 9 makes reachable, which is Ruling 7's shape — but it is a widening of scope and is disclosed
    as one rather than folded in silently. Nothing asserted the old text (grepped: 0 hits).
-2. **Fixture G's `str`-column end-to-end arm passes before the guard as well as after**, and is
+3. **Fixture G's `str`-column end-to-end arm passes before the guard as well as after**, and is
    labelled in its own docstring as a production control rather than a discriminating test. The arm
    that actually crashed at HEAD is the converted xfail. Presented that way so the `str` arm is not
    mistaken for the end-to-end proof.
-3. **Task 7's guard now also narrows the ragged-`None` case**, which is reachable from a validated
-   config — `_is_numeric(None)` is `False`. Decision 7 argues the guard's path is *unreachable from a
-   validated config* and declines a diagnostic on that ground; that argument is true of the `str`
-   case and **not** of the ragged-`None` case, where the guard silently drops the `None` units from
-   the contrast. It is not silent in the record — `n_paired` reports the narrowed count, and
-   `W-STATS-COLUMN-THIN` already fires on the condition side for such a column — but the *contrast*
-   side has no disclosure of its own. Raised for the whole-branch reviewer rather than acted on:
-   minting a contrast-side code is not task 7's, and Decision 7 explicitly rejects one.
+4. **Decision 7's stated GROUND for minting no code is wrong for the reachable case, and the
+   decision itself is still right.** Decision 7 declines a diagnostic because *the path is
+   unreachable from a validated config and a row that can never fire misleads*. That is true of the
+   `str` case and **false of the ragged-`None` case**, which is reachable and is the crash task 7
+   actually closes. Not left as an open question: the guard's comment now carries the corrected
+   ground — no code is minted because the disclosure already exists (the narrowed `n_paired` in the
+   record, beside the condition-side `W-STATS-COLUMN-THIN`), not because nothing can reach it. **No
+   new code should be minted**, which is Decision 7's conclusion and this batch does not disturb it;
+   the residual for the whole-branch reviewer is whether the *contrast* side wants a disclosure of
+   its own, which is a `statistics`-surface question and not task 7's.
