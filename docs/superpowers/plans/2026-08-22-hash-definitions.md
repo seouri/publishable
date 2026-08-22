@@ -24,6 +24,8 @@ character, per design Decision 14, which **derived** that rather than assuming i
 | Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
 | Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
 
+**That table is reproduced here for a reader's convenience and is NOT this plan's source of truth for
+it** — task 13 copies it from the feasibility analysis' own last entry and diffs against that.
 Row 1 counts configs validating with zero **errors**; `W-PARAM-UNSET` is a warning and the two new codes
 are errors raised by `command_run`, not by `validate`. Rows 2 and 3 name surfaces this slice does not
 touch. Row 4 counts core-side dependencies; `code_hash` is computed for every run regardless of config,
@@ -64,17 +66,27 @@ extended by no task.
 **Measurement this plan argues from:** `docs/superpowers/H6-SCOPING.md`, measured 2026-08-22 against
 `da9907b` — **whose recommended implementation route the design already rejected with measurements, and
 the design wins** (Decision 2); the design's own re-measurement at `560e3a8`; and this plan's
-re-measurement against **`main` at `f8450f9`**. `git diff --stat da9907b f8450f9 -- src tests` prints
-nothing — every commit between them is documents — so the code this plan measured is byte-identical to
-the code the scoping measured. Every signature, message, helper name and literal below was read or
+re-measurement against **`main` at `f8450f9`**. `git diff --stat da9907b f8450f9 -- src tests` was
+**run** and prints nothing — so the code this plan measured is byte-identical to the code the scoping
+measured, which is what licenses reusing its baseline while re-checking its claims. That was checked by
+running the diff, not by reading four `docs:` commit-message prefixes, which would have been a correlate
+standing in for the fact. Every signature, message, helper name and literal below was read or
 **run** at `f8450f9`. **Nothing is cited by line number.**
 
-**Baseline, measured 2026-08-22 in the FOREGROUND at `f8450f9`:**
+**Baseline at `f8450f9`, and HOW each figure was obtained — because a task that reconciles against a
+false provenance line is a task that stops for the wrong reason:**
 
-- `uv run pytest -q` → **2931 passed, 1 skipped, 2 xfailed** (2934 collected)
-- `uv run ruff check .` → **All checks passed!**
-- `uv run ruff format --check .` → **93 files already formatted**
-- `uv run mypy` → **Success: no issues found in 52 source files**
+- `uv run pytest --collect-only -q` → **2934 tests collected**, run in the real repo, foreground.
+- `uv run pytest -q` → **2931 passed, 1 skipped, 2 xfailed** (2931 + 1 + 2 = 2934, so the collection
+  matches). **This figure was produced in a scratchpad COPY of the repo, with `W-PARAM-UNSET` already
+  patched in, under `-p no:randomly`, for § Corrections 7's blast-radius measurement** — not by a
+  foreground run of `main` in this working tree. The patch adds **no test**, so the count is the
+  baseline's; the honest statement is that the *count* is measured and the *run* was the corrections
+  measurement. **Task 1's implementer re-confirms it with one foreground `uv run pytest -q` in this repo
+  before committing, and reconciles any difference before proceeding.**
+- `uv run ruff check .` → **All checks passed!** — run in the real repo, foreground.
+- `uv run ruff format --check .` → **93 files already formatted** — run in the real repo, foreground.
+- `uv run mypy` → **Success: no issues found in 52 source files** — run in the real repo, foreground.
 
 **Task count: 13.** The design's 12 in its own grain and its own numbering, plus **task 13, the
 § Executability entry**, which the controller's hard requirement gives a task of its own. The addition
@@ -100,6 +112,18 @@ text, because an implementer sees only their own task brief.
 | **9 after 8** | It re-runs guard-pin arm E over the finished refusal and reports the diff line count |
 | **11 anywhere after 1** | `W-PARAM-UNSET` shares no file with the `code_hash` half. It is placed after the code half so its suite-wide render count is measured against a branch that already moved everything else it is going to move |
 | **12, then 13** | Every filing and both consistency passes against the finished branch; the § Executability entry is appended last so its commit sha is the branch's |
+
+**Two ordering facts, said once so neither reads as an omission.** **(i) The task sections below appear
+in EXECUTION order, not numeric order** — 1, 2, 7, 10, 3, 4, 5, 6, 8, 9, 11, 12, 13 — which is the
+design's own order with task 13 appended. H5b's plan, which this one copies its form from, happened to
+have the two orders coincide; here they do not, and a controller looking for `## Task 3` in third
+position should look fifth. `task-brief` extracts a section by its heading, so nothing depends on the
+file order. **(ii) Both new § Errors rows land in task 8, two batches after `E-CODE-FILE-LIST`'s code
+lands in task 4.** That is deliberate and it is the one place this slice does not lead with the document:
+the row's content — *"an empty answer is not read as nothing-excluded"*, and the submodule as the
+reachable instance — **is a description of the returncode behaviour task 4 establishes**, and writing it
+first would be writing a row about a tri-state nobody had measured in code yet. The two rows are written
+by one task so they have one shape, which is what *one row per code, covering every emit site* asks for.
 
 ### Three deviations from the design's grain, each argued
 
@@ -179,6 +203,12 @@ table's *ignored* row is where the enumeration lives once.
 subprocess" tests/test_hashes.py` → 0). That testability property, not the spine's unqualified purity
 sentence, is what forces the injected predicate — the sentence is already false of the shipped module,
 which rglobs, reads bytes and carries `_SKIP_DIRS`.
+
+**Mutation numbers: the design's are 1–14 and this plan does not renumber them; the two this plan adds
+are `P1` and `P2`.** Briefs cite mutation numbers across task boundaries, so two tasks calling two
+different things "mutation 10" would produce two reports claiming the same pin. **P1** is task 8's
+empty-digest-comparison mutant (blind, and forbidden in the brief for that reason); **P2** is task 5's
+subprocess-count mutant. Every other number in this plan is the design's own.
 
 **One row per code, covering every emit site.** That shape was the whole-branch Major on two of H8's
 sub-slices, shipped twice inside a third, and miscounted twice in H5b. A diagnostic's unit of work is
@@ -384,6 +414,11 @@ answer to five slices weakening a pin quietly, and to the two that pinned one li
       here), and the derived seeds (never published as digests) — so they are **deliberately not in this
       arm**: *a control asserting only absences passes identically if nothing ran.* Say so in the
       docstring and name Fixture M as what covers the upstream pair.
+      **Say explicitly that arm B carries NO copy of these seven figures.** The design puts them in arm B
+      *and* arm C; this plan puts them in **C only**, so **no list is pinned twice** and task 5 — arm B's
+      sole editor — has nothing of arm C's to edit. Two slices pinned one list twice and edited both;
+      this is the answer to that, and it is stated rather than left as a silent shrinkage a reviewer
+      diffing against the design would query.
 - [ ] **Step 4: capture arm D. NO AUTHORIZED EDITOR.** Fixture D's tree and Fixture E's tree, both
       asserted at `eec1541e…`. **The docstring states the coincidence and why the arm is built on the
       after value**: the untracked-`.pyd` tree has the *same* today value, so an assertion on the today
@@ -458,10 +493,12 @@ it in the documents; task 12 discharges it in `CLAUDE.md` and the ledger.
       that consumes a pre-change upstream through `io.reuse_from` publishes **one record carrying two
       hash definitions** — its own under the new rule and `provenance.upstream[].code_hash` copied
       verbatim from the old one — **with nothing marking which is which.** Stated, not mitigated.
-- [ ] **Step 4: build Fixture N, the pin the controller requires.** Two hand-written `run.yaml` records
-      for the same tree at the same commit, identical in every field except `code_hash` — one
-      `ebc5ee53…`, one `71bf339c…` — and `run_id`s whose suffixes match their own digests. Run the
-      shipped `diff` over the pair and assert the rendered output contains `code_hash` and `DIFFERS` on
+- [ ] **Step 4: build Fixture N, the pin the controller requires. Do NOT hand-write two records from
+      scratch.** `tests/test_diff.py` already imports `run_a_project` from `tests/test_cli.py` and calls
+      **`command_diff(run_a, run_b)`** directly on two run directories — that is this fixture's shape.
+      Produce one real run, copy its directory, and edit the copy's `run.yaml` so the pair is identical
+      in every field except `code_hash` — one `ebc5ee53…`, one `71bf339c…` — with each `run_id`'s suffix
+      matching its own digest. Then call `command_diff` over the pair and assert the rendered output contains `code_hash` and `DIFFERS` on
       the same row and that the exit code is **0** (`diff` exits 0 on every comparison it renders, 1 only
       when an operand cannot be read). **The docstring says what the test is for in one sentence: this is
       what a reader sees across the H6a boundary for identical code, and it is the cost Ruling C accepts
@@ -639,10 +676,12 @@ anyway"* literally true: the filter is called **after** the skip set has run, ov
       synthetic caller that omits it, and the runtime property that matters — that the one production
       caller passes a real predicate — is **task 5's mutation 2**. Name this in the report; do not claim
       it as a runtime pin.
-- [ ] **Step 7: mutation 3 for this task — delete the `code_hash_of` extraction and inline the fold back
-      into `code_hash`.** Caught by step 3's identity test only if the test calls both names; check that
-      it does. If the mutation cannot be expressed because nothing calls `code_hash_of` yet, **say so** —
-      it acquires its production caller at task 8 — rather than reporting a pin that does not exist.
+- [ ] **Step 7: `code_hash_of`'s survival is a READING OBLIGATION, not a mutation, and it is stated as
+      one.** Deleting the extraction does not make step 3's test *fail*, it makes it fail to **import** —
+      two branches that cannot differ in the way a mutation needs. **A mutation is a claim too**, so this
+      is not dressed up as one: the batch review reads `code_hash`'s body and confirms it delegates to
+      `code_hash_of`, and task 5's **mutation P2** is what pins the property that actually matters — that
+      the production caller takes the file list **once**.
 
 **Delta:** +1 test.
 
@@ -779,6 +818,12 @@ hashed = hashed_files(repo_root, _include)
 ch = code_hash_of(hashed)
 ```
 
+- [ ] **Step 0: name the import edits, because the plan this one copies its form from had exactly this
+      correction.** H5b's § Corrections held *"`cli.py` does not import `_is_numeric`."* Here, `cli.py`
+      imports `code_hash, design_digest, parameters_hash` from `publishable.hashes` and
+      `find_repo_root, git_provenance` from `publishable.provenance`. **This task adds `hashed_files` and
+      `code_hash_of` to the first and `unignored_under_hashed_trees` to the second.** Neither name is in
+      scope before this edit.
 - [ ] **Step 1: wire it, and change nothing about where the site sits.** The existing site already runs
       after unit resolution and before `allocate_run_dir`, which is what Decision 5 and Decision 7 both
       require. Do not move it.
@@ -810,14 +855,19 @@ ch = code_hash_of(hashed)
       the record's `code_hash`. Under the mutant the phase-3 answer predates the write, `generated.py`
       drops out of `include`, and the two differ by one file. Two branches that differ, and the
       discriminator is a digest rather than a file's presence.
-- [ ] **Step 8: pin the subprocess count.** Patch `subprocess.run` (or the helper) with a counter and
-      assert `git check-ignore` is invoked **exactly once** for one `run`. **The mutation:** call
+- [ ] **Step 8: mutation P2 — pin the subprocess count.** Patch `subprocess.run` (or the helper) with a
+      counter and assert `git check-ignore` is invoked **exactly once** for one `run`. **The mutant:** call
       `hashed_files(repo_root, _include)` and `code_hash(repo_root, _include)` separately — the naive
       shape — and watch the count go to 2. This is the pin § Corrections 2 exists for, and without it the
       correction is prose.
-- [ ] **Step 9: Fixture M — one record carrying two hash definitions, and mutation 14.** A hand-written
-      pre-change `run.yaml` whose `code_hash` is `ebc5ee53…`, consumed by a post-change run over the base
-      tree through `io.reuse_from`. Assert the new record's own `code_hash` is `71bf339c…`, that
+- [ ] **Step 9: Fixture M — one record carrying two hash definitions, and mutation 14.**
+      **The sibling that already got it right is the first place to look:** `tests/test_cli.py`'s
+      `_build_fixture_f_upstream` builds a **genuinely produced** upstream run with a `run`-scoped step
+      publishing `out.json` and reads the shared step's name back out of its own `run.yaml` rather than
+      assuming it. **Use it, then rewrite that record's `code_hash` to `ebc5ee53…` in place** — a real
+      record with one field edited is a better pre-change artefact than a hand-written mapping, because
+      it satisfies `lineage.read_record_file` by construction rather than by luck. Then run a post-change
+      run over the base tree that consumes it through `io.reuse_from`. Assert the new record's own `code_hash` is `71bf339c…`, that
       `provenance.upstream[0].code_hash` is `ebc5ee53…` **copied verbatim** (`lineage.py` copies it;
       grepped), and — this is the part that must not be written as an absence —
       **assert the record's top-level key set as a literal**, so a future slice that adds a marker fails
@@ -911,7 +961,13 @@ replacement** is the shape the § Errors work exists to catch, so H6a ships **on
       before `ch = code_hash_of(hashed)`. Refuse through a `Collector` the way `E-CODE-DIRTY` does in the
       same function, print, and return `EXIT_WRONG`. The message **names both hashed trees** and says the
       run would otherwise publish the digest of nothing.
-- [ ] **Step 2: Fixture G, end to end.** A committed repo with an **empty** `src/`, no `templates/`, and
+- [ ] **Step 2: Fixture G, end to end. Two construction facts, both measured, so the fixture is not
+      discovered to be unbuildable mid-task.** **Git does not track an empty directory**, so `src/` must
+      exist on disk while git holds nothing under it — which is also why the dirty gate is clean here,
+      the same property measured for Fixture H. And the entrypoint must resolve from **outside** both
+      trees: `load_experiment` inserts `<repo>/src` at the front of `sys.path`, but
+      `importlib.import_module` still resolves anything else already importable, which is exactly how
+      the scoping reached this case. A committed repo with an **empty** `src/`, no `templates/`, and
       an entrypoint importable from a `PYTHONPATH` directory outside both trees — the shape the scoping
       measured producing a **completed run at exit 0** with `code_hash: sha256:e3b0c442…` in its
       `run_id`. Assert exit 1, `E-CODE-EMPTY` in the output, **and that no run directory exists** — by
@@ -928,8 +984,8 @@ replacement** is the shape the § Errors work exists to catch, so H6a ships **on
       with the empty digest, measured as today's behaviour.
 - [ ] **Step 5: mutation 9 — move the guard after `allocate_run_dir`.** Caught by Fixture G's *no run
       directory* assertion: the mutant leaves a directory behind.
-- [ ] **Step 6: mutation 10 for this task — replace `not hashed` with a comparison against the empty
-      digest.** **Named blind in advance**: the two branches cannot differ, because the digest of an
+- [ ] **Step 6: mutation P1 — replace `not hashed` with a comparison against the empty digest.**
+      **Named blind in advance**: the two branches cannot differ, because the digest of an
       empty list *is* the empty digest. **The replacement is a reading obligation, stated as one**: the
       batch review reads the guard and confirms it tests the list, not the digest. That is why the
       one-liner is forbidden in this brief rather than left to a test.
@@ -1162,8 +1218,12 @@ computed for every run regardless of config, so **no config gains or loses a dep
 
 - [ ] **Step 1: append one entry**, headed *"Measured on 2026-08-22 against commit `<sha>`"* with the
       branch's own sha, in § Executability on this build. **Never state a build fact undated.**
-- [ ] **Step 2: repeat the four rows CHARACTER FOR CHARACTER.** Copy the immediately preceding entry's
-      table and **diff it against the source rather than retyping it.** **No fifth number is minted, and
+- [ ] **Step 2: repeat the four rows CHARACTER FOR CHARACTER, copied from the FEASIBILITY ANALYSIS' own
+      last entry — NOT from this plan's header.** This plan reproduces the table in its own opening for a
+      reader's convenience, and **that copy is not a source of truth**; a second source of truth is how
+      both of this analysis' wrong figures were made. Copy the immediately preceding entry's table out of
+      `docs/feasibility-llm-growth-studies.md` and **diff it against that source rather than retyping
+      it.** **No fifth number is minted, and
       no single figure is quoted for this analysis' executability — quote the table, or name the
       dependency.**
 - [ ] **Step 3: state what newly stops and what newly warns, for THESE configs, in prose.** Following
