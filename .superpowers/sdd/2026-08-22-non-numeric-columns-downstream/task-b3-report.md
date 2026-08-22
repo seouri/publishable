@@ -454,3 +454,139 @@ batch and restored from `HEAD` before the first commit; verified intact before e
    new code should be minted**, which is Decision 7's conclusion and this batch does not disturb it;
    the residual for the whole-branch reviewer is whether the *contrast* side wants a disclosure of
    its own, which is a `statistics`-surface question and not task 7's.
+
+---
+
+## Fix round, 2026-08-22 — appended after `task-b3-review.md` (`548cedd`), not editing anything above
+
+Two Majors were claim defects with no code change owed; Major 3 and the three Minors are false counts
+in this report, corrected below by appending rather than by editing the numbers in place. Nothing in
+`src/` needed to move — verified myself before touching anything, per the review's own framing.
+
+### Major 1 — § Warnings row and § Steps and artifacts paragraph made total over Ruling 1's three mixtures
+
+Both passages stated an all-or-nothing rule that Controller ruling 1's amendment table (this plan,
+`### Ruling 1`) already rejects, and the reachable middle case — a number for some units, `None` for the
+rest — was in neither. Fixed at both homes:
+
+- `docs/reference.md` § Warnings core reports, the `W-STATS-STRATUM-SHADOWED` row: now names all three
+  mixtures the amendment table draws for any recorded column (every unit a number → its own block; some
+  units a number and the rest `None` → a block over the units that carried one; no unit a number → none),
+  linked to [§ The per-unit tables](../../../docs/reference.md#the-per-unit-tables) rather than restating
+  the rule a second time in different words.
+- `docs/reference.md` § Steps and artifacts, the reserved-`by` paragraph: *"and its own metric block too
+  where every unit recorded a number for it"* was a sufficient-condition reading that reads as necessary
+  too. Now reads *"and its own metric block too under the same rule any recorded column earns one by —
+  over the units that carried a number, even when that is fewer than all of them."*
+
+**Verified by running, not by re-reading the wording.** A step recording `by` as a number for 20 of 40
+units and `None` for the rest, driven end to end through `run_a_project` (the review's own fixture,
+reproduced independently): `n.completed: 20`, `value: 19.0`, a full interval, and
+`W-STATS-STRATUM-SHADOWED` in stdout — the middle row of the amendment table, and now what both passages
+say. Swept for the retired two-case phrasing across `README.md`, `docs/design-principles.md`,
+`docs/experimental-designs.md`, `docs/reference.md`: `grep -rn "no unit recorded a number\|whatever it
+holds\|keeps none\|gets no contrast delta"` — the only hit left is the row itself, now correct. Swept
+`docs/superpowers/spec-defects.md` for the same claim: two `W-STATS-STRATUM-SHADOWED` mentions there,
+neither stating an all-or-nothing rule (mechanical pass owed only to the four documents; checked spec-
+defects anyway since the claim has had three homes in this slice). **Closed.**
+
+### Major 2 — the guard comment's ground rewritten again, this time checked against the code before being written
+
+The `3be2808` ground asserted `W-STATS-COLUMN-THIN` as a **standing** disclosure the same column *"already
+earns."* Reproduced the review's own measurement independently: the ragged-`None` contrast fixture
+(`_RULING1_CONTRAST_STEP`) with `limits.min_reported_n: 1` — `n_paired: 3`, `W-STATS-COLUMN-THIN` **absent**
+from stdout. Ruling 5's own cost-if-wrong paragraph names exactly this case (*"a project declaring a floor
+of 1 gets no warning"*).
+
+**Per the review's instruction — a new ground, not a third layer on a wrong one — the sentence was
+rewritten to state what is true**: `n_paired` is the unconditional disclosure, always in the record;
+`W-STATS-COLUMN-THIN` is conditional on `limits.min_reported_n` (Ruling 5) and is not a standing second
+disclosure — a floor of 1, or no floor, produces none, which is the ruling's own named cost rather than a
+reason to mint a warning here. The conclusion (no new code minted) is unchanged; only the ground moved.
+
+**Verified the new ground is itself true, before shipping it, the same way the finding was made**: same
+fixture and floor, `n_paired == 3` and `"W-STATS-COLUMN-THIN" not in stdout` — matches character for
+character what the comment now says. **Closed.**
+
+### Major 3 — the `blast_radius` grep claim, corrected by appending
+
+The report's *"exactly one line"* claim for `grep -rn "blast_radius" --include="*.py" --include="*.md" .`
+at `848835e` is false. Re-run against that exact commit:
+
+```
+$ git grep -n "blast_radius" 848835e -- '*.py' '*.md'
+.superpowers/sdd/2026-08-22-non-numeric-columns-downstream/task-b2-report.md:73
+.superpowers/sdd/2026-08-22-non-numeric-columns-downstream/task-b2-report.md:227
+.superpowers/sdd/2026-08-22-non-numeric-columns-downstream/task-b2-review.md:67
+tests/test_cli.py:17816   (the renamed definition)
+tests/test_cli.py:18045   (Fixture G's docstring, citing the renamed test)
+```
+
+**Five lines, three files** — two inside `tests/test_cli.py` itself. **No action is owed on the state**:
+the three development-record hits carry the old name deliberately (a report and a review are not
+retro-edited), which is the identical treatment task 10 gave the old collision-test name in this same
+batch. The defect was the claim, not the code or the record. **Closed** — corrected here, not by editing
+the original sentence.
+
+### Minor 4 — the "85 insertions, 0 deletions" figure
+
+Re-run: `git show b276704 --numstat -- tests/test_cli.py` → **93 0**, not 85/0. The conclusion the figure
+was offered to support — *the count is mechanical rather than eyeballed* — is unaffected; only the number
+was wrong. **Closed.**
+
+### Minor 5 — the old-collision-test-name enumeration
+
+Re-run against `df37f2e`, the state task 10 step 1 would have seen:
+
+```
+$ git grep -c "a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused" df37f2e -- '*.md' '*.py'
+task-4-brief.md:1   H5b-SCOPING.md:3   plan:2   design:1   tests/test_stats.py:1
+```
+
+Five files, `H5b-SCOPING.md` at three hits not two, `task-4-brief.md` a fifth file the original
+enumeration omitted. All five are development record, correctly left with the old name. **Closed.**
+
+### Minor 6 — the `W-STATS-STRATUM-SHADOWED` two-line grep
+
+Re-run against `df37f2e`: `git grep -n "W-STATS-STRATUM-SHADOWED" df37f2e -- 'src/publishable/*.py'` →
+two lines (`cli.py`'s emit site, `report.py:91`'s docstring) — but `report.py`'s `_is_strata_block`
+docstring at that commit line-wraps the string across two source lines
+(`` `W-STATS-STRATUM- ``/`` SHADOWED` ``), so the full-string grep could not have matched it; it was found
+by reading (§ Corrections 15), not by the grep cited as establishing it. Re-run at HEAD, after task 9's
+reflow puts the string on one line: three lines (`cli.py:3603`, `report.py:91`, `report.py:112`). No site
+was missed and no code changes — the enumeration rests on reading, and this report should have said so
+rather than presenting the grep as the establishing measurement. **Closed** — recorded here as the
+correction; the substance (both `report.py` docstrings) was already right in `b276704`.
+
+### Regression checks
+
+- The mixed-`by` scenario (20/40 numeric) and the ragged-`None` contrast with `limits.min_reported_n: 1`
+  (6-unit fixture, `n_paired: 3`) were both re-run end to end through `run_a_project` after the doc and
+  comment edits and match exactly what is now documented.
+- A recorded column legitimately named `by` (`test_a_recorded_column_named_by_keeps_its_metric_and_warns`,
+  `test_a_recorded_by_column_warns_even_with_no_report_by_declared`, and
+  `test_h8c_arm_a_the_records_field_level_shape`'s structural walk) is untouched by this round — no `src/`
+  behaviour moved, only comments and prose.
+- Task 7's converted disclosure test (`test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_no_longer_crashes`)
+  is unedited and still asserts strictly more than the retired xfail did.
+
+### Mechanical pass, this edit only
+
+`docs/reference.md`'s two edited passages: no trailing whitespace, no tabs, no invisible unicode
+(checked programmatically), fenced blocks skipped (none touched), table row column count unchanged at the
+`W-STATS-STRATUM-SHADOWED` row (2 pipes, 3 cells, matching sibling rows), both `#the-per-unit-tables` and
+`#warnings-core-reports` anchors resolve (headings exist, confirmed by grep), no duplicate anchors
+introduced. A whole-file scripted anchor/link sweep (fenced blocks stripped) found four pre-existing
+misses, all `&`-in-heading slugger artifacts identical in class to the 21 the batch 3 review's own pass
+found and attributed to itself (`Secrets & credentials`, `Naming conventions & repeat defaults`,
+`executions.jsonl`, `allocation.json`) — none touched by this diff (`git diff --stat docs/reference.md` →
+2 insertions, 2 deletions), so pre-existing and out of scope for this round.
+
+### Gates
+
+`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy`, and the full suite all clean —
+figures in the commit-level report below, read from each command's own output.
+
+### Status
+
+All three Majors and all three Minors: **closed**, as detailed above. No finding left open.

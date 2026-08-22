@@ -1196,8 +1196,15 @@ def _comparison_step_blocks(
                         # already read. **No new code is minted**, and not on the
                         # ground that this path is unreachable — the live case
                         # above is reachable. The disclosure is the narrowed
-                        # `n_paired` itself, beside the condition-side
-                        # `W-STATS-COLUMN-THIN` that the same column already earns.
+                        # `n_paired` itself, which is unconditional and always in
+                        # the record. The condition-side `W-STATS-COLUMN-THIN`
+                        # is NOT a standing second disclosure here: it fires only
+                        # when the contributing count falls below
+                        # `limits.min_reported_n` (Controller ruling 5), so a
+                        # project declaring a floor of 1 — or no floor at all —
+                        # gets none, and `n_paired` is then the only signal. That
+                        # gap is the ruling's own named cost, not a reason to mint
+                        # a second warning here for the contrast side.
                         and _is_numeric(of_collapsed[k][metric_key])
                         and _is_numeric(against_collapsed[k][metric_key])
                     ]
