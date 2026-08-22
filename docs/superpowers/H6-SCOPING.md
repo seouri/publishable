@@ -39,7 +39,9 @@ shape, including their habit of saying how each claim was measured.
    **working tree** and skipping whatever `.gitignore` skips."* § Templates: *"while its `code_hash`
    is unchanged, that being the mechanism an ignore file has no bearing on."* Measured: **three of
    the four ignore patterns `publishable new` itself writes are not honoured** — `.env` MOVES the
-   hash, `.venv/` MOVES it, and `*.py[cod]` is honoured for `.pyc`/`.pyo` and **not** for `.pyd`.
+   hash, `.venv/` MOVES it, and a `.pyd` MOVES it while a `.pyc` does not — not a partial honouring
+   of `*.py[cod]` but a coincidence: `_SKIP_SUFFIXES` names two suffixes and consults no ignore file
+   at all.
 4. **The gap is not theoretical any more, and the S1 filing's "the two agree today" is falsified.**
    Two real runs, **same commit `a9b5df1`, both `code_dirty: false`**, differing only by a
    git-ignored `src/mix/.env`: `diff` prints `code_hash DIFFERS`, and
@@ -62,8 +64,9 @@ shape, including their habit of saying how each claim was measured.
    — H9's, both measured NOT BUILT — are the commands that compare a **recorded** figure against a
    **recomputed** one. H6 must land before H9, or H9 builds against definitions that then move
    (§ 9). H3c-3 touches no H6 surface.
-8. **20 tasks, and it should split 12 / 8** on the value-changing / additive seam, with the additive
-   half first on H5's precedent (§ 10).
+8. **20 tasks, and it should split 12 / 8** on the value-changing / additive seam, **H6a
+   (definitions) first** — H6b's one gated task waits on a ruling nobody has made, and H6a's every
+   task is self-contained (§ 10).
 
 ---
 
@@ -404,11 +407,27 @@ is one task, not seven, and it needs a ruling before it is planned.
 ## 7. `reproduce` and `resume`'s comparisons — none of them exist
 
 Measured by invoking, not by reading `NOT_BUILT_COMMANDS`: `resume`, `reproduce`, `dry-run`,
-`draft`, `demo` and `docs` all print *"is specified but not built in this version"*. So **no shipped
-command compares a recorded hash against a recomputed one.** `freeze` re-hashes only the lockfile
-(`W-FREEZE-LOCK-MOVED`), and refuses a run directory that already holds a `run.yaml`
-(`E-FREEZE-RUN-ENDED`, measured). `diff`, `report study.yaml` and `study add` compare **recorded**
-strings and the documents say so.
+`draft`, `demo` and `docs` all print *"is specified but not built in this version"*. So no shipped
+command compares a recorded **`code_hash`** against a recomputed one: `code_hash` has **one call
+site in all of `src/`** (`cli.command_run`, grepped), `freeze` re-hashes only the lockfile
+(`W-FREEZE-LOCK-MOVED`) and refuses a run directory that already holds a `run.yaml`
+(`E-FREEZE-RUN-ENDED`, measured), and `report study.yaml` and `study add` compare recorded strings
+with the documents saying so.
+
+**`parameters_hash` is the exception, and it is already shipped.** `diff.py`'s `_figure` calls
+`_compute_parameters_hash(side.config)` for a **config-side** operand, so `diff <config> <run>`
+compares a **freshly computed** hash against a recorded one. Run:
+
+```
+parameters_hash    DIFFERS
+  parameters.analysis.min_samples  30 → (absent)
+```
+
+— beside four `not comparable` rows, `code_hash`'s reading *"a config records no code_hash; the tree
+it would hash is the tree now, not the tree a run used."* So a normalization change does not merely
+wait for H9: **it changes what `diff <config> <run>` says about runs already on disk, on the day it
+lands.** That makes task 6's marker question live for `parameters_hash` immediately, and it is the
+sharpest argument for ruling task 9 narrowly.
 
 This is what makes both H6 branches cheap **now** and expensive later, and it is the whole ordering
 argument: H6 changes what the two identity functions compute for an unchanged input, so every
@@ -494,20 +513,26 @@ H8b Decision 7, H5a/H5b): *changing what an existing key reports* versus *additi
 | 14 | `provenance.environment.hostname`, plus a pin that a bundle carries `<redacted by study add>` for it — the wiring exists and is waiting | H8c wrote the redaction against a key nobody writes; the pin is the point |
 | 15 | `provenance.environment.hardware`: `cpu_count` is stdlib; **`gpu` is a decision** — core cannot probe one without a dependency or a subprocess, and § The two files shows `{gpu: "1x A100 80GB", cpu_count: 32}` | A ruling plus possibly a document edit; the apparatus is the existing route for anything core cannot observe |
 | 16 | Close the six-unwritten-keys filing's last row; rule whether § What `study add` redacts needs `os`/`hardware` rows | The filing's other rows are already struck; this closes it |
-| 17 | `E-CODE-DIRTY`'s § Errors row, plus `E-GIT-NO-REPO`/`E-GIT-NO-COMMIT` — **needs the spine owner's ruling first** on whether H6's charter widens (the nine-codes entry's option 1). Recommendation: take these three, leave six | One row per code covering **every** emit site, which is what two sub-slices shipped wrong |
+| 17 | `E-CODE-DIRTY`'s § Errors row, plus `E-GIT-NO-REPO`/`E-GIT-NO-COMMIT` — **needs the spine owner's ruling first**, and drops to a filing if none arrives on whether H6's charter widens (the nine-codes entry's option 1). Recommendation: take these three, leave six | One row per code covering **every** emit site, which is what two sub-slices shipped wrong |
 | 18 | § Templates' *"goes dirty at `validate`"*: either `validate` gains a dirty warning, or the sentence changes | `validate` is silent today (measured); a `W-` code is a registry seat, so this is a ruling too |
 | 19 | Documents-and-codes consistency pass — mechanical (links, anchors, tables, whitespace) and cross-document over the four documents | The batch with no review is where the findings are; this one is nobody else's input |
 | 20 | `spec-defects.md`: strike H6's four entries that close, re-own what H6 declines, and correct the zero-file entry's stale *"H1's registry"* owner | Four entries name H6; a ledger line saying "filed" is not a filing |
 
 ### Which half first
 
-**H6b first, H6a second**, on H5's precedent: the additive half lands alone, and the half that
-changes what a shipped key reports ships last and by itself, so a whole-branch review of it is not
-also reviewing new record keys. Three supporting facts rather than the analogy alone: H6b's keys
-(`provenance.environment.*`) and H6a's possible marker (§ 7) are **different key sets**, so the
-split does not cut through one behaviour change; H6b unblocks a redaction H8c already shipped
-against nothing; and H6a's task 1 is a document ruling that benefits from being the branch's own
-first task rather than the tenth.
+**H6a first, H6b second or alongside it** — and the H5 precedent this project would reach for does
+**not** decide it. H5a/H5b split because both halves touched one shipped surface and one changed
+what an existing key contained; here H6b's keys (`provenance.environment.*`) and H6a's possible
+marker (§ 7) are **different key sets**, so the precedent argues only that the value-changing half
+ships *alone*, not that it ships *second*. Three facts decide the order instead:
+
+- **H6a is what H9 waits on** (§ 9), and `parameters_hash`'s definition already reaches a shipped
+  command through `diff`'s config side (§ 7). H6b blocks nothing.
+- **Every H6a task is self-contained**; its task 1 is a ruling H6 makes from the evidence in § 2.1,
+  and starting a branch with it is better than reaching it tenth.
+- **H6b's task 17 is gated on a ruling nobody has made** — whether this charter widens to the nine
+  undocumented codes. Running H6a first buys the time to get that ruling; if it does not arrive,
+  task 17 drops to a filing and H6b is 7 tasks.
 
 **Both halves must land before H9.** If only one can, it is H6a.
 
@@ -536,5 +561,8 @@ Reported as a list, not a count of zero, and each one grepped or run rather than
    the nine-codes entry's option 1 is a live, unruled proposal to widen this charter (§ 6).
 9. **The purity rule cited by the charter is not in `design-principles.md`**, and is already broken
    in its own terms (§ 4).
-10. **Two tests in `tests/test_hashes.py` are byte-identical in body** — a duplicated pin, not a
+10. **`diff <config> <run>` already compares a recomputed `parameters_hash` against a recorded
+    one** (§ 7) — measured after a first draft of this document asserted the opposite for both
+    hashes. The claim is true of `code_hash` and false of `parameters_hash`.
+11. **Two tests in `tests/test_hashes.py` are byte-identical in body** — a duplicated pin, not a
     defect, recorded so task 5 does not "fix" one and leave the other (§ 2.1, § 10).
