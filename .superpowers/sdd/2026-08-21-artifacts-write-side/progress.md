@@ -94,3 +94,46 @@ so the extracted brief could not carry the `.parquet` capability pin and my disp
 carried **into** a brief still needs verifying; a ruling that **overrules** a brief must reach the brief;
 and an instruction existing **only** in a dispatch can be outweighed by the brief in front of the
 implementer.
+
+## Batches 2 and 3 — the documents and the `E-` registry
+
+Batch 2: `3230ce1` (the unification rule), `4dc9a50` (`measurements.parquet`'s column set, pinned by a
+real-run fixture), `7686556`, `6b90b1e` (fix round). Batch 3: `a2b6b51` (three rows widened to every emit
+site), `8822dc9` (`E-UNITS-ATTR-COLUMN` minted before any code raises it), `45aa4fc`, `0818d92` (fix
+round). Suite 2844 → **2845**. Both batches PASS on both verdicts.
+
+**Batch 2 shipped two false clauses propping each other up.** `reference.md` described the unit-key column
+as named by `data.units.key` — **it is literally `unit`**, verified three ways including `finalize`'s
+hardcoded `columns = ["unit", …]` — and a second sentence, *"that is the one way the two files' column
+sets differ"*, **read as consistent only because the first was false.** Two interlocking false claims are
+harder to spot than either alone, which is why the job is **tracing each clause to code, never to the
+neighbouring clause.**
+
+**Batch 3's two Majors were both in the one row it was isolated to get right**, and the reviewer
+established the grading principle before ruling: § Errors core raises **enumerates every emit site and
+annotates how each travels**, so **a contained site belongs in the row and an unannotated one is the
+defect.** `E-STEP-KEY-COLLISION` has **seven raise sites across five faults** and the row named four —
+with **another passage linking *into* that row for exactly the omitted fault**, so a reader following the
+link landed somewhere that did not describe what sent them. And **two enumerated sites never raise to a
+user at all**, being contained and re-reported as `W-STATS-AGGREGATE-FAILED`.
+
+**The structural cause is worth more than either fix: there is no docs↔code `E-` registry test.** Only
+prose forces a later task to land what a row promises — which is why this exact shape has now gone wrong
+in **three consecutive sub-slices**. Recorded in the batch report rather than left as an observation.
+
+### A fourth variant of one failure, stopped by a disclosure
+
+**Batch 3's implementer found that the plan's own task text, read literally, would have `.parquet`
+refusing a structural cell** — contradicting my second ruling — bound each clause to one format, and
+**flagged that it could find no passage stating the binding plainly.** I appended the ruling to **the
+plan** (`11dd8b3`), so **tasks 7, 9 and 11 do not inherit the superseded reading.**
+
+**The four variants now recorded:** a finding carried **into** a brief still needs verifying; a ruling
+that **overrules** a brief must reach the brief; an instruction living **only** in a dispatch can be
+outweighed by the brief; and **a ruling post-dating a plan leaves every later task's text carrying the
+superseded reading.** **The remedy is identical in all four: put the correction where the brief is
+extracted from.**
+
+**And batch 3 declined to report zero disagreements**, naming two concerns instead — both of which checked
+out. That phrasing has been wrong **eight** times here; this is the first batch in a while to avoid it by
+construction rather than by correction.
