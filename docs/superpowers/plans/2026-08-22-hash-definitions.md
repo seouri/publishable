@@ -304,6 +304,13 @@ perturbation and its own two digests.
 
 ## Task 1: Ruling A written into the documents, and the four-case table
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Surface: documents only.** No code, no test.
 
 **Files:** `docs/reference.md`.
@@ -379,6 +386,13 @@ behaviour.
 
 ## Task 2: the guard pin — six arms, captured before anything moves
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Runs before every code task. Surface: direct calls to `hashes.code_hash` for arms A, C, D and E; a real
 `run` through `main` for arms A and B's `run_id` halves; `validate` through a `Collector` for arm F.**
 
@@ -446,6 +460,13 @@ test).
 ---
 
 ## Task 7: Ruling C written — no marker, `uv.lock` is the carrier — and the boundary pinned
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: documents, plus one pin over two hand-written records through the shipped `diff`.**
 
@@ -519,6 +540,13 @@ which are **H9's** and are re-affirmed as H9's in writing by design Decision 12.
 ---
 
 ## Task 10: Ruling B written into the documents — two false sentences DELETED
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: documents only, plus one docstring under `src/` that quotes one of them.**
 
@@ -594,6 +622,13 @@ what makes the strike safe.
 ---
 
 ## Task 3: `include` becomes a required batch parameter, and the fold is extracted
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: `src/publishable/hashes.py`, plus 14 call sites.**
 
@@ -696,6 +731,13 @@ that is expected and is not an arm-E violation.
 
 ## Task 4: the ignore helper in `provenance.py`, and `E-CODE-FILE-LIST`
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Surface: `src/publishable/provenance.py`, plus tests through direct calls and real repositories.**
 
 **Files:** `src/publishable/provenance.py`, `tests/test_provenance.py`.
@@ -788,6 +830,13 @@ no other `_git` call site. `git_provenance`'s pathspec.
 ---
 
 ## Task 5: wire it at `command_run`'s single call site — THE VALUE CHANGE
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: a real `run` through the installed console script. Not `validate`, not a direct call.**
 
@@ -887,6 +936,13 @@ editing phase 3 has misread Decision 5.
 
 ## Task 6: the hash and the gate agree, and the duplicated `__pycache__` pin is replaced
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Surface: direct calls to `hashes.hashed_files` and `provenance.git_provenance` over a real repository.**
 
 **Files:** `tests/test_hashes.py`.
@@ -932,6 +988,13 @@ whose literal this task's fixture shares and **does not edit**.
 ---
 
 ## Task 8: `E-CODE-EMPTY` — the guard, its § Errors row, and its two reachable situations
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: `src/publishable/cli.py`, and a real `run` through the installed console script.**
 
@@ -1012,6 +1075,13 @@ replacement** is the shape the § Errors work exists to catch, so H6a ships **on
 
 ## Task 9: the zero-file blast radius, and the stale owner corrected before it is struck
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Surface: reading and re-running, plus one `spec-defects.md` correction.**
 
 **Files:** `docs/superpowers/spec-defects.md`.
@@ -1039,6 +1109,13 @@ replacement** is the shape the § Errors work exists to catch, so H6a ships **on
 ---
 
 ## Task 11: `W-PARAM-UNSET` at `validate`, and the shared helper
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: `validate` through a `Collector`.**
 
@@ -1129,6 +1206,13 @@ unedited after this task is the proof that the extraction was behaviour-preservi
 
 ## Task 12: the records
 
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
+
 **Surface: tracked records and `CLAUDE.md`. `spec-defects.md` is a live list, so a closed gap is struck;
 every other tracked record is appended to, never retro-edited.**
 
@@ -1204,6 +1288,13 @@ this slice did not close. Any code.
 ---
 
 ## Task 13: the § Executability entry — four rows, character for character, no fifth number
+
+> **BINDING CONTROLLER RULINGS — read them before this task's steps.** They are appended at the end of
+> this plan under *Controller rulings, 2026-08-22*, they **post-date every task section including this
+> one**, and where they disagree with the steps below **they win**. `task-brief` extracts one `## Task N`
+> section and nothing else, so an appended ruling reaches no brief on its own — that is how the previous
+> slice shipped a Critical, and this pointer is the fix. **Ruling F (the exclude chain) changes the
+> command every hashing task runs.**
 
 **Surface: one appended dated entry in a non-normative analysis.**
 
@@ -1503,3 +1594,64 @@ implementer.** These are in the plan itself, in the task sections they bind, and
 - **No task is unreviewed**, including the last, and batch 3 is the value change with a real-command
   review.
 - **Nothing here reopens Decision 2 or Decision 9.**
+
+
+---
+
+## Controller rulings, 2026-08-22 — the four questions the plan handed up
+
+### Ruling F — the exclude chain is narrowed to the repo's own committed rules, not disclosed as machine-dependent
+
+**The plan is right that `git check-ignore` answers from git's whole exclude chain, and wrong that the
+only options are *disclose* or *reopen Decision 2*.** A third exists and it is the direct question.
+
+`code_hash` exists to make *same code, different parameters* provable **across machines and across time**.
+An identity function that consults `core.excludesFile` is not that: two machines with identical trees and
+different global git config compute different digests, and the record gives a reader no way to see why.
+The dirty gate's machine-dependence is not a precedent — a gate answers *may this run proceed here*,
+which is a local question by nature; a hash answers *is this the same code*, which is not.
+
+**Measured, in a throwaway repo with a global exclude of `*.log` and a committed `.gitignore` of
+`b.txt`:**
+
+```
+git check-ignore --stdin                                    → a.log, b.txt   (both)
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+  git -c core.excludesFile= check-ignore --stdin            → b.txt          (the committed rule only)
+```
+
+**So: every `check-ignore` invocation in this slice runs with the global and system config neutralized.**
+What remains is the repo's own committed rules — the root `.gitignore` and every per-directory one, both
+of which travel with the tree — plus `.git/info/exclude`, which **no flag can disable** and which is the
+one residue to disclose. That is a far smaller disclosure than the whole chain, and it names something a
+reader can act on.
+
+**Cost if wrong:** a project deliberately relying on a global exclude to keep something out of its hash
+finds it hashed. That is the correct outcome under this ruling's own argument — a rule that does not
+travel with the tree cannot define the tree's identity — and it is the reason the ruling is stated rather
+than left to the implementer.
+
+### Ruling G — the 875 ms at ten thousand paths is accepted and disclosed, not designed around
+
+Correctness decided Decision 2 and cost does not reopen it. **Disclose the measurement** — `875 ms` versus
+`19 ms` for the rejected `ls-files` shape at 10,002 paths, roughly twice the whole of `code_hash` — and
+**file the scaling note with an owner that is a fact with a reason.** Pattern-count scaling is unmeasured;
+say so rather than implying paths are the only axis. A research repo with ten thousand files under
+`src/**` is outside anything this project has seen, and paying under a second there to answer the right
+question on every ordinary repo is the trade this project makes everywhere else.
+
+### Ruling H — take the `code_hash_of` extraction, not the memoizing closure
+
+**Grounds beyond the plan's own:** the extraction kills the second **walk** as well as the subprocess, and
+it leaves `E-CODE-FILE-LIST` with **one emit site.** *§ Errors carries one row per code covering every
+emit site* is the shape that produced a whole-branch Major on two sub-slices, shipped twice in a third,
+and was miscounted twice in the slice just merged. **A structural change that makes a code un-multipliable
+is worth one name**, and a memoizing closure leaves the second site there for a later reader to find.
+
+### Ruling I — Fixture N becomes the guard pin's seventh arm, with NO authorized editor
+
+The claim it holds is *a `diff` across this boundary prints `code_hash DIFFERS` for identical code* —
+the disclosure that `schema_version` deliberately does not carry. **That is precisely the claim a later
+slice will want to soften**, because it reads like a defect and is a consequence. An arm with no
+authorized editor is this repo's answer to five slices weakening a pin quietly: **a passing arm is the
+proof.** As task 7's own test it would be editable by whoever next touches task 7's surface.
