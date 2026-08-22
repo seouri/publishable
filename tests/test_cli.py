@@ -17791,3 +17791,78 @@ def test_the_two_levels_do_not_interact_a_declared_collapse_never_disagrees(tmp_
     ]
     collapsed = collapse_repeats(executions, "analyze", 0)
     assert collapsed["p1"]["tag"] == "a"
+
+
+# --- H5b task 6: Controller ruling 1's blast radius — the crash it opens up -
+
+_RULING1_CONTRAST_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i < 3:
+                io.record(unit.key, {{"score": float(i)}})
+            else:
+                io.record(unit.key, {{"score": None}})
+        return {{}}
+"""
+
+
+@pytest.mark.xfail(
+    reason=(
+        "H5b task 6's disclosure, not its fix. Controller ruling 1's gate "
+        "relaxation (a column numeric for some units and `None` for others "
+        "now keeps a block, task 6) makes such a column enter "
+        "`summarize_step`'s published keys for the FIRST time — before this "
+        "task it was dropped by the old all-or-nothing gate and so never "
+        "reached `cli.py`'s per-metric contrast loop "
+        "(`sorted((set(of_summary) & set(against_summary)) - {'by'})` at "
+        "cli.py). A two-condition run computing `vs_baseline` over such a "
+        "column now reaches cli.py's unguarded "
+        "`of_collapsed[k][metric_key] - against_collapsed[k][metric_key]` "
+        "subtraction with `k` a unit both sides carry `None` for — "
+        "`TypeError`, uncaught, outside every `try`: run directory complete, "
+        "every execution paid for, no `run.yaml`. Task 7 (`docs/superpowers/"
+        "plans/2026-08-22-non-numeric-columns-downstream.md` Task 7, "
+        "Fixture G) owns the guard and supersedes this pin — it should FAIL "
+        "(stop xfailing) the moment task 7's guard lands; strict=True makes "
+        "that loud rather than silent."
+    ),
+    strict=True,
+)
+def test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_crashes(tmp_path, capsys):
+    """H5b task 6's disclosure. Asserts the CORRECT behaviour (exit 0,
+    `run.yaml` written) so this pin fails loudly — an `xfail` on
+    `pytest.raises(TypeError)` would pin the bug as intended instead of
+    flagging it for removal.
+
+    The blast radius is narrower than 'any ragged column': an all-`None`
+    column cannot reach it (empty numeric subset -> the column is skipped ->
+    never enters `of_summary`/`against_summary` at all), and a ragged column
+    with no `None` cannot reach it either — the guard pin's own arm E
+    (`test_the_correction_family_measurement_arm_e_no_editor_except_task_4`)
+    computes a live paired `score` contrast at `n_paired: 4` over a `score`
+    only 4 of 6 units carry, with no crash, which also confirms
+    `ExecutionResult.rows` carries un-unioned per-execution rows rather than
+    `finalize`'s union-with-nulls — if it were the union every ragged column
+    in every run would hit this, not only one carrying an explicit `None`.
+    The trigger is exactly: a column numeric for some units and `None` for
+    others, in a run that computes a contrast over it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _starter_step=_RULING1_CONTRAST_STEP,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert doc["run_dir"] is not None
+    assert (doc["run_dir"] / "run.yaml").exists()

@@ -2871,10 +2871,23 @@ def summarize_step(
     roster a condition drew from, not any one column, and every column in the
     table shares that one roster.
 
-    A column is skipped entirely — not coerced, not defaulted — when any unit's
-    value for it is not a real number (a string, or a `bool`, which is an `int`
-    subclass but never a quantity to average). Averaging a bool would silently
-    read as a proportion; this refuses that rather than doing it quietly.
+    A column is skipped entirely — not coerced, not defaulted — when NO unit
+    that carries it holds a real number (a string, a `bool` — which is an
+    `int` subclass but never a quantity to average — or `None`). Averaging a
+    bool would silently read as a proportion; this refuses that rather than
+    doing it quietly.
+
+    Controller ruling 1 (2026-08-22): when SOME units carry a number and
+    others don't — a `None` from Decision 1's disagreement return, or a unit
+    that simply recorded `None` — the column is not skipped. Its block is
+    computed over the units that carried a number alone, and `n.completed`
+    below is that CONTRIBUTING count rather than the condition-wide figure,
+    for the same reason a ragged column's `completed` already differs from
+    `counts`': an interval over five values published beside a `completed` of
+    two hundred is a precision claim no later reader could catch. A `str`
+    beside a number cannot reach this function at all —
+    `artifacts._check_column_types` refuses it at `finalize` — so this is not
+    a third case to project, only the one ruling 1 actually names.
 
     `derived` is what a template's `aggregate` returned for this step, name →
     scalar, already computed once over the whole table for the reported
@@ -2901,10 +2914,9 @@ def summarize_step(
     resampling was attempted and failed, and a caller (`cli.py`) that only
     checked `ci95: null` could not otherwise tell which happened.
 
-    A derived key colliding with a recorded column — even one dropped above for
-    being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
-    `artifacts.py` raises for the sibling case: one name cannot hold both a
-    column's mean and a derived value.
+    A derived key colliding with a recorded column is refused with the same
+    `E-STEP-KEY-COLLISION` `artifacts.py` raises for the sibling case: one
+    name cannot hold both a column's mean and a derived value.
 
     `beside_n` is core-supplied context copied verbatim into every metric block —
     `technical_n`, `weighted_by`, and `resample` today (`_beside_n_copy`, not a
@@ -3118,9 +3130,21 @@ def summarize_step(
         # One pass over `(key, value)`, so the weights below cannot be filtered
         # or ordered differently from the values they weight.
         carried = [(key, cols[column]) for key, cols in collapsed.items() if column in cols]
-        raw = [value for _, value in carried]
-        if not raw or not all(_is_numeric(v) for v in raw):
+        # Ruling 1 (Controller rulings, 2026-08-22): filtered to the NUMERIC
+        # subset here, not gated all-or-nothing on `raw`. A column non-numeric
+        # for every unit that carries it has an empty subset and is skipped
+        # below exactly as before; a column numeric for some units and `None`
+        # for others (Decision 1's disagreement return, or a unit that simply
+        # recorded `None`) now keeps a block computed over the units that
+        # contributed a number, with `n.completed` below reporting that
+        # CONTRIBUTING count rather than the condition-wide figure — the
+        # precision an interval over five values beside a `completed` of two
+        # hundred would otherwise misstate. `str` beside a number cannot reach
+        # here at all: `_check_column_types` refuses it at `finalize`.
+        carried = [(key, value) for key, value in carried if _is_numeric(value)]
+        if not carried:
             continue
+        raw = [value for _, value in carried]
         values = [float(v) for v in raw]
         # The column's own keys, taken from the same pass the values were: the
         # cluster of a unit is looked up by key, so a vector filtered or ordered

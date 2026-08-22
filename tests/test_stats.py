@@ -6180,3 +6180,76 @@ def test_fixture_l_arm_2_both_repeats_numeric_draws_no_warning():
     collapsed = collapse_repeats(results, "analyze", condition_index=0)
     assert collapsed["p0"]["score"] == 5.0
     assert repeats_disagreeing(results, "analyze", condition_index=0) == {}
+
+
+# --- H5b task 6: Fixture I (where the projection sits), and the Controller ---
+# --- ruling 1 fix (a mixed numeric/None column across UNITS keeps a block) --
+
+
+def test_fixture_i_a_derived_metric_reading_the_bool_column_stays_inside_its_ci():
+    """H5b task 6, Fixture I. `summarize_step` over Fixture A's wide table
+    (six units, `u0`-`u3` carrying `score`, all six carrying bool `valid`)
+    with a derived metric that READS the bool column (`n_valid`, counting
+    `row.get("valid") is True`).
+
+    The load-bearing claim: `summarize_step` passes the `collapsed` it
+    received straight to `percentile_of_derived`, which rebuilds each draw's
+    table from WHOLE rows. Stripping the column at the function's INPUT would
+    give the 2000 draws a narrower table (four rows, `score` only) than the
+    single unresampled `aggregate` call in `cli.py` (six rows, `valid`
+    included) — measured on this fixture: `(6.0, 6.0)` against the full table
+    and `(0.0, 0.0)` against a stripped one, a point estimate outside its own
+    interval. Projecting only at the OUTPUT (this function's own column loop,
+    which never touches `collapsed` itself) is what keeps the derived branch's
+    table whole.
+    """
+    wide = _fixture_b_wide_collapsed()
+    counts = {"resolved": 6.0, "completed": 6.0, "ineligible": 0.0, "failed": 0.0}
+
+    def n_valid(units):
+        return float(sum(1 for row in units if row.get("valid") is True))
+
+    out = summarize_step(
+        wide, counts, derived={"n_valid": 6.0}, seed=7, resample={"n_valid": n_valid}, draws=2000
+    )
+    assert out["n_valid"]["value"] == 6.0
+    assert out["n_valid"]["ci95"] == [6.0, 6.0]
+    assert out["n_valid"]["ci95"][0] <= out["n_valid"]["value"] <= out["n_valid"]["ci95"][1]
+    assert out["n_valid"]["resample_draws"] == 2000
+    assert "valid" not in out  # the bool recorded column itself earns no block
+
+
+def test_ruling_1_a_column_numeric_for_some_units_and_none_for_others_keeps_a_block():
+    """Controller ruling 1 (2026-08-22), amendment row 2 — the mixed column
+    across UNITS (not across a single unit's repeats, which is task 4/5's
+    Decision 5/6 territory). `u0` carries a number, `u1` carries `None` —
+    reachable the moment task 4 lets `_across_repeats` return `None` for a
+    unit whose repeats disagreed on a non-numeric column, or simply because a
+    unit recorded `None` directly (`_check_column_types` never refuses `None`
+    beside a `float`, measured against `artifacts._check_column_types`).
+
+    This is a real regression task 4 introduced and task 6 closes: BEFORE
+    task 4, `_gather_repeats`'s old filter dropped a non-numeric/`None` value
+    at the walk, so `u1` never carried `score` at all and `summarize_step`'s
+    column loop already published a block over `u0` alone, `n.completed: 1`
+    — the ordinary ragged-column case its own docstring already describes.
+    AFTER task 4 and before this fix, `u1`'s `score` is `None` and PRESENT,
+    so the old `not all(_is_numeric(v) for v in raw)` gate dropped the WHOLE
+    column — the exact silent-deletion shape ruling 1 exists to end. The fix
+    filters `carried` to its numeric subset rather than gating all-or-nothing,
+    which is what restores the pre-task-4 behaviour and generalizes it: `n`
+    reports the CONTRIBUTING count, not `counts`' condition-wide figure.
+    """
+    collapsed = {"u0": {"score": 4.0}, "u1": {"score": None}}
+    out = summarize_step(collapsed, {"completed": 2}, seed=7)
+    assert out["score"]["value"] == 4.0
+    assert out["score"]["n"]["completed"] == 1
+
+
+def test_ruling_1_all_non_numeric_still_earns_no_block_at_all():
+    """Ruling 1's row 1 (unchanged): a column non-numeric for EVERY unit that
+    carries it earns no block whatsoever — there is no mean of strings, and
+    this is the case the pre-ruling all-or-nothing wording was correct about."""
+    collapsed = {"u0": {"valid": True}, "u1": {"valid": True}}
+    out = summarize_step(collapsed, {"completed": 2}, seed=7)
+    assert out == {}
