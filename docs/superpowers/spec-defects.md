@@ -8376,3 +8376,39 @@ filing*.
 slice's surface is this file's own hygiene — so it wants a claimant rather than a schedule. Its shape is
 stated here so whoever claims it needs no re-derivation: **parse every `## ` heading not marked closed,
 extract its `Owner:` line, and fail on any that names a slice whose merge commit exists on `main`.**
+
+## OPEN — a unit whose only recorded column is non-numeric is silently dropped from the unit table, and the statistics are then computed over nothing — **Owner: H5b**
+
+**Filed 2026-08-21 against `0bd29a3`, before H5's design, because a silently wrong published number is the
+one defect class this project cannot leave to a slice-end filing.**
+
+**Measured, by direct call:** `collapse_repeats` over six completed units each recording `valid: True`
+returns **`{}`** — not six units with the column dropped, but **zero units.** The units do not survive
+the collapse at all.
+
+**Measured downstream, on a real run** (in H5's scoping, `docs/superpowers/H5-SCOPING.md`): a config that
+**validates clean** published `n_valid: {value: 0.0, ci95: [0.0, 0.0], method: percentile_over_units,
+resample_draws: 2000}` where **all six units recorded `valid: True`** — at **exit 0, with no
+diagnostic.** A reader has no way to tell that number from a real one.
+
+**Why it is worse than a dropped column.** § The unit table is the inference base makes the per-unit table
+the basis of every interval core reports, and `n` counts units. A unit with no numeric column is not a
+unit with less information — under this behaviour it is **not a unit at all**, so `n` is wrong, the
+interval is wrong, and `resample_draws: 2000` asserts work done over an empty table.
+
+**And the boundary was invented rather than inherited.** The bool/int-clash filing above reasoned that
+*"whoever writes `aggregate` should inherit this reasoning"* — and `collapse_repeats` chose a **third**
+boundary, dropping silently, which that entry describes nowhere. **A named-forward reasoning that the next
+implementer does not read is not a carry**, which is the same failure this file records for findings
+routed into briefs.
+
+**Owner: H5b**, the sub-slice H5's scoping charters for non-numeric columns flowing downstream to
+`aggregate`. **The check its closer must make:** decide whether such a unit is **carried with its
+non-numeric column** (§ The unit table's reading), **carried with the column omitted**, or **refused
+loudly** — and whichever it is, **the silent drop must stop**, because *no diagnostic* is the only one of
+the four that cannot be right. **This is a behaviour change to `run`**, so it takes the ruling this
+project has applied twice: additive is fine, and changing what an existing key reports needs the argument
+made in the open.
+
+**Cost while unclaimed:** any run whose step records only non-numeric columns for some units publishes
+intervals over a silently smaller table, with `n` and `resample_draws` both asserting otherwise.
