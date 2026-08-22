@@ -412,9 +412,9 @@ The four documents say what `publishable` **is**. These say how it got there, an
 
 **The plan argues from the spec, and the code outranks both.** Where they disagree, the code wins and the *document changes first* — six of six implementers on the most recent slice found a real disagreement, so finding one is expected, not exceptional.
 
-Two things stay untracked because git already holds them: task briefs (extracted from the plan by `scripts/task-brief`) and every `.diff` (regenerable from the two commits in its filename).
+Two things stay untracked because git already holds them: task briefs (extracted from the plan by the installed `superpowers` plugin's `task-brief`) and every `.diff` (regenerable from the two commits in its filename).
 
-**`scripts/sdd-workspace` rewrites `.superpowers/sdd/.gitignore` to a bare `*` every time it runs, and `task-brief` calls it.** Already-tracked files stay tracked, so the damage is only to records created after a clobber. Restore that file's content when you notice, and use `git add -f` when committing new records.
+**The plugin's `sdd-workspace` rewrites `.superpowers/sdd/.gitignore` to a bare `*` every time it runs, and `task-brief` calls it.** Both scripts live in the installed `superpowers` plugin and **not in this repository — `scripts/` does not exist here**, and this file described them as repo paths for several slices, which is the *assuming a documented rule has code behind it* row applied to its own author. Already-tracked files stay tracked, so the damage is only to records created after a clobber. Restore that file's content when you notice, and use `git add -f` when committing new records.
 
 ## Invariants a change must not quietly break
 
