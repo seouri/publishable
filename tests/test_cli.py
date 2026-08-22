@@ -16797,6 +16797,104 @@ def test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types(
     assert type(first["note"]).__name__ == "NoneType"
 
 
+# H5a task 2: `measurements.parquet` written by a real run — the fixture the
+# design's own § What could not be measured named as absent
+# ("no scratchpad config here declared `data.units.measurements`"). `cohort`
+# is the declared attribute; `reading` is the roster's own measurement-axis
+# column (present in the table, exactly the shape `data.units.measurements.by`
+# documents), and the step invents a second, independent measurement
+# identity of its own (`measurement="m1"`/`"m2"`) through `io.record` — the
+# axis `measurements.parquet` actually rows over.
+_H5A_TASK2_MEASURED_ROSTER = "patient_id,cohort,arm,reading\n" + (
+    "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]},r{i}" for i in range(1, 11)) + "\n"
+)
+
+_H5A_TASK2_MEASURED_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"score": float(i)}}, measurement="m1")
+            io.record(unit.key, {{"score": float(i) + 1.0}}, measurement="m2")
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_h5a_task2_measurements_parquet_carries_no_declared_attribute(tmp_path: Path):
+    """Design Decision 2 / task 2: `measurements.parquet`'s column set is
+    `unit`, `measurement`, then every recorded key — and **no** declared
+    attribute, unlike its sibling `units.parquet`, which carries `cohort`.
+    Both halves are asserted from the same run so the asymmetry is the
+    claim rather than either half alone.
+
+    A real run through `run_a_project`, not a direct `StepIO` probe — the
+    design's own gap, closed here rather than documented from reading. No
+    literal below is transcribed from `artifacts.py`; every one is read
+    back from the parquet files this run actually wrote, and no step name
+    or repeat label is a literal: both tables are located by `rglob`
+    across the whole run directory.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        units=10,
+        unit_attributes=["cohort"],
+        roster_csv=_H5A_TASK2_MEASURED_ROSTER,
+        units_overrides={
+            "measurements": {"by": "reading", "collapse": {"score": "mean"}},
+        },
+        _starter_step=_H5A_TASK2_MEASURED_STARTER_STEP,
+    )
+
+    units_paths = sorted(doc["run_dir"].rglob("units.parquet"))
+    measurements_paths = sorted(doc["run_dir"].rglob("measurements.parquet"))
+    # Five seed repeats, `init`'s default replication — the same count arm A
+    # measured for `units.parquet`, and `measurements.parquet` is written by
+    # the same per-execution `finalize` call, so it is written once per
+    # repeat too.
+    assert len(units_paths) == 5
+    assert len(measurements_paths) == 5
+
+    units_rows_all = [_decode_parquet(p.read_bytes()) for p in units_paths]
+    measurements_rows_all = [_decode_parquet(p.read_bytes()) for p in measurements_paths]
+    assert all(rows == units_rows_all[0] for rows in units_rows_all[1:])
+    assert all(rows == measurements_rows_all[0] for rows in measurements_rows_all[1:])
+
+    units_rows = units_rows_all[0]
+    measurements_rows = measurements_rows_all[0]
+
+    # The column LIST, in order — the claim § The per-unit tables makes.
+    assert list(units_rows[0].keys()) == ["unit", "cohort", "score"]
+    assert list(measurements_rows[0].keys()) == ["unit", "measurement", "score"]
+
+    # The asymmetry itself: the declared attribute is on one side and not
+    # the other.
+    assert "cohort" in units_rows[0]
+    assert "cohort" not in measurements_rows[0]
+
+    assert len(units_rows) == 10
+    assert len(measurements_rows) == 20  # two measurements ("m1", "m2") per unit
+
+    by_unit = {row["unit"]: row for row in units_rows}
+    by_key = {(row["unit"], row["measurement"]): row for row in measurements_rows}
+
+    assert by_unit["p1"]["cohort"] == "ab"[1 % 2]
+    assert by_unit["p1"]["score"] == 0.5  # mean(0.0, 1.0), the two measurements collapsed
+    assert by_unit["p10"]["score"] == 9.5  # mean(9.0, 10.0)
+
+    assert by_key[("p1", "m1")]["score"] == 0.0
+    assert by_key[("p1", "m2")]["score"] == 1.0
+    assert by_key[("p10", "m1")]["score"] == 9.0
+    assert by_key[("p10", "m2")]["score"] == 10.0
+
+
 _H5A_ARM_D_LITERALS = (
     "0.581",
     "0.488",

@@ -996,6 +996,10 @@ This is the rule the code already enforces; it was reachable only by colliding w
 
 **This rule is stated for the per-unit tables — `units.parquet` and `measurements.parquet`, both [`.parquet`](#steps-and-artifacts) — because that is the format it is true of.** A `.csv` write does not unify a column's types across rows at all today: two rows disagreeing on a column's type write successfully, each cell holding its own `str()`.
 
+`measurements.parquet`'s columns are `unit`, `measurement`, then every key any measurement row recorded — the union, exactly as `units.parquet`'s recorded columns are, but with **no declared attribute** among them. That is the one way the two files' column sets differ, and it is deliberate rather than an omission: a declared attribute comes from the roster, not from an execution, so it is constant across every measurement of one unit, and repeating it on each `(unit, measurement)` row would be a value `measurements.parquet` would then have to keep consistent with `units.parquet`'s own copy, for something a reader can already get by joining on `unit`. [§ Templates](#templates-where-parameters-are-defined) makes the same argument in the other direction for a declared attribute reaching `aggregate`'s table — it is carried through unchanged because "it has nothing to collapse across a unit's repeats" — and `measurements.parquet` is precisely the table before any collapse has happened, where there is nothing for an attribute to be uncollapsed into.
+
+The three groups of columns any per-unit table can hold — the unit key, a declared attribute, and a recorded key — never collide: `io.record`'s `measurement=` branch refuses a recorded key named `unit`, one named `measurement`, and one shadowing a declared attribute, each `E-STEP-KEY-COLLISION`, so the column set above is always a plain concatenation rather than a union that has to resolve a clash.
+
 ### The apparatus files
 
 `apparatus/probes.jsonl` is the append-only ledger every probe writes to — at `dry-run`, at run start, before each execution, and at [`freeze`](#cli-reference):
