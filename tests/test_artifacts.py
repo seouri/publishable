@@ -1,4 +1,5 @@
 # tests/test_artifacts.py
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import numpy as np
 import pytest
 import yaml
 
-from publishable import ArtifactError, ArtifactExistsError, ContractError
+from publishable import ArtifactError, ArtifactExistsError, ContractError, artifacts
 from publishable.artifacts import (
     ReportIO,
     StepIO,
@@ -81,6 +82,24 @@ def test_an_unregistered_extension_takes_bytes_or_str_verbatim(io: StepIO):
     with pytest.raises(ArtifactError) as e:
         io.write("model2.pkl", {"not": "bytes"})
     assert e.value.code == "E-ARTIFACT-UNWRITABLE"
+
+
+def test_h5a_step2_control_the_unregistered_suffix_message_is_not_prefixed(
+    io: StepIO,
+):
+    """Task 9 step 2's control (§ Corrections, correction 3): this raise
+    sits in `io.write`'s own `else` branch, outside the `WRITERS[suffix](obj)`
+    dispatch the new `except ContractError` wraps, so it must not gain a
+    second copy of the artifact name. The design's own wording — "not
+    prefixed" — is unassertable as written, because this message already
+    contains the name (`"{name} has no registered writer …"`); asserted
+    instead as `msg.count(name) == 1` and `not msg.startswith(f"{name}:")`.
+    """
+    with pytest.raises(ArtifactError) as e:
+        io.write("model3.pkl", {"not": "bytes"})
+    msg = str(e.value)
+    assert msg.count("model3.pkl") == 1
+    assert not msg.startswith("model3.pkl:")
 
 
 def test_nothing_is_ever_overwritten(io: StepIO):
@@ -341,6 +360,61 @@ def test_recording_a_column_named_unit_is_a_key_collision(tmp_path: Path):
         io.record("p0", {"unit": "IMPOSTER"})
     assert e.value.code == "E-STEP-KEY-COLLISION"
     assert "unit" in str(e.value)
+
+
+# Task 7 — Fixture M, design Decision 9. Measured at `d2caacf`: the plain branch
+# used to accept a `measurement` key and write it into `units.parquet`, while the
+# `measurement=` branch refused the identical key three lines away. Three arms:
+# the plain branch now refuses it (arm 1), the `measurement=` branch already did
+# and still does (arm 2 — kept so the symmetry is what the test asserts, not just
+# arm 1 in isolation), and a plain record naming the *plural* `measurements` still
+# writes (arm 3 — the control that stops a substring/prefix guard from passing).
+def test_fixture_m_plain_record_refuses_a_measurement_column(tmp_path: Path):
+    """Arm 1: the asymmetry this task closes."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"measurement": "HIJACK"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "measurement" in str(e.value)
+
+
+def test_fixture_m_measurement_branch_still_refuses_the_same_key(tmp_path: Path):
+    """Arm 2: already passing today, kept so the test asserts the symmetry
+    rather than only the new branch."""
+    io = _measuring_io(tmp_path)
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"measurement": "HIJACK"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_fixture_m_a_plural_measurements_column_still_writes(tmp_path: Path):
+    """Arm 3, the control: `measurements` (plural) is a different name from
+    `measurement` and must keep writing — a guard written as a substring or
+    prefix test over the key would swallow this too."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.record("p0", {"measurements": 3})
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p0", "measurements": 3}]
 
 
 def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
@@ -651,6 +725,61 @@ def test_no_measurements_parquet_when_no_step_measured(tmp_path: Path):
     assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "score": 10}]
 
 
+# Task 5 step 6 — the arms § Corrections correction 1 exists for. A recorded
+# `by` column is legal by design (design Decision 4: the refusal removes one
+# PRODUCER of a `by` column, an attribute declaration, never the possibility
+# of one), and `RESERVED_COLUMNS` must have exactly one reader for that to
+# stay true. Without these two pins, a later slice pointing `record`'s
+# collision guards or `_collapse_measurements`' structural-column exclusion
+# at the constant would refuse or silently drop a legally recorded `by`
+# column, with the suite green.
+def test_a_plain_recorded_by_column_survives_into_units_parquet(tmp_path: Path) -> None:
+    """Arm (a): a PLAIN `io.record` payload naming `by` reaches `units.parquet`
+    with its value. `RESERVED_COLUMNS` is not consulted by `record`'s
+    collision guards at all — only `unit` and `measurement` are, by literal —
+    so `by` is neither of the two names those guards refuse.
+
+    Brief step 6(a)'s second clause — that a real `run` also draws
+    `W-STATS-STRATUM-SHADOWED` for this column — is deliberately NOT asserted
+    here: a bare `StepIO` has no `run` around it to draw a warning from, and
+    that warning is `cli.py`'s, not `artifacts.py`'s. It is covered end to end
+    by the pre-existing `tests/test_cli.py::
+    test_a_recorded_column_named_by_keeps_its_metric_and_warns`, which runs a
+    real `run` recording `by` and asserts both the warning and the column's
+    own value and interval survive. This arm's job is narrower: only the
+    plain-record-reaches-`units.parquet` half, at the artifact layer."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    io.record("p1", {"by": 2.0, "score": 10})
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "by": 2.0, "score": 10}]
+
+
+def test_a_measured_by_column_survives_the_collapse_into_units_parquet(tmp_path: Path) -> None:
+    """Arm (b): a `measurement=`-recorded column named `by` survives
+    `_collapse_measurements`. `collapse: "first"` is declared explicitly
+    (rather than leaving `by` a numeric value) because `_collapse_measurements`
+    calls `rule_for("by", collapse)` then `coerce_for_rule` — under a NUMERIC
+    rule a string `by` value would refuse before this arm could observe
+    survival at all, which is a fixture that fires for the wrong reason. Under
+    `first`, `coerce_for_rule` is a no-op and the earliest-recorded string
+    value survives untouched — which is also why `by`'s value here is a
+    string ("north") rather than a number: a numeric value under `first`
+    would pass even if `_collapse_measurements`' structural-column exclusion
+    HAD been re-pointed at `RESERVED_COLUMNS`, since `coerce_for_rule` would
+    silently produce a number either way. A string value is what makes this
+    arm distinguish "the column is excluded" from "the column collapsed"."""
+    io = _measuring_io(tmp_path, collapse="first")
+    io.record("p1", {"by": "north", "score": 10}, measurement="r1")
+    io.record("p1", {"by": "north", "score": 20}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p1", "by": "north", "score": 10}
+    ]
+
+
 def test_a_numeric_rule_coerces_a_recorded_string_before_applying(tmp_path: Path):
     """`coerce_scalars` guarantees a scalar, not a number: a step recording `"10"`
     reaches the collapse as a `str`, where `mean` would return the string `"10"`
@@ -794,6 +923,78 @@ def test_finalize_writes_a_parquet_table_and_an_ineligible_ledger(tmp_path: Path
     assert rows[0]["extra"] is None, "a column absent from a row reads as null"
     lines = (sd / "ineligible.jsonl").read_text().splitlines()
     assert json.loads(lines[0]) == {"unit": "p2", "reason": "no baseline visit"}
+
+
+# Task 8 — Fixture D, design Decision 10, plan § Corrections correction 5.
+#
+# `finalize`'s `columns = ["unit", *attribute_names, *recorded]` can hold
+# `"unit"` twice when a directly constructed `Unit` carries an attribute named
+# `unit` — `recorded` excludes `"unit"` but `attribute_names` does not. The
+# per-row dict comprehension `finalize` builds already collapses a duplicate
+# column NAME (a Python dict cannot hold the same key twice), so an assertion
+# on the written parquet's column order passes identically whether or not the
+# list itself is deduped — measured, and why this fixture does not read the
+# file. The claim is about the LIST `finalize` builds, so the assertion is on
+# that list.
+#
+# `finalize`'s own signature is unchanged, so the list is reached by spying on
+# the module-level helper it now calls, `_finalize_columns` — chosen over
+# inlining the dedupe, per the brief, because a spy on a call `finalize` makes
+# is what catches BOTH ways this could regress: the helper's own body losing
+# the dedupe (the spy's return still holds the duplicate), and `finalize`
+# reverting to building the list inline without calling the helper at all (the
+# spy is never invoked). A test that only unit-tests `_finalize_columns` in
+# isolation would miss the second — "a mutation applied to a proxy" — because
+# nothing would ever call `finalize` through the helper in that test.
+def test_fixture_d_finalize_columns_is_deduped_by_name(tmp_path: Path, monkeypatch):
+    from publishable.units import Unit, UnitList
+
+    calls: list[tuple[list[str], list[str]]] = []
+    returned: list[list[str]] = []
+    real = artifacts._finalize_columns
+
+    def spy(attribute_names: list[str], recorded: list[str]) -> list[str]:
+        calls.append((list(attribute_names), list(recorded)))
+        result = real(attribute_names, recorded)
+        returned.append(result)
+        return result
+
+    monkeypatch.setattr(artifacts, "_finalize_columns", spy)
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    # A Unit built directly (not through resolve_units), carrying an attribute
+    # named `unit` — the shape task 5's E-UNITS-ATTR-COLUMN refuses for a
+    # config but cannot reach here, since `Unit` is on § The importable
+    # surface and this call constructs one by hand.
+    roster = UnitList([Unit(key="p0", attributes={"unit": "HIJACK", "site": "a"})])
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    io.record("p0", {"score": 1})
+    io.finalize()
+
+    # The call-site half: `finalize` must actually route through the helper,
+    # or the spy — and the dedupe it wraps — is never exercised at all.
+    assert len(calls) == 1
+    attribute_names, recorded = calls[0]
+    assert attribute_names == ["unit", "site"]
+    assert recorded == ["score"]
+
+    # The list half: the helper's return, as `finalize` actually used it, has
+    # `"unit"` exactly once, in first-seen (leading) position.
+    columns = returned[0]
+    assert columns.count("unit") == 1
+    assert columns == ["unit", "site", "score"]
+
+    # Documents the residual correction 5 names: the dedupe fixes the LIST,
+    # not the VALUE. The attribute merge still overwrites `merged["unit"]`
+    # with the attribute's value, so the published row's `unit` column carries
+    # the attribute's "HIJACK", not the real key "p0" — unchanged by this
+    # task, and not asserted as a passing behaviour here, only recorded as the
+    # open residual (filed by task 12 for a direct caller; no guard is built
+    # for it in this task).
+    rows = _read_parquet(io.step_dir / "units.parquet")
+    assert rows == [{"unit": "HIJACK", "site": "a", "score": 1}]
 
 
 def test_no_files_are_written_when_nothing_was_recorded_or_skipped(tmp_path: Path):
@@ -2380,3 +2581,453 @@ def test_h8c_arm_c_read_condition_resolves_at_three_repeats_and_at_one(tmp_path:
     for built in (three, one):
         summary = built["record"]["results"]["summary"]["step03_compare"]
         assert summary == {"model_m": "pearson", "n_rows": 10}
+
+
+# ---------------------------------------------------------------------------
+# H5a task 13: the guard pin's arms B and C — both encoders' bytes through a
+# real `StepIO.write`, and the two shipped type-clash refusals through that
+# same real call rather than through `_encode_parquet` directly. Captured by
+# running, at `804271c` (`main`, clean tree, before H5a's own first task).
+# `docs/superpowers/plans/2026-08-21-artifacts-write-side.md` task 13;
+# `docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`.
+#
+# Arm A (a real run's `units.parquet`) and arm D (the worked example's own
+# text) live in `tests/test_cli.py`, because arm A needs a real `run` and
+# arm D needs no artifact at all — this file's fixtures build a `StepIO`
+# directly, which is the surface both arms below actually exercise.
+# ---------------------------------------------------------------------------
+
+_H5A_ARM_B_ROWS = [
+    {"i": 1, "f": 1.5, "s": "hello", "b": True, "n": None},
+    {"i": 2, "f": 2.5, "s": "world", "b": False, "n": None},
+]
+
+
+def test_h5a_arm_b1_the_csv_golden_bytes_never_move_in_this_slice(tmp_path: Path):
+    """Arm B1 — `.csv` GOLDEN BYTES. NEVER MOVE IN THIS SLICE.
+
+    One row set of Python scalars covering `int`, `float`, `str`, `bool` and
+    `None`, written through a real `StepIO.write` and read back as bytes.
+    Deterministic: `csv` is stdlib and no library version is in the path, so
+    this is the same guarantee `test_a_mixed_int_and_float_column_promotes_to_float_deliberately`
+    and its siblings already rest on, made a byte-level pin rather than a
+    round-trip assertion.
+    """
+    io = make_io(tmp_path)
+    path = io.write("golden.csv", _H5A_ARM_B_ROWS)
+    assert path.read_bytes() == (b"i,f,s,b,n\n1,1.5,hello,True,\n2,2.5,world,False,\n")
+
+
+def test_h5a_arm_b2_the_parquet_golden_sha256_is_a_tripwire(tmp_path: Path):
+    """Arm B2 — `.parquet` GOLDEN sha256. A TRIPWIRE, edit conditions STATED
+    IN ADVANCE and NOT left to judgement.
+
+    This hex is coupled to the `pyarrow` `uv.lock` pins, not to this file's
+    source. If it fails: arm A
+    (`test_h5a_arm_a_a_real_runs_units_parquet_column_order_values_and_types`
+    in `tests/test_cli.py`) is what tells you which fault you have — arm A
+    green and this red means the library moved; both red means the coercion
+    moved a legal artifact. It may be recaptured ONLY when `uv.lock`'s
+    `pyarrow` entry changed in the same commit, and only with arm A green.
+    NO TASK IN H5a MAY EDIT IT: no task in this slice touches `uv.lock`.
+    """
+    io = make_io(tmp_path)
+    path = io.write("golden.parquet", _H5A_ARM_B_ROWS)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == "c003934b92fed035aa70dc8e8ea04b336a9c27aedfa64196cba4b440dabcea3e"
+
+
+def test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write(tmp_path: Path):
+    """Arm C — the shapes that must keep raising, through a real `io.write`
+    rather than through `_encode_parquet` directly.
+
+    The bool/int and str/int refusals themselves are ALREADY pinned by
+    `test_a_bool_and_int_column_clash_raises_rather_than_coercing` and
+    `test_a_str_and_int_column_clash_raises_rather_than_coercing`
+    (grepped, not assumed — both call `_encode_parquet` directly). What
+    this arm adds: the same two shapes through `StepIO.write`, so a later
+    `except ContractError` wrapper around `io.write`'s dispatch (task 9)
+    cannot swallow or re-code them — and the assertions are on the code and
+    on the column name and both type names as SUBSTRINGS, never on the whole
+    message, `startswith`, or the surface clause `"io.record's values, a
+    step's return, and a template's aggregate..."` — task 9 is authorized to
+    delete that clause and to prefix the artifact name onto the message, and
+    a golden literal here would fail an arm this plan gives no editor.
+    """
+    io_bool = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_bool:
+        io_bool.write("clash.parquet", [{"v": True}, {"v": 1}])
+    assert e_bool.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_bool.value)
+    assert "bool" in str(e_bool.value)
+    assert "int" in str(e_bool.value)
+
+    io_str = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_str:
+        io_str.write("clash.parquet", [{"v": "x"}, {"v": 1}])
+    assert e_str.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_str.value)
+    assert "str" in str(e_str.value)
+    assert "int" in str(e_str.value)
+
+
+# ---------------------------------------------------------------------------
+# H5a task 13, arm E: added to the dispatch by the controller after this
+# branch's brief was extracted, because it derives from the design's SECOND
+# controller ruling ("Decision 5 is narrowed..."), which post-dates the plan
+# the brief was cut from. The brief could not carry it — only the dispatch
+# could, and it still had to be repeated as an explicit correction, which is
+# itself worth carrying: a dispatch-only instruction competes with a brief
+# and can lose. See the report's added note.
+#
+# Fix round 1, Major 1: the original single test was labelled "NO AUTHORIZED
+# EDITOR" while its own docstring said task 9 IS authorized to change the
+# `.csv` half — those two statements cannot both stand, and plan task 9 step
+# 5 (Fixture S) builds exactly that refusal while step 8's expected-green
+# list is A/B1/B2/C, arm E absent because the plan predates it. Split in two:
+# arm E1 (`.parquet`, genuinely no editor) and arm E2 (`.csv`, task 9 named
+# as its SOLE editor, with the post-edit state stated in advance — H8a arm
+# B's precedent for a pin one task is allowed to move).
+# ---------------------------------------------------------------------------
+
+
+def test_h5a_arm_e1_parquet_keeps_a_structural_or_bytes_cell_intact(tmp_path: Path):
+    """Arm E1 — `.parquet` round-trips a structural or `bytes` cell
+    BYTE-FAITHFULLY, from the second controller ruling
+    (`docs/superpowers/specs/2026-08-21-artifacts-write-side-design.md`):
+    "`.parquet` accepts both, because it *can* return them, byte-faithfully.
+    No refusal is added there." A capability this slice's design promises to
+    KEEP, not merely leaves unbroken.
+
+    NO AUTHORIZED EDITOR, for real this time: no task in H5a narrows what
+    `.parquet` accepts. If either assertion below fires, that is a finding.
+
+    Every assertion checks the returned value's TYPE as well as its value —
+    `[1, 2] == [1.0, 2.0]` is already `True`, so the list cell's own element
+    types are checked too (fix round 1, Minor 2: the first cut asserted only
+    the outer `list`/`bytes` type, and a mutation promoting the list's
+    elements from `int` to `float` left it green).
+    """
+    from publishable.artifacts import _decode_parquet
+
+    io = make_io(tmp_path)
+
+    pq_list = _decode_parquet(io.write("e_list.parquet", [{"v": [1, 2]}]).read_bytes())
+    assert pq_list == [{"v": [1, 2]}]
+    assert type(pq_list[0]["v"]) is list
+    assert [type(x) for x in pq_list[0]["v"]] == [int, int]
+
+    pq_bytes = _decode_parquet(io.write("e_bytes.parquet", [{"v": b"x"}]).read_bytes())
+    assert pq_bytes == [{"v": b"x"}]
+    assert type(pq_bytes[0]["v"]) is bytes
+
+
+def test_h5a_arm_e2_csv_refuses_a_structural_or_bytes_cell(tmp_path: Path):
+    """Arm E2 — POST-TASK-9 state, stated in advance by plan task 9 step 5
+    (Fixture S) and now built: `.csv` cannot return a structural or `bytes`
+    cell intact (the pre-task-9 state this test used to pin was `"[1, 2]"`
+    and `"b'x'"` — silent corruption), so it now refuses instead, converting
+    that corruption into a loud `ContractError` · `E-STEP-RETURN-TYPE`
+    naming the column and the artifact — the same shape
+    `test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write`
+    above already asserts by substring.
+
+    TASK 9 WAS the sole authorized editor of this test; no other task may
+    edit it further without a fresh ruling. A `.csv` write returning an
+    actual `list` or `bytes` object, rather than raising, is a finding
+    regardless of which task is running.
+    """
+    io_list = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_list:
+        io_list.write("e_list.csv", [{"v": [1, 2]}])
+    assert e_list.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_list.value)
+    assert "e_list.csv" in str(e_list.value)
+
+    io_bytes = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_bytes:
+        io_bytes.write("e_bytes.csv", [{"v": b"x"}])
+    assert e_bytes.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_bytes.value)
+    assert "e_bytes.csv" in str(e_bytes.value)
+
+
+def test_h5a_fixture_s_csv_refuses_a_structural_cell_on_either_side_of_the_row_set(
+    tmp_path: Path,
+):
+    """Fixture S — `.csv` only: `.parquet`'s side of this fixture is arm E1
+    above (no authorized editor; a structural cell keeps round-tripping
+    there). A `[1, 2]` cell in the FIRST row of a three-row set, and one in
+    the LAST row of another three-row set — the decoy-sort-position trap in
+    its row-order form (`CLAUDE.md` § Writing checks that can fail): a check
+    that stops at the first offending row, or one that only ever sees a
+    first-row offender in its fixture, cannot tell "checks every row" from
+    "checks the first row". Each arm asserts the refusal names the column,
+    the row index, and the artifact.
+    """
+    io_first = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_first:
+        io_first.write("s_first.csv", [{"v": [1, 2]}, {"v": 1}, {"v": 2}])
+    assert e_first.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_first.value)
+    assert "row 0" in str(e_first.value)
+    assert "s_first.csv" in str(e_first.value)
+
+    io_last = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_last:
+        io_last.write("s_last.csv", [{"v": 1}, {"v": 2}, {"v": [1, 2]}])
+    assert e_last.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_last.value)
+    assert "row 2" in str(e_last.value)
+    assert "s_last.csv" in str(e_last.value)
+
+
+def test_h5a_fixture_n_a_non_mapping_row_refuses_with_the_documented_code(
+    tmp_path: Path,
+):
+    """Fixture N — a row that is not a mapping, for both row-shaped
+    writers. Before this task: a bare `AttributeError` out of `_encode_csv`
+    and a bare `TypeError` out of `_encode_parquet` (measured at `d2caacf`).
+    Now: `ArtifactError` · `E-ARTIFACT-UNWRITABLE`, which
+    `docs/reference.md` § Steps and artifacts already promised for "handing
+    a writer anything else". Asserting the exception CLASS (via
+    `pytest.raises(ArtifactError)`, which does not catch a bare
+    `AttributeError`/`TypeError`) is the claim, not merely the code.
+    """
+    for suffix in (".csv", ".parquet"):
+        io_bad = make_io(tmp_path)
+        with pytest.raises(ArtifactError) as e:
+            io_bad.write(f"n_bad{suffix}", [{"v": 1.0}, "not a mapping"])
+        assert e.value.code == "E-ARTIFACT-UNWRITABLE"
+
+
+def test_h5a_fixture_n_control_the_same_rows_without_the_offender_write(
+    tmp_path: Path,
+):
+    """Fixture N's control — without it, the refusal arm above would pass
+    equally well if `io.write` silently wrote nothing at all. Same row set
+    with the non-mapping element removed: the write must succeed and the
+    artifact must exist, for both formats.
+    """
+    for suffix in (".csv", ".parquet"):
+        io_good = make_io(tmp_path)
+        path = io_good.write(f"n_good{suffix}", [{"v": 1.0}])
+        assert path.exists()
+
+
+def test_h5a_step7_local_pin_parquet_coerces_numpy_float64_beside_float(
+    tmp_path: Path,
+):
+    """Local pin for task 9 step 7 mutation (i): with `_encode_parquet`'s
+    call to `_coerced_rows` removed, `np.float64` beside a plain `float` in
+    the same column raises `E-STEP-RETURN-TYPE` rather than writing — the
+    spurious refusal Decision 5 retires (measured at `d2caacf`: that exact
+    input raises today, and after this task it writes). Task 11's own
+    Fixture W re-measures this across the whole cross-format matrix; this
+    is THIS task's own commit pinned in the meantime, so a reviewer does
+    not have to wait for a later task to know the mutation is caught.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    io_ = make_io(tmp_path)
+    path = io_.write("w_local.parquet", [{"v": np.float64(1.5)}, {"v": 1.5}])
+    rows = _decode_parquet(path.read_bytes())
+    assert rows == [{"v": 1.5}, {"v": 1.5}]
+    assert all(type(r["v"]) is float for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# H5a task 11: Fixture W, Fixture E, Fixture B's cross-spelling arm, and the
+# whole-branch mutation re-run (`docs/superpowers/plans/2026-08-21-artifacts-
+# write-side.md` task 11). Nothing below is new production code — the only
+# product of this task is pins, and the mutation re-run is reported in
+# `.superpowers/sdd/2026-08-21-artifacts-write-side/task-11-report.md`.
+#
+# Both encoders were measured directly (not assumed) before writing any of
+# this, at the commit this task started from:
+#   - `.parquet` decodes to the INPUT ROWS AS COERCED (int/float promoted to
+#     float via `_check_column_types`'s grouping plus pyarrow's own table
+#     construction; a NumPy scalar unwrapped to its Python counterpart).
+#   - `.csv` decodes every cell to `str(coerced_value)` — measured for every
+#     arm below, including int-beside-float, which does NOT promote for
+#     `.csv`: `_encode_csv` never calls `_check_column_types` at all
+#     (§ Corrections, correction 8 — cross-row unification is a `.parquet`
+#     rule only), so the two formats disagree on this arm for a second,
+#     independent reason from correction 2's `str()` rule.
+# ---------------------------------------------------------------------------
+
+_H5A_FIXTURE_W_ARMS: dict[str, list[dict[str, Any]]] = {
+    "homogeneous_float": [{"v": 1.5}, {"v": 2.5}],
+    "np_float64_beside_float": [{"v": np.float64(1.5)}, {"v": 2.5}],
+    "np_str_beside_str": [{"v": np.str_("a")}, {"v": "b"}],
+    "np_bool_beside_bool": [{"v": np.bool_(True)}, {"v": False}],
+}
+
+
+def test_h5a_fixture_w_parquet_round_trip_per_arm(tmp_path: Path):
+    """Fixture W, `.parquet` half. Rows built here, written through a real
+    `StepIO.write`, read back through the registered reader, and compared to
+    the INPUT ROWS AS COERCED — never to a hand-written expectation, so the
+    claim is the round trip and not a literal someone typed. `coerce_scalars`
+    is called directly on each arm's own rows to compute the expectation,
+    which is the same coercion `_coerced_rows(keep_structural=True)` applies
+    before handing rows to pyarrow.
+
+    Four arms here share one rule (decoded == coerced, type for type); the
+    fifth arm, int-beside-float, promotes and gets its own test below because
+    the promoted value is no longer equal to the merely-coerced one.
+    """
+    from publishable.artifacts import _decode_parquet
+    from publishable.coercion import coerce_scalars
+
+    io_ = make_io(tmp_path)
+    for name, rows in _H5A_FIXTURE_W_ARMS.items():
+        path = io_.write(f"fixture_w_{name}.parquet", rows)
+        decoded = _decode_parquet(path.read_bytes())
+        expected = [coerce_scalars(dict(row), "fixture w") for row in rows]
+        assert decoded == expected, name
+        for d_row, e_row in zip(decoded, expected, strict=True):
+            assert type(d_row["v"]) is type(e_row["v"]), name
+
+
+def test_h5a_fixture_w_parquet_int_beside_float_promotes(tmp_path: Path):
+    """Fixture W's fifth `.parquet` arm: `int` beside `float`. Every decoded
+    value is asserted to be a `float` **by `isinstance` over the decoded
+    rows** — the promotion, computed rather than written down as a literal —
+    and the decoded values equal the coerced rows with each promoted to
+    `float`, also computed rather than hand-typed.
+    """
+    from publishable.artifacts import _decode_parquet
+    from publishable.coercion import coerce_scalars
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": 1}, {"v": 2.5}]
+    path = io_.write("fixture_w_int_beside_float.parquet", rows)
+    decoded = _decode_parquet(path.read_bytes())
+    coerced = [coerce_scalars(dict(row), "fixture w") for row in rows]
+    promoted = [{"v": float(row["v"])} for row in coerced]
+    assert decoded == promoted
+    assert all(isinstance(row["v"], float) for row in decoded)
+
+
+def test_h5a_fixture_w_csv_round_trip_compares_to_str_of_coerced(tmp_path: Path):
+    """Fixture W, `.csv` half. **Correction 2**: `_decode_csv` returns a
+    `str` for every value — measured: `[{"v": 1.0}]` reads back
+    `[{'v': '1.0'}]` — so this compares each decoded cell to
+    `str(coerced_value)`, never to the coerced value itself. Asserting
+    equality with the coerced value would fail for every arm here, because
+    `.csv`'s reader gives back a string regardless of what was written
+    (`docs/reference.md` § Steps and artifacts' split `.csv`/`.parquet` row).
+
+    This covers all FIVE arms, including int-beside-float: unlike
+    `.parquet`, `.csv` never promotes — `_encode_csv` does not call
+    `_check_column_types` — so `1` stays `str(1) == '1'` rather than
+    `str(1.0) == '1.0'`, measured directly before writing this assertion.
+    """
+    from publishable.artifacts import _decode_csv
+    from publishable.coercion import coerce_scalars
+
+    arms = dict(_H5A_FIXTURE_W_ARMS)
+    arms["int_beside_float"] = [{"v": 1}, {"v": 2.5}]
+
+    io_ = make_io(tmp_path)
+    for name, rows in arms.items():
+        path = io_.write(f"fixture_w_{name}.csv", rows)
+        decoded = _decode_csv(path.read_bytes())
+        coerced = [coerce_scalars(dict(row), "fixture w") for row in rows]
+        expected = [{"v": str(row["v"])} for row in coerced]
+        assert decoded == expected, name
+
+
+def test_h5a_fixture_b_cross_spelling_true_by_construction_not_a_pin(tmp_path: Path):
+    """Fixture B — the NumPy-spelled and Python-spelled versions of one
+    column, written to two artifacts, and the two files' **bytes** compared.
+    Both formats.
+
+    **Declared weak here, on purpose, because it is:** after coercion, the
+    NumPy-spelled row set and the Python-spelled one become the SAME coerced
+    rows, so byte equality between the two artifacts is true BY CONSTRUCTION
+    — this arm can only fail if coercion is absent, which is exactly what
+    Fixture W's own arms above already catch by a more direct route (a round
+    trip against a real expectation, not a same-input-twice comparison). This
+    arm discriminates *coercion present* from *coercion deleted* and nothing
+    finer.
+
+    **The claim "a legal run's artifacts are byte-identical" (controller
+    requirement 2) is pinned by task 13's arms A, B1 and B2, and by NOTHING
+    here.** Written down so this arm is never read as satisfying that
+    requirement — `docs/superpowers/plans/2026-08-21-artifacts-write-side.md`
+    § Corrections, correction 2, names task 13's arms as the only ones that
+    capture bytes BEFORE this slice's change, which is the only thing that
+    can pin a claim about what MOVED.
+    """
+    rows_np = [{"v": np.float64(1.5)}, {"v": np.float64(2.5)}]
+    rows_py = [{"v": 1.5}, {"v": 2.5}]
+
+    io_csv = make_io(tmp_path)
+    p_np_csv = io_csv.write("fixture_b_np.csv", rows_np)
+    p_py_csv = io_csv.write("fixture_b_py.csv", rows_py)
+    assert p_np_csv.read_bytes() == p_py_csv.read_bytes()
+
+    io_pq = make_io(tmp_path)
+    p_np_pq = io_pq.write("fixture_b_np.parquet", rows_np)
+    p_py_pq = io_pq.write("fixture_b_py.parquet", rows_py)
+    assert p_np_pq.read_bytes() == p_py_pq.read_bytes()
+
+
+def test_h5a_fixture_e_empty_row_list_writes_an_empty_table_and_raises_nothing(
+    tmp_path: Path,
+):
+    """Fixture E, first arm: an empty row list writes an empty table and
+    raises nothing. Both formats. This is one of the arms a coercion change
+    is most likely to break silently — an empty sequence never reaches a
+    single value-coercing branch, so a walk that assumed at least one row
+    could raise on `rows[0]` or similar and this is the arm that would catch
+    it. Asserted on the decoded rows.
+    """
+    from publishable.artifacts import _decode_csv, _decode_parquet
+
+    io_ = make_io(tmp_path)
+    csv_path = io_.write("fixture_e_empty.csv", [])
+    assert _decode_csv(csv_path.read_bytes()) == []
+    pq_path = io_.write("fixture_e_empty.parquet", [])
+    assert _decode_parquet(pq_path.read_bytes()) == []
+
+
+def test_h5a_fixture_e_all_none_column_parquet_round_trips_as_none(tmp_path: Path):
+    """Fixture E, second arm, `.parquet` half: a column whose every value is
+    `None` round-trips as `None` in every row, asserted on the decoded rows.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": None}, {"v": None}]
+    path = io_.write("fixture_e_none.parquet", rows)
+    assert _decode_parquet(path.read_bytes()) == [{"v": None}, {"v": None}]
+
+
+def test_h5a_fixture_e_all_none_column_csv_round_trips_as_empty_string_not_none(
+    tmp_path: Path,
+):
+    """Fixture E, second arm, `.csv` half — and a THIRD instance of
+    correction 2's asymmetry, found by measuring rather than by trusting the
+    design's own wording. § The discriminating fixtures' Fixture E says a
+    `None` column "round-trips as `None` in every row. Both formats" — that
+    is false of `.csv`, measured directly: `csv.DictWriter` writes a `None`
+    cell as an empty string (not the text `"None"`, and not `None` itself),
+    and `csv.DictReader` gives that empty string straight back. So the
+    `.csv` decoded row is `{"v": ""}`, never `{"v": None}`. This is not
+    `str()` of the coerced value either (`str(None) == "None"`, not `""`) —
+    it is the `csv` module's own special-casing of `None`, a THIRD distinct
+    `.csv` behaviour beyond correction 2's `str()` rule and correction 8's
+    "no cross-row unification," found here because Fixture E's own claim was
+    checked against the code rather than carried. Filed for task 12 to
+    correct in the design/plan text; not edited here, since editing the
+    development record is not this task's job.
+    """
+    from publishable.artifacts import _decode_csv
+
+    io_ = make_io(tmp_path)
+    rows = [{"v": None}, {"v": None}]
+    path = io_.write("fixture_e_none.csv", rows)
+    assert _decode_csv(path.read_bytes()) == [{"v": ""}, {"v": ""}]

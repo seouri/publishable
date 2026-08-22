@@ -51,8 +51,57 @@ def _encode_jsonl(rows: Any) -> bytes:
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode()
 
 
+def _coerced_rows(rows: Any, *, keep_structural: bool = False) -> list[dict[str, Any]]:
+    """Refuse a non-mapping row; coerce every mapping row's scalars.
+
+    One function, called separately from `_encode_csv` and from
+    `_encode_parquet` — two call sites, not one shared body reached once, so
+    a mutation deleting either call is caught by that format's own fixture
+    and leaves the other format's arm green (`docs/superpowers/plans/
+    2026-08-21-artifacts-write-side.md` task 9 step 7 (i)/(ii)).
+
+    The non-mapping check runs before anything below it touches the row's
+    keys, so a `str` or a list handed in place of a mapping raises
+    `ArtifactError` · `E-ARTIFACT-UNWRITABLE` naming the row rather than a
+    bare `AttributeError`/`TypeError` out of the encoder. `where` passed to
+    `coerce_scalars` is the row's own index, so the message names the row;
+    `io.write` prefixes the artifact name onto it afterward.
+
+    `keep_structural` is `.parquet`'s capability alone, from the design's
+    SECOND controller ruling (`docs/superpowers/specs/2026-08-21-artifacts-
+    write-side-design.md`): "a writer accepts what it can give back",
+    applied per format. `.parquet` round-trips a structural or `bytes` cell
+    byte-faithfully (pinned by arm E1, `tests/test_artifacts.py`, NO
+    authorized editor), so a value `coerce_scalars` would refuse is kept
+    exactly as given rather than raised on — only a NumPy scalar is still
+    unwrapped to its Python counterpart, so `_check_column_types`' exact-
+    type grouping sees one type rather than two. `.csv` cannot give a
+    structural or `bytes` cell back at all (`"[1, 2]"`, `"b'x'"` — arm E2,
+    task 9's sole edit), so it calls with the default and refuses.
+    """
+    out: list[dict[str, Any]] = []
+    for i, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ArtifactError(
+                f"row {i} is a {type(row).__name__}, not a mapping; a row-shaped "
+                "write takes a sequence of mappings, one per row",
+                code="E-ARTIFACT-UNWRITABLE",
+            )
+        if not keep_structural:
+            out.append(coerce_scalars(dict(row), f"row {i}"))
+            continue
+        coerced: dict[str, Any] = {}
+        for key, value in row.items():
+            try:
+                coerced[key] = coerce_scalars({key: value}, f"row {i}")[key]
+            except ContractError:
+                coerced[key] = value
+        out.append(coerced)
+    return out
+
+
 def _encode_csv(rows: Any) -> bytes:
-    rows = list(rows)
+    rows = _coerced_rows(rows)
     columns: list[str] = []
     for row in rows:
         for key in row:
@@ -88,11 +137,27 @@ def _article(name: str) -> str:
 def _check_column_types(rows: list[dict[str, Any]], columns: list[str]) -> None:
     """Refuse a column mixing incompatible types, naming the column and a unit for each.
 
+    PRECONDITION: every value this function sees has already been through
+    `_coerced_rows`, and its correctness depends on that. With coercion in
+    front of it, a value here is exactly `bool`, `int`, `float`, `str`, or
+    `None` — a NumPy spelling of a scalar already unwrapped to its Python
+    counterpart, and a structural or `bytes` cell is either refused (`.csv`)
+    or left alone by `.parquet`'s own capability, never reaching this
+    column-level check reshaped into something the grouping below wasn't
+    written for. `float if actual in (int, float) else actual` is correct
+    exactly because of that precondition (`docs/superpowers/specs/2026-08-21-
+    artifacts-write-side-design.md` Decision 8): the surviving groups are
+    exactly `{bool, float, str}`, so no two of them can ever report the same
+    type name, and a second, coercion-aware normalization here would be a
+    branch no fixture can reach. Calling this against uncoerced rows groups
+    `numpy.float64` apart from `float` and refuses what should promote —
+    the mistake task 9 step 7 (i)'s mutation reproduces.
+
     int/float mixing within a column is the deliberate promotion pinned by
     `test_a_mixed_int_and_float_column_promotes_to_float_deliberately` and is not a
     conflict here. Anything else — bool/int, str/int, and so on — is the same
-    contract `io.record`'s `values` is already checked against, so it raises the same
-    `E-STEP-RETURN-TYPE` a step's return or a template's `aggregate` would.
+    contract every recorded scalar is already checked against, so it raises the
+    same `E-STEP-RETURN-TYPE` a step's return or a template's `aggregate` would.
     """
     for col in columns:
         groups: dict[type, tuple[type, Any]] = {}
@@ -112,9 +177,7 @@ def _check_column_types(rows: list[dict[str, Any]], columns: list[str]) -> None:
             raise ContractError(
                 f"column {col!r} recorded both {_article(name_a)} {name_a} "
                 f"(unit {unit_a!r}) and {_article(name_b)} {name_b} (unit "
-                f"{unit_b!r}); io.record's values, a step's return, and a "
-                "template's aggregate take the same scalars under the same "
-                "coercion, and this build cannot record a column mixing those types",
+                f"{unit_b!r}); this build cannot record a column mixing those types",
                 code="E-STEP-RETURN-TYPE",
             )
 
@@ -123,7 +186,7 @@ def _encode_parquet(rows: Any) -> bytes:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    rows = list(rows)
+    rows = _coerced_rows(rows, keep_structural=True)
     columns: list[str] = []
     for row in rows:
         for key in row:
@@ -474,6 +537,40 @@ def derive_step_scopes_and_repeats(execution: dict[str, Any]) -> tuple[dict[str,
     return step_scopes, repeats
 
 
+def _finalize_columns(attribute_names: list[str], recorded: list[str]) -> list[str]:
+    """`units.parquet`'s column list: the unit key, then every declared
+    attribute, then every recorded key — deduped by name, first-seen order
+    preserved.
+
+    `recorded` already excludes `"unit"` (`finalize`'s own loop skips it), but
+    `attribute_names` does not, so `"unit", *attribute_names, *recorded` can
+    hold `"unit"` twice when a `Unit` carries an attribute of that name. Task 5's
+    refusal (`E-UNITS-ATTR-COLUMN`) makes that unreachable from a config, but
+    `finalize` is called with whatever `UnitList` its caller constructs, and
+    `Unit` is on `reference.md` § The importable surface — a caller can build one
+    directly. Deduping here is the one-line fix; it does not depend on task 5's
+    refusal to be correct.
+
+    **This fixes the LIST, not the VALUE.** The row this list becomes columns
+    for is still built by `finalize`'s attribute-merge loop, which overwrites
+    `merged["unit"]` with the attribute's value when a `Unit` carries one named
+    `unit` — so a directly constructed such `Unit` still publishes its
+    attribute's value in the unit-key column, the identity gone. Deduping the
+    column list changes nothing about that value hijack: it was never a list
+    defect (the per-row dict comprehension already collapses a duplicate
+    column name, so the file's *shape* was never wrong), and closing the value
+    hijack for a direct caller is not this function's job — `spec-defects.md`
+    carries it.
+    """
+    seen: set[str] = set()
+    columns: list[str] = []
+    for name in ("unit", *attribute_names, *recorded):
+        if name not in seen:
+            seen.add(name)
+            columns.append(name)
+    return columns
+
+
 class StepIO:
     def __init__(
         self,
@@ -680,6 +777,25 @@ class StepIO:
                 "be named `unit`",
                 code="E-STEP-KEY-COLLISION",
             )
+        # The mirror of the `measurement=` branch's own `measurement` guard above:
+        # in one step's directory, `units.parquet` and `measurements.parquet` are
+        # siblings, and `_collapse_measurements` consumes the measurement axis on
+        # its way into `units.parquet` — the column is dropped there precisely
+        # because it has no meaning once the rows are one unit. Without this
+        # guard, a `measurement` column in `units.parquet` would mean "the axis,
+        # consumed" for a measured unit and "whatever the step recorded" for a
+        # plain one, in the same file, in the same column. This is unconditional
+        # — not gated on whether `data.units.measurements` is declared — because
+        # gating it would make one line of step code legal or illegal depending
+        # on a config block elsewhere: the same "depending on which call the step
+        # happened to make first" arbitrariness this docstring already argues
+        # against for the settle rules.
+        if "measurement" in values:
+            raise ContractError(
+                "`measurement` collides with the measurement column: a recorded "
+                "column may not be named `measurement`",
+                code="E-STEP-KEY-COLLISION",
+            )
         collision = self._declared_attributes() & values.keys()
         if collision:
             name = sorted(collision)[0]
@@ -793,7 +909,7 @@ class StepIO:
                 for key in row:
                     if key != "unit" and key not in recorded:
                         recorded.append(key)
-            columns = ["unit", *attribute_names, *recorded]
+            columns = _finalize_columns(attribute_names, recorded)
             rows = []
             for key, row in self._rows.items():
                 owner = by_key.get(key)
@@ -832,7 +948,20 @@ class StepIO:
         target = self.path(name)
         suffix = _suffix_for(name)
         if suffix is not None:
-            data = WRITERS[suffix](obj)
+            # A writer sees rows, never the artifact name — so this `try`
+            # encloses exactly the dispatch and nothing else (`path` above,
+            # with its existence check and `_resolve`'s containment refusal,
+            # already ran outside it), and re-raises with the name prefixed
+            # and the code preserved, `from exc`. The same catch-and-re-code
+            # `apparatus.check_facts` makes over `coerce_scalars`, copied for
+            # where its `try` sits and not only for what it calls — H8c
+            # shipped a credential leak by lifting calls out of their `try`.
+            # Prefixes, never rewords: a plugin writer's own message
+            # survives inside it.
+            try:
+                data = WRITERS[suffix](obj)
+            except ContractError as exc:
+                raise ContractError(f"{name}: {exc}", code=exc.code) from exc
         elif isinstance(obj, bytes):
             data = obj
         elif isinstance(obj, str):

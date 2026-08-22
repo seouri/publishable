@@ -909,3 +909,19 @@ found it real, and generalized from it to both formats without measuring the sec
 *answering from a proxy* move this project has now recorded six times, made by the person enforcing the
 rule. **The plan caught it by measuring what I asserted**, which is the behaviour the *code outranks both*
 rule exists to produce.
+
+---
+
+## Correction, 2026-08-22 — Fixture E's claim is true of one format, not both
+
+**§ Fixture E above says a column whose every value is `None` "round-trips as `None` in every row" and
+attaches that to both formats. This replaces the "both" half.** Measured against the two encoders:
+`.parquet` gives `None` back; **`.csv` gives back the empty string**, because `csv.DictWriter` has no null
+and `csv.DictReader` reads an empty field as `''`. The fixture as shipped asserts each format against what
+that format actually returns.
+
+Nothing in the code is wrong — `.csv` cannot represent a null, and *"a writer accepts what it can give
+back"*, as narrowed by this design's second appended ruling, is **per format**. What the sentence got
+wrong is the same thing the ruling was issued about: assuming the two formats answer alike. The live
+question it leaves — whether `.csv` should **refuse** a `None` cell the way it now refuses a `bytes` or a
+structural one — is filed in `docs/superpowers/spec-defects.md`.

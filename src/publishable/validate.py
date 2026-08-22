@@ -1337,7 +1337,8 @@ def _check_units(
     # make, not a fault `check_envelope` already caught: unlike the `input_dir`
     # and `key` guards above, skipping here silently would be a real gap, not a
     # duplicate. `_from_table` (`units.py`) checks each name against
-    # `RESERVED_FIELDS` (a tuple — tolerates an unhashable name) and then against
+    # `UNIT_FIELDS`, then `RESERVED_COLUMNS` (both tuples — tolerate an
+    # unhashable name) and then against
     # `columns` (a `set` — raises `TypeError: unhashable type` for a list or
     # dict). Reported under `E-UNITS-ATTR-MISSING`, the identifier `_from_table`
     # itself already raises for a *string* name the table doesn't have — a

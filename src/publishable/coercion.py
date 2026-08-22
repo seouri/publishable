@@ -11,9 +11,15 @@ implementing `__float__`, `__index__`, or `__bool__` to the Python scalar it
 stands for, keeps that, and raises `ContractError` on everything else — a
 list, a dict, an array, a `DataFrame`, a fitted model. The line is
 deliberately at *what the value already is* rather than at what could be
-talked into serializing — which is why `__len__` is the refusal test: a
-NumPy array satisfies every one of those protocols too, but it also has
-`__len__`, and the document forbids coercing it.
+talked into serializing — which is why `__len__` is the refusal test for
+everything with a length: a NumPy array satisfies every one of those
+protocols too, but it also has `__len__`, and the document forbids coercing
+it. `np.str_` has `__len__` as well and is the one carve-out from that
+guard rather than a counterexample to it — a value that is already a `str`
+by inheritance is admitted before the `__len__` guard ever runs, because
+`str` (unlike `bytes`, or an array's own type) is one of the four scalar
+types this module accepts on sight; see `_coerce_one`'s own comments for
+which ground each of `np.str_` and `np.bytes_` rests on.
 
 There is exactly one documented exception: an `Estimate` returned at
 `summary` scope. `CLAUDE.md`'s invariant states it precisely — a step's
@@ -190,10 +196,41 @@ def _coerce_one(key: str, value: Any, where: str) -> Any:
     if value is None or type(value) in _SCALARS:
         return value
 
+    # A value that is already a `str` by inheritance is that string. `str` IS
+    # in `_SCALARS` — this is the identical situation `numpy.float64` is in,
+    # just for a type the `__len__` guard below would otherwise catch first,
+    # since `np.str_` has `__len__` and a plain array does too. `bytes` is NOT
+    # in `_SCALARS`, so `np.bytes_` (also a `__len__` type) is deliberately
+    # left to fall through to that guard and be refused on the same ground
+    # plain `bytes` already is — admitting the NumPy spelling of a type core
+    # refuses in its Python spelling would be the divergence this module's one
+    # rule exists to prevent. `str.__str__(value)`, not `str(value)`: the
+    # latter calls a `str` subclass's own `__str__` override, so
+    # `str(Color.RED)` is `'Color.RED'` for a `class Color(str, Enum)` under
+    # Python 3.11+ — corrupting the value silently — while `str.__str__`
+    # reaches straight past any override to the underlying character data
+    # and returns `'red'`, an exact `str` carrying the value the enum
+    # declares.
+    if isinstance(value, str):
+        return str.__str__(value)
+
+    # This branch landing here, ahead of everything that touches roster
+    # attribute values, is what closes the window a resolver-yielded `np.str_`
+    # attribute would otherwise open the moment attribute coercion ships:
+    # without it, that value would go from "never refused" straight to
+    # "refused" for one commit, invisibly, because no test today exercises a
+    # resolver's own attribute projection through this function. The pin
+    # (mutations (i)/(ii), five tests each) only proves this shared function
+    # keeps admitting a `str` by inheritance — it proves nothing about
+    # `units.py`, which calls this function nowhere yet. Closing that
+    # remaining gap is the coercion call site's own job, once one exists.
+
     # Anything with `__len__` is structural, full stop — this must come before
     # the protocol checks below, because a NumPy array satisfies `__float__`,
     # `__index__`, and `__bool__` just as a scalar does, and coercing it would
-    # silently collapse a sequence to one element.
+    # silently collapse a sequence to one element. `np.bytes_` reaches this
+    # guard (it has `__len__`) and is refused here, on the same ground plain
+    # `bytes` is.
     if hasattr(value, "__len__"):
         raise _refuse(key, value, where)
 

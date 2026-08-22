@@ -19,11 +19,40 @@ from pathlib import Path
 from typing import Any, cast
 
 from publishable.artifacts import ResolverIO
+from publishable.coercion import coerce_scalars
 from publishable.config import Config
 from publishable.errors import ContractError
 from publishable.plugins import check_registration, declared_names, load_entry_point, scan_group
 
-RESERVED_FIELDS = ("key", "paths", "attributes")
+UNIT_FIELDS = ("key", "paths", "attributes")
+"""Can `unit.<name>` reach this attribute? `Unit` is a frozen dataclass whose
+`__getattr__` resolves attributes, so a field of the same name wins and the
+attribute is unreachable by the accessor the documents give for it. These
+cannot be freed: the accessor is the type's own API."""
+
+RESERVED_COLUMNS = ("unit", "measurement", "by")
+"""Would this attribute silently occupy a column that already means
+something? Each already names a column in a per-unit table (`unit`) or a
+block in the record (`measurement`, `by`). Any of these could be freed by
+renaming the column or the block — a different lifetime from `UNIT_FIELDS`
+above, which is the whole ground for two constants rather than one wider
+tuple (design Decision 3).
+
+**This constant has exactly ONE reader: the attribute-name check at the
+three attribute call sites below (`_from_table`, `_from_glob`,
+`_from_resolver`).** It must NOT be pointed at `io.record`'s collision
+guards, at `_collapse_measurements`' structural-column exclusion, or at
+`finalize`'s `key != "unit"` filter (plan § Corrections, correction 1):
+those three sites answer a *different* question — "may a RECORDED column be
+named this?" — whose answer for `by` is yes, on design Decision 4's own
+text: a step *recording* a column called `by` stays legal, because the
+retry that would refuse it re-runs against executions that already
+completed. Re-pointing any of the three at this constant would refuse (or
+silently drop from `units.parquet`) a legally recorded `by` column. This
+refusal removes one *producer* of a `by` column — a declared attribute —
+never the possibility of one, and is not license to identify a stratum by
+the name `by` anywhere: `report` already had to learn that lesson
+structurally (H8c), and this comment is what stops it being relearned here."""
 
 
 class _FrozenAttributes(Mapping[str, Any]):
@@ -208,11 +237,19 @@ def _from_table(
             code="E-UNITS-KEY-MISSING",
         )
     for name in attrs:
-        if name in RESERVED_FIELDS:
+        if name in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {name!r}, which is a field of `Unit` itself; "
-                f"{', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"{', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if name in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {name!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         if name not in columns:
             raise ContractError(
@@ -233,11 +270,19 @@ def _from_glob(
     # example. Ordered as `_from_table` orders it, reserved before unsourced, so
     # one declaration draws one code whichever source it sits under.
     for name in decl.get("attributes") or []:
-        if name in RESERVED_FIELDS:
+        if name in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {name!r}, which is a field of `Unit` itself; "
-                f"{', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"{', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if name in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {name!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         raise ContractError(
             f"`data.units.attributes` names {name!r}, which `from: {{glob: {pattern!r}}}` "
@@ -411,11 +456,19 @@ def _from_resolver(
                 "so the field a table would simply have carried has to be yielded",
                 code="E-UNITS-ATTR-MISSING",
             )
-        if attribute in RESERVED_FIELDS:
+        if attribute in UNIT_FIELDS:
             raise ContractError(
                 f"`data.units.attributes` names {attribute!r}, which is a field of `Unit` "
-                f"itself; {', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                f"itself; {', '.join(UNIT_FIELDS)} cannot also be attributes",
                 code="E-UNITS-ATTR-RESERVED",
+            )
+        if attribute in RESERVED_COLUMNS:
+            raise ContractError(
+                f"`data.units.attributes` names {attribute!r}; {', '.join(RESERVED_COLUMNS)} "
+                "already name a column of a per-unit table or the block a stratified "
+                "report keys its rows by, so a declared attribute of that name would "
+                "silently occupy it rather than being read back as an attribute",
+                code="E-UNITS-ATTR-COLUMN",
             )
         if attribute not in yielded:
             raise ContractError(
@@ -612,7 +665,56 @@ def resolve_units(
                 code="E-UNITS-KEY-DUPLICATE",
             )
         seen[u.key] = 1
-    return UnitList(units), technical_n, columns
+    # Design Decision 6, plan task 6: every resolved unit's attribute mapping
+    # is run through the one scalar walk every other surface uses, so
+    # `Unit.attributes` values are guaranteed scalars for every consumer —
+    # `cluster_by`, `weight_by`, a fold's `stratify_by`, `holdout.from`, and
+    # `_attributed`'s merge all read them, which is an invariant this build
+    # does not otherwise have. `finalize` writes `units.parquet` through
+    # `self.write(...)`, and Decision 5's coercion runs there too (`_encode_csv`);
+    # WITHOUT this coercion here, a resolver-yielded structural attribute value
+    # would survive validation and every execution, then raise a
+    # `ContractError` inside `finalize` — AFTER every execution is paid for.
+    # This is the one thing standing between that and a refusal `validate`
+    # and `run` both meet before the first execution.
+    #
+    # Placed at the very end — after the source, after `collapse_measurements`
+    # (which can itself produce a numeric attribute value through
+    # `apply_rule`), and after the uniqueness loop directly above — so a
+    # roster that is both duplicate-keyed and structurally-attributed still
+    # reports `E-UNITS-KEY-DUPLICATE`, the fault about the roster's identity,
+    # exactly as it does today.
+    #
+    # Every `Unit` is rebuilt UNCONDITIONALLY, never only when a value
+    # actually needed coercion: `Unit` is frozen, `__post_init__` re-wraps
+    # `attributes` regardless of what it's given, and a conditional rebuild
+    # would add a branch whose two sides no fixture separates. Cost, stated
+    # here rather than left to be discovered: the `Unit` a resolver
+    # constructed is replaced by an equal-but-coerced one. `Unit` is frozen
+    # and hashable by `key` alone, so nothing promises object identity — but a
+    # resolver holding a reference to its own yielded object and expecting
+    # core to hand back that same object would be surprised.
+    #
+    # `E-RESOLVER-YIELD`, widened rather than a new mint — design Decision 4's
+    # own test: the fault does not differ. `E-RESOLVER-YIELD` already means
+    # "what this resolver yielded is not something core can build a roster row
+    # from," and a `Unit` carrying an unusable attribute value is that fault
+    # in a second shape. The coercion runs over every source's attribute
+    # values at this one site, but only a resolver can produce the fault a
+    # non-scalar attribute value is: a table source hands every value through
+    # `csv.DictReader` as a `str`, and a glob yields no attributes at all — so
+    # the code's family is right even though the check itself is source-blind.
+    # Message preserved from `coerce_scalars`'s own raise and only the code
+    # changed, the same catch-and-re-code `E-RESOLVER-SWEPT-PARAM` already
+    # makes over `E-STEP-SWEPT-PARAM`'s raise.
+    coerced_units: list[Unit] = []
+    for u in units:
+        try:
+            coerced_attrs = coerce_scalars(dict(u.attributes), f"unit {u.key!r}'s attributes")
+        except ContractError as exc:
+            raise ContractError(str(exc), code="E-RESOLVER-YIELD") from exc
+        coerced_units.append(Unit(key=u.key, paths=u.paths, attributes=coerced_attrs))
+    return UnitList(coerced_units), technical_n, columns
 
 
 def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:

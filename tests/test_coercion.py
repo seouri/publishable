@@ -1,5 +1,5 @@
 from decimal import Decimal
-from enum import IntEnum
+from enum import Enum, IntEnum
 from fractions import Fraction
 
 import numpy as np
@@ -256,3 +256,118 @@ def test_a_bare_value_beside_an_estimate_is_untouched():
     stays bare — it is not wrapped into the Estimate shape."""
     got = coerce_scalars({"delta": Estimate(value=0.031), "converged": True}, "s", scope="summary")
     assert got["converged"] is True
+
+
+# Fixture C — the coercion branch, `str` against `bytes` (Decision 7).
+
+
+def test_a_numpy_str_coerces_to_exactly_str():
+    """`np.str_` is a genuine `str` subclass, so it is already one of the four
+    types `_SCALARS` accepts and the only thing wrong with it is that its type
+    is not exactly `str` — the identical situation `np.float64` is in.
+    `type(...) is str`, not `isinstance`, because `np.str_` passes
+    `isinstance(..., str)` either way and that assertion would pass unmutated."""
+    out = coerce_scalars({"r": np.str_("a")}, "io.record")
+    assert type(out["r"]) is str
+    assert out["r"] == "a"
+
+
+def test_a_numpy_bytes_is_still_refused():
+    """`bytes` is NOT in `_SCALARS`, so `np.bytes_` — a `bytes` subclass with
+    `__len__`, same as `np.str_` — is left to the `__len__` guard rather than
+    admitted, on the same ground plain `bytes` already is."""
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"r": np.bytes_(b"a")}, "io.record")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
+
+
+def test_plain_bytes_is_refused_with_the_same_code():
+    """The Python spelling of the type `np.bytes_` shares — admitting the NumPy
+    spelling of a type core refuses in its Python spelling would be the
+    divergence this module's one rule exists to prevent."""
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"r": b"a"}, "io.record")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
+
+
+def test_a_str_enum_member_coerces_to_its_declared_value_not_its_repr():
+    """`str(Color.RED)` is `'Color.RED'` under Python 3.11+ and would corrupt
+    the value silently; `str.__str__(Color.RED)` is `'red'`, the literal the
+    enum declares. This is why the branch calls `str.__str__` and not `str()`."""
+
+    class Color(str, Enum):  # noqa: UP042 — StrEnum.__str__ returns the value, not "Color.RED"; this fixture needs the mixin's corrupting __str__
+        RED = "red"
+
+    out = coerce_scalars({"c": Color.RED}, "io.record")
+    assert type(out["c"]) is str
+    assert out["c"] == "red"
+
+
+def test_a_numpy_array_of_floats_still_raises_the_positive_control():
+    """Without this control, the arms above prove only that something was
+    refused — not that the `__len__` guard still does the job it exists for.
+    `np.array([1.0, 2.0])` has `__float__` and `__len__` both; it must still be
+    refused, never coerced to its first element."""
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"r": np.array([1.0, 2.0])}, "io.record")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
+
+
+def test_an_estimate_value_that_is_a_str_subclass_now_raises_the_more_precise_code():
+    """Before this task, a `str`-subclass `value` failed `_coerce_one`'s
+    exact-type test, reached the `__len__` guard (a `str` subclass has
+    `__len__`), and `_coerce_one` raised `E-STEP-RETURN-TYPE` directly, which
+    `_coerce_estimate` propagated unchanged. Now the new branch coerces it to
+    a plain `str` before the guard, and `_is_number` then refuses a `str` on
+    its own narrower ground — so the code moves to the more precise
+    `E-STEP-ESTIMATE-VALUE`. The shape refuses both before and after; only
+    the code moves."""
+
+    class Color(str, Enum):  # noqa: UP042 — StrEnum.__str__ returns the value, not "Color.RED"; this fixture needs the mixin's corrupting __str__
+        RED = "red"
+
+    est = Estimate(value=Color.RED, method="m")  # type: ignore[arg-type]
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"d": est}, "step04_agreement", scope="summary")
+    assert excinfo.value.code == "E-STEP-ESTIMATE-VALUE"
+
+
+def test_an_estimate_ci95_bound_that_is_a_str_subclass_now_raises_the_more_precise_code():
+    """Same retirement, for a `ci95` bound: it coerces to `str` and then fails
+    `_is_number`, raising `E-STEP-ESTIMATE-CI95` rather than
+    `E-STEP-RETURN-TYPE`."""
+
+    class Color(str, Enum):  # noqa: UP042 — StrEnum.__str__ returns the value, not "Color.RED"; this fixture needs the mixin's corrupting __str__
+        RED = "red"
+
+    est = Estimate(value=0.5, ci95=[Color.RED, 0.9], method="m")  # type: ignore[arg-type]
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"d": est}, "step04_agreement", scope="summary")
+    assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
+
+
+def test_an_estimates_n_retires_the_refusal_a_str_subclass_used_to_draw():
+    """A THIRD retirement (review Minor 1), distinct from `value`/`ci95` moving
+    to a more precise code: `n` is held to no numeric rule (`_is_number` is
+    never applied to it), so a `str`-subclass `n` does not fail a narrower
+    check afterward — it simply stops being refused. Before this task an
+    `np.str_` `n` reached `_coerce_one`'s `__len__` guard and raised
+    `E-STEP-RETURN-TYPE` directly; now it coerces and is kept, exactly as a
+    plain `str` label already was."""
+    est = Estimate(value=0.5, n=np.str_("612 pairs"), method="m")  # type: ignore[arg-type]
+    got = coerce_scalars({"d": est}, "step04_agreement", scope="summary")["d"]
+    assert type(got.n) is str
+    assert got.n == "612 pairs"
+
+
+def test_a_zero_dimensional_numpy_float_array_still_raises():
+    """`np.array(1.0)` has `ndim == 0` and an `item()` like a true NumPy
+    scalar — the shape closest to being mistaken for one. Measured:
+    `hasattr(np.array(1.0), "__len__")` is `True` even though calling
+    `len(...)` on it raises `TypeError`, because `ndarray` always carries the
+    method regardless of shape — so this array reaches the `__len__` guard
+    and is refused there, same as a sized array, never reaching the `item()`
+    unwrap a true scalar would."""
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"r": np.array(1.0)}, "io.record")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"

@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 import yaml
 from tests.conftest import write_experiment_module
+from tests.test_cli import run_a_project
 
 from publishable.base_experiment import load_experiment
-from publishable.diagnostics import Collector
+from publishable.diagnostics import EXIT_WRONG, Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList, assignment_for
 from publishable.validate import (
@@ -364,7 +365,8 @@ def test_a_wrong_typed_units_attribute_item_does_not_crash_table_resolution(
     nothing, because the outer shape is right; only an ITEM inside it is wrong, the
     same class of gap `sweep.grid`'s per-value checks exist for, one leaf table
     cannot name a dotted path for a list element. `_from_table` (`units.py`) checks
-    each name against `RESERVED_FIELDS` (a tuple — tolerates an unhashable name) and
+    each name against `UNIT_FIELDS`, then `RESERVED_COLUMNS` (both tuples —
+    tolerate an unhashable name) and
     then against `columns` (a `set` — `TypeError: unhashable type` for a list or
     dict). Unlike the `input_dir`/`key` guards above, nothing else in this pass
     reports this fault, so `_check_units` reports it itself (`E-UNITS-ATTR-MISSING`,
@@ -4770,6 +4772,78 @@ def test_a_reserved_attribute_name_is_reported_at_validate(write_config, tmp_pat
             }
         )
     )
+
+
+# Fixture A's `validate_config` surface — `tests/test_units.py` pins the same
+# fixture through `resolve_units` directly; task 5 step 5 requires both,
+# since `_check_units` catches `ContractError` and reports rather than
+# raising, and only running through the report path proves that catch is in
+# place. Decoys `aaa_site` (sorts before) and `zzz_site` (sorts after) rule
+# out "reports the first offender" collapsing into "reports the first name."
+@pytest.mark.parametrize("reserved", ["unit", "measurement", "by"])
+def test_a_reserved_column_name_is_reported_at_validate_with_decoys_on_each_side(
+    write_config, tmp_path, reserved: str
+):
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,aaa_site,unit,measurement,by,zzz_site\np1,a,u,m,b,z\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["aaa_site", reserved, "zzz_site"],
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-ATTR-COLUMN" in found
+    message = messages_by_code(path)["E-UNITS-ATTR-COLUMN"]
+    # `reserved in message` alone is satisfied by the message's own
+    # `', '.join(RESERVED_COLUMNS)` enumeration ("unit, measurement, by")
+    # regardless of which name was actually reported — Major 2. The
+    # offender's own `names {reserved!r}` clause is a string the enumeration
+    # cannot produce.
+    assert f"names {reserved!r}" in message
+
+
+def test_units_field_among_decoys_is_reserved_not_column_at_validate(write_config, tmp_path):
+    """The fourth arm at `validate`: `paths` draws `E-UNITS-ATTR-RESERVED`, not
+    `E-UNITS-ATTR-COLUMN` — proof the two codes are told apart at the report
+    surface too, not merely inside `resolve_units`."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,aaa_site,unit,measurement,by,zzz_site\np1,a,u,m,b,z\n"
+    )
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["aaa_site", "paths", "zzz_site"],
+                }
+            }
+        )
+    )
+    assert "E-UNITS-ATTR-RESERVED" in found
+    assert "E-UNITS-ATTR-COLUMN" not in found
+
+
+def test_a_reserved_column_name_meets_the_same_refusal_at_run(tmp_path, capsys):
+    """Task 5 step 4: MEASURE which surfaces report it rather than assuming two.
+    `command_run` calls `validate_config` first and returns `EXIT_WRONG` on any
+    error before its own `resolve_units` call — so `run` meets this refusal
+    through `validate`'s gate, one emit path, the same precedent
+    `E-UNITS-ATTR-MISSING` sets. Confirmed by actually running `run`, not by
+    reading `command_run` alone."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        unit_attributes=["by"],
+        expect_exit=EXIT_WRONG,
+    )
+    assert "E-UNITS-ATTR-COLUMN" in (doc["stdout"] or "")
+    assert doc["run_dir"] is None
 
 
 def test_no_units_block_still_validates_clean(write_config):

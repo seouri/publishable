@@ -165,6 +165,123 @@ def test_reserved_attribute_names_are_refused(input_dir: Path, reserved: str):
     assert e.value.code == "E-UNITS-ATTR-RESERVED"
 
 
+# Fixture A — the reserved COLUMN name (`unit`, `measurement`, `by`), with a
+# decoy sorting on EACH side (`aaa_site` before, `zzz_site` after). Design
+# Decision 4, plan task 5 step 5. Two names only ever distinguish two
+# answers: without a decoy on both sides, a fixture with the reserved name in
+# one position can't tell "reports the first offender" from "reports the
+# first name" or from an ordering that happens to agree. The table carries
+# `unit`, `measurement`, `by`, `aaa_site` AND `zzz_site` as REAL columns —
+# without that, every arm would fire on `E-UNITS-ATTR-MISSING` (a mutation
+# firing for the wrong reason) rather than on the reserved-name check this
+# fixture exists to pin.
+@pytest.fixture
+def reserved_column_table(tmp_path: Path) -> Path:
+    d = tmp_path / "colname_in"
+    d.mkdir()
+    (d / "index.csv").write_text(
+        "patient_id,aaa_site,unit,measurement,by,zzz_site\np1,a,u,m,b,z\np2,a,u,m,b,z\n"
+    )
+    return d
+
+
+@pytest.mark.parametrize("reserved", ["unit", "measurement", "by"])
+def test_a_reserved_column_name_is_refused_with_a_decoy_on_each_side(
+    reserved_column_table: Path, reserved: str
+):
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["aaa_site", reserved, "zzz_site"],
+            },
+            reserved_column_table,
+        )
+    assert e.value.code == "E-UNITS-ATTR-COLUMN"
+    # `reserved in str(e.value)` alone would also be satisfied by the
+    # message's own `', '.join(RESERVED_COLUMNS)` enumeration ("unit,
+    # measurement, by" contains each member) regardless of which name the
+    # refusal actually reports — Major 2. Asserting the offender's own
+    # `names {reserved!r}` clause is a string the enumeration cannot produce.
+    assert f"names {reserved!r}" in str(e.value)
+
+
+def test_a_units_field_name_among_decoys_is_still_reported_reserved_not_column(
+    reserved_column_table: Path,
+):
+    """The fourth arm: `paths` is a `UNIT_FIELDS` member, not a `RESERVED_COLUMNS`
+    one, and this is what proves the two codes are told apart rather than one
+    swallowing the other. `reserved_column_table` doesn't carry a `paths`
+    column, but `UNIT_FIELDS` is checked first, so the missing-column check
+    below it is never reached."""
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["aaa_site", "paths", "zzz_site"],
+            },
+            reserved_column_table,
+        )
+    assert e.value.code == "E-UNITS-ATTR-RESERVED"
+
+
+@pytest.mark.parametrize("reserved", ["unit", "measurement", "by"])
+def test_a_resolver_yielding_a_reserved_column_attribute_is_refused(
+    installed, registries, tmp_path, reserved: str
+):
+    """The resolver arm of Fixture A. Unlike the table and glob arms, a
+    resolver's decoys are yielded attributes rather than table columns —
+    `_from_resolver` projects onto the union of what was yielded, so
+    `aaa_site`/`zzz_site` being present in `yielded` is what keeps this arm
+    from tripping `E-UNITS-ATTR-MISSING` instead."""
+    from publishable.config import Config
+
+    body = (
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='p1', attributes={'aaa_site': 'a', "
+        f"{reserved!r}: 'x', 'zzz_site': 'z'}})\n"
+    )
+    module = f"colreserved_{reserved}_r5"
+    _install_resolver(installed, tmp_path, module, body)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["aaa_site", reserved, "zzz_site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop(module, None)
+    assert excinfo.value.code == "E-UNITS-ATTR-COLUMN"
+    # See the table-arm's comment above: the bare `reserved in str(...)` form
+    # is satisfied by the message's own enumeration regardless of which name
+    # was actually reported.
+    assert f"names {reserved!r}" in str(excinfo.value)
+
+
+def test_a_glob_source_reports_a_reserved_column_name(input_dir: Path):
+    """The glob arm is different and written differently: `_from_glob` refuses
+    EVERY declared attribute as unsourceable, so a leading decoy would raise
+    `E-UNITS-ATTR-MISSING` first rather than exercising this check at all — a
+    glob has no columns of its own for a decoy to occupy. So this arm
+    declares the reserved name alone."""
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["by"]}, input_dir)
+    assert e.value.code == "E-UNITS-ATTR-COLUMN"
+    # `"by" in str(e.value)` alone is satisfied by the message's own
+    # `', '.join(RESERVED_COLUMNS)` enumeration regardless of which name was
+    # reported — the same vacuous form Major 2 named for the other arms.
+    assert "names 'by'" in str(e.value)
+
+
 def test_a_unit_is_frozen_and_hashable_by_key():
     u = Unit(key="p1", paths=(), attributes={"label": "1"})
     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
@@ -3928,6 +4045,130 @@ def test_a_resolver_yielding_something_that_is_not_a_unit_is_refused(
         sys.modules.pop("wrongyield_r25", None)
     assert excinfo.value.code == "E-RESOLVER-YIELD"
     assert "dict" in str(excinfo.value)
+
+
+_YIELDS_A_STRUCTURAL_ATTRIBUTE = """\
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(key="a1", attributes={"tags": [1, 2], "site": "north"})
+"""
+
+
+def test_a_resolver_yielding_a_structural_attribute_value_is_refused(
+    installed, registries, tmp_path
+):
+    """Fixture R's refusal arm — design Decision 6. `_from_resolver` projects
+    onto the declared list, so an UNDECLARED structural attribute is dropped
+    and never refuses (`test_a_resolver_roster_is_projected_onto_the_declared_
+    attributes` above); `tags` must be declared here for this arm to reach the
+    coercion at all."""
+    from publishable.config import Config
+
+    _install_resolver(installed, tmp_path, "structattr_r30", _YIELDS_A_STRUCTURAL_ATTRIBUTE)
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {
+                    "from": {"resolver": "plate_wells"},
+                    "key": "well",
+                    "attributes": ["tags", "site"],
+                },
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("structattr_r30", None)
+    assert excinfo.value.code == "E-RESOLVER-YIELD"
+    assert "tags" in str(excinfo.value)
+
+
+_YIELDS_A_NUMPY_SCALAR_ATTRIBUTE = """\
+import numpy as np
+
+from publishable import Unit, register_resolver
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    yield Unit(
+        key="a1",
+        attributes={"score": np.float64(1.5), "tag": np.str_("north"), "site": "north"},
+    )
+"""
+
+
+def test_a_resolver_yielding_a_numpy_scalar_attribute_coerces_to_exact_python_float(
+    installed, registries, tmp_path
+):
+    """Fixture R's POSITIVE CONTROL. `type(...) is float`/`type(...) is str`,
+    not `isinstance` — `np.float64` passes `isinstance(v, float)` and
+    `np.str_` passes `isinstance(v, str)`, so only an exact-type check proves
+    the coercion ran rather than merely that nothing refused.
+
+    `tag` (an `np.str_`) is here to close batch 4's enforcement gap
+    (`progress.md`'s ledger: correction 6's ordering rule was pinned only at
+    the shared `coerce_scalars` function, never at the resolver surface).
+    `np.float64` alone cannot pin that: it reaches its Python counterpart
+    through `_coerce_one`'s `item()`/NumPy-unwrap path, never through the
+    `isinstance(value, str) → str.__str__(value)` branch task 10 added —
+    deleting that branch (the exact displacement correction 6 forbids)
+    changes nothing this resolver fixture observes unless `tag` is here to
+    reach it. Without `tag`, the refusal arm above would prove only that
+    something was refused, not that the ordinary numeric OR string case still
+    resolves and coerces."""
+    from publishable.config import Config
+
+    _install_resolver(installed, tmp_path, "npscalarattr_r30", _YIELDS_A_NUMPY_SCALAR_ATTRIBUTE)
+    try:
+        roster, _n, _columns = resolve_units(
+            {
+                "from": {"resolver": "plate_wells"},
+                "key": "well",
+                "attributes": ["score", "tag", "site"],
+            },
+            tmp_path,
+            cfg=Config({}),
+        )
+    finally:
+        sys.modules.pop("npscalarattr_r30", None)
+    assert type(roster[0].attributes["score"]) is float
+    assert roster[0].attributes["score"] == 1.5
+    assert type(roster[0].attributes["tag"]) is str
+    assert roster[0].attributes["tag"] == "north"
+    assert roster[0].attributes["site"] == "north"
+
+
+def test_the_coercion_runs_after_the_uniqueness_check(installed, registries, tmp_path):
+    """Pins task 6 step 2's placement: a roster that is both duplicate-keyed
+    AND structurally-attributed must still report `E-UNITS-KEY-DUPLICATE`,
+    the fault about the roster's identity — not `E-RESOLVER-YIELD` for the
+    attribute, which is what mutation (iii) (moving the coercion above the
+    uniqueness loop) would report instead."""
+    from publishable.config import Config
+
+    _install_resolver(
+        installed,
+        tmp_path,
+        "dupplusattr_r30",
+        "from publishable import Unit, register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n"
+        "    yield Unit(key='a1', attributes={'tags': [1, 2]})\n"
+        "    yield Unit(key='a1', attributes={'tags': [3, 4]})\n",
+    )
+    try:
+        with pytest.raises(ContractError) as excinfo:
+            resolve_units(
+                {"from": {"resolver": "plate_wells"}, "key": "well", "attributes": ["tags"]},
+                tmp_path,
+                cfg=Config({}),
+            )
+    finally:
+        sys.modules.pop("dupplusattr_r30", None)
+    assert excinfo.value.code == "E-UNITS-KEY-DUPLICATE"
 
 
 def test_a_resolver_source_reached_with_no_cfg_refuses_rather_than_crashing(
