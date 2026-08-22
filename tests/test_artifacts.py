@@ -84,6 +84,24 @@ def test_an_unregistered_extension_takes_bytes_or_str_verbatim(io: StepIO):
     assert e.value.code == "E-ARTIFACT-UNWRITABLE"
 
 
+def test_h5a_step2_control_the_unregistered_suffix_message_is_not_prefixed(
+    io: StepIO,
+):
+    """Task 9 step 2's control (§ Corrections, correction 3): this raise
+    sits in `io.write`'s own `else` branch, outside the `WRITERS[suffix](obj)`
+    dispatch the new `except ContractError` wraps, so it must not gain a
+    second copy of the artifact name. The design's own wording — "not
+    prefixed" — is unassertable as written, because this message already
+    contains the name (`"{name} has no registered writer …"`); asserted
+    instead as `msg.count(name) == 1` and `not msg.startswith(f"{name}:")`.
+    """
+    with pytest.raises(ArtifactError) as e:
+        io.write("model3.pkl", {"not": "bytes"})
+    msg = str(e.value)
+    assert msg.count("model3.pkl") == 1
+    assert not msg.startswith("model3.pkl:")
+
+
 def test_nothing_is_ever_overwritten(io: StepIO):
     io.write("a.json", {"x": 1})
     with pytest.raises(ArtifactExistsError) as e:
@@ -2704,33 +2722,115 @@ def test_h5a_arm_e1_parquet_keeps_a_structural_or_bytes_cell_intact(tmp_path: Pa
     assert type(pq_bytes[0]["v"]) is bytes
 
 
-def test_h5a_arm_e2_csv_stringifies_a_structural_or_bytes_cell(tmp_path: Path):
-    """Arm E2 — `.csv` CANNOT return a structural or `bytes` cell intact, so
-    it stringifies it instead, from the second controller ruling: "`.csv`
-    refuses a structural or `bytes` cell, because it cannot return one. That
-    is the corruption case." This test pins the corruption AS OF task 13,
-    which is the ground for the refusal task 9 builds.
-
-    TASK 9 IS THE SOLE AUTHORIZED EDITOR of this test, and the post-edit
-    state is stated in advance (plan task 9 step 5, Fixture S): both writes
-    below must instead raise `ContractError` · `E-STEP-RETURN-TYPE`,
+def test_h5a_arm_e2_csv_refuses_a_structural_or_bytes_cell(tmp_path: Path):
+    """Arm E2 — POST-TASK-9 state, stated in advance by plan task 9 step 5
+    (Fixture S) and now built: `.csv` cannot return a structural or `bytes`
+    cell intact (the pre-task-9 state this test used to pin was `"[1, 2]"`
+    and `"b'x'"` — silent corruption), so it now refuses instead, converting
+    that corruption into a loud `ContractError` · `E-STEP-RETURN-TYPE`
     naming the column and the artifact — the same shape
     `test_h5a_arm_c_the_two_shipped_type_clashes_through_a_real_io_write`
-    above already asserts by substring. No other task may edit this test;
-    a `.csv` write returning an actual `list` or `bytes` object, rather
-    than either a string or a raise, is a finding regardless of which task
-    is running.
+    above already asserts by substring.
 
-    Every assertion checks the returned value's TYPE as well as its value.
+    TASK 9 WAS the sole authorized editor of this test; no other task may
+    edit it further without a fresh ruling. A `.csv` write returning an
+    actual `list` or `bytes` object, rather than raising, is a finding
+    regardless of which task is running.
     """
-    from publishable.artifacts import _decode_csv
+    io_list = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_list:
+        io_list.write("e_list.csv", [{"v": [1, 2]}])
+    assert e_list.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_list.value)
+    assert "e_list.csv" in str(e_list.value)
 
-    io = make_io(tmp_path)
+    io_bytes = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_bytes:
+        io_bytes.write("e_bytes.csv", [{"v": b"x"}])
+    assert e_bytes.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_bytes.value)
+    assert "e_bytes.csv" in str(e_bytes.value)
 
-    csv_list = _decode_csv(io.write("e_list.csv", [{"v": [1, 2]}]).read_bytes())
-    assert csv_list == [{"v": "[1, 2]"}]
-    assert type(csv_list[0]["v"]) is str
 
-    csv_bytes = _decode_csv(io.write("e_bytes.csv", [{"v": b"x"}]).read_bytes())
-    assert csv_bytes == [{"v": "b'x'"}]
-    assert type(csv_bytes[0]["v"]) is str
+def test_h5a_fixture_s_csv_refuses_a_structural_cell_on_either_side_of_the_row_set(
+    tmp_path: Path,
+):
+    """Fixture S — `.csv` only: `.parquet`'s side of this fixture is arm E1
+    above (no authorized editor; a structural cell keeps round-tripping
+    there). A `[1, 2]` cell in the FIRST row of a three-row set, and one in
+    the LAST row of another three-row set — the decoy-sort-position trap in
+    its row-order form (`CLAUDE.md` § Writing checks that can fail): a check
+    that stops at the first offending row, or one that only ever sees a
+    first-row offender in its fixture, cannot tell "checks every row" from
+    "checks the first row". Each arm asserts the refusal names the column,
+    the row index, and the artifact.
+    """
+    io_first = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_first:
+        io_first.write("s_first.csv", [{"v": [1, 2]}, {"v": 1}, {"v": 2}])
+    assert e_first.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_first.value)
+    assert "row 0" in str(e_first.value)
+    assert "s_first.csv" in str(e_first.value)
+
+    io_last = make_io(tmp_path)
+    with pytest.raises(ContractError) as e_last:
+        io_last.write("s_last.csv", [{"v": 1}, {"v": 2}, {"v": [1, 2]}])
+    assert e_last.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e_last.value)
+    assert "row 2" in str(e_last.value)
+    assert "s_last.csv" in str(e_last.value)
+
+
+def test_h5a_fixture_n_a_non_mapping_row_refuses_with_the_documented_code(
+    tmp_path: Path,
+):
+    """Fixture N — a row that is not a mapping, for both row-shaped
+    writers. Before this task: a bare `AttributeError` out of `_encode_csv`
+    and a bare `TypeError` out of `_encode_parquet` (measured at `d2caacf`).
+    Now: `ArtifactError` · `E-ARTIFACT-UNWRITABLE`, which
+    `docs/reference.md` § Steps and artifacts already promised for "handing
+    a writer anything else". Asserting the exception CLASS (via
+    `pytest.raises(ArtifactError)`, which does not catch a bare
+    `AttributeError`/`TypeError`) is the claim, not merely the code.
+    """
+    for suffix in (".csv", ".parquet"):
+        io_bad = make_io(tmp_path)
+        with pytest.raises(ArtifactError) as e:
+            io_bad.write(f"n_bad{suffix}", [{"v": 1.0}, "not a mapping"])
+        assert e.value.code == "E-ARTIFACT-UNWRITABLE"
+
+
+def test_h5a_fixture_n_control_the_same_rows_without_the_offender_write(
+    tmp_path: Path,
+):
+    """Fixture N's control — without it, the refusal arm above would pass
+    equally well if `io.write` silently wrote nothing at all. Same row set
+    with the non-mapping element removed: the write must succeed and the
+    artifact must exist, for both formats.
+    """
+    for suffix in (".csv", ".parquet"):
+        io_good = make_io(tmp_path)
+        path = io_good.write(f"n_good{suffix}", [{"v": 1.0}])
+        assert path.exists()
+
+
+def test_h5a_step7_local_pin_parquet_coerces_numpy_float64_beside_float(
+    tmp_path: Path,
+):
+    """Local pin for task 9 step 7 mutation (i): with `_encode_parquet`'s
+    call to `_coerced_rows` removed, `np.float64` beside a plain `float` in
+    the same column raises `E-STEP-RETURN-TYPE` rather than writing — the
+    spurious refusal Decision 5 retires (measured at `d2caacf`: that exact
+    input raises today, and after this task it writes). Task 11's own
+    Fixture W re-measures this across the whole cross-format matrix; this
+    is THIS task's own commit pinned in the meantime, so a reviewer does
+    not have to wait for a later task to know the mutation is caught.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    io_ = make_io(tmp_path)
+    path = io_.write("w_local.parquet", [{"v": np.float64(1.5)}, {"v": 1.5}])
+    rows = _decode_parquet(path.read_bytes())
+    assert rows == [{"v": 1.5}, {"v": 1.5}]
+    assert all(type(r["v"]) is float for r in rows)
