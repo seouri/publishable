@@ -3036,6 +3036,17 @@ The condition's own block, computed over the same roster, still carries one — 
 side in the same record, which is how a reader tells "this level has no null" apart from "the null
 failed to run for the whole condition."
 
+**A level block must carry at least one entry from the level's *own* table, and a level that cannot
+is absent rather than empty.** A block holding nothing but derived metrics — over a subset whose
+every recorded column was non-numeric, so no column of it earns a metric block — is the empty case
+wearing a value: the derived numbers came from a table with nothing in it to summarize, and
+publishing them under a level would claim a stratification found something. Absent, not empty, is
+the rule [`vs_baseline`](#contrasts-claims-that-arent-condition-vs-baseline) and `contrasts` already
+follow, and the `by` block itself follows it one layer out — a `by: {}` would claim a stratification
+was performed and found nothing, which is a different statement from not having one. A reader
+distinguishes the two by which levels are present, so a level absent from the block is the honest
+report of a stratum with no measurement of its own.
+
 ### Before you spend it
 
 ```bash

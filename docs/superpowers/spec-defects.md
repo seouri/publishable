@@ -2593,10 +2593,31 @@ work — non-numeric recorded columns — belongs to **H5 Artifacts**.
 
 | Carried | Owner |
 |---|---|
-| The second empty-level gate in `cli`'s stratum loop is unpinned | **RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b, by name.** H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") routes "the second empty-level gate in `cli.py`'s stratum loop" to H5b task 15 by that description; the gate goes live exactly when non-numeric recorded columns land, which H5a does not build, and the gate is not deleted in the meantime |
+| ~~The second empty-level gate in `cli`'s stratum loop is unpinned~~ | ~~**RE-OWNED 2026-08-22 to H5 Artifacts, sub-slice H5b, by name.** H5a's own plan (`docs/superpowers/plans/2026-08-21-artifacts-write-side.md`, "What H5a refuses to do, with the route") routes "the second empty-level gate in `cli.py`'s stratum loop" to H5b task 15 by that description; the gate goes live exactly when non-numeric recorded columns land, which H5a does not build, and the gate is not deleted in the meantime~~ **STRUCK 2026-08-22 (H5b task 11): PINNED.** See the note below the table |
 | A `report_by` whose every level is empty produces no `by` block and no diagnostic | **H4 Statistics**, which owns `report_by` hardening. A new warning identifier, so it is H4's to mint and to add to `reference.md` § Warnings core reports |
 | `E-STATS-CONTRAST-UNKNOWN` renders with `!r` where `E-STATS-REPORTBY-UNKNOWN` does not | **No slice; closed as deliberate.** The row already argues it: showing the repr distinguishes `1` from `"1"` where the value has not been narrowed to `str` |
 | A stratum level whose every resample draw is degenerate records `resample_draws: 0` with no console warning | **H4 Statistics.** The record carries the count, so only the disclosure is missing; the parent-level sibling `W-STATS-AGGREGATE-FAILED` already warns, and H4 owns both sides of that asymmetry |
+
+**STRUCK 2026-08-22 (H5b task 11): the second empty-level gate is PINNED — and this entry's own
+account of why it was unreachable was wrong.** The pin is
+`tests/test_cli.py::test_fixture_h_the_all_non_numeric_level_is_absent_the_numeric_one_present`
+(H5b task 4, Fixture H), and task 4's mutation (iii) — `if True:` in place of the gate — already ran
+against the full suite and failed it, recorded in
+`.superpowers/sdd/2026-08-22-non-numeric-columns-downstream/task-b2-report.md`. That result is cited
+rather than re-run: **re-running a mutation whose result is recorded is not evidence, and running it
+against a stale checkout is worse.** `reference.md` § Reporting strata now states the rule the gate
+enforces, so the gate has a document as well as a test.
+
+**The correction to this entry's own reasoning.** It said the gate was unreachable *"because the
+first gate (`if not level_collapsed: continue`) already catches every empty level a numeric-only
+table can produce."* That names the wrong mechanism as the operative one. The measured reason is
+narrower and is about the **collapse**, not about the first gate: before H5b task 4,
+`collapse_repeats` did not admit a unit whose every recorded value was non-numeric at all, so no
+level could hold rows that produced no metric entry — the second gate went live exactly when the
+collapse started admitting such a unit. The first gate would still have been the one to fire for a
+level with **no rows**; it was never the reason a level with rows and no numeric column was
+unreachable, because that state did not exist. *A filing's claims about the code go stale like any
+other comment; when you change code an entry describes, re-read the entry.*
 
 ## New identifiers: `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD`, `W-STEP-ESTIMATE-N`
 
