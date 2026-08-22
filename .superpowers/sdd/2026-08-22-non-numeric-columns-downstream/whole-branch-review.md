@@ -389,3 +389,98 @@ measurement behind Major 3.
 
 **No Critical. Nothing in `src/` computes a wrong number, and the behaviour change is exactly the one the
 slice enumerated — with one warning it did not.**
+
+---
+
+## Fix round, 2026-08-22 — all three Majors and all three Minors closed, at commit `3bf55d9`
+
+**All six findings closed. Nothing left open.**
+
+### Major 1 — closed
+
+Reproduced the mechanism before touching anything: `grep -n "CONTRAST-RESAMPLE-THIN" src/publishable/cli.py`
+confirms two distinct emit sites, `cli.py:1659` (the contrast arm, `W-STATS-CONTRAST-RESAMPLE-THIN`) and
+`cli.py:3257` (`W-STATS-RESAMPLE-THIN`) — matching the review's finding exactly. `CLAUDE.md`'s "Four
+things newly stop or newly warn" is now "Five", with item (v) naming the mechanism, both emit sites, and
+`reference.md`'s own row ruling the two are two facts on the same disclosure ground. Edited **in place**
+(not a dated record). `docs/feasibility-llm-growth-studies.md` gets an **appended** dated correction
+(`### Correction, dated 2026-08-22, against the H5b whole-branch review at commit \`14b816e\``) stating
+the count is five rather than four, naming the mechanism and both sites, and stating explicitly that
+**row 4 of the executability table is unmoved** — this is a count in prose, and the table takes no fifth
+number, matching the section's own rule that a wrong figure must be re-derived rather than incremented.
+The design spec and `progress.md` were **not** touched (development record, append-only elsewhere).
+
+### Major 2 — closed
+
+Deleted the false read-side clause in `spec-defects.md`'s OPEN `E-STEP-RETURN-TYPE` entry rather than
+rewriting it. The read-side paragraph now points at Ruling 1's amendment table
+(`docs/superpowers/plans/2026-08-22-non-numeric-columns-downstream.md` § "Ruling 1 — the mixed column")
+as the single authority, and the write-side paragraph is untouched (it was already correct). Swept for
+the claim, newline-insensitively (whitespace-normalized regex over each full file, not `grep -F`), across
+all four documents, `CLAUDE.md`, `spec-defects.md`, and every file under `find src -name "*.py"` (52
+files) for the patterns `own metric block and nothing else`, `costs that column its own metric`,
+`regardless of the mixture`, `published as a metric only when every value`: **zero hits in every
+file swept.** Proved the sweep can fail: the same script found the control string
+`Ruling 1's amendment table` in `spec-defects.md` (the sentence just written), confirming the null result
+on the claim patterns is a real absence and not a broken sweep. Files swept: `README.md`,
+`docs/design-principles.md`, `docs/experimental-designs.md`, `docs/reference.md`, `CLAUDE.md`,
+`docs/superpowers/spec-defects.md`, and all 52 `src/**/*.py` files (listed by `find src -name "*.py"` in
+this session's transcript). Not swept: `tests/`, `docs/superpowers/plans/` and
+`docs/superpowers/specs/*-design.md`, `docs/superpowers/*-SCOPING.md`, `docs/feasibility-*.md` — the
+finding names the four documents, `CLAUDE.md`, `spec-defects.md` and `src/` docstrings specifically, and
+those are the six classes swept.
+
+### Major 3 — closed
+
+Deleted `report.py::_is_metric_entry`'s false parenthetical clause (*"A NON-numeric one keeps no metric
+block at all"*). Replaced with a true statement — a NON-numeric `by` column can also keep a full metric
+block (a mixed column, computed over its contributing units) — and kept the surviving conclusion (the
+record can hold either shape under this key, and a structural test is what reads both) verbatim. No
+behaviour changed; `_is_metric_entry`'s body (`isinstance(value, Mapping) and "value" in value`) is
+untouched, so no mutation was written for this fix — it corrects a comment, not code the suite exercises
+differently.
+
+### Minor 1 — closed
+
+`tests/test_cli.py`, arm G's inline comment: "The third distinct" → "The fourth distinct" `resample_draws`
+literal. No assertion, no literal, and no other line touched — verified by `git show 3bf55d9 -- tests/test_cli.py`,
+a one-line diff.
+
+### Minor 2 — closed
+
+Narrowed the RE-OWNED note's stated verification command from
+`grep -n "H5b, H6, H9, H3c-3's remaining 14" docs/superpowers/spec-defects.md` to
+`grep -n "H5b, H6, H9" docs/superpowers/spec-defects.md`, and named why: the phrase wraps after
+`H3c-3's` at line 1951, which a single-line grep cannot see across. Re-ran both: the old command finds
+three of the four parenthetical hits (misses line 1951); the narrowed command finds all four (1951,
+8613, 8643, 8674) plus the note's own two self-referential lines (8873 shows the enumeration in prose,
+8879 shows the corrected command quoted) — 7 total, read individually and confirmed correct.
+
+### Minor 3 — filed, not fixed, as ordered
+
+Added a new `## OPEN` entry to `spec-defects.md` for `W-STATS-COLUMN-THIN` firing once per column on a
+sub-floor roster, owner unassigned with the reason (no remaining slice — H6, H9, H3c-3's remaining 14 —
+has this loop's per-column granularity as its surface). No code touched. This is the route the review
+itself specified: narrowing the loop now, inside a fix round with no argument written against Ruling 5,
+would be an unauthorized behaviour change.
+
+### Verification
+
+- `uv run pytest`: **2931 passed, 1 skipped, 2 xfailed** in 198.70s — identical to the review's own
+  figure, confirming no regression from any of the six fixes (all are docs/comments/a filed-not-fixed
+  entry, save the one-word docstring ordinal in Minor 1).
+- `uv run ruff check .`: all checks passed.
+- `uv run ruff format --check .`: 93 files already formatted.
+- `uv run mypy`: success, 52 source files.
+- Mechanical pass (trailing whitespace, tabs, invisible unicode, duplicate anchors) run over
+  `CLAUDE.md`, `docs/feasibility-llm-growth-studies.md` and `docs/superpowers/spec-defects.md` — the
+  three documents touched: clean.
+
+**Commit:** `3bf55d9` (fix round). No `--force`, no `git checkout --`, no destructive git operation used.
+
+**Concern carried forward, not a finding against this round:** Minor 3's filing is now a seventh entry in
+`spec-defects.md` unassigned "with the reason" that no remaining slice covers a specific loop's
+granularity — a pattern this file has repeatedly needed re-owning notes for once a named slice merges.
+Whoever next touches `spec-defects.md`'s unassigned entries should re-derive the remaining-slice list
+rather than trust this round's "H6, H9, H3c-3's remaining 14," per this repo's own rule that a scoping
+expires.
