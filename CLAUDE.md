@@ -247,8 +247,11 @@ because being *able* to derive a statistics change from a lockfile hash is not b
 
 Four things worth carrying. **A rule with three cases invites a two-case sentence at every site that
 mentions it, because two cases sound complete** — this slice shipped one three times, as a Critical then
-two Majors, in three different files, each caught by someone sweeping for the *claim* rather than for the
-file it was first noticed in. The three mixtures, and the amendment table is now the single authority
+two Majors and then a whole-branch Major, in **five** different files across four rounds, each caught by
+someone sweeping for the *claim* rather than for the file it was first noticed in — **and the fifth home
+was reachable only by a newline-insensitive sweep**, because `grep -rF` cannot match a phrase that
+wrapped, which is also how the third home hid. The round that closed the fourth home swept `reference.md`
+and the plan and **not `spec-defects.md`**, where the same commit had written the same sentence. The three mixtures, and the amendment table is now the single authority
 every site links to instead of restating: non-numeric for **every** unit (no block, the column still
 reaching the table), a number for some units and `None` for others (a block over the contributors, with
 the contributing count and `W-STATS-COLUMN-THIN` below the floor), and `str` **beside** a number, which
@@ -565,6 +568,7 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 | A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
 | The test's **reader** normalising the defect away | A resolved-values echo shipped as a YAML alias — one anchor, five `*id001` pointers — and **both tests used `yaml.safe_load`, which resolves aliases**. The defect lived in the serialization and the reader undid it before the assertion. When a defect could live in *how* a value is written, assert on the raw text |
+| A sweep that has never been shown to fail | Two of three sweeps written in one batch were **incapable of failing** when first run — by their authors, while checking for exactly that; one had inverted fence-skip logic, one a broken slugger. A third could not match its target because the phrase wrapped. **Run every sweep against a string you know is present before believing a zero**, and report that proof rather than the zero |
 | A mutation's **result** reported as a count nobody read | Three batches of one slice recorded `1 failed` against a true 4, `375` against 376, and *"six raise sites"* against eight. None changed a conclusion — and the first was **better** pinned than reported, because widening a `try` broke three `pytest.raises` pins nobody had looked for. **A number offered as verification evidence has to be the number the command printed**, or the reader who trusts it is the one who later moves a pin it was supposed to guard |
 | A mutation whose **prediction** went stale under a later task in its own slice | Deleting roster coercion once raised inside `finalize`; after a later task gave `.parquet` its capability, the same mutant **completed at exit 0 and silently published a structural attribute**. The pin still failed, so nothing was weakened — but the *shape* the brief predicted was gone. **A whole-branch re-run is not a formality**: the branch under each mutation changed after the mutation was written |
 | A **mutation** whose two branches cannot differ | A reviewer proposed proving a distinction by swapping to a value derived from the same source — a mathematical no-op no fixture could ever catch; a controller's proposed mutation was blind for a different reason. **A mutation is a claim too**: before trusting "this would prove X", check the two branches can actually produce different results |
@@ -683,6 +687,11 @@ made by the author of the rule forbidding it, while measuring for it.
   that path. Prove each sweep can fail by running it against a string known to be present. This matters
   more now that the [development record](#the-development-record) is tracked: a sweep over the four
   documents must **name** them, since `*.md` no longer means what it used to.
+- **A `grep -F` for a phrase cannot match the phrase once it wraps**, and prose in this repo wraps at
+  every edit. One false sentence had **five homes in one slice**; two of them survived rounds of sweeping
+  because the phrase spanned a newline in exactly the files nobody had listed. **Sweep for a distinctive
+  short fragment, or normalise newlines first** — and when a claim has already been found twice, assume
+  the next home is one your last sweep *could not* have matched rather than one you forgot to include.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
 - **`ruff format` does not touch `*.md`** — it processes `.py`, `.pyi` and `.ipynb`, and this repo adds no
