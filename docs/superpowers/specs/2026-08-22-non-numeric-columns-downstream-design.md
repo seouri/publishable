@@ -368,10 +368,32 @@ the line is a `# TODO: replace with your analysis` placeholder by design.
 **Cost if wrong.** A new user's first run still shows an empty `aggregated` and has to read the
 document to learn why. The § Templates sentence Decision 10 adds is where they read it.
 
-### 13. The slice is **not additive**, and it ships — the argument in the open
+### 13. The slice is **not additive**, and it ships
 
-Held in § The behaviour change below, said loudly and in a section of its own, on H5a's and H8b
-Decision 7's precedent.
+**The question.** This project has ruled twice (H7d Part B, H8b Decision 7) that additive is fine and
+that changing what an existing key **reports** is not. The scoping measured that H5b changes what
+existing keys report and that no narrowing of the fix makes it additive. Ship it, or narrow it?
+
+**The answer: ship it**, with the change enumerated key by key in § The behaviour change below, in a
+section of its own on H5a's precedent.
+
+**Grounds.** Both prior rulings turn on whether a **correct** behaviour is being changed quietly.
+H7d Part B's refusal was of a widening that would have moved `run_status` for a run that was already
+right, argued for in a shipped test's docstring. Here the moved numbers are wrong on the record's own
+terms: `n_valid: 0.0` over six `True` rows carries `ci95: [0.0, 0.0]` and `resample_draws: 2000`, and
+today's derived block reads `{resolved: 6, completed: 4, ineligible: 0, failed: 0}` while `attrition`
+over the same executions returns `completed: 6` (both measured). The filing itself states the test
+this decision applies: *additive is fine, and changing what an existing key reports needs the argument
+made in the open* — an obligation to disclose, not a prohibition on fixing.
+
+**Rejected: narrowing until it is additive.** The two candidate narrowings are *carry the values but
+do not admit the unit*, which leaves the scaffold's own step publishing statistics over a table
+missing units `attrition` counts, and *refuse loudly*, which costs a completed run its record. Both
+hold the key set stable by keeping a wrong number — narrowing the fix until it is wrong.
+
+**Cost if wrong.** Stated in full in § The behaviour change and not mitigated away: two runs of the
+same config, data and seed across this slice publish different `aggregated` numbers with all three
+hashes `identical` and no `diff` row pointing at the change.
 
 ### 14. Row 4 of the § Executability table goes `1 → 0 → 1`, and E5's analysis-side defect does **not** pre-empt the core-side dependency
 
@@ -464,7 +486,22 @@ ranks on the point estimate over half the raw `ci95` width and the *other* metri
 3. A template's `aggregate` that assumes every row carries its numeric column now meets rows that do
    not and may raise — contained, costing that step's `derived` mapping (Decision 1's cost).
 
+4. **A purely numeric derived metric newly draws `W-STATS-RESAMPLE-THIN`**, and this is the item a
+   three-item list would have read as excluded. `cli.py` warns whenever `used < derived_metric_draws`
+   — any degenerate draw at all — and admitting units that carry no numeric column creates degenerate
+   draws for a metric reading only numeric columns: measured on Fixture A, `mean_score` goes
+   `2000 → 1998`, which crosses that condition. Its sibling consequence — `ci95: null` once `used`
+   falls below `min_honest_draws()`, 80 at 95 % confidence — is **reachable and not bounded away**:
+   for a metric needing one non-null value the surviving fraction is ≈ `1 − e^−k` in the number `k` of
+   units carrying the column (≈ 63 % at `k = 1`, far above the floor), but a metric needing four
+   non-null values at `k = 1` over six units survives ≈ 0.9 % of draws, which is below 80 of 2000.
+   **So it is named as reachable rather than argued away**, and the arithmetic is here so a reviewer
+   checks the claim instead of the intuition.
+
 **Nothing is retired**, and one new warning is minted (`W-STATS-REPEATS-DISAGREE`, Decision 3).
+`W-STATS-RESAMPLE-THIN` is an existing code at an existing site seeing a wider input — **no new emit
+site, so no § Warnings row moves** — and it is listed above because *name what actually stops* covers
+a warning a shipped run newly earns, not only a refusal.
 
 **Cost if the ruling is wrong.** Two runs of the same config, over the same data, with the same seed,
 on either side of this slice publish different numbers in `aggregated`. `code_hash`,
@@ -574,7 +611,8 @@ value is **6.0** and that no `W-STATS-AGGREGATE-FAILED` appears. Today the same 
 One unit, two repeats, recording `{"flag": True}` and `{"flag": False}`. Asserts
 `collapsed["p0"]["flag"] is None` — the key **present**, the value `None` — and that
 `W-STATS-REPEATS-DISAGREE` names `flag`. `values[0]` is `True`, so a mutant carrying the first value
-gives `True`, which the assertion separates from `None`.
+gives `True`, which the assertion separates from `None`. The harder pair — `None` against `True` — is
+Fixture D's second arm, because that one cannot be told from an agreeing `None` by its cell.
 
 This is the replacement for `test_collapse_drops_a_bool_column_rather_than_averaging_it`, whose
 assertion (`"flag" not in collapsed["p0"]`) pins the behaviour that is the defect. It is a **correct
@@ -583,10 +621,20 @@ move**, not a weakening, and it is named as one in the pin (arm B).
 ### Fixture D — repeats that agree on a recorded `None` (the control Decision 3 rests on)
 
 Two repeats both recording `{"valid": None}`. Asserts the cell is `None` **and that
-`W-STATS-REPEATS-DISAGREE` does not fire** — asserted on `capsys`' stderr stream, not on an exit
-code, because *when you assert an absence, assert it on the stream the thing writes to*. This is the
-fixture that makes the difference between Decision 3 and the version this design rejected: under the
-rejected `None`-as-signal rule it fails.
+`W-STATS-REPEATS-DISAGREE` does not fire** — asserted on the run's **stdout**, not on an exit code
+and not on stderr, because *when you assert an absence, assert it on the stream the thing writes to*
+and **the stream was measured rather than assumed**: every shipped assertion on a run finding reads
+stdout (`tests/test_cli.py` carries two `assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]` lines,
+`tests/test_report.py` a third). An absence asserted on stderr would pass whether the warning fired
+or not, which would make exactly this fixture unable to fail. This is the fixture that makes the
+difference between Decision 3 and the version this design rejected: under the rejected
+`None`-as-signal rule it fails.
+
+**Second arm, and it is the one Decision 3 is actually about:** one repeat recording `{"valid":
+None}` and another recording `{"valid": True}` — a genuine disagreement whose collapsed cell is
+`None`, **bit-identical to the first arm's**. Asserts the cell is `None` and that the warning **does**
+fire. The two arms differ only in the rows, never in the collapsed value, so a rule answering from
+the cell gives one answer to both and must fail one of them.
 
 ### Fixture E — the collision, driven from the collapse's own output
 
@@ -665,7 +713,7 @@ could not differ.
 | 8. Point Decision 9's `by` test back at `step_summary` | Fixture F's warning assertion and its no-strata assertion | measured by the scoping both ways: the non-numeric column never reaches `step_summary`, so the mutant is silent |
 | 9. Widen Decision 9 to suppress a **numeric** `by` column's metric block | pin arm C — the two existing tests asserting `aggregated[step]["by"]["value"] == 39.0` | the numeric arm keeps its metric block; a widened guard removes it |
 | 10. Replace `cli.py`'s second empty-level gate with `if True:` | Fixture H's absent-level assertion | measured at `5ee3a0c`: this mutation leaves the **whole suite** green today. It stops being blind at task 4, which is the point of the reachability table |
-| 11. Delete the `W-STATS-REPEATS-DISAGREE` call site | Fixture C's warning assertion, asserted on stderr with the column name in it | the message names `flag`; nothing else in that run's output does — checked against the run's other diagnostics rather than assumed |
+| 11. Delete the `W-STATS-REPEATS-DISAGREE` call site | Fixture C's warning assertion, on **stdout** (the stream measured in Fixture D) with the column name in it | the message names `flag`; nothing else in that run's output does — checked against the run's other diagnostics rather than assumed |
 | 12. Make Decision 3's new function answer from the collapsed cell rather than from the rows | Fixture D | a recorded `None` is indistinguishable from a disagreement at the cell, which is the whole ground for Decision 3 |
 | 13. Restore `summarize_step`'s deleted docstring clause | nothing — **named blind in advance** | a docstring has no behaviour. Its replacement is mutation 4's second arm, which pins the property the clause was describing, and the batch review reads the sentence against the code |
 
@@ -689,7 +737,7 @@ pin quietly, and to the two that pinned one list twice and edited both.
 | Arm | The claim | Sole authorized editor | State specified in advance |
 |---|---|---|---|
 | **A** | A run with **no non-numeric recorded column anywhere in it** publishes a byte-identical `results` block: captured as a literal snapshot of `run.yaml`'s `results` mapping for a two-condition, two-seed, Holm-corrected run over 40 units with one numeric column and one derived metric | **NONE** | unchanged. A passing arm after every task is the proof that the numeric-only path did not move |
-| **B** | The run that **does** move: Fixture A's, with every moving key and both its values in the docstring | **task 4 only** | the "After" column of § The behaviour change's table, literal for literal. Task 4 flips the four literals named there and nothing else; any other edit to this arm is a finding |
+| **B** | The run that **does** move: Fixture A's, with every moving key and both its values in the docstring | **task 4 only** | **seven keys move, enumerated rather than counted**: `n_valid.value`, `n_valid.ci95`, `n_rows.value`, `n_rows.ci95`, `mean_score.n.completed`, `mean_score.ci95`, `mean_score.resample_draws`. Task 4 flips those seven to the "After" column of § The behaviour change's table, literal for literal, and edits nothing else here — every `score.*` literal and `mean_score.value` stay put. **Task 5 is not an editor of this arm**: Fixture A has no column that disagrees across repeats, so the collapse rule cannot reach it, and a task-5 edit here is a finding |
 | **C** | The **numeric** `by` column keeps its metric block and its warning: `tests/test_cli.py::test_a_recorded_column_named_by_keeps_its_metric_and_warns` and `::test_a_recorded_by_column_warns_even_with_no_report_by_declared`, asserting `value == 39.0` | **NONE** | zero lines changed. The batch review that lands Decision 9 checks `git diff` over both test bodies and reports the line count |
 | **D** | `E-STEP-COLUMN-UNKNOWN` still raises for a name **no** row holds, and the derived-key collision still raises for a **numeric** recorded column | **NONE** | unchanged. These are the two behaviours the slice narrows *around* and must not narrow *away* |
 
@@ -764,7 +812,7 @@ reachable). Order within a batch is the order listed.
 | Batch | Tasks | Contents | What its review must look for |
 |---|---|---|---|
 | **1 — the documents, the mint, and the pin** | 1, 2, 3 | The guard pin's four arms captured **before anything moves**; § Templates and § Statistical reporting (Decision 10); § The per-unit tables' routed question decided (Decision 11); `W-STATS-REPEATS-DISAGREE` minted (Decision 3) | Does any new sentence claim a behaviour the code will not have after batch 2? Does the pin have a named sole editor per arm, **two arms with none**, and arm A's rule and fixture framing stated as two things? Is the mint's row true of the site batch 2 will add? Mechanical pass on every `reference.md` edit |
-| **2 — the collapse. THE BEHAVIOUR CHANGE** | 4, 5, 6, and the pins for 10 and 11 | Carriage and admission with the 20 annotation sites (Decisions 1, 5); the across-repeats rule reusing `apply_rule`'s constant shortcut (Decision 2); the disagreement function and its warning (Decision 3); `summarize_step`'s deleted clause (Decision 4); Fixtures A, B, C, D, E, H, I, K; mutations 1–5, 10–12 | **A real-command review**: run the console script end to end on Fixture A's and Fixture B's projects and read `run.yaml` key by key against § The behaviour change's table — not `validate`, not a direct call. Then: is arm B's edit exactly the four literals specified in advance? Is arm A still passing untouched? Are the collision and the empty-level gate pinned **here** rather than promised to batch 3? Does the ruling's enumeration match what the run actually printed? |
+| **2 — the collapse. THE BEHAVIOUR CHANGE** | 4, 5, 6, and the pins for 10 and 11 | Carriage and admission with the 20 annotation sites (Decisions 1, 5); the across-repeats rule reusing `apply_rule`'s constant shortcut (Decision 2); the disagreement function and its warning (Decision 3); `summarize_step`'s deleted clause (Decision 4); Fixtures A, B, C, D, E, H, I, K; mutations 1–5, 10–12 | **A real-command review**: run the console script end to end on Fixture A's and Fixture B's projects and read `run.yaml` key by key against § The behaviour change's table — not `validate`, not a direct call. Then: is arm B's edit exactly the seven keys enumerated in advance, with every `score.*` literal and `mean_score.value` untouched? Is arm A still passing untouched? Are the collision and the empty-level gate pinned **here** rather than promised to batch 3? Does the ruling's enumeration match what the run actually printed? |
 | **3 — the guards and the namespace** | 7, 8, 9, 10, 11 | The contrast filter (Decision 7); the `paired_keys` ruling documented (Decision 6); the `by` arbitration and `_attributed`'s deleted grounds (Decision 9); the collision test made real (Decision 8); the empty-level gate's document and record halves | Arm C's `git diff` line count over the two existing `by` tests — **report the number**. Does the direct-call arm of Fixture G say in its own docstring that it drives an unreachable state, and does the end-to-end arm carry the production claim? Were the two `_attributed` grounds **deleted** rather than rewritten? |
 | **4 — the pins and the readers** | 12, 13, 14 | `E-STEP-COLUMN-UNKNOWN` both directions; the silent case's discriminating test; `report` and `study` pinned (Fixture J); the three shipped docstrings re-derived | Does any assertion here pass if the behaviour is neutered? Grep every claim the briefs make about other tests before repeating it, and **report what was grepped** |
 | **5 — the records** | 15 | Strikes, filings, the § Executability entry, the spine correction, `CLAUDE.md`'s order line | **This batch gets a full review, not a skim.** Twice a controller ran a final batch straight into the whole-branch gate, and the second time three of four Majors lived in it. Check every struck entry against the code, every "filed" against the file, and the § Executability table's three unchanged rows character for character |
