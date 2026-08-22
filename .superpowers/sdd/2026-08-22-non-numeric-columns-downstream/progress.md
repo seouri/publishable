@@ -197,3 +197,38 @@ discriminates. Both held.
 through the installed console script over a project carrying **all three** of Ruling 1's mixtures, and
 both rendered the correct two rows and no third. After a Critical and two Majors from stating a two-case
 version of that rule, the batch that had the most room to restate it did not.
+
+## Batch 5 — tasks 15, 16 — the records, reviewed rather than skimmed
+
+Commits `56aad22` (strikes, filings, `CLAUDE.md`, both passes), `da31016` (§ Executability, row 4
+re-derived), `c8a1380`/`dea7c70`, fix round `bc50409`, review `6bbe922` (**both PASS**, two Minors, one
+of them **retracted after investigation**). Suite unmoved at **2931**; no `src/` or `tests/` file moved.
+
+**Row 4's re-derivation holds, `1 → 0 → 1`, and the check that matters was mechanical**: the reviewer
+diffed the three § Executability entries programmatically and confirmed **rows 1–3 and the header are
+byte-identical** while row 4 alone moved. The table stays four rows. That is the shape those two dated
+corrections earlier in the section demanded, and it is now three entries old.
+
+**The H9 filing was reproduced from scratch rather than trusted**: a standalone repo, `uv.lock DIFFERS`
+printing two digests, and the moved package's name appearing **nowhere**, at exit 0. *A filed gap that
+does not reproduce is worse than an unfiled one*, and a reviewer who rebuilds the repro is the only reader
+who can say it does.
+
+**H5a's *"filed, owner H5b"* line resolved without a second entry, and the reviewer nearly filed the
+opposite.** The suspicion was the right one — *a design line saying "Filed" pointing at an entry that
+answers a **different** question is the same failure in a new costume* — and it was checked by direct
+probe rather than by reading: the two entries answer **disjoint, compatible** questions. **The finding was
+raised and then retracted on measurement**, which is what a retraction should look like.
+
+**The sharpest thing in this batch is about sweeps, and it generalizes backwards.** The brief's `grep -rF`
+shape **cannot match a line-wrapped phrase**, and that hid two real hits until the task re-ran
+newline-insensitively — which is the mechanism that let this slice's signature claim live in a third home
+nobody had named. And the reviewer's own throwaway checker **had to be debugged three times** — inverted
+fence-skip logic, then a slugger bug — **before it could fail on an injected fault.** *Prove every sweep
+can fail* is not ceremony: two of the three sweeps written in this batch were incapable of failing when
+first run, by their authors, while checking for exactly that.
+
+**One thing is deliberately left to the whole-branch gate.** Arm G's docstring calls `1927` both the
+*fourth* and the *third* distinct `resample_draws` literal. A records task **must not edit a pin arm's
+docstring** — that is the rule that keeps a pin from being adjusted by whoever last read it — so it was
+named, not fixed. Correct restraint; it is the gate's to close.
