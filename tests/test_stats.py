@@ -5766,3 +5766,219 @@ def test_a_clustered_derived_draw_over_constant_content_reports_no_interval():
     )
     assert interval is None
     assert survivors == 0
+
+
+# --- H5b task 1: the guard pin, arms B and F --------------------------------
+#
+# Captured BEFORE any H5b task moves anything (H5b plan task 1), against
+# `ee8085e`. Every literal below was produced by RUNNING `summarize_step`
+# (module-level probes `p1`/`p6` in the H5b plan), not read from the plan's
+# prose — the plan's own numbers are its claim, these are the measurement.
+
+
+def _fixture_b_rows():
+    """Fixture A: `u0`-`u3` recorded a numeric `score` alongside a bool
+    `valid`; `u4`-`u5` recorded only the bool. Six units, one repeat."""
+    rows = [{"unit": f"u{i}", "score": float(i), "valid": True} for i in range(4)]
+    rows += [{"unit": f"u{i}", "valid": True} for i in range(4, 6)]
+    return rows
+
+
+def _fixture_b_wide_collapsed():
+    """The wide collapsed table H5b ships: every unit admitted, `valid`
+    carried. Hand-written, since no shipped caller can produce it yet —
+    unlike the narrow table below, this one never moves."""
+    wide = {f"u{i}": {"score": float(i), "valid": True} for i in range(4)}
+    wide.update({f"u{i}": {"valid": True} for i in range(4, 6)})
+    return wide
+
+
+def _fixture_b_derived(collapsed):
+    """What a template's `aggregate` would compute over `collapsed`, using
+    row-dict access (`"score" in row`, `row.get("valid")`) rather than
+    `UnitTable.score`/`UnitTable.valid` attribute access. The narrow
+    (TODAY) table carries no `valid` column at all — not merely a
+    non-numeric one, the column is absent from every unit — so a real
+    attribute read would raise `E-STEP-COLUMN-UNKNOWN`; a real template
+    hitting that is `cli.py`'s contained `W-STATS-AGGREGATE-FAILED` path,
+    which is not what this direct-call pin exercises.
+    """
+    rows = list(collapsed.values())
+    scores = [r["score"] for r in rows if "score" in r]
+    return {
+        "n_rows": float(len(rows)),
+        "n_valid": float(sum(1 for r in rows if r.get("valid") is True)),
+        "mean_score": sum(scores) / len(scores) if scores else None,
+    }
+
+
+def _fixture_b_n_rows(units):
+    return float(len(units))
+
+
+def _fixture_b_n_valid(units):
+    """Row-dict `.get`, not `units.valid`: on the narrow table no row holds
+    `valid` at all, and an attribute read would raise."""
+    return float(sum(1 for row in units if row.get("valid") is True))
+
+
+def _fixture_b_mean_score(units):
+    vals = [row["score"] for row in units if "score" in row]
+    return sum(vals) / len(vals) if vals else None
+
+
+def test_a_bool_only_column_widens_exactly_seven_moving_keys():
+    """H5b's guard pin, arm B (H5b plan task 1, step 2). **Sole authorized
+    editor: task 4**, flipping exactly the seven asserted TODAY values to
+    their AFTER counterpart and nothing else in this test. Task 5 is not an
+    editor here: this fixture has no column that disagrees across repeats
+    (every unit's `valid` is `True` in its one and only repeat), so the
+    disagreement disclosure this slice adds cannot fire on it — a task-5
+    edit to this test would be a finding, not a fixture repair.
+
+    Drives `summarize_step` twice over the same `derived`/`resample` map.
+    The narrow (TODAY) `collapsed` comes from a LIVE `collapse_repeats` call
+    on `_result`-built executions, so it moves if a later task changes the
+    collapse; the wide (AFTER) `collapsed` is hand-written and never moves.
+
+    `mean_score.value == 1.5` on BOTH tables is the load-bearing assertion:
+    a fixture in which every number moves cannot tell "the table widened"
+    from "the metric changed". `mean_score.resample_draws` moving
+    `2000 -> 1998` is this fixture's own number at `seed=7, draws=2000` —
+    not a constant, and not reused for any other arm's seed.
+    """
+    result = _result("", _fixture_b_rows())
+    narrow = collapse_repeats([result], "analyze", 0)
+    assert narrow == {f"u{i}": {"score": float(i)} for i in range(4)}, (
+        "the narrow collapse must admit exactly u0-u3 and drop the bool "
+        "column entirely — Corrections 10's 'carriage vs admission' shape"
+    )
+
+    wide = _fixture_b_wide_collapsed()
+    counts = {"resolved": 6.0, "completed": 6.0, "ineligible": 0.0, "failed": 0.0}
+    resample = {
+        "n_rows": _fixture_b_n_rows,
+        "n_valid": _fixture_b_n_valid,
+        "mean_score": _fixture_b_mean_score,
+    }
+
+    today = summarize_step(
+        narrow, counts, derived=_fixture_b_derived(narrow), seed=7, resample=resample, draws=2000
+    )
+    after = summarize_step(
+        wide, counts, derived=_fixture_b_derived(wide), seed=7, resample=resample, draws=2000
+    )
+
+    # The seven moving keys, enumerated — never counted.
+    assert today["n_valid"]["value"] == 0.0
+    assert after["n_valid"]["value"] == 6.0
+    assert today["n_valid"]["ci95"] == [0.0, 0.0]
+    assert after["n_valid"]["ci95"] == [6.0, 6.0]
+    assert today["n_rows"]["value"] == 4.0
+    assert after["n_rows"]["value"] == 6.0
+    assert today["n_rows"]["ci95"] == [4.0, 4.0]
+    assert after["n_rows"]["ci95"] == [6.0, 6.0]
+    assert today["mean_score"]["n"]["completed"] == 4
+    assert after["mean_score"]["n"]["completed"] == 6
+    assert today["mean_score"]["ci95"] == [0.5, 2.5]
+    assert after["mean_score"]["ci95"] == [0.3333333333333333, 2.5]
+    assert today["mean_score"]["resample_draws"] == 2000
+    assert after["mean_score"]["resample_draws"] == 1998
+
+    # Unmoved, and load-bearing.
+    assert today["mean_score"]["value"] == 1.5
+    assert after["mean_score"]["value"] == 1.5
+    assert today["score"]["value"] == 1.5
+    assert after["score"]["value"] == 1.5
+    assert today["score"]["n"]["completed"] == 4
+    assert after["score"]["n"]["completed"] == 4
+    assert today["score"]["ci95"] == [-0.5542602567605206, 3.5542602567605206]
+    assert after["score"]["ci95"] == [-0.5542602567605206, 3.5542602567605206]
+    assert today["score"]["method"] == "t_over_units"
+    assert after["score"]["method"] == "t_over_units"
+
+    # The projection: `valid` is a bool column, and admitting the units it
+    # lives on must not also publish a metric block for it.
+    assert "valid" not in today
+    assert "valid" not in after
+
+
+def _fixture_f_labels():
+    return {f"u{i}": ("a" if i % 2 == 0 else "b") for i in range(6)}
+
+
+def _fixture_f_mean_score_null(units, labels):
+    """A mean-of-group-a-minus-mean-of-group-b statistic over the
+    RELABELLED mapping `permutation_of_derived` hands it as its second
+    argument — a one-argument closure ignoring `labels` would recompute the
+    same grouping on every draw and return `None` for every key
+    (`permutation_of_derived`'s own "not varied" rule), which is why the
+    function takes `compute(table, labels)` rather than `resample`'s
+    one-argument shape."""
+    a = [row["score"] for row in units if "score" in row and labels.get(row["unit"]) == "a"]
+    b = [row["score"] for row in units if "score" in row and labels.get(row["unit"]) == "b"]
+    if not a or not b:
+        return None
+    return sum(a) / len(a) - sum(b) / len(b)
+
+
+def test_a_derived_metrics_permutation_p_value_widens_but_a_recorded_columns_never_gets_one():
+    """H5b's guard pin, arm F (H5b plan task 1, step 3b; Corrections 16).
+    **Sole authorized editor: task 4.** Fixture A's two tables again, this
+    time with a `null_test` declared and a `null_fn` per derived key.
+
+    Why this is a separate arm rather than more keys on arm B: arm B's
+    fixture declares no `null_test`, and adding one would change the block
+    shape every one of arm B's seven literals was captured from.
+
+    The asymmetry stated and which half was reasoned: a RECORDED column
+    (`score`) gets no `p_value` from `summarize_step` at all — the write is
+    in the derived branch only (confirmed:
+    `grep -n 'p_value' src/publishable/stats.py` over the recorded-column
+    loop's own range has no hit, only the derived branch below it does).
+    A CONTRAST's p-value comes from `permutation_over_contrast` over
+    `of_values`/`against_values` in the unpaired recorded-column arm, which
+    a later task narrows rather than widens — that half was read, not run,
+    here.
+    """
+    narrow = {f"u{i}": {"score": float(i)} for i in range(4)}
+    wide = {f"u{i}": {"score": float(i), "valid": True} for i in range(4)}
+    wide.update({f"u{i}": {"valid": True} for i in range(4, 6)})
+    counts = {"resolved": 6.0, "completed": 6.0, "ineligible": 0.0, "failed": 0.0}
+    null_test = {"method": "permutation", "n": 500, "shuffle": "grp", "level": "rows"}
+    labels = _fixture_f_labels()
+
+    def derived_for(collapsed):
+        rows = list(collapsed.values())
+        scores = [r["score"] for r in rows if "score" in r]
+        return {"mean_score": sum(scores) / len(scores) if scores else None}
+
+    today = summarize_step(
+        narrow,
+        counts,
+        derived=derived_for(narrow),
+        seed=7,
+        null_test=null_test,
+        labels=labels,
+        null_fns={"mean_score": _fixture_f_mean_score_null},
+    )
+    after = summarize_step(
+        wide,
+        counts,
+        derived=derived_for(wide),
+        seed=7,
+        null_test=null_test,
+        labels=labels,
+        null_fns={"mean_score": _fixture_f_mean_score_null},
+    )
+
+    assert today["mean_score"]["p_value"] == 0.846307385229541
+    assert today["mean_score"]["null_draws"] == 500
+    assert after["mean_score"]["p_value"] == 0.812375249500998
+    assert after["mean_score"]["null_draws"] == 500
+
+    # Must not move: a recorded column has no `p_value` at all, in either table.
+    assert "p_value" not in today["score"]
+    assert "null_draws" not in today["score"]
+    assert "p_value" not in after["score"]
+    assert "null_draws" not in after["score"]

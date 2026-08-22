@@ -17168,3 +17168,327 @@ def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
     """
     text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
     assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]
+
+
+# --- H5b task 1: the guard pin, arms A and E --------------------------------
+#
+# Captured BEFORE any H5b task moves anything (H5b plan task 1), against
+# `ee8085e`. Every literal below was produced by running the real console
+# path through `run_a_project`, twice each, and diffing the two runs for
+# byte-identical `results` — not read from the plan's prose.
+
+
+def test_a_numeric_only_run_is_untouched_by_h5b_no_editor(tmp_path):
+    """H5b's guard pin, arm A (H5b plan task 1, step 1). **NO AUTHORIZED
+    EDITOR — no task in this slice may edit this test.** A passing arm A
+    after every later task is the proof that the numeric-only path did not
+    move.
+
+    `_AGGREGATE_STEP` records `{"pred": float(i)}` and nothing else — a
+    single numeric column, no bool — so `aggregate_returns="total"` is used
+    rather than the default `STARTER_STEP` (which records `{"present":
+    True}`, a bool, and would falsify this arm's own premise for the wrong
+    reason).
+
+    **If a second recorded column of any non-numeric type is ever added to
+    this fixture, that FALSIFIES this arm rather than failing it** — the
+    rule this pins is that identity holds when no non-numeric column exists
+    ANYWHERE in the same correction family (Holm ranks across the family,
+    so one metric's interval width moves another's corrected interval),
+    not merely that this one column stayed a number. Arm E is the
+    measurement that a numeric-only column's OWN corrected interval still
+    moves when a *different* column in the family admits more units — the
+    reason this arm's fixture must stay strictly numeric rather than
+    merely unedited.
+
+    Two-condition (`pearson` baseline vs. `spearman`), two-seed, Holm
+    correction (the generated default), 40 units. The whole `results`
+    mapping is asserted against a literal — reproduced twice via
+    `run_a_project` and diffed byte-identical before being pinned here.
+    """
+    doc = run_a_project(
+        tmp_path,
+        units=40,
+        aggregate_returns="total",
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    assert run["results"] == {
+        "conditions": [
+            {
+                "aggregated": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [15.761212085024908, 23.23878791497509],
+                            "correction": None,
+                            "method": "t_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "repeat_spread": {"kind": "seed", "n": 2, "std": 0.0},
+                            "value": 19.5,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [16.025, 23.025],
+                            "cohens_d": None,
+                            "correction": None,
+                            "method": "percentile_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "resample_draws": 2000,
+                            "value": 19.5,
+                        },
+                    }
+                },
+                "index": 0,
+                "is_baseline": True,
+                "label": "baseline",
+                "per_repeat": {
+                    "step01_summarize_units": {"seed40": {"n_units": 40}, "seed47": {"n_units": 40}}
+                },
+                "values": {"analysis.method": "pearson"},
+            },
+            {
+                "aggregated": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [15.761212085024908, 23.23878791497509],
+                            "correction": None,
+                            "method": "t_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "repeat_spread": {"kind": "seed", "n": 2, "std": 0.0},
+                            "value": 19.5,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [16.025, 23.025],
+                            "cohens_d": None,
+                            "correction": None,
+                            "method": "percentile_over_units",
+                            "n": {"completed": 40, "failed": 0, "ineligible": 0, "resolved": 40},
+                            "resample_draws": 2000,
+                            "value": 19.5,
+                        },
+                    }
+                },
+                "index": 1,
+                "is_baseline": False,
+                "label": "method=spearman",
+                "per_repeat": {
+                    "step01_summarize_units": {"seed40": {"n_units": 40}, "seed47": {"n_units": 40}}
+                },
+                "values": {"analysis.method": "spearman"},
+                "vs_baseline": {
+                    "step01_summarize_units": {
+                        "pred": {
+                            "basis": "units",
+                            "ci95": [0.0, 0.0],
+                            "ci95_corrected": [0.0, 0.0],
+                            "cohens_d": None,
+                            "correction": "holm",
+                            "correction_level": 0.025,
+                            "delta": 0.0,
+                            "family": {"comparisons": 1, "metrics": 2},
+                            "family_size": 2,
+                            "method": "paired_t_over_units",
+                            "n_paired": 40,
+                            "paired": True,
+                        },
+                        "total": {
+                            "basis": "units",
+                            "ci95": [0.0, 0.0],
+                            "ci95_corrected": [0.0, 0.0],
+                            "cohens_d": None,
+                            "correction": "holm",
+                            "correction_level": 0.05,
+                            "delta": 0.0,
+                            "family": {"comparisons": 1, "metrics": 2},
+                            "family_size": 2,
+                            "method": "paired_percentile_over_units",
+                            "n_paired": 40,
+                            "paired": True,
+                        },
+                    }
+                },
+            },
+        ],
+        "summary": {},
+    }
+
+
+_ARM_E_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        thr = {{"pearson": 0.5, "spearman": 0.4}}.get(cfg.parameters.analysis.method, 0.5)
+        for i, unit in enumerate(io.units):
+            if i < 4:
+                io.record(unit.key, {{"score": float(i) + thr, "valid": True}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def _arm_e_aggregate(self, units, cfg):
+    """Row-dict access (`"score" in row`), never `units.valid` — the
+    unpatched (TODAY) collapse never carries a `valid` column at all, and
+    an attribute read would raise `E-STEP-COLUMN-UNKNOWN`."""
+    scores = [row["score"] for row in units if "score" in row]
+    return {
+        "n_rows": float(len(units)),
+        "mean_score": sum(scores) / len(scores) if scores else None,
+    }
+
+
+def _arm_e_widened_collapse(results, step_name, condition_index, fold_members=None):
+    """The AFTER shape this plan ships — every unit admitted, every
+    recorded value carried, a disagreeing non-numeric column collapsing to
+    `None` — installed as a monkeypatch on `publishable.cli.collapse_repeats`
+    so the correction-family measurement below is captured by RUNNING the
+    console path with the after-behaviour in place, per Corrections 9 and
+    Ruling 3. **This function does not ship**: the committed test asserts
+    only the TODAY (unpatched) column, and a later task flips it."""
+    from publishable.stats import _is_numeric, handed_to
+
+    recording = [
+        r
+        for r in results
+        if r.execution.step_name == step_name
+        and r.execution.scope == "repeat"
+        and r.execution.condition_index == condition_index
+    ]
+    if not recording:
+        return {}
+    rows_by_label: dict[str, list[dict[str, Any]]] = {}
+    recorded_by_label: dict[str, set[str]] = {}
+    for r in recording:
+        label = r.execution.repeat_label or ""
+        rows_by_label.setdefault(label, []).extend(r.rows)
+        recorded_by_label.setdefault(label, set()).update(r.recorded)
+    labels = list(recorded_by_label)
+    candidates: set[str] = set()
+    for keys in recorded_by_label.values():
+        candidates |= keys
+    gathered: dict[str, dict[str, list[Any]]] = {}
+    for key in sorted(candidates):
+        mine = handed_to(key, labels, fold_members)
+        if not mine or any(key not in recorded_by_label[lb] for lb in mine):
+            continue
+        for lb in mine:
+            for row in rows_by_label[lb]:
+                if row["unit"] != key:
+                    continue
+                for column, value in row.items():
+                    if column == "unit":
+                        continue
+                    gathered.setdefault(key, {}).setdefault(column, []).append(value)
+    out: dict[str, dict[str, Any]] = {}
+    for key, cols in gathered.items():
+        row: dict[str, Any] = {}
+        for col, vals in cols.items():
+            if all(_is_numeric(v) for v in vals):
+                row[col] = sum(float(v) for v in vals) / len(vals)
+            elif len(set(vals)) == 1:
+                row[col] = vals[0]
+            else:
+                row[col] = None
+        out[key] = row
+    return out
+
+
+def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_path):
+    """H5b's guard pin, arm E (H5b plan task 1, step 3; Corrections 9;
+    Ruling 3). **Sole authorized editor: task 4.** Re-measured by running
+    the console path — not copied from the scoping's prose.
+
+    A two-condition run (`pearson` baseline, `spearman` grid), six units,
+    default five seeds, `correction: holm` (the generated default), whose
+    step records a `score`+`valid` pair for `i < 4` and `valid` alone
+    otherwise, with `thr` `0.5` under pearson and `0.4` under spearman.
+    The template's `aggregate` returns `n_rows` and `mean_score`.
+
+    This asserts only the TODAY (unpatched) column — the AFTER column was
+    measured by installing `_arm_e_widened_collapse` on
+    `publishable.cli.collapse_repeats` and running the same fixture again,
+    which reproduced all three of the scoping's cited literals (`n_paired`
+    4 -> 6; the `correction_level` swap; `score.ci95_corrected` moving in
+    its last digits) plus two the scoping's own paragraph does not name:
+    the derived contrast's (`mean_score`) own `ci95` and `ci95_corrected`,
+    and both conditions' `aggregated...mean_score.ci95`. That monkeypatch
+    does not ship.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(GenericTemplate, "aggregate", _arm_e_aggregate)
+        doc = run_a_project(
+            tmp_path,
+            units=6,
+            _starter_step=_ARM_E_STEP,
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    baseline, spearman = run["results"]["conditions"]
+
+    baseline_step = baseline["aggregated"]["step01_summarize_units"]
+    spearman_step = spearman["aggregated"]["step01_summarize_units"]
+    assert baseline_step["n_rows"]["value"] == 4.0
+    assert baseline_step["n_rows"]["n"]["completed"] == 4
+    assert baseline_step["n_rows"]["ci95"] == [4.0, 4.0]
+    assert spearman_step["n_rows"]["value"] == 4.0
+    assert spearman_step["n_rows"]["n"]["completed"] == 4
+    assert spearman_step["n_rows"]["ci95"] == [4.0, 4.0]
+
+    assert baseline_step["mean_score"]["n"]["completed"] == 4
+    assert baseline_step["mean_score"]["ci95"] == [1.0, 3.0]
+    assert spearman_step["mean_score"]["n"]["completed"] == 4
+    assert spearman_step["mean_score"]["ci95"] == [0.8999999999999999, 2.9]
+
+    vs_baseline = spearman["vs_baseline"]["step01_summarize_units"]
+    assert vs_baseline["mean_score"]["n_paired"] == 4
+    assert vs_baseline["mean_score"]["correction_level"] == 0.025
+    assert vs_baseline["mean_score"]["ci95"] == [-0.10000000000000009, -0.09999999999999998]
+    assert vs_baseline["mean_score"]["ci95_corrected"] == [
+        -0.10000000000000009,
+        -0.09999999999999998,
+    ]
+    assert vs_baseline["score"]["correction_level"] == 0.05
+    assert vs_baseline["score"]["ci95_corrected"] == [-0.10000000000000014, -0.09999999999999998]
+
+    # Must not move (across TODAY/AFTER, within each condition — measured
+    # identical for both when the AFTER monkeypatch was installed).
+    assert vs_baseline["score"]["n_paired"] == 4
+    assert vs_baseline["score"]["ci95"] == [-0.10000000000000014, -0.09999999999999998]
+    assert vs_baseline["n_rows"]["correction_level"] == 0.016666666666666666
+    assert baseline_step["score"] == {
+        "basis": "units",
+        "value": 2.0,
+        "n": {"completed": 4, "failed": 0, "ineligible": 0, "resolved": 6},
+        "ci95": [-0.0542602567605206, 4.054260256760521],
+        "method": "t_over_units",
+        "correction": None,
+        "repeat_spread": {"kind": "seed", "n": 5, "std": 0.0},
+    }
+    assert spearman_step["score"] == {
+        "basis": "units",
+        "value": 1.9,
+        "n": {"completed": 4, "failed": 0, "ineligible": 0, "resolved": 6},
+        "ci95": [-0.1542602567605207, 3.9542602567605205],
+        "method": "t_over_units",
+        "correction": None,
+        "repeat_spread": {"kind": "seed", "n": 5, "std": 0.0},
+    }
