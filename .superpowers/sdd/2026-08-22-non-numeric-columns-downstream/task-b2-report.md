@@ -99,3 +99,159 @@ A directly-recorded `None` (no repeat disagreement at all — a unit's step just
 1. **The Ruling 1 gate fix landed in task 6 despite that task's brief stating "ships NO code change."** That claim was measured only against Ruling 1's row 1 (all-non-numeric). Row 2 (mixed) was not owned by any task's original steps — I implemented it here because leaving it unbuilt would ship the batch-1 Critical's exact defect shape one level up (a `None` cell from task 4's own new return path silently deleting a whole published column), and `reference.md` already states the ruling's correct behavior in shipped prose. Flag if a different slice/task should have owned this instead.
 2. **Task 7's `TypeError` is now reachable**, exactly as CLAUDE.md's brief predicted it might be, and is pinned `xfail(strict=True)` rather than fixed, per instruction. Task 7 must remove this pin (or it will fail loudly once Fixture G's guard lands).
 3. No document edit was needed for this batch — `reference.md` already carries Ruling 1's three-mixture wording (confirmed by grep, not assumed).
+
+---
+
+# Batch 2 fix round — 2026-08-22 (appended; nothing above this line was edited)
+
+Commits: `ad67a75` (source and documents), `a9b6340` (the nine pins).
+Suite: **2920 passed, 1 skipped, 3 xfailed** (2911/1/3 at `4edd98d`; +9 tests, no
+existing test edited, none removed). `ruff check` clean, `ruff format --check` 93 files
+unchanged, `mypy` 52 source files clean, `git status --porcelain` empty after every
+mutation was reverted **by editing back** and each revert verified by re-running.
+
+## Correction to what is above (m3), appended rather than edited in place
+
+The "Mutations" section above reports task 4's mutation (i) — restoring
+`or not _is_numeric(value)` in `_gather_repeats` — as failing "Fixture A's `narrow ==
+wide` assertion and Fixture B's `n_present`". **The full unfiltered suite fails four
+tests, not those two alone**: it also fails both Fixture E arms and the Fixture C
+replacement (`test_a_disagreeing_bool_column_collapses_to_none_not_dropped`). The
+review re-ran it and read the count; this section records the correct figure. The
+number above stands as written, with this line as its correction — the fourth
+miscount in this slice family, and in a column framed as *counts read, not estimated*.
+
+## Status per finding
+
+| Finding | Status | Where it was closed |
+|---|---|---|
+| **M1** (false warning message + false § Warnings row) | **closed** | The two clauses deleted from `cli.py`'s message and from the row. Pinned end to end by `test_a_disagreeing_column_that_still_publishes_a_value_is_not_told_it_carries_none` |
+| **M2** (row's frequency claim) | **closed** | Row now reads *once per (condition, step, recorded column)* — Ruling 6's *fix the row, not the loop*. Pinned by `test_two_disagreeing_columns_in_one_step_warn_twice_once_per_column` |
+| **M3** (Ruling 1 row 2 shipped its count and not its warning) | **closed** | `W-STATS-COLUMN-THIN` minted per Ruling 5, one § Warnings row, three tests |
+| **M4** (`_across_repeats`'s falsified ground) | **closed** | Clause deleted through `argues for;` so no dangling referent remains; the true statement three paragraphs down was already there |
+| **M5** (`_repeats_disagree`'s unpinned tuple, and its false stated consequence) | **closed** | Pinned in both orders; the false consequence **deleted** and replaced by the measured one |
+| **M6** (empty-record admission unpinned) | **closed** | Two pins: the membership at `collapse_repeats`, and the published `n_rows` out of `run.yaml` |
+| **M7** (moving-key enumeration omits the `report_by` stratum path) | **closed** | **Arm G**, a new guard-pin arm, carrying a fourth labelled `resample_draws` literal |
+| **m1** (Ruling 1 row 2 had no end-to-end pin) | **closed** | `test_ruling_1_row_2_publishes_the_contributing_count_in_run_yaml` |
+| **m2** (arm E asserts no `resample_draws`) | **closed with grounds, arm E unedited** | See below |
+| **m3** (mutation (i)'s blast radius under-reported) | **closed** | The correction above |
+
+## A third site carried M1's premise, and the third site the dispatch named did not
+
+The dispatch says three sites carry M1's false premise: the warning message, the
+§ Warnings row, and `repeats_disagreeing`'s docstring. **Grepped: that docstring is the
+one that was already right** — *"its collapsed cell is still the mean of the numbers —
+the disclosure is the warning, not the loss of the column"* is true of the mixed case,
+and deleting it would have turned a correct statement into a gap. It stands untouched.
+The review's own M1 body says the same thing (*"says the opposite"*); the dispatch's
+list is where the third item drifted.
+
+Sweeping for the **claim** rather than for the file turned up a site in neither the
+review nor the dispatch: `reference.md` § Statistical reporting's *"A repeat-level
+disagreement collapses that unit's cell to `None`"* — true only when no value is
+numeric, false of exactly the case M1 is about. Deleted to its true remainder.
+Greps run (file list filtered, never the output), over the four documents, `src/`,
+`tests/` and `CLAUDE.md`: `carry no value`, `is not a number`, `collapses that unit`,
+`requires \*all\* carried values numeric`, `order-dependent`, `once per (condition`.
+The development record was left alone deliberately — it is corrected by appending.
+
+## `W-STATS-COLUMN-THIN`, and its measured footprint
+
+Built per Ruling 5: one warning per (condition, step, recorded column) whose
+**contributing** count — `summarize_step`'s per-column `n.completed` — is below
+`limits.min_reported_n`, at `run` time, naming the column and the count. The floor's
+guard is `W-STATS-STRATUM-THIN`'s verbatim (`isinstance(..., (int, float)) and not
+isinstance(..., bool)`), and the site sits where **both** `summarize_step` calls have
+converged on `step_summary`, so the `except ContractError` retry is covered by the same
+one site.
+
+**Footprint measured before anything else was written**, as the first change of the
+round: with the emit site in place and no test touched, the full suite was
+**2911 passed, 1 skipped, 3 xfailed — unchanged**. Why: the generated default is
+`min_reported_n: 10` and `run_a_project`'s default roster is 10 units, so a
+fully-covered column sits *at* the floor and `<` does not fire; the fixtures that do
+trip it assert the presence of other strings, never the absence of warnings. **No
+shipped assertion had to move**, which is the reason this ruling could be built
+literally rather than negotiated.
+
+**Two asymmetries worth carrying, reported rather than absorbed.** Both siblings are
+gated on a *declaration* — `W-STATS-CONTRAST-THIN` on `comp.within is not None`,
+`W-STATS-STRATUM-THIN` on `report_by` — and this one is not, so its footprint is every
+recorded column of every run. That is what Ruling 5 says, and it is recorded here as a
+property rather than discovered by the next reader. And two scope decisions are written
+into the code as decisions with grounds: a column that earned **no** block is skipped
+(there is no contributing count to name), and a `report_by` **level**'s columns are not
+checked (`W-STATS-STRATUM-THIN` already names a thin level against the same floor, and
+per-column-per-level would multiply one fact by the column count). The first was
+verified live rather than reasoned: mixture 1's console run warns for `score` and
+**not** for the bool `flag`.
+
+I grepped for a mechanical docs-versus-code test over warning codes — a registry, a
+vocabulary frozenset, an enumeration in `tests/` — and **found none**:
+`grep -rn "W-STATS-STRATUM-THIN" src tests docs/*.md README.md CLAUDE.md` returns an
+emit site, two prose mentions in `validate.py`, four test assertions and one § Warnings
+row. So a new code's obligations here are exactly the emit site and the row, and both
+are met; there is no third place a new code can be missing from.
+
+## m2 — decided, with grounds, and arm E left alone
+
+`resample_draws` is `resample_seed(digest)`-dependent, so it is pinnable end to end,
+and there are now **four** measured literals for it: arm B's `1998` (direct call,
+`seed=7`), plan correction 7's `1999`, the batch 2 review's `1997`, and arm G's `1927`.
+m2's actual content was that nobody had two to compare — **arm G supplies the second,
+labelled with the fixture whose digest produced it**, which is why arm E is left
+exactly as it stands. Arm E's docstring names task 4 as its sole authorized editor;
+adding a literal there would have been an edit by a round that is not task 4, for a
+comparison arm G already provides. **Recorded rather than silently skipped.**
+
+## Mutations — text and count, each read from the FULL unfiltered suite
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | Restore `is not a number and` / `so those units carry no value for it;` in the emit site's message | **2 failed**, 2918 passed — M1's test on both absence assertions, and M2's on `recorded column 'flag' disagrees` |
+| 2 | `repeats_disagreeing(...).items()` → `list(...)[:1]` (once per condition+step, the row's old claim) | **1 failed**, 2919 passed — M2's test, `assert 1 == 2` |
+| 3 | `contributing < column_floor` → `<=` | **1 failed**, 2919 passed — `test_a_recorded_column_at_the_floor_draws_no_column_thin_warning` |
+| 4 | `if contributing < column_floor:` → `if False:` (delete the warning) | **1 failed**, 2919 passed — the naming test, on the code's absence from stdout |
+| 5 | `any((_is_numeric(v), v) != ...)` → `any(v != first ...)` | **1 failed**, 2919 passed — M5's test, both orders |
+| 6 | `if cols` added to `collapse_repeats`'s return comprehension | **2 failed**, 2918 passed — M6's two halves, direct-call and `run.yaml` |
+| 7 | `level_collapsed` narrowed to rows carrying a numeric value (the pre-H5b stratum table) | **1 failed**, 2919 passed — arm G, `assert 2.0 == 3.0` |
+
+**Mutation 7 was blind on its first attempt and is reported as such.** I first wrote
+`if k in keys and v` — a bool-only row is `{"valid": True}`, which is truthy, so the two
+branches could not differ and the suite stayed at 2920 green. *A mutation is a claim
+too*: the second form narrows the projection the way the pre-H5b collapse actually did,
+and it fails.
+
+## Nothing regressed, verified rather than assumed
+
+- `pytest --runxfail` on `test_ruling_1s_blast_radius_a_contrast_over_a_ragged_none_column_crashes`
+  fails at **`cli.py:1168`, `TypeError: unsupported operand type(s) for -: 'NoneType'
+  and 'NoneType'`** — the same place and the same reason, not a new diagnostic.
+  `W-STATS-COLUMN-THIN` cannot pre-empt it: diagnostics print after the crash point.
+- **Ruling 1's three mixtures, re-run through the installed console script** (`uv run
+  --project <repo> publishable run`) on a project scaffolded by `publishable new` +
+  `generate experiment`, outside this repo, committed clean:
+  - **all non-numeric**: `flag` earns no block, `score` publishes at `n.completed: 6`,
+    exit 0 — and `W-STATS-COLUMN-THIN` names `score` alone;
+  - **number for some, `None` for others**: `score.value: 1.0`, `n: {resolved: 6,
+    completed: 3, …}`, exit 0, `W-STATS-COLUMN-THIN` naming `3 unit(s)`;
+  - **`str` beside a number**: exit **4**, ledger status `failed`, every execution
+    `E-STEP-RETURN-TYPE ContractError: units.parquet: column 'score' recorded both a
+    float (unit 'p1') and a str (unit 'p4')` — the ruling's own quoted message.
+
+## Concerns
+
+1. **`W-STATS-COLUMN-THIN` has no declaration gate**, unlike both siblings. Today it
+   costs nothing (measured: zero suite churn), but any project whose roster is smaller
+   than its own `min_reported_n` will see one warning per recorded column per condition
+   per step. That is Ruling 5 as written, and the place to revisit it is the ruling, not
+   the code.
+2. **Arm G asserts no pre-H5b values and says so.** The narrow collapse no longer exists
+   to run, so the "before" figures in its docstring would have been reasoning reported as
+   measurement. What it pins instead is the moved state plus the pair that makes the move
+   visible inside one run (a three-row level table beside a two-unit `score`).
+3. `run.yaml`'s own `n` for a derived metric inside a `by` level is the level's
+   condition-wide `completed`, so arm G's `mean_score.n.completed == 3` and its
+   `score.n.completed == 2` describe two different denominators in one block set. Nothing
+   in this round changed that, and no finding named it; noting it because a reader
+   comparing the two figures will ask.
