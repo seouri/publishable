@@ -179,3 +179,19 @@ structural/bytes capability) — all green, unedited.
 None outstanding. Both `§ Errors` clauses I was responsible for were already accurate and needed no
 edit — reported here rather than as a silent "nothing to do", per the standing rule against claiming
 zero disagreements without saying what was checked.
+
+## Correction, 2026-08-22, from review `8bc0395`
+
+**Mutation 5's outcome above is wrong and this replaces it.** It records *"FAIL: 1 failed — the step 2
+control"*. The reviewer re-ran the identical mutation twice and got **4 failures**: the step 2 control,
+plus `test_an_unregistered_extension_takes_bytes_or_str_verbatim`,
+`test_write_of_an_unwritable_object_leaves_nothing_behind`, and
+`test_h5a_fixture_n_a_non_mapping_row_refuses_with_the_documented_code`. The three additional ones fail
+because widening the `try` to the whole body **also converts the `else`-branch and non-mapping
+`ArtifactError`s into `ContractError`**, so their `pytest.raises(ArtifactError)` pins break.
+
+The direction matters: the mutation is **better** pinned than reported, not worse, and **the shipped code
+is unaffected** — the wrapper as built is dispatch-only. So this is a reporting defect. It is recorded
+here rather than silently edited above because an under-reported mutation count is the same shape as
+*reading a mutation's silence as confirmation*: whoever reads a `1 failed` line concludes only one test
+guards that boundary, and would then feel free to move the other three.
