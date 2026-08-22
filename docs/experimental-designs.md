@@ -381,6 +381,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Credentials in a shared config** | The config stores variable names; values live in `.env`. Core never writes one into the config, and redacts a **declared** credential's value out of an exception's text at the two places one can surface — see `reference.md` § Secrets & credentials for that boundary and its limit |
 | **A credential missing for one arm of a sweep** | A parameter value declares the credential it needs in [`requires_env`](reference.md#a-credential-can-belong-to-a-parameter-value), so `validate` checks the union over the conditions the sweep actually resolves — rather than a static list that must either demand a key no condition uses or stay silent about one a later condition will |
 | **Patient data in a public repo** | `input_dir` and `output_dir` may not resolve inside the repo, checked at generate, validate, and run |
+| **An attribute silently occupying the unit's own identity** | A declared `data.units.attributes` name of `unit`, `measurement`, or `by` would land in a column [a per-unit table](reference.md#the-per-unit-tables) already carries — most visibly `unit`, the column every pairing and every contrast reads the unit's identity from, which such an attribute used to replace outright rather than merely shadow. Refused at `validate`, before a run's first execution (`E-UNITS-ATTR-COLUMN`), rather than accepted and silently overwritten |
 
 ---
 
