@@ -255,3 +255,33 @@ and it fails.
    `score.n.completed == 2` describe two different denominators in one block set. Nothing
    in this round changed that, and no finding named it; noting it because a reader
    comparing the two figures will ask.
+
+## Addendum, same day — two sweeps this round had not run, and concern 3 withdrawn
+
+**The sweep reached one file further.** `grep -n "carry no value\|is not a number\|collapses
+that unit\|once per (condition\|W-STATS-REPEATS-DISAGREE"` over
+`docs/feasibility-llm-growth-studies.md`, `README.md`, `docs/design-principles.md`,
+`docs/experimental-designs.md` and `CLAUDE.md` — **no hits**, so nothing in the
+feasibility analysis (task 16's, not to be touched here) or the other three documents
+carries a clause this round deleted. Reported with the command because *"I grepped the
+files I was allowed to edit"* is not the claim.
+
+**The inserted § Warnings row moved every row below it**, so: `grep -n "the row
+above\|the row below\|the two rows\|further up\|further down\|rows above\|rows below"
+docs/reference.md` → three hits, all in § Validation prose or unrelated paragraphs, none
+in or near § Warnings core reports. No prose anywhere counts the warning codes
+(`grep -n "warnings core reports\|warning codes"` → nothing), so the insertion invalidates
+no count phrase.
+
+**Concern 3 is withdrawn, on measurement.** I claimed a derived metric's `n.completed`
+inside a `by` level is the level-wide `completed` while a recorded column's is the
+contributing count, and called it two denominators in one block set. Read the code:
+`derived_n = {**counts, "completed": len(collapsed)}` — a derived metric's `completed` is
+the number of **rows the metric was computed over**, and a recorded column's is the number
+of **values its own mean was computed over**. Both are *what it was computed from*, which
+is what § Statistical reporting's own sentence says, so arm G's `mean_score.n.completed:
+3` beside `score.n.completed: 2` is one rule applied twice, not two rules. Nothing to
+file. The claim came from reading the § Weighted samples paragraph about `effective`
+(which *does* take the condition-wide figure for a derived metric) and carrying it to
+`completed` — a proxy, answered by the neighbouring fact rather than by the line that
+decides.
