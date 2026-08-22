@@ -822,7 +822,7 @@ def _comparison_step_blocks(
     *,
     roster: "UnitList",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -1650,7 +1650,7 @@ def _compute_vs_baseline(
     conditions: "list[Condition]",
     roster: "UnitList | None",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -1731,7 +1731,7 @@ def _compute_declared_contrasts(
     conditions: "list[Condition]",
     roster: "UnitList | None",
     aggregated: dict[int, dict[str, dict[str, Any]]],
-    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]],
     derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
     resample_fns_by_key: dict[
         tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
@@ -2844,7 +2844,7 @@ def command_run(config_path: Path) -> int:
             # time: the per-unit table, what `aggregate` returned by name, and
             # the resample closure `_make_resample_fn` built for it, one entry
             # per (condition, recording step) actually seen this run.
-            collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]] = {}
+            collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, Any]]] = {}
             derived_by_key: dict[tuple[int, str], dict[str, Any] | None] = {}
             resample_fns_by_key: dict[
                 tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None

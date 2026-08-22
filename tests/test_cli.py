@@ -17418,15 +17418,19 @@ def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_pat
     otherwise, with `thr` `0.5` under pearson and `0.4` under spearman.
     The template's `aggregate` returns `n_rows` and `mean_score`.
 
-    This asserts only the TODAY (unpatched) column — the AFTER column was
-    measured by installing `_arm_e_widened_collapse` on
+    **Flipped to the AFTER column by task 4.** The scoping measured the AFTER
+    shape by installing `_arm_e_widened_collapse` on
     `publishable.cli.collapse_repeats` and running the same fixture again,
-    which reproduced all three of the scoping's cited literals (`n_paired`
-    4 -> 6; the `correction_level` swap; `score.ci95_corrected` moving in
-    its last digits) plus two the scoping's own paragraph does not name:
-    the derived contrast's (`mean_score`) own `ci95` and `ci95_corrected`,
-    and both conditions' `aggregated...mean_score.ci95`. That monkeypatch
-    does not ship.
+    before this task's `collapse_repeats` existed; task 4's real
+    `collapse_repeats` now produces that shape directly, no monkeypatch
+    needed, and this run reproduces all three of the scoping's cited
+    literals (`n_paired` 4 -> 6; the `correction_level` swap between
+    `mean_score` and `score`; `score.ci95_corrected` moving in its last
+    digits) plus two the scoping's own paragraph does not name: the
+    derived contrast's (`mean_score`) own `ci95` and `ci95_corrected`, and
+    both conditions' `aggregated...mean_score.ci95`/`n_rows.*`.
+    `_arm_e_widened_collapse` is left in place as the record of how the
+    AFTER shape was measured before it shipped; it is not called here.
     """
     from publishable.templates.builtin.generic import GenericTemplate
 
@@ -17446,28 +17450,31 @@ def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_pat
 
     baseline_step = baseline["aggregated"]["step01_summarize_units"]
     spearman_step = spearman["aggregated"]["step01_summarize_units"]
-    assert baseline_step["n_rows"]["value"] == 4.0
-    assert baseline_step["n_rows"]["n"]["completed"] == 4
-    assert baseline_step["n_rows"]["ci95"] == [4.0, 4.0]
-    assert spearman_step["n_rows"]["value"] == 4.0
-    assert spearman_step["n_rows"]["n"]["completed"] == 4
-    assert spearman_step["n_rows"]["ci95"] == [4.0, 4.0]
+    assert baseline_step["n_rows"]["value"] == 6.0
+    assert baseline_step["n_rows"]["n"]["completed"] == 6
+    assert baseline_step["n_rows"]["ci95"] == [6.0, 6.0]
+    assert spearman_step["n_rows"]["value"] == 6.0
+    assert spearman_step["n_rows"]["n"]["completed"] == 6
+    assert spearman_step["n_rows"]["ci95"] == [6.0, 6.0]
 
-    assert baseline_step["mean_score"]["n"]["completed"] == 4
-    assert baseline_step["mean_score"]["ci95"] == [1.0, 3.0]
-    assert spearman_step["mean_score"]["n"]["completed"] == 4
-    assert spearman_step["mean_score"]["ci95"] == [0.8999999999999999, 2.9]
+    assert baseline_step["mean_score"]["n"]["completed"] == 6
+    assert baseline_step["mean_score"]["ci95"] == [0.8333333333333334, 3.1666666666666665]
+    assert spearman_step["mean_score"]["n"]["completed"] == 6
+    assert spearman_step["mean_score"]["ci95"] == [0.7333333333333334, 3.0666666666666664]
 
     vs_baseline = spearman["vs_baseline"]["step01_summarize_units"]
-    assert vs_baseline["mean_score"]["n_paired"] == 4
-    assert vs_baseline["mean_score"]["correction_level"] == 0.025
-    assert vs_baseline["mean_score"]["ci95"] == [-0.10000000000000009, -0.09999999999999998]
+    assert vs_baseline["mean_score"]["n_paired"] == 6
+    # The correction_level SWAP (Corrections 9): admitting u4/u5 changes
+    # which family member ranks narrowest, so `mean_score` and `score`
+    # trade Holm's two non-median levels between them.
+    assert vs_baseline["mean_score"]["correction_level"] == 0.05
+    assert vs_baseline["mean_score"]["ci95"] == [-0.10000000000000053, -0.09999999999999964]
     assert vs_baseline["mean_score"]["ci95_corrected"] == [
-        -0.10000000000000009,
-        -0.09999999999999998,
+        -0.10000000000000053,
+        -0.09999999999999964,
     ]
-    assert vs_baseline["score"]["correction_level"] == 0.05
-    assert vs_baseline["score"]["ci95_corrected"] == [-0.10000000000000014, -0.09999999999999998]
+    assert vs_baseline["score"]["correction_level"] == 0.025
+    assert vs_baseline["score"]["ci95_corrected"] == [-0.10000000000000017, -0.09999999999999995]
 
     # Must not move (across TODAY/AFTER, within each condition — measured
     # identical for both when the AFTER monkeypatch was installed).
@@ -17492,3 +17499,156 @@ def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_pat
         "correction": None,
         "repeat_spread": {"kind": "seed", "n": 5, "std": 0.0},
     }
+
+
+# --- H5b task 4: Fixture B (the scaffold's own run, end to end) -------------
+
+
+def test_fixture_b_the_scaffolds_own_run_is_unchanged_by_h5b(tmp_path, capsys):
+    """H5b task 4, Fixture B. `STARTER_STEP` unmodified records `{"present":
+    True}` for every unit — a bool, no numeric column at all.
+
+    `GenericTemplate` inherits `BaseTemplate.aggregate`, which returns `{}`
+    regardless of what `collapsed` holds (Decision 12), so
+    `aggregated.step01_summarize_units == {}` **before and after H5b** — the
+    scaffold's own symptom does not move, because there is no `aggregate` to
+    read the newly-carried `present` column at all.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=6)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg == {}
+
+
+_FIXTURE_B_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("present_counter")\n'
+    "class PresentCounter(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_present": float(len([r for r in units if r.get("present")]))}\n'
+)
+
+_FIXTURE_B_ABSENT_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("absent_reader")\n'
+    "class AbsentReader(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_broken": float(len(units.nothing_ever_records_this))}\n'
+)
+
+
+def test_fixture_b_a_project_local_template_now_sees_the_bool_column(tmp_path, capsys):
+    """H5b task 4, Fixture B, second half. A project-local template's
+    `aggregate` counts `present` via row-dict `.get` — no attribute read, so
+    this arm alone cannot tell whether the harness ever raises. Today (before
+    H5b) `present` is absent from every unit's collapsed row, so `.get`
+    silently returns `None` for all six and the metric is `0.0` at exit 0.
+    After H5b's task 4, `present` is carried for every admitted unit, so the
+    same read reports `6.0`, and no `W-STATS-AGGREGATE-FAILED` appears on
+    stdout — the stream every shipped assertion on a run finding reads.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _local_template=_FIXTURE_B_TEMPLATE,
+        experiment_type="present_counter",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert agg["n_present"]["value"] == 6.0
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+
+
+def test_fixture_b_control_an_attribute_read_of_a_genuinely_absent_column_still_warns(
+    tmp_path, capsys
+):
+    """H5b task 4, Fixture B's can-fail control. Without this, the previous
+    test's absence-of-warning assertion would pass identically whether
+    `aggregate` ran at all: a template reading `units.nothing_ever_records_this`
+    (a name no unit, before or after H5b, ever carries) still earns
+    `E-STEP-COLUMN-UNKNOWN`, contained and disclosed as
+    `W-STATS-AGGREGATE-FAILED` on stdout — proving the harness this fixture
+    relies on is actually exercised end to end.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=6,
+        _local_template=_FIXTURE_B_ABSENT_TEMPLATE,
+        experiment_type="absent_reader",
+        parameters={},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-COLUMN-UNKNOWN" in doc["stdout"]
+
+
+# --- H5b task 4: Fixture H (the stratum's empty level) ----------------------
+
+_FIXTURE_H_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key in ("p1", "p2"):
+                io.record(unit.key, {{"score": 10.0}})
+            else:
+                io.record(unit.key, {{"valid": True}})
+        return {{}}
+"""
+
+_FIXTURE_H_TEMPLATE = (
+    "from publishable import BaseTemplate, register_template\n\n\n"
+    '@register_template("h_rows")\n'
+    "class NRows(BaseTemplate):\n"
+    "    def aggregate(self, units, cfg):\n"
+    '        return {"n_rows": float(len(list(units)))}\n'
+)
+
+
+def test_fixture_h_the_all_non_numeric_level_is_absent_the_numeric_one_present(tmp_path, capsys):
+    """H5b task 4, Fixture H. `report_by: [grp]` over a roster where `grp=a`'s
+    units carry a numeric `score` and `grp=b`'s carry only a bool `valid`. A
+    project-local template's `aggregate` (`n_rows`, needing no particular
+    column) succeeds on both levels.
+
+    Before H5b, `grp=b`'s level_collapsed is `{}` (every unit's only column was
+    non-numeric and dropped by the old collapse), so `cli.py`'s `if not
+    level_collapsed: continue` drops it before the second gate is ever
+    reached. After task 4, `grp=b`'s units ARE admitted (each carrying `valid`),
+    so `level_collapsed` is non-empty and the run reaches the second gate this
+    fixture actually pins: `level_summary` there holds nothing but the derived
+    `n_rows` (the bool column earns no recorded-column block), so
+    `set(level_summary) - set(level_derived or {})` is empty and the level is
+    STILL correctly excluded — `cli.py` needed no change for this, but nothing
+    exercised the path until task 4 made `grp=b`'s units admissible at all.
+
+    The presence half is what stops this from being an absence-only control:
+    `grp=a` has a genuine recorded column (`score`), so its `level_summary`
+    holds more than its derived keys and it survives into `by`.
+    """
+    roster_csv = "patient_id,grp\np1,a\np2,a\np3,b\np4,b\n"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        roster_csv=roster_csv,
+        _starter_step=_FIXTURE_H_STEP,
+        _local_template=_FIXTURE_H_TEMPLATE,
+        units_overrides={"attributes": ["grp"]},
+        statistics={"report_by": ["grp"]},
+        experiment_type="h_rows",
+        parameters={},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by_grp = agg["by"]["grp"]
+    assert "b" not in by_grp
+    assert "a" in by_grp
+    assert by_grp["a"]["score"]["value"] == 10.0
+    assert by_grp["a"]["n_rows"]["value"] == 2.0

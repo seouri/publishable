@@ -386,18 +386,36 @@ def test_two_units_per_fold_under_fold_times_seed_keeps_every_unit():
     collapse lands on a different number, so the table distinguishes all of them.
     A too-wide intersection gives `{}` (4 rows expected); the per-unit mean is
     2.0, distinct from 1.0 (first seed only), 3.0 (last write wins), 4.0 (summed)
-    and 0.5 (averaged across folds, dividing by a fold count)."""
-    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    and 0.5 (averaged across folds, dividing by a fold count).
+
+    **H5b task 4, Fixture K.** Extended (not duplicated — grepped for by name)
+    with a third fold, `fold03`, whose two units record only a bool `flag`, both
+    seeds agreeing. Decision 1 changed what `collapse_repeats` RETURNS for a
+    non-numeric column — it now carries rather than drops it — and changed
+    nothing about how `handed_to`'s intersection decides membership: `u5`/`u6`
+    are admitted within their own fold exactly as `u1`-`u4` are within theirs,
+    and each gets `flag: True` (the repeats agreed, so `_across_repeats` returns
+    the value itself rather than `None`) beside its numeric `s`-less row.
+    """
+    members = {
+        "fold01": frozenset({"u1", "u2"}),
+        "fold02": frozenset({"u3", "u4"}),
+        "fold03": frozenset({"u5", "u6"}),
+    }
     results = [
         _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"s": 1.0}, "u2": {"s": 1.0}}),
         _repeat_result("analyze", "fold01_seed02", 0, {"u1": {"s": 3.0}, "u2": {"s": 3.0}}),
         _repeat_result("analyze", "fold02_seed01", 0, {"u3": {"s": 1.0}, "u4": {"s": 1.0}}),
         _repeat_result("analyze", "fold02_seed02", 0, {"u3": {"s": 3.0}, "u4": {"s": 3.0}}),
+        _repeat_result("analyze", "fold03_seed01", 0, {"u5": {"flag": True}, "u6": {"flag": True}}),
+        _repeat_result("analyze", "fold03_seed02", 0, {"u5": {"flag": True}, "u6": {"flag": True}}),
     ]
     table = collapse_repeats(results, "analyze", 0, members)
-    assert len(table) == 4
-    assert set(table) == {"u1", "u2", "u3", "u4"}
-    assert all(row["s"] == 2.0 for row in table.values())
+    assert len(table) == 6
+    assert set(table) == {"u1", "u2", "u3", "u4", "u5", "u6"}
+    assert all(row["s"] == 2.0 for key, row in table.items() if key not in ("u5", "u6"))
+    assert table["u5"] == {"flag": True}
+    assert table["u6"] == {"flag": True}
 
 
 def test_a_unit_in_no_fold_partition_is_dropped_rather_than_admitted():
@@ -453,6 +471,18 @@ def test_collapse_ignores_other_steps_and_non_repeat_scopes():
     assert collapse_repeats(condition_scoped, "analyze", condition_index=0) == {}
 
 
+@pytest.mark.xfail(
+    reason=(
+        "H5b task 4: this pinned the unit drop wearing the name of a column "
+        "drop — 'p0' was absent from `collapsed` entirely, not merely missing "
+        "'flag' (§ Corrections 12). After task 4, 'p0' is admitted and its "
+        "disagreeing 'flag' column collapses to `None` rather than being "
+        "dropped, so `'flag' not in collapsed['p0']` is now false. Task 5 "
+        "replaces this test with Fixture C, which asserts the correct shape: "
+        "the key present and the value `None`, plus the disagreement warning."
+    ),
+    strict=True,
+)
 def test_collapse_drops_a_bool_column_rather_than_averaging_it():
     results = [
         _result("seed17", [{"unit": "p0", "flag": True}]),
@@ -5837,9 +5867,15 @@ def test_a_bool_only_column_widens_exactly_seven_moving_keys():
     edit to this test would be a finding, not a fixture repair.
 
     Drives `summarize_step` twice over the same `derived`/`resample` map.
-    The narrow (TODAY) `collapsed` comes from a LIVE `collapse_repeats` call
-    on `_result`-built executions, so it moves if a later task changes the
-    collapse; the wide (AFTER) `collapsed` is hand-written and never moves.
+    The narrow `collapsed` comes from a LIVE `collapse_repeats` call on
+    `_result`-built executions; the wide (AFTER) `collapsed` is hand-written
+    and never moves. **After task 4, the two are identical** — H5b's whole
+    point is that the live collapse now admits every unit and carries every
+    recorded value, so "narrow" no longer describes anything the live call
+    can still produce. The seven literals below are flipped to their AFTER
+    value because the TODAY (pre-H5b) shape is no longer reachable through
+    `collapse_repeats` at all — this is the moving-run pin itself passing
+    through its own moved state, not a second measurement.
 
     `mean_score.value == 1.5` on BOTH tables is the load-bearing assertion:
     a fixture in which every number moves cannot tell "the table widened"
@@ -5849,12 +5885,13 @@ def test_a_bool_only_column_widens_exactly_seven_moving_keys():
     """
     result = _result("", _fixture_b_rows())
     narrow = collapse_repeats([result], "analyze", 0)
-    assert narrow == {f"u{i}": {"score": float(i)} for i in range(4)}, (
-        "the narrow collapse must admit exactly u0-u3 and drop the bool "
-        "column entirely — Corrections 10's 'carriage vs admission' shape"
+    wide = _fixture_b_wide_collapsed()
+    assert narrow == wide, (
+        "H5b task 4: the live collapse now admits u4/u5 and carries `valid` "
+        "for every unit, so it equals the hand-written AFTER table exactly "
+        "— the narrow (pre-H5b) shape this arm used to produce is gone"
     )
 
-    wide = _fixture_b_wide_collapsed()
     counts = {"resolved": 6.0, "completed": 6.0, "ineligible": 0.0, "failed": 0.0}
     resample = {
         "n_rows": _fixture_b_n_rows,
@@ -5869,20 +5906,22 @@ def test_a_bool_only_column_widens_exactly_seven_moving_keys():
         wide, counts, derived=_fixture_b_derived(wide), seed=7, resample=resample, draws=2000
     )
 
-    # The seven moving keys, enumerated — never counted.
-    assert today["n_valid"]["value"] == 0.0
+    # The seven moving keys, enumerated — never counted. Flipped from their
+    # pre-H5b TODAY values (0.0/[0.0, 0.0]/4.0/[4.0, 4.0]/4/[0.5, 2.5]/2000)
+    # to the AFTER values `narrow` now actually produces.
+    assert today["n_valid"]["value"] == 6.0
     assert after["n_valid"]["value"] == 6.0
-    assert today["n_valid"]["ci95"] == [0.0, 0.0]
+    assert today["n_valid"]["ci95"] == [6.0, 6.0]
     assert after["n_valid"]["ci95"] == [6.0, 6.0]
-    assert today["n_rows"]["value"] == 4.0
+    assert today["n_rows"]["value"] == 6.0
     assert after["n_rows"]["value"] == 6.0
-    assert today["n_rows"]["ci95"] == [4.0, 4.0]
+    assert today["n_rows"]["ci95"] == [6.0, 6.0]
     assert after["n_rows"]["ci95"] == [6.0, 6.0]
-    assert today["mean_score"]["n"]["completed"] == 4
+    assert today["mean_score"]["n"]["completed"] == 6
     assert after["mean_score"]["n"]["completed"] == 6
-    assert today["mean_score"]["ci95"] == [0.5, 2.5]
+    assert today["mean_score"]["ci95"] == [0.3333333333333333, 2.5]
     assert after["mean_score"]["ci95"] == [0.3333333333333333, 2.5]
-    assert today["mean_score"]["resample_draws"] == 2000
+    assert today["mean_score"]["resample_draws"] == 1998
     assert after["mean_score"]["resample_draws"] == 1998
 
     # Unmoved, and load-bearing.
@@ -5982,3 +6021,87 @@ def test_a_derived_metrics_permutation_p_value_widens_but_a_recorded_columns_nev
     assert "null_draws" not in today["score"]
     assert "p_value" not in after["score"]
     assert "null_draws" not in after["score"]
+
+
+# --- H5b task 4: Fixture E (the collision, from the collapse's own output), ---
+# --- Fixture M (`repeat_spread` under the widened `keys`) --------------------
+
+
+def test_fixture_e_a_collision_from_a_real_collapse_output_is_refused():
+    """H5b task 4, Fixture E, first arm. `collapse_repeats` over executions
+    recording `{"score": float(i), "r": True}` — a production caller's own
+    shape, not a hand-built `collapsed` dict — fed straight to
+    `summarize_step(..., derived={"r": 1.0})`. `r` is dropped from `out` for
+    being non-numeric (every unit's `r` is `True`, no disagreement), and the
+    collision check must still see it: task 10 owns the shipped test's
+    fixture replacement and its § Errors assertion, this is the pin that a
+    collapse a real caller can produce reaches the same refusal."""
+    rows = [{"unit": f"u{i}", "score": float(i), "r": True} for i in range(5)]
+    result = _result("", rows)
+    collapsed = collapse_repeats([result], "analyze", 0)
+    assert collapsed == {f"u{i}": {"score": float(i), "r": True} for i in range(5)}
+    with pytest.raises(ContractError) as exc:
+        summarize_step(collapsed, {"completed": 5}, derived={"r": 1.0}, seed=7)
+    assert exc.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_fixture_e_a_disagreeing_collided_column_still_refuses():
+    """H5b task 4, Fixture E, second arm — the one that pins Decision 2's
+    `None` choice. Two repeats disagree on `r` for every unit, so its
+    collapsed cell is `None` (not dropped, not omitted); the collision must
+    still fire, because `None` keeps the column visible to the check that
+    reads `collapsed`'s own keys rather than `out`'s."""
+    results = [
+        _result("seed1", [{"unit": f"u{i}", "score": float(i), "r": True} for i in range(5)]),
+        _result("seed2", [{"unit": f"u{i}", "score": float(i), "r": False} for i in range(5)]),
+    ]
+    collapsed = collapse_repeats(results, "analyze", 0)
+    assert all(collapsed[f"u{i}"]["r"] is None for i in range(5))
+    with pytest.raises(ContractError) as exc:
+        summarize_step(collapsed, {"completed": 5}, derived={"r": 1.0}, seed=7)
+    assert exc.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_fixture_m_repeat_spread_unmoved_under_the_widened_keys():
+    """H5b task 4, Fixture M. `cli.py` passes `keys=set(collapsed)`, which
+    widens 4 -> 6 in this shape while `score`'s own column carries only 4.
+    The gate that holds is `repeat_spread`'s own per-member `_is_numeric`
+    filter: admitting `u4`/`u5` (bool-only) into `keys` gives their rows no
+    `score` value to contribute, so neither `std` nor `n` moves. A fixture
+    whose repeats record identical scores could not see whether this held —
+    `std: 0.0` agrees with the bug either way — so this one's two seeds
+    record `score` 2.0 apart.
+    """
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    results = [
+        _repeat_result(
+            "analyze",
+            "seed87",
+            0,
+            {
+                "u0": {"score": 1.0},
+                "u1": {"score": 1.0},
+                "u2": {"score": 1.0},
+                "u3": {"score": 1.0},
+            },
+        ),
+        _repeat_result(
+            "analyze",
+            "seed93",
+            0,
+            {
+                "u0": {"score": 3.0},
+                "u1": {"score": 3.0},
+                "u2": {"score": 3.0},
+                "u3": {"score": 3.0},
+            },
+        ),
+        _repeat_result("analyze", "seed87", 0, {"u4": {"flag": True}, "u5": {"flag": True}}),
+        _repeat_result("analyze", "seed93", 0, {"u4": {"flag": True}, "u5": {"flag": True}}),
+    ]
+    narrow_keys = {"u0", "u1", "u2", "u3"}
+    wide_keys = {"u0", "u1", "u2", "u3", "u4", "u5"}
+    narrow_spread = repeat_spread(results, "analyze", 0, levels, "score", keys=narrow_keys)
+    wide_spread = repeat_spread(results, "analyze", 0, levels, "score", keys=wide_keys)
+    assert narrow_spread == [{"std": 1.0, "n": 2, "kind": "seed"}]
+    assert wide_spread == narrow_spread
