@@ -279,3 +279,34 @@ The correction is **appended to the report** rather than edited into it, for exa
 emit site rather than accepted as a claim. That is the second batch running where the one-row-per-code
 question was answered with *nothing to do* — and the first where the answer had to be **checked**, because
 the plan said those clauses described code that did not exist when they were written.
+
+## Batch 8 — task 11 alone — the cross-format matrix and the whole-branch re-run
+
+Commits `16ba11a` (Fixture W per format, Fixture E), `81dabdf` (report, plus a `.gitignore` restore),
+review `0d5c8b5`, report correction below it. Suite 2884 → **2891**. **PASS on one Major, again a
+miscount rather than a code defect.**
+
+**This task shipped no production code, so every candidate finding in it was a pin that does not pin —
+and the review found none.** Correction 2 held under independent measurement: `.csv`'s arms compare
+against **`str()` of the coerced value**, `.parquet`'s against the coerced value itself, each round-trip
+measured rather than read. And the batch turned up **a second, independent cause of the two formats'
+disagreement** that correction 2 does not cover: **`.csv` does no int-beside-float promotion at all**, so
+the `str()` rule and the promotion rule are two separate reasons the same row decodes differently.
+
+**A mutation's prediction can go stale under a later task in its own slice.** Task 6's mutation (i) was
+written when deleting roster coercion raised inside `finalize`; with **task 9's `.parquet` capability
+landed**, the same mutant now **completes at exit 0 and silently publishes a structural attribute into
+`units.parquet`.** The mutation still fails, so the pin still holds — but *where* it surfaces moved, and
+the brief's prediction of the shape was no longer true. Worth carrying: **a whole-branch re-run is not a
+formality**, because the branch under it changed after each mutation was written.
+
+**The design's own Fixture E wording is false of `.csv`.** *"A `None` column round-trips as `None` …
+both formats"* — measured, `csv.DictWriter` writes `None` as the **empty string**, neither `None` nor
+`"None"`. It is **filed for task 12** rather than edited into the spec, because a design records what was
+decided when it was written and is corrected by appending.
+
+**And the miscount is now a pattern, not an incident.** Mutation 13(ii) was recorded as *375 failed, 48
+errors* against a measured **376 failed, 48 errors** — the second miscount in two batches, in a column
+whose own framing is *counts read, not estimated*. Neither changed a conclusion. Both are recorded
+because a number introduced as **read** is a claim like any other, and the reader who trusts one is the
+reader who later moves a pin it was supposed to guard.

@@ -161,3 +161,15 @@ touch them only as intended catches, listed above.
   for it. Not a code defect — every one of those 375 failures is a real run correctly refusing to
   silently corrupt a `str` cell into a crash rather than a diagnostic — but worth carrying so a future
   reader does not read "arm A and arm B2 catch it" as the complete picture.
+
+## Correction, 2026-08-22, from review `0d5c8b5`
+
+**Mutation 13(ii)'s failure count above is wrong by one and this replaces it.** The table records
+*"375 failed, 48 errors"*. Measured twice, foreground, caches cleared, deterministic: **376 failed, 2467
+passed, 1 skipped, 2 xfailed, 48 errors.**
+
+Nothing substantive moves — the two arms the design names are present in the failures either way, and no
+pin's correctness depends on it. It is recorded because the table's own framing is *counts read, not
+estimated*, and this slice has now produced **two** miscounts in that column (task 9's mutation (v),
+reported as 1 against a true 4, and this one). A number introduced as *read rather than estimated* is a
+claim like any other.
