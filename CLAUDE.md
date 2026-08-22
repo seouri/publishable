@@ -25,11 +25,14 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H5 Artifacts, H6 Hashes and provenance, H9, then H3c-3's remaining
-14 — the H4, H7 and H8 families are all complete.** H5 and H6 are chartered as **independent** in the
-spine design and were omitted from this sentence for several slices while it was narrowed around the
-families being worked; `spec-defects.md` carries live entries owned by each, which is how the omission
-was caught. Amended twice on 2026-08-14
+**Order of the slices that remain: H5b, H6 Hashes and provenance, H9, then H3c-3's remaining
+14 — the H4, H7 and H8 families are all complete, and H5a merged on 2026-08-22.** H5 split two ways on
+the write/downstream seam and **only H5b carries behaviour-change exposure**; H5b and H6 are chartered as
+**independent** in the spine design and were omitted from this sentence for several slices while it was
+narrowed around the families being worked; `spec-defects.md` carries live entries owned by each, which is
+how the omission was caught. **The spine design's own nine-row charter table was never amended for either
+H8's three-way split or H5's two-way one** — it read as nine slices while the work had become fourteen,
+and an appended amendment dated 2026-08-22 now records both. Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -184,6 +187,52 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H5a (write-side integrity and the reserved-column namespace) merged on 2026-08-22 — the first of
+H5's two.** Scalars are coerced on the write side; `RESERVED_COLUMNS` splits the *fields on `Unit`* from
+the *names an attribute may not take* (adding `unit`, `measurement`, `by`) and `E-UNITS-ATTR-COLUMN`
+refuses a collision at `validate`; roster attribute values are coerced at `resolve_units`; `io.record`'s
+plain branch refuses a `measurement` column, closing an asymmetry with the branch three lines away that
+already refused it; `finalize`'s `columns` list is deduped by name; and the slice's one behaviour change,
+both row-shaped writers coerce, a non-mapping row is refused, and `io.write` names the artifact in the
+diagnostic. **It retires no refusal and unblocks ZERO configs** — every check it adds refuses a config
+that is corrupt today, so the feasibility analysis' four-row table is repeated character for character for
+the third consecutive entry, and the direction that had to be checked rather than assumed is that a slice
+shipping new refusals moved no config **into** the refused column either: the eight still validate clean.
+
+Five things worth carrying. **A capability question is answered per format, and the ruling had to be
+issued mid-plan.** Decision 5 read *"a writer accepts what it can give back"*; the controller generalized
+`.csv`'s answer to `.parquet` **while enforcing the rule against answering from a proxy**, and the plan
+caught it. Measured: `.csv` returns `b"x"` as `"b'x'"` and `[1,2]` as `'[1, 2]'`, so it **refuses**;
+`.parquet` round-trips both, so it **keeps the capability and gains a pin**. **Four entries of one shape
+are now filed** from that ruling's fallout — a bare traceback for nested NumPy scalars through
+`.yaml`/`.json`/`.jsonl`, a non-`str` column key, an unencodable object through `.parquet`, and a `None`
+cell silently becoming `''` through `.csv` — each a place where the promise is true of the writer's
+**named** refusals and silent or uncoded outside them.
+
+**A design's own fixture description was false of one format**, found by the whole-branch matrix rather
+than by reading: Fixture E claimed a `None` column round-trips as `None` in *both* formats, and
+`csv.DictWriter` has no null. Corrected by **appending** to the design, with the live half filed.
+
+**Three miscounts in three consecutive batches**, each in a mutation-result column whose own framing is
+*counts read, not estimated* — a mutation reported as 1 failure against a true 4, a `375` against a `376`,
+and *"six raise sites"* against eight. **None changed a conclusion, which is exactly why they are
+recorded**: a reader who trusts one is the reader who later moves a pin it was supposed to guard. And the
+first of them was **better** pinned than reported, not worse — widening a `try` broke three
+`pytest.raises` pins nobody had looked for.
+
+**A mutation's prediction can go stale under a later task in its own slice.** Task 6's mutation was written
+when deleting roster coercion raised inside `finalize`; once task 9 gave `.parquet` its capability, the same
+mutant **completes at exit 0 and silently publishes a structural attribute** into `units.parquet`. The pin
+still holds and the mutation still fails — but *where* it surfaces moved, which is why a whole-branch
+re-run is not a formality: the branch under each mutation changed after the mutation was written.
+
+**And a finding can reach the dispatch without reaching the brief.** The `.csv`-null gap was measured in one
+batch, recorded in the ledger as *"filed for task 12"*, and **named in the controller's dispatch as a
+carry-forward** — then neither filed nor reported open, caught only by that task's review. *A ledger line
+saying "filed" is not a filing*, **and neither is a dispatch line**: a report that lists five carry-forwards
+and discharges four reads as complete. This is also the third instance in one slice of a carried finding
+reported closed while undischarged.
 
 **H8c (`report` and `study`) merged on 2026-08-21 — the last of H8's three.** `report` renders a run's
 or a bundle's standard sections — the condition table, deltas, hypothesis verdicts, attrition — from
@@ -433,6 +482,8 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 | A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
 | The test's **reader** normalising the defect away | A resolved-values echo shipped as a YAML alias — one anchor, five `*id001` pointers — and **both tests used `yaml.safe_load`, which resolves aliases**. The defect lived in the serialization and the reader undid it before the assertion. When a defect could live in *how* a value is written, assert on the raw text |
+| A mutation's **result** reported as a count nobody read | Three batches of one slice recorded `1 failed` against a true 4, `375` against 376, and *"six raise sites"* against eight. None changed a conclusion — and the first was **better** pinned than reported, because widening a `try` broke three `pytest.raises` pins nobody had looked for. **A number offered as verification evidence has to be the number the command printed**, or the reader who trusts it is the one who later moves a pin it was supposed to guard |
+| A mutation whose **prediction** went stale under a later task in its own slice | Deleting roster coercion once raised inside `finalize`; after a later task gave `.parquet` its capability, the same mutant **completed at exit 0 and silently published a structural attribute**. The pin still failed, so nothing was weakened — but the *shape* the brief predicted was gone. **A whole-branch re-run is not a formality**: the branch under each mutation changed after the mutation was written |
 | A **mutation** whose two branches cannot differ | A reviewer proposed proving a distinction by swapping to a value derived from the same source — a mathematical no-op no fixture could ever catch; a controller's proposed mutation was blind for a different reason. **A mutation is a claim too**: before trusting "this would prove X", check the two branches can actually produce different results |
 
 ### Answering a question with a proxy
@@ -525,7 +576,12 @@ made by the author of the rule forbidding it, while measuring for it.
   On the next it was **in the brief, measured, named** — and still not built, while the report claimed
   guards that existed at no commit. The second is worse than the first: **a report's claim that a
   carried finding is closed has to be checked against the code like any other claim**, because the
-  carry itself creates the expectation that it was done.
+  carry itself creates the expectation that it was done. **A third form: it reaches the dispatch and never
+  the brief.** A gap measured in one batch, recorded in the ledger as *"filed for task 12"*, and named in
+  the controller's dispatch as one of five carry-forwards was then neither filed nor reported open — and a
+  report discharging four of five reads as complete. *A ledger line saying "filed" is not a filing*, and
+  **neither is a dispatch line**: put it in the brief, or expect the task's review to be the only thing
+  that catches it.
 - **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —

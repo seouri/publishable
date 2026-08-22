@@ -97,6 +97,27 @@ for amending this table, not for inventing a tenth name in the ledger.
 | **H8 Studies and reporting** | `study new`/`add`, `report`, `diff`, `freeze`, lineage and upstream chains | after H4 |
 | **H9 Reproduction and the other modes** | `reproduce`, `dry-run`, `draft`, `resume`, `demo`, `docs` — every command that is a second entry into `run`'s own sequence | last — `reproduce` is what reads the environment back, so it decides the unresolved lockfile questions |
 
+**AMENDMENT, 2026-08-22, recording two splits this table never received.** Neither the **H8** row nor the
+**H5** row above was amended when its slice split, and both splits are load-bearing enough that a reader
+of this table alone would mis-scope the work.
+
+| Row | Split into | Where the split was measured |
+|---|---|---|
+| **H8 Studies and reporting** | **H8a** lineage and `io.reuse_from` (10) · **H8b** `diff` and `freeze` (8) · **H8c** `report` and `study`, including `BaseReport` (12) — all three merged | [`H8-SCOPING.md`](../H8-SCOPING.md) — 30 tasks against this one-row charter |
+| **H5 Artifacts** | **H5a** write-side integrity and the reserved-column namespace (9) — merged 2026-08-22 · **H5b** non-numeric columns downstream to `aggregate` (10) | [`H5-SCOPING.md`](../H5-SCOPING.md) — 19 tasks, split on the write/downstream seam |
+
+H5's seam is worth stating here rather than only in its scoping, because it decides the order: **H5a is
+`artifacts.py`, `units.py`, `coercion.py`, `validate.py`, and adds refusals for configs that are corrupt
+today; H5b is `stats.py` and `cli.py`, and changes what an existing key — `aggregated` — may contain.**
+This project has ruled twice that an additive change to a shipped surface is fine and changing what an
+existing key reports is not (H7d Part B, H8b Decision 7), so the behaviour-change exposure is **H5b's
+alone**, and H5a went first.
+
+**The general point, which is why this amendment exists at all.** Both splits were recorded in `CLAUDE.md`
+and in the slice's own dated scoping, and **neither reached this table** — so the table read as a nine-row
+charter while the work had become fourteen slices. A scoping expires and a spec does not, but a spec whose
+table is never amended stops describing the plan it exists to hold.
+
 ### Order, amended against outside evidence
 
 **AMENDMENT, 2026-08-14, from an executability measurement of

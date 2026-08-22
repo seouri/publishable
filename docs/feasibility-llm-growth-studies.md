@@ -1667,3 +1667,39 @@ character** — repeated rather than restated, for the same reason the H8b entry
 words are what a later reader should quote, not this entry's gloss on them. **Mint no fifth number
 here either.** Nothing above changes what H8a's entry already established; this entry exists to say so
 on the record rather than to leave H8c's landing unmeasured against this analysis.
+
+### Measured on 2026-08-22 against commit `71f3c6e` — after H5a
+
+**Coercion on the write side, and the reserved-column namespace.** `E-UNITS-ATTR-COLUMN` refuses a
+`data.units.attributes` entry named after a reserved column (`unit`, `measurement`, `by`, or any field on
+`Unit`); roster attribute values are coerced at `resolve_units`; `io.record`'s plain branch refuses a
+`measurement` column; and both row-shaped writers coerce, with per-format capability — `.csv` refuses a
+structural or `bytes` cell because it cannot give one back, `.parquet` keeps it because it can. Verified
+by running each surface through the installed console script, not by reading the emit sites.
+
+**H5a unblocks ZERO configs, and the table below is repeated from the H8a entry unchanged — no row
+moves.** Every check this slice added is a **refusal of a config that is corrupt today**: none of the
+eight transplantable configs declares an attribute named after a reserved column, and none records a
+non-scalar. So nothing here can move a config out of the *refused* column, and — this is the direction
+worth stating — nothing here can move one **into** it either, which for a slice that ships new refusals is
+the claim that had to be checked rather than assumed. The eight still validate with zero errors.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**Mint no fifth number here.** The table above is the H8a entry's, character for character, for the third
+consecutive entry — repeated rather than restated, because the two corrections earlier in this section
+established that every wrong figure this analysis has carried was made the same way: a slice retired or
+added one thing, and the summary phrase was **carried forward without re-deriving what it counted**.
+
+**One thing H5a's landing does change about a *future* row, and it is H5b's.** The write side now coerces
+and refuses; what a **non-numeric recorded column** does once it flows downstream into `collapse_repeats`,
+`summarize_step` and the table a template's `aggregate` receives is **untouched by this slice** — it is
+silently dropped, filed in [`spec-defects.md`](superpowers/spec-defects.md), and owned by H5b. That is a
+change to what an existing key (`aggregated`) may contain, so when it lands it is the first slice since
+H7d Part B with real behaviour-change exposure on a shipped surface — and it is the slice that could move
+a row here, in either direction.
