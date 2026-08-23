@@ -8931,3 +8931,30 @@ would be a behaviour change riding in on a fix round. **Owner: unassigned, with 
 remaining slice (H6, H9, H3c-3's remaining 14) has this loop's per-column granularity as its surface;
 the fix, if made, is narrowing the loop `cli.py:3284` iterates to one warning per (condition, step) that
 counts the columns below the floor rather than to one per (condition, step, column).
+
+## `hashes.code_hash` has zero production call sites — measured and closed
+
+**Filed and resolved 2026-08-22, H6a batch 3 fix round** (Major 2 of `task-b3-review.md`, reviewed
+at `d959b34`). Task 5 rewired `cli.command_run` to call `hashed_files` and `code_hash_of` directly
+rather than through `hashes.code_hash`, because it will also need the raw file list for task 8's
+zero-file guard and a second call through the wrapper would re-walk both trees for nothing.
+`grep -rn "code_hash(" src/publishable/*.py` returns exactly one hit — the `def` in `hashes.py:75`
+— and nothing calls it.
+
+**Measured before ruling on it, per the controller's Ruling K: this is not two implementations of
+one fold.** `code_hash`'s entire body is `return code_hash_of(hashed_files(repo_root, include))` —
+the identical two functions `command_run` calls directly — and
+`test_code_hash_delegates_to_code_hash_of_over_hashed_files` (`tests/test_hashes.py`, H6a task 3)
+pins the two forms equal on both an `include=None` tree and a real narrowing filter, precisely to
+guard against the drift a second implementation would risk. There is one fold, computed in one
+place; `code_hash` is a pinned composition of it, not a second source of truth that could disagree.
+
+**`reference.md`'s two mentions were checked against this and are accurate as worded.** Both
+(`W-STUDY-CODE-HASH-MISMATCH`'s row and § Building one) say `report` never calls `hashes.code_hash`
+— a true statement about what `report` does, not a claim that some other command does. Neither
+needed correcting; neither presents the function as having a production caller.
+
+**Closed here, not deferred.** `code_hash` stays: it is what a caller wanting only the digest,
+without the file list, calls, and its zero-caller state in `src/` today is a fact about who
+currently needs the file list — `command_run` does, for a guard not yet built when task 3 wrote
+the wrapper — not a duplicate implementation needing deletion. Nothing owes this entry.
