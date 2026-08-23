@@ -312,7 +312,14 @@ def test_run_on_a_path_with_no_repo_is_wrong_not_invalid(tmp_path: Path):
 
 
 def test_operation_commands_take_no_flags(capsys):
+    """H9a batch 3-5 fix round, Minor 1: the two-argument call below reaches
+    `len(rest) != 1` first and short-circuits before the flag half its name
+    claims is ever evaluated — proved by mutation (dropping the flag check
+    entirely leaves this exact call green). A single flag-shaped argument is
+    what isolates the flag half: `len(rest) == 1` is satisfied and only
+    `rest[0].startswith("-")` can produce EXIT_INVOCATION."""
     assert main(["run", "cfg.yaml", "--allow-dirty"]) == EXIT_INVOCATION
+    assert main(["run", "--allow-dirty"]) == EXIT_INVOCATION
 
 
 # H8b batch 6 review, Major 1: `diff`'s own CLI arm (arity exactly two, no
@@ -9577,7 +9584,8 @@ def test_reference_cli_tables_are_parsed_at_all():
         statuses = {status for _, status in rows}
         assert statuses, column
         assert statuses <= {"built", "NOT BUILT"}, column
-    assert ("dry-run", "NOT BUILT") in tables["Command"]
+    assert ("dry-run", "built") in tables["Command"]
+    assert ("resume", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -12409,6 +12417,68 @@ def test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message(
     # Python's own uncaught-exception printer.
     assert excinfo.value.args == ()
     assert str(excinfo.value) == ""
+
+
+def test_h9a_b2_a_parameter_declared_credential_survives_the_roster_raise(
+    tmp_path, monkeypatch, capsys
+):
+    """H9a task 2's owed replacement for a mutation the design named BLIND.
+
+    The mutation is *move the `credentials` assignment below the roster
+    resolution* inside `_prepare_run`. What that ordering buys is stated in the
+    comment above the assignment: a resolver's body is the first user code in
+    the command that can raise carrying a credential it read, so the value set
+    `redact` answers from has to exist before that call is reached. The design
+    named the mutation blind and made this fixture mandatory rather than
+    optional.
+
+    What is new here, and why this is not
+    `test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole`
+    pinned twice: that test's credential reaches the set through the template's
+    own `required_env`. This one reaches it through the OTHER half of the union
+    `declared_credential_names` computes — a `Param(requires_env=)` resolved
+    against the level a swept/declared parameter actually holds — which is why
+    `credentials` needs `conditions` and `run_template` and so cannot be
+    computed at the top of the command. Grepped before writing: `requires_env`
+    appears at three places in this file (the `_LOCAL_CRED_TEMPLATE` literal, a
+    docstring above `test_a_project_local_template_s_credentials_are_redacted_too`
+    naming it, and `test_..._declared_credential_names_for_and_check_requires_env`),
+    and none of the three raises from the ROSTER — the first two leak from a
+    STEP's own error, which is `execute_plan`'s redaction and a different site.
+
+    Not an assertion over `_prepare_run`'s own AST, deliberately: statement
+    position answers *where does this sit*, not *does a credential leak*, and
+    answering with a position is the proxy substitution this repo has paid for
+    twice (`CLAUDE.md` § Answering a question with a proxy).
+    """
+    import publishable.cli as cli_mod
+
+    for name in ("PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_AZURE", "PUBLISHABLE_TEST_OPENAI"):
+        monkeypatch.delenv(name, raising=False)
+
+    def _boom(*_args, **_kwargs):
+        raise ContractError(
+            f"resolver could not reach the store: token={_SENTINEL}",
+            code="E-UNITS-SOURCE-MISSING",
+        )
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="cred_assay",
+        parameters={"llm": {"provider": "azure_openai"}},
+        _local_template=_LOCAL_CRED_TEMPLATE,
+        _env_file=(f"PUBLISHABLE_TEST_TOKEN=irrelevant\nPUBLISHABLE_TEST_AZURE={_SENTINEL}\n"),
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    # The positive companion first: a sweep for an absent sentinel passes
+    # identically on a run that never raised at all.
+    assert "E-UNITS-SOURCE-MISSING" in captured, captured
+    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in captured, captured
+    assert _SENTINEL not in captured, captured
 
 
 def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, monkeypatch, capsys):
@@ -19931,3 +20001,2359 @@ def test_h6b_arm_t_the_git_layers_two_codes_at_the_cli(tmp_path, capsys, monkeyp
     err3 = capsys.readouterr().err
     assert "E-GIT-NO-COMMIT" in err3
     assert "E-CODE-DIRTY" not in err3
+
+
+# ===========================================================================
+# H9a task 1 — the guard pin (design Decision 4 / Ruling U;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 1; design § 7's
+# table). Batch 2 extracts phases 1-5 of the 1916-line `command_run` into
+# `_prepare_run`, and this pin is the only thing standing between that
+# extraction and a silent behaviour change (design § 5's disclosure).
+#
+# ARMS A-E BELOW HAVE NO AUTHORIZED EDITOR — design § 7's table states NONE
+# for every one of them, and the task 1 brief repeats it. An implementer who
+# finds one of these failing has found a finding to report, not an assertion
+# to edit; leaving the branch red is correct (Ruling U's own cost-if-wrong).
+#
+# Arms F and G are cited rather than captured here — see the task 1 report
+# for the citations and the six existing pins correction 5 names.
+# ===========================================================================
+
+_H9A_NORMALIZED_LEAF_KEYS = {
+    "at",
+    "started_at",
+    "wall_seconds",
+    "run_id",
+    "hostname",
+    # the three hashes, § 5's own list plus the task 1 brief's explicit
+    # addition — `code_hash`, `parameters_hash`, `input_manifest_hash`.
+    "code_hash",
+    "parameters_hash",
+    "input_manifest_hash",
+    # EXTENSION beyond the brief's list, reported as a finding (task 1
+    # report): `provenance.git.commit` is the SHA of a commit `run_a_project`
+    # makes fresh inside `tmp_path` for every test invocation, and `git
+    # commit`'s hash is sensitive to the committer/author timestamp — running
+    # this exact fixture twice, back to back, produced two different commit
+    # SHAs over byte-identical trees. It cannot be a stable literal, so it is
+    # normalized here rather than pinned; `provenance.units_hash` was checked
+    # the same way (twice, independently) and found STABLE — a pure content
+    # hash of the roster — so it is a hardcoded literal below, not in this
+    # set.
+    "commit",
+}
+
+
+def _h9a_run_yaml_leaves(doc: Any, tmp_path: Path) -> list[tuple[str, Any]]:
+    """`run.yaml`, walked into a `(dotted_path, value)` list and normalized
+    per the task 1 brief / design § 5, then sorted by dotted path (the SORT
+    is over the result, not over dict iteration order, so this is stable
+    regardless of `yaml.safe_load`'s own key order).
+
+    Normalizes exactly three things, plus one EXTENSION reported as a
+    finding (`commit`, see `_H9A_NORMALIZED_LEAF_KEYS`'s own comment): a
+    leaf whose OWN key is in `_H9A_NORMALIZED_LEAF_KEYS`; a string leaf that
+    is an absolute path under `tmp_path` (`git.repo_root`,
+    `data.input_dir`/`output_dir`); and the three hashes (folded into the
+    same key-name set above, since each is itself a leaf named for one of
+    them).
+    """
+    leaves: list[tuple[str, Any]] = []
+
+    def walk(obj: Any, path: tuple[str, ...]) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                walk(v, path + (str(k),))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, path + (str(i),))
+        else:
+            leaves.append((".".join(path), obj))
+
+    walk(doc, ())
+    tmp_str = str(tmp_path)
+    normalized = []
+    for path, value in leaves:
+        last = path.rsplit(".", 1)[-1]
+        if last in _H9A_NORMALIZED_LEAF_KEYS:
+            value = "<normalized>"
+        elif isinstance(value, str) and tmp_str in value:
+            value = "<normalized>"
+        normalized.append((path, value))
+    normalized.sort(key=lambda kv: kv[0])
+    return normalized
+
+
+def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
+    """H9a guard-pin ARM A. SOLE AUTHORIZED EDITOR: NONE (design § 7's
+    table; task 1 brief). A failure here is a finding to report, not an
+    assertion to edit.
+
+    Driven exactly as the brief specifies: a two-level `grid` sweep over
+    `analysis.method`, two `seed` repeats, and a real derived metric
+    (`aggregate_returns="mean_pred"`, the helper every end-to-end test in
+    this file uses) through `run_a_project`, which drives `main(["run",
+    ...])` — the installed console script's own entry point, not a direct
+    call. `units=20` clears `limits.min_reported_n` (10) so the golden
+    below carries no `W-STATS-COLUMN-THIN` side effect to keep in sync.
+
+    The literal list below was CAPTURED BY RUNNING this exact fixture
+    (via a throwaway driver script, discarded once the literal below was
+    copied in) — never transcribed from `run_record.py`. Mutation: change
+    `run_record.py`'s emission of `results.conditions[i].is_baseline` (flip
+    the boolean it writes) — production code, not the test — and this arm
+    must fail; it does (checked before this test was finalized).
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=20,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        aggregate_returns="mean_pred",
+    )
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    leaves = _h9a_run_yaml_leaves(run_doc, tmp_path)
+    assert leaves == [
+        ("code_hash", "<normalized>"),
+        ("config.data.input_dir", "<normalized>"),
+        ("config.data.input_manifest_policy", "hash_all"),
+        ("config.data.output_dir", "<normalized>"),
+        ("config.data.units.allocation", "within"),
+        ("config.data.units.cluster_by", None),
+        ("config.data.units.from", "index.csv"),
+        ("config.data.units.holdout", None),
+        ("config.data.units.key", "patient_id"),
+        ("config.data.units.measurements", None),
+        ("config.data.units.weight_by", None),
+        ("config.entrypoint", "cohort_pilot.experiment:CohortPilotExperiment"),
+        ("config.experiment_type", "generic"),
+        ("config.limits.max_executions", 500),
+        ("config.limits.max_failed_fraction", 0.2),
+        ("config.limits.max_ineligible_fraction", 0.5),
+        ("config.limits.min_clusters", 10),
+        ("config.limits.min_reported_n", 10),
+        ("config.limits.min_units_per_cell", 20),
+        ("config.metadata.authors.0", "Kyungjoon Lee"),
+        ("config.metadata.description", "an end-to-end helper run"),
+        ("config.metadata.institution", ""),
+        ("config.metadata.name", "cohort-pilot"),
+        ("config.parameters.analysis.confidence", 0.95),
+        ("config.parameters.analysis.drop_missing", True),
+        ("config.parameters.analysis.method", "pearson"),
+        ("config.parameters.analysis.min_samples", 30),
+        ("config.plugin", None),
+        ("config.replication.repeats.0.kind", "seed"),
+        ("config.replication.repeats.0.n", 2),
+        ("config.schema_version", "1.0"),
+        ("config.statistics.correction", "holm"),
+        ("config.sweep.grid.analysis.method.0", "pearson"),
+        ("config.sweep.grid.analysis.method.1", "spearman"),
+        ("config.template_version", "1.0.0"),
+        ("draft", False),
+        ("execution.conditions.0.index", 0),
+        ("execution.conditions.0.label", "method=pearson"),
+        ("execution.conditions.0.steps.step01_summarize_units.seed40.attempts", 1),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed40.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed40.status", "completed"),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed40.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed47.attempts", 1),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed47.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed47.status", "completed"),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed47.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.index", 1),
+        ("execution.conditions.1.label", "method=spearman"),
+        ("execution.conditions.1.steps.step01_summarize_units.seed40.attempts", 1),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed40.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed40.status", "completed"),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed40.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed47.attempts", 1),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed47.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed47.status", "completed"),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed47.wall_seconds",
+            "<normalized>",
+        ),
+        ("layout.conditions", True),
+        ("layout.repeats", True),
+        ("parameters_hash", "<normalized>"),
+        ("provenance.allocation", None),
+        ("provenance.allocation_hash", None),
+        ("provenance.apparatus", None),
+        ("provenance.environment.hardware.cpu_count", 8),
+        ("provenance.environment.hostname", "<normalized>"),
+        ("provenance.environment.manager", "uv"),
+        ("provenance.environment.os", "Darwin-25.5.0-arm64"),
+        ("provenance.environment.python_version", "3.13.7"),
+        ("provenance.environment.uv_lock", None),
+        ("provenance.environment.uv_lock_hash", None),
+        ("provenance.git.branch", "main"),
+        ("provenance.git.code_dirty", False),
+        ("provenance.git.commit", "<normalized>"),
+        ("provenance.git.config_committed", True),
+        ("provenance.git.remote", None),
+        ("provenance.git.repo_root", "<normalized>"),
+        ("provenance.input_manifest", "manifest/input.json"),
+        ("provenance.input_manifest_hash", "<normalized>"),
+        ("provenance.publishable_version", "0.1.0"),
+        ("provenance.units.key", "patient_id"),
+        ("provenance.units.n", 20),
+        (
+            "provenance.units_hash",
+            "sha256:3cb4a21c9fe2ee78b4edadc11e1e837fe0f2f8de9e643bb1223862a786c604c3",
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.basis", "units"),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.ci95.0", 6.85),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.ci95.1", 12.05),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.cohens_d", None),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.correction",
+            None,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.method",
+            "percentile_over_units",
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.completed",
+            20,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.failed", 0),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.ineligible",
+            0,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.resolved",
+            20,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.resample_draws",
+            2000,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.value", 9.5),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.basis", "units"),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.ci95.0",
+            6.731189431979746,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.ci95.1",
+            12.268810568020253,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.correction", None),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.method",
+            "t_over_units",
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.completed", 20),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.failed", 0),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.resolved", 20),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.kind",
+            "seed",
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.n",
+            2,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.std",
+            0.0,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.value", 9.5),
+        ("results.conditions.0.index", 0),
+        ("results.conditions.0.is_baseline", False),
+        ("results.conditions.0.label", "method=pearson"),
+        (
+            "results.conditions.0.per_repeat.step01_summarize_units.seed40.n_units",
+            20,
+        ),
+        (
+            "results.conditions.0.per_repeat.step01_summarize_units.seed47.n_units",
+            20,
+        ),
+        ("results.conditions.0.values.analysis.method", "pearson"),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.basis", "units"),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.ci95.0", 6.85),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.ci95.1", 12.05),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.cohens_d", None),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.correction",
+            None,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.method",
+            "percentile_over_units",
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.completed",
+            20,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.failed", 0),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.ineligible",
+            0,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.resolved",
+            20,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.resample_draws",
+            2000,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.value", 9.5),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.basis", "units"),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.ci95.0",
+            6.731189431979746,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.ci95.1",
+            12.268810568020253,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.correction", None),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.method",
+            "t_over_units",
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.completed", 20),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.failed", 0),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.resolved", 20),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.kind",
+            "seed",
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.n",
+            2,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.std",
+            0.0,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.value", 9.5),
+        ("results.conditions.1.index", 1),
+        ("results.conditions.1.is_baseline", False),
+        ("results.conditions.1.label", "method=spearman"),
+        (
+            "results.conditions.1.per_repeat.step01_summarize_units.seed40.n_units",
+            20,
+        ),
+        (
+            "results.conditions.1.per_repeat.step01_summarize_units.seed47.n_units",
+            20,
+        ),
+        ("results.conditions.1.values.analysis.method", "spearman"),
+        ("run_id", "<normalized>"),
+        ("schema_version", "1.0"),
+        ("status", "completed"),
+    ]
+
+
+def test_h9a_arm_b_runs_full_stdout_line_by_line(tmp_path: Path, capsys):
+    """H9a guard-pin ARM B. SOLE AUTHORIZED EDITOR: NONE. Same shape as arm
+    A ("that same completed run" — the design's own wording, honoured here
+    as the same fixture parameters, not the same process, since each test
+    in this file drives its own `main(["run", ...])`), asserting stdout
+    rather than the record.
+
+    Normalized the same way (design § 5 / brief): the run directory's own
+    path under `tmp_path` is replaced (`<tmp>`), and the run-directory NAME
+    itself — `run_<timestamp>_<code-hash-prefix>` — is replaced separately
+    (`<run_dir>`) because it embeds `run_id` and the hash prefix inline in
+    a path segment, not as a standalone leaf a key-name check could catch.
+    Neither `wall_seconds` nor `hostname` appears in a clean run's stdout at
+    all — captured, not assumed — so this fixture cannot exercise those two
+    normalizations; that absence is the finding, not a gap in the test.
+
+    Mutation: change the literal text `run.yaml → ` that `command_run`
+    prints before the run directory path — production code — and this arm
+    fails (checked before this test was finalized).
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=20,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        aggregate_returns="mean_pred",
+        capsys=capsys,
+    )
+    tmp_str = str(tmp_path)
+    normalized = doc["stdout"].replace(tmp_str, "<tmp>")
+    normalized = re.sub(
+        r"run_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_[0-9a-f]+", "<run_dir>", normalized
+    )
+    assert normalized.splitlines() == [
+        "  warning W-ENV-UNLOCKED       environment",
+        "          no uv.lock found at <tmp>/proj; the environment is not pinned, and "
+        "`reproduce` will not be able to restore it",
+        "1 problem (0 errors, 1 warning)",
+        "run.yaml → <tmp>/results/<run_dir>/run.yaml",
+    ]
+
+
+def test_h9a_arm_c_completed_status_and_exit(tmp_path: Path):
+    """H9a guard-pin ARM C, `completed` → 0. SOLE AUTHORIZED EDITOR: NONE.
+
+    `run_a_project` already asserts `main(["run", ...]) == EXIT_OK` (its
+    default `expect_exit`) as part of driving the run; `status` is asserted
+    here as its OWN, separate statement, so the two claims — the exit code
+    and the status byte — are both live in this one test rather than one of
+    them being merely implied by the other.
+
+    Mutation: in `cli.py`'s final `{"completed": EXIT_OK, "partial":
+    EXIT_PARTIAL}.get(status, EXIT_FAILED)` line, swap `EXIT_OK` for
+    `EXIT_PARTIAL` — production code — and this arm fails: `run_a_project`'s
+    internal `assert main(...) == expect_exit` raises before this test's own
+    body even reaches its `status` assertion (checked before this test was
+    finalized).
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+
+_H9A_ALWAYS_FAILS_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("h9a arm c: every execution of this step fails")
+"""
+
+
+def test_h9a_arm_c_failed_status_and_exit(tmp_path: Path, monkeypatch):
+    """H9a guard-pin ARM C, `failed` → 4. SOLE AUTHORIZED EDITOR: NONE.
+
+    The scaffold's ONE step always raises, so no execution ever completes —
+    `run_status`'s `if not any(... completed ...): return "failed"` path
+    (its precedent: `test_a_credential_value_reaches_no_artifact_and_the_
+    redaction_says_so`'s own docstring names this exact fixture shape: "a
+    step that fails on every repeat with no completing step anywhere leaves
+    the run failed, not partial").
+
+    Mutation: in the same `.get(status, EXIT_FAILED)` line, swap the
+    default `EXIT_FAILED` for `EXIT_PARTIAL` — production code — and this
+    arm fails on the exit-code assertion while `status` stays `"failed"`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H9A_ALWAYS_FAILS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+
+_H9A_CONDITIONAL_FAIL_EXTRA_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("h9a arm c: this second step always fails")
+"""
+
+
+def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
+    """H9a guard-pin ARM C, `partial` → 3. SOLE AUTHORIZED EDITOR: NONE.
+
+    The scaffold's own starter step always completes; a second, generated
+    step always raises — so every repeat has one completed execution and
+    one failed one, which is `run_status`'s `partial` branch (`any(...
+    completed ...)` true and `all(... completed ...)` false).
+
+    Mutation: in the same `.get(status, EXIT_FAILED)` line, delete the
+    `"partial": EXIT_PARTIAL` entry entirely — production code — and this
+    arm fails on the exit-code assertion (falling through to the dict's
+    default, `EXIT_FAILED`) while `status` stays `"partial"`.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["always_fails"],
+        extra_step_source=_H9A_CONDITIONAL_FAIL_EXTRA_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "partial"
+
+
+# Arm C, `apparatus-unreachable` → 5: CITED rather than rebuilt. See the
+# task 1 report — `test_g_fixture_u_unreachable_mid_plan` above already
+# asserts `run["status"] == "partial"` as its own statement, separate from
+# `expect_exit=EXIT_EXTERNAL`, in its own test, through a real run's own
+# probe plugin — exactly this sub-arm's claim. Rebuilding it here with a
+# second probe-plugin fixture would be the "same list pinned twice" fault
+# this slice's own binding rulings name; the H8b arm C precedent (restating
+# a claim already pinned elsewhere, in this exact file, to keep an arm
+# self-contained) was considered and rejected here because that precedent
+# restates a cheap key-list assertion, not a whole apparatus-plugin
+# fixture — the cost/benefit is the opposite way round.
+
+
+def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
+    """H9a guard-pin ARM D. SOLE AUTHORIZED EDITOR: NONE. NEW COVERAGE
+    (design § 7's table; task 1 brief; § Corrections 10): the claim exists
+    in two docstrings in this file (grepped below) and in no assertion
+    before this task.
+
+    Greps run before writing this test, every hit attributed:
+
+    `grep -rn "wall_seconds" tests/` → 8 hits: `tests/test_stats.py` (3,
+    building `ExecutionResult`/similar fixtures directly), `tests/
+    test_runner.py` (2, a step's own returned mapping, unrelated to the
+    ledger line), `tests/test_run_record.py` (1, building an
+    `ExecutionResult` directly), and 2 in `tests/test_cli.py` itself — both
+    are the DOCSTRING PROSE this arm replaces (`test_technical_n_reaches_
+    run_yaml_beside_every_metrics_n`'s and the wiring test near it), stating
+    the key set in words with no assertion beside them. A ninth hit is this
+    very test's own docstring, added after the grep was run.
+
+    `grep -n "keys()) ==" tests/test_cli.py` → 1 hit before this task,
+    `test_h8c_arm_a_the_records_field_level_shape`'s `assert list(execution.
+    keys()) == ["shared", "conditions", "summary"]` — the EXECUTION block's
+    top-level key list, not a single `executions.jsonl` LINE's key set. No
+    existing assertion holds the ledger line's keys.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    lines = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert lines
+    for entry in lines:
+        assert set(entry.keys()) == {
+            "step",
+            "scope",
+            "condition",
+            "repeat",
+            "status",
+            "started_at",
+            "wall_seconds",
+            "error",
+        }
+
+
+def test_h9a_arm_e_a_config_that_fails_validation(tmp_path: Path, capsys):
+    """H9a guard-pin ARM E, sub-fixture 1 of 4: a config that fails
+    `validate`. SOLE AUTHORIZED EDITOR: NONE.
+
+    `parameters.analysis.method` is overridden to a value outside its
+    declared `choices` (`"pearson"`/`"spearman"`/`"kendall"`), which
+    `validate_config` reports as `E-PARAM-VALUE` — refused before
+    `command_run` creates anything.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+        parameters={
+            "analysis": {
+                "method": "not-a-real-method",
+                "min_samples": 30,
+                "confidence": 0.95,
+                "drop_missing": True,
+            }
+        },
+    )
+    assert doc["run_dir"] is None
+    captured = doc["stdout"] or ""
+    assert "E-PARAM-VALUE" in captured
+    assert not list(doc["results_dir"].glob("*"))
+
+
+def test_h9a_arm_e_a_dirty_tree(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 2 of 4: a dirty `src/**`. SOLE
+    AUTHORIZED EDITOR: NONE.
+
+    Built on `_h6a_t5_project` (already defined in this file, and
+    deliberately not the guard pin's own `_h6a_pin_project`, per that
+    helper's own docstring on why the two are kept separate) — a committed
+    project whose hashed trees hold exactly `src/pkg/step.py`. Editing that
+    file AFTER the commit, without staging or re-committing, is what
+    `git status --porcelain -- src templates` reports and `E-CODE-DIRTY`
+    refuses.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_arm_e_dirty")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_arm_e_a_roster_refusal(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 3 of 4: a roster refusal. SOLE
+    AUTHORIZED EDITOR: NONE.
+
+    `resolve_units` is monkeypatched to raise a `ContractError` carrying a
+    real § Errors code, the same technique
+    `test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole`
+    uses above — `command_run`'s `except BaseException` arm around the
+    `resolve_units` call redacts and reports it, returning `EXIT_WRONG`
+    with no run directory created.
+    """
+    import publishable.cli as cli_mod
+
+    def _boom(*_args, **_kwargs):
+        raise ContractError("roster resolution failed", code="E-UNITS-SOURCE-MISSING")
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    assert doc["run_dir"] is None
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-UNITS-SOURCE-MISSING" in captured
+    assert not list(doc["results_dir"].glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_arm_e_the_zero_file_e_code_empty(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 4 of 4: the zero-hashed-file
+    refusal. SOLE AUTHORIZED EDITOR: NONE.
+
+    Built on `_h6a_t8_project` (already defined in this file, H6a task 8's
+    own builder) rather than a second project builder for the identical
+    shape — this arm exists so the guard pin's OWN section is
+    self-contained (the H8b arm C precedent), restating the claim through
+    the same helper rather than a new one. `write_step=False` is what
+    leaves `src/pkg/` committed but empty.
+    """
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_arm_e_empty",
+        gitignore=".env\n__pycache__/\n*.py[cod]\n.venv/\n",
+        write_step=False,
+    )
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+# ===========================================================================
+# H9a task 3 — `command_draft` (design Decision 3 / Ruling T;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 3). `draft` relaxes
+# the dirty-tree gate `_prepare_run`'s `allow_dirty` parameter guards, and
+# must not widen what the gate COVERS: the pathspec stays `src/**` and
+# `templates/**` (H6b Decision 12, declined, one line from this one).
+# Fixture Q is called directly against `command_draft`, since `draft` is not
+# dispatched by name until task 4.
+# ===========================================================================
+
+
+def test_h9a_fixture_q_a_draft_on_a_dirty_tree(tmp_path: Path, monkeypatch, capsys):
+    """Fixture Q: `draft` on a tree dirtied AFTER the commit, outside this
+    repository. `command_draft` must proceed where `run` would refuse
+    (Fixture arm E, sub-fixture 2 covers `run`'s own refusal on the
+    identical shape of dirt), record `draft: true` and
+    `provenance.git.code_dirty: true`, and print the notice on STDERR only
+    — asserted on that one stream, never on a combined capture, which is
+    this repo's own recorded trap (an absence asserted on the wrong stream
+    passes vacuously)."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is True
+
+    # The notice is on stderr, and stdout must not have absorbed it — `run`'s
+    # own stdout is pinned (task 1 arm B) and a draft must not join it there.
+    assert "notice" in err
+    assert "draft" in err
+    assert "src/** or templates/**" in err
+    assert "notice" not in out
+
+
+def test_h9a_fixture_q_a_draft_on_a_clean_tree_records_code_dirty_false(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The other half of Ruling T's own ground: `code_dirty` stays a
+    MEASUREMENT under `draft`, not a value forced by the command. A draft of
+    a clean tree records `draft: true` and `git.code_dirty: false` — the
+    conjunction § Draft runs documents today cannot be honoured on this
+    input, which is exactly Correction 12 (corrected in task 6). No notice
+    is printed, because there is nothing uncommitted to notice about."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_clean")
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is False
+    assert "notice" not in err
+
+
+def test_h9a_a_dirty_tree_still_refuses_plain_run(tmp_path: Path, monkeypatch, capsys):
+    """The other direction of the gate relaxation, on the identical dirtied
+    tree Fixture Q uses: `run` must still refuse. Pinning only `draft`'s
+    honouring would leave `run`'s refusal unpinned against a regression that
+    widens `allow_dirty` for both callers at once."""
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_run_refuses")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+    results_dir = tmp_path / "results"
+
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_fixture_q_draft_pathspec_does_not_widen_to_the_repo_root(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Ruling T's own trap, given its own fixture: a file dirtied OUTSIDE
+    `src/**` and `templates/**` — at the repository root — must not be seen
+    by the gate at all, under `draft` OR under `run`. H6b Decision 12
+    declined widening `E-CODE-DIRTY`'s pathspec to the repo root; `draft`
+    relaxing the gate must not close that declined decision sideways. Both
+    calls must proceed (exit 0) and both records must show `code_dirty:
+    false`, because the dirt sits outside `HASHED_TREES`."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_root_dirt")
+    root = cfg.parents[2]
+    (root / "README_UNCOMMITTED.md").write_text("dirt at the repo root, not under src/**\n")
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["provenance"]["git"]["code_dirty"] is False
+    assert "notice" not in err
+    shutil.rmtree(run_dirs[0])
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+
+# ===========================================================================
+# H9a task 4 — wiring `draft` into `_dispatch` (design Decision 3 / Ruling T;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 4). `draft` joins
+# `OPERATION_COMMANDS`'s existing one-path arity arm rather than getting a
+# second enforcer, and `NOT_BUILT_COMMANDS` drops `"draft"`. Correction 16
+# (`_dispatch`'s branch order is load-bearing): before this task,
+# `publishable draft new` hit the two-token `NOT_BUILT_COMMANDS` key first
+# and printed the specified-but-unbuilt diagnostic; after it, `draft` is a
+# real `OPERATION_COMMANDS` member and the SAME two-token invocation reaches
+# the shared arity arm instead, because the built branches are still
+# evaluated before the `NOT_BUILT_COMMANDS` lookups. That is the one shipped
+# answer this task moves, and it is pinned below rather than merely
+# disclosed.
+#
+# Correction 11 / this task's own brief: the shared arity arm
+# (`` `{command}` takes exactly one path and no flags ``) was pinned by
+# NOTHING — `grep -rn "takes exactly one path" tests/` returned 0 hits, and
+# `grep -rn "no flags" tests/` returned exactly 1, `_DIFF_ARITY_MESSAGE`
+# (line 324 of this file), `diff`'s own and a DIFFERENT arity rule. The
+# tests below are the first pin of the shared arm, using `draft` as the
+# probe.
+# ===========================================================================
+
+
+def test_h9a_draft_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic(capsys):
+    """The one shipped answer this task moves (task 4 brief). Before: the
+    two-token key `"draft new"` hit `NOT_BUILT_COMMANDS` and
+    `_report_not_built` printed the specified-but-unbuilt diagnostic. After:
+    `"draft"` is in `OPERATION_COMMANDS`, the two-token lookup never
+    happens (that branch returns first), and `rest == ["new"]` is a single
+    path — so the call actually proceeds into `command_draft` rather than
+    being refused for arity. This is the arity arm on a real, if wrong,
+    path, so it must not print either the not-built diagnostic or the
+    unknown-command message; distinguishing this from the true arity
+    failures below is the point of naming it separately."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "draft" not in NOT_BUILT_COMMANDS
+    assert "draft new" not in NOT_BUILT_COMMANDS
+    code = main(["draft", "new"])
+    err = capsys.readouterr().err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    # `new` is not a readable config path, so `_prepare_run` reports a wrong
+    # (not invocation) failure rather than an arity one — this is what
+    # separates "reached real argument handling" from "still refused for
+    # shape", which the three tests below cover.
+    assert code != EXIT_INVOCATION
+
+
+_DRAFT_ARITY_MESSAGE = "`draft` takes exactly one path and no flags"
+
+
+def test_h9a_draft_with_no_path_is_an_invocation_error(capsys):
+    assert main(["draft"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_draft_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["draft", "a", "b"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_draft_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument,
+    so a mutation replacing the condition with a bare `len(rest) != 1` must
+    fail this test while passing the two above."""
+    assert main(["draft", "--json"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+# ===========================================================================
+# H9a task 5 — `draft`'s three readers, against a REAL draft
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 5). All three
+# readers ship, and until this task all three were testable only against a
+# SYNTHESIZED record: `tests/test_report.py::
+# test_fixture_t_a_draft_run_is_refused_not_rendered` and
+# `::test_fixture_t_bundle_flags_a_draft_member_at_exit_0` and
+# `tests/test_diff.py::test_h8b_a_draft_run_earns_the_draft_label_in_the_header`
+# each hand-edit `draft: true` onto a completed run's record and say so in
+# their own docstrings ("`draft` itself is H9's, so a GENUINE draft run
+# cannot be produced at this task"). Now that `draft` dispatches (task 4),
+# each reader gets the real thing.
+#
+# **Stated as a difference, not as a count**: the three tests below do not
+# replace those three — the pairs are two ends of one check, and neutering
+# a reader's `record.get("draft") is True` test fails BOTH ends. That is
+# what this task's mutations measured, and it is the honest form of "new
+# coverage".
+# ===========================================================================
+
+
+def _h9a_t5_clean_and_draft(tmp_path: Path, capsys) -> dict[str, Any]:
+    """One project, two runs: a `run` of the committed tree, then a `draft`
+    of the same tree with `src/**` dirtied afterwards.
+
+    Built on `run_a_project` — this module's one end-to-end driver, and the
+    same builder all three synthesized-record tests above use — rather than
+    on a second scaffold-and-commit dance. The draft comes SECOND on
+    purpose: `run` refuses a dirty tree (`E-CODE-DIRTY`), so the clean run
+    has to happen while the tree is still clean.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, aggregate_returns="r")
+    clean_dir = doc["run_dir"]
+    root = doc["root"]
+    # Dirty a file inside `src/**`, which is one of the two trees the gate
+    # covers — not the repo root, which H6b Decision 12 declined to widen to.
+    step_files = sorted(root.glob("src/*/steps/*.py")) or sorted(root.glob("src/*/*.py"))
+    assert step_files, "the scaffold must have written something under src/**"
+    step_files[0].write_text(step_files[0].read_text() + "\n# uncommitted edit\n")
+    capsys.readouterr()
+    assert main(["draft", str(doc["cfg"])]) == EXIT_OK
+    capsys.readouterr()
+    draft_dirs = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != clean_dir]
+    assert len(draft_dirs) == 1, draft_dirs
+    draft_dir = draft_dirs[0]
+    # The fixture's own premise, verified rather than assumed: one record
+    # really carries `draft: true` and the other really does not, so a test
+    # below that finds no difference has found a reader defect rather than a
+    # fixture that never differed.
+    draft_record = yaml.safe_load((draft_dir / "run.yaml").read_text())
+    clean_record = yaml.safe_load((clean_dir / "run.yaml").read_text())
+    assert draft_record["draft"] is True
+    assert clean_record["draft"] is False
+    return {
+        "clean_dir": clean_dir,
+        "draft_dir": draft_dir,
+        "clean_record": clean_record,
+        "draft_record": draft_record,
+    }
+
+
+def test_h9a_t5_report_refuses_a_real_draft(tmp_path: Path, capsys):
+    """`report` over a run `publishable draft` actually produced.
+
+    Both directions, because testing the refusal and never the honouring is
+    this repo's own recorded shape: the clean run of the same project must
+    still render at exit 0, so a mutation that refuses every record fails
+    here too.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+
+    capsys.readouterr()
+    code = main(["report", str(pair["draft_dir"] / "run.yaml")])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert captured.out == ""
+    assert "E-REPORT-DRAFT" in captured.err
+
+    # The honouring half, on the identical project's clean run.
+    assert main(["report", str(pair["clean_dir"] / "run.yaml")]) == EXIT_OK
+    assert "## Conditions" in capsys.readouterr().out
+
+
+def test_h9a_t5_a_bundle_flags_a_real_draft_member_and_still_renders(tmp_path: Path, capsys):
+    """Decision 7's asymmetry against real drafts: a single run is refused
+    (above), a bundle MEMBER is flagged and the render succeeds.
+
+    The bundle lives outside any repository (`study new` refuses one inside
+    a repo with `E-STUDY-IN-REPO`), and both member names — `sensitivity`
+    and `primary` — carry no substring of `draft`, which is
+    `test_fixture_t_bundle_flags_a_draft_member_at_exit_0`'s own recorded
+    fix: its first version named the member `draft_run` and asserted bare
+    `"draft" in out`, which the `## draft_run` heading already satisfied.
+    The flagged member's block is split off from the clean member's before
+    asserting, so only the flag's own sentence can satisfy it.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+    bundle = tmp_path / "bundle"
+
+    assert main(["study", "new", str(bundle), "--title", "H9a task 5 bundle"]) == EXIT_OK
+    assert (
+        main(
+            [
+                "study",
+                "add",
+                str(bundle),
+                str(pair["draft_dir"] / "run.yaml"),
+                "--as",
+                "sensitivity",
+            ]
+        )
+        == EXIT_OK
+    )
+    assert (
+        main(["study", "add", str(bundle), str(pair["clean_dir"] / "run.yaml"), "--as", "primary"])
+        == EXIT_OK
+    )
+
+    capsys.readouterr()
+    code = main(["report", str(bundle / "study.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    sensitivity_block, primary_block = out.split("## primary", 1)
+    assert "not reachable from any commit" in sensitivity_block
+    assert "not reachable from any commit" not in primary_block
+    assert "## Conditions" in primary_block
+
+
+def test_h9a_t5_diff_labels_a_real_draft_on_one_side_only(tmp_path: Path, capsys):
+    """`diff` over a real draft and a real `run` of the same project.
+
+    Asserted PER SIDE, on the tokens of each side's own header line, never
+    as a substring of the whole output: `assert "draft" in out` has already
+    passed in this repository because a bundle member was named
+    `draft_run`, and a `run` tag's pin has already passed on a bundle
+    header's `##`. The two header lines are found by their leading `A`/`B`
+    letter, which is `_header_line`'s own first field.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+
+    capsys.readouterr()
+    code = main(
+        [
+            "diff",
+            str(pair["draft_dir"] / "run.yaml"),
+            str(pair["clean_dir"] / "run.yaml"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    lines = out.splitlines()
+    (side_a,) = [line for line in lines if line.split()[:1] == ["A"]]
+    (side_b,) = [line for line in lines if line.split()[:1] == ["B"]]
+    assert "draft" in side_a.split()
+    assert "draft" not in side_b.split()
+
+
+# ===========================================================================
+# H9a task 6 — Fixture R and § Draft runs' corrected conjunction
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 6; design
+# Decision 9; § Corrections against the code, correction 12). § Draft runs
+# read *"Draft runs are recorded with `draft: true` and
+# `git.code_dirty: true`"*, and the second half is false of the code:
+# `code_dirty` is `provenance.git_provenance`'s MEASUREMENT of the tree, so
+# a draft of a CLEAN tree records `false`. The DOCUMENT was corrected;
+# forcing the flag would make a `provenance` figure lie about the one thing
+# `provenance` is for, and would break `diff`'s `git` comparison between a
+# clean draft and the `run` of the same commit.
+#
+# Stated as a difference, not as a count:
+# `test_h9a_fixture_q_a_draft_on_a_clean_tree_records_code_dirty_false`
+# (task 3, above) already asserts the same three facts. Fixture R adds the
+# two things that test does not have — it **verifies its own premise** by
+# running `git status --porcelain -- src templates` inside the project and
+# asserting it is empty BEFORE the command, so a passing `code_dirty is
+# False` cannot be a tree that was dirty in a way the gate could not see;
+# and it goes through `main(["draft", ...])` rather than a direct
+# `command_draft` call, which task 3 could not do because the name did not
+# dispatch until task 4.
+# ===========================================================================
+
+
+def test_h9a_fixture_r_a_draft_of_a_clean_tree_records_code_dirty_false(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture R: `draft` on a verified-clean tree, outside this repository.
+
+    The premise is measured with the gate's OWN pathspec — `git status
+    --porcelain -- src templates`, which is what `provenance.git_provenance`
+    asks — rather than with a whole-tree `git status`: a file outside the two
+    hashed trees is deliberately invisible here (H6b Decision 12 declined
+    widening that pathspec), so a whole-tree premise would be asserting
+    something the code does not read.
+
+    No notice is asserted on **stderr**, the stream the task-3 notice writes
+    to, and the absence is paired with something that must report — the
+    record `run` wrote and the `run.yaml →` line on stdout — so a test that
+    passed because nothing ran at all is ruled out.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_r")
+    root = cfg.parents[2]
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert porcelain.stdout == "", f"Fixture R's premise: {porcelain.stdout!r}"
+
+    capsys.readouterr()
+    assert main(["draft", str(cfg)]) == EXIT_OK
+    out, err = capsys.readouterr()
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is False
+    # The paired positive: the run really happened, so the absence below is
+    # about the notice rather than about a command that did nothing.
+    assert "run.yaml →" in out
+    assert "notice" not in err
+
+
+# ===========================================================================
+# H9a task 7 — `dry-run` (docs/superpowers/plans/2026-08-23-re-entry-seam.md
+# task 7; design Decisions 1, 8, 11, 12 and 16). Called DIRECTLY here:
+# `dry-run` does not dispatch by name until task 9, which is task 3's own
+# precedent for `command_draft`.
+#
+# **Ruling R** is the claim these fixtures exist to hold: § Operation
+# commands promised "every artifact path that *would* be written", which
+# needs the `io.write` names inside step bodies — and core never inspects
+# the body of user Python. So the command prints step directories, the fixed
+# files, and the unit-execution count, **and says in its own output what it
+# omits and why**. A narrowed promise that does not say what it dropped is
+# worse than the wrong one it replaced, because nothing marks it partial at
+# the point of reading — so the omission sentence gets its own assertion.
+# ===========================================================================
+
+_H9A_DRY_RUN_FIXED_HEADER = "fixed files in that directory:"
+
+
+def _h9a_parse_dry_run(out: str) -> tuple[set[str], set[str]]:
+    """The step-directory list and the fixed-file list, off the transcript.
+
+    Both counts in the two header lines are checked against the lengths of
+    the lists they introduce, so a build whose count and whose list disagree
+    fails here rather than being read past.
+    """
+    lines = out.splitlines()
+    (i,) = [k for k, line in enumerate(lines) if line.startswith("would create ")]
+    (j,) = [k for k, line in enumerate(lines) if line.endswith(_H9A_DRY_RUN_FIXED_HEADER)]
+    step_dirs = {line.strip() for line in lines[i + 1 : j]}
+    assert all(line.startswith("  ") for line in lines[i + 1 : j]), lines[i + 1 : j]
+    fixed: set[str] = set()
+    k = j + 1
+    while k < len(lines) and lines[k].startswith("  "):
+        fixed.add(lines[k].strip())
+        k += 1
+    assert lines[i].startswith(f"would create {len(step_dirs)} step directories under ")
+    assert lines[j] == f"and {len(fixed)} {_H9A_DRY_RUN_FIXED_HEADER}"
+    return step_dirs, fixed
+
+
+def _h9a_fixture_u(cfg: Path, run_dir: Path, capsys, *, artifact_names: set[str]) -> set[str]:
+    """Fixture U's own body: `dry-run`'s two lists, compared **set to set**
+    against the tree a real `run` of the same config created.
+
+    Neither list is compared against a literal or against a count: a count
+    literal that happens to match is the fixture-agrees-with-the-bug shape,
+    and a path literal would be this module re-deriving the layout
+    `runner.step_dir_for` owns.
+
+    **The residue is enumerated, never filtered by pattern.** A completed run
+    directory holds exactly two kinds of file: the fixed ones core names, and
+    the artifacts step code named through `io.write` — which is precisely
+    what Ruling R says cannot be listed in advance. So the real tree is
+    partitioned by `dry-run`'s own step-directory set, the artifact half is
+    asserted to be exactly `artifact_names` inside each step directory
+    (`units.parquet` for every fixture here, from `io.record`'s own collapse),
+    and the remaining half must equal the fixed-file list exactly.
+
+    The step-directory set is derived from the real tree with no name
+    exclusion of its own: a step directory is a **leaf** directory (nothing
+    creates a directory inside one) that is not the parent of a fixed file —
+    which is what makes `environment/`, `manifest/` and `apparatus/` fall out
+    on their own rather than being listed here as exceptions.
+    """
+    capsys.readouterr()
+    from publishable.cli import command_dry_run
+
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    step_dirs, fixed = _h9a_parse_dry_run(out)
+
+    real_dirs = {str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_dir()}
+    real_files = {str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()}
+    leaf_dirs = {
+        d for d in real_dirs if not any(o != d and o.startswith(f"{d}/") for o in real_dirs)
+    }
+    fixed_parents = {str(Path(f).parent) for f in fixed}
+    assert step_dirs == leaf_dirs - fixed_parents, (step_dirs, leaf_dirs, fixed_parents)
+    artifacts = {f for f in real_files if str(Path(f).parent) in step_dirs}
+    assert artifacts == {f"{d}/{name}" for d in step_dirs for name in artifact_names}
+    assert real_files - artifacts == fixed
+
+    # Ruling R's own requirement: the output names its omission. Asserted on
+    # a phrase nothing else in the transcript can produce — `io.write` appears
+    # nowhere else, and the surrounding lines name step directories and fixed
+    # files rather than artifact files.
+    assert "artifact files inside a step directory are NOT listed" in out
+    assert "core never inspects" in out
+    return step_dirs
+
+
+def test_h9a_fixture_u_the_two_lists_match_a_real_runs_tree(tmp_path: Path, capsys):
+    """Fixture U, arm 1 of 3: the base fixed-file set — no lockfile, no
+    drawn axis, no probe — and four step directories.
+
+    `n: 2` seed repeats, and the count is load-bearing rather than
+    incidental: `execute_plan`'s `collapse = len(repeats) <= 1` means that
+    with **one** repeat a degenerate level adds no directory component, so
+    `step_dir_for(..., collapse_repeats=True)` and `False` return the same
+    tree and this fixture's prescribed mutation would be blind. Two repeats
+    is the smallest count at which the two readings differ.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds: one would collapse the repeat directory component",
+        },
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    step_dirs = _h9a_fixture_u(doc["cfg"], doc["run_dir"], capsys, artifact_names={"units.parquet"})
+    # This arm is the NEGATIVE for all three conditional branches: no
+    # lockfile resolved, no drawn axis declared, no probe declared, so the
+    # fixed-file list is the base seven and nothing more. Asserted through
+    # the set comparison above; the count is stated here so an arm that
+    # silently stopped planning executions is visible.
+    assert len(step_dirs) == 4
+
+
+def test_h9a_fixture_u_the_conditional_fixed_files_uv_lock_and_allocation(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture U, arm 2 of 3: two of the three conditional branches, each
+    exercised by a config that earns it.
+
+    `_h6a_t5_project` writes a real `uv.lock` at the project root, so
+    `lock_path is not None` and `environment/uv.lock` is written; and it
+    declares `sweep.groups`, so `_resolved_group_axes` is non-empty and
+    `build_allocation_document` returns a document, which is what puts
+    `allocation.json` on disk. Its `replication.repeats` is edited to `n: 2`
+    after the commit — `configs/**` is in neither hashed tree, so this
+    dirties nothing the gate reads — for the same collapse reason arm 1
+    states.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_u")
+    doc = yaml.safe_load(cfg.read_text())
+    doc["replication"]["repeats"] = [{"kind": "seed", "n": 2}]
+    cfg.write_text(yaml.safe_dump(doc))
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted((tmp_path / "results").glob("run_*"))
+    assert (run_dir / "environment" / "uv.lock").exists()
+    assert (run_dir / "allocation.json").exists()
+
+    step_dirs = _h9a_fixture_u(cfg, run_dir, capsys, artifact_names={"units.parquet"})
+    assert len(step_dirs) == 4
+
+
+_H9A_U_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_u_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_H9A_U_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9a_u_assay")
+class H9aUAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9a_u_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+
+def test_h9a_fixture_u_the_conditional_fixed_file_apparatus_probes_jsonl(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture U, arm 3 of 3: the third conditional branch. A template
+    declaring `apparatus_probe` is what puts `apparatus/probes.jsonl` on
+    disk, and without this arm that predicate is untested — naming a branch
+    is not testing it.
+
+    `dry-run` does not CALL the probe at this task (task 10 owns the probe
+    round); the claim here is only that a run of this config writes that
+    ledger and that `dry-run` says so.
+    """
+    site = installed(
+        "dist-h9a-u", "1.0", {"publishable.probes": {"h9a_u_probe": "h9a_u_probe_mod:probe"}}
+    )
+    (site / "h9a_u_probe_mod.py").write_text(_H9A_U_PROBE_MODULE)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h9a_u_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_H9A_U_TEMPLATE,
+    )
+    assert (doc["run_dir"] / "apparatus" / "probes.jsonl").exists()
+    _h9a_fixture_u(doc["cfg"], doc["run_dir"], capsys, artifact_names={"units.parquet"})
+
+
+def test_h9a_dry_run_creates_nothing_under_output_dir_on_a_never_run_project(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """*Creates nothing*, arm 1: scoped to `output_dir` (Decision 12).
+
+    Repo-wide byte identity is deliberately NOT asserted, and the reason is
+    measured rather than predicted: importing the entrypoint runs
+    `discover_local`, which writes `src/**/__pycache__/` and
+    `templates/__pycache__/` exactly as `validate` already does (§ Templates'
+    own "goes dirty at `validate`"). A bytecode cache is not an artifact of a
+    run, and an arm asserting repo-wide identity would fail and invite
+    whoever met it to weaken the assertion instead.
+
+    Proved path by path, before and after, rather than by reading the code
+    for absent `mkdir` calls — and **paired with a positive**: the transcript
+    really printed, so a pass here cannot be a command that did nothing.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_creates_nothing")
+    results = tmp_path / "results"
+    before = sorted(p.relative_to(results) for p in results.rglob("*"))
+    assert before == []  # the project has never been run
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    after = sorted(p.relative_to(results) for p in results.rglob("*"))
+    assert after == before
+    assert not list(results.glob("run_*"))
+    # The paired positive: something must have reported.
+    assert "creates nothing" in out
+    assert out.startswith("sweep: ")
+
+
+def test_h9a_dry_run_leaves_an_existing_output_dir_byte_identical(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """*Creates nothing*, arm 2: an `output_dir` that already holds a run.
+
+    The stronger arm, because the empty-directory case above passes for a
+    command that merely fails to allocate: here every existing path and every
+    existing byte is compared before and after, so a `dry-run` that appended
+    a ledger line or repointed `latest` fails.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_identical")
+    results = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    def snapshot() -> dict[str, bytes | None]:
+        return {
+            str(p.relative_to(results)): (None if p.is_dir() else p.read_bytes())
+            for p in results.rglob("*")
+        }
+
+    before = snapshot()
+    assert before, "the snapshot must not be empty, or this arm asserts nothing"
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert snapshot() == before
+
+    # Minor 4, batch 3-5 fix round: both arms above call `command_dry_run`
+    # directly, so *creates nothing through the DISPATCHED command* was
+    # pinned only by the end-to-end transcript test, which asserts output
+    # rather than the filesystem. This arm closes that gap — same
+    # byte-identity snapshot, driven through `main([...])`, the route a
+    # user actually takes.
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert snapshot() == before
+
+
+def test_h9a_dry_run_against_a_live_lock_completes_and_takes_none(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Decision 12's second arm: § One execution at a time says pointing a
+    read command at a live run is "as ordinary as reading the ledger", and
+    `dry-run` takes no lock at all, so it is a stronger case than `freeze`'s.
+
+    A `lock` file is written by hand into the completed run directory — a
+    CONSTRUCTED live-run state, `tests/test_freeze.py::_mid_run`'s own shape
+    — and must be untouched afterwards.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_live_lock")
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted((tmp_path / "results").glob("run_*"))
+    lock = run_dir / "lock"
+    lock.write_text(json.dumps({"host": "elsewhere", "pid": 1}))
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert json.loads(lock.read_text()) == {"host": "elsewhere", "pid": 1}
+
+
+def test_h9a_dry_run_inherits_e_code_empty_from_phases_1_to_5(tmp_path: Path, monkeypatch, capsys):
+    """§ Corrections against the code, correction 19: `E-CODE-EMPTY`'s
+    refusal sits INSIDE phases 1-5 — the print and the exit both — so
+    `dry-run` inherits it by calling `_prepare_run`, and that is correct: a
+    config whose hashed trees hold no file is refused before any metered
+    call, which is the cost ordering doing its job.
+
+    An inherited refusal nobody tests is how a mode silently diverges from
+    the command it re-enters, so this pins it: the same
+    `_h6a_t8_project(write_step=False)` tree that guard-pin arm E drives
+    through `run` is driven through `dry-run` here, and both the exit code
+    and the printed code are asserted — plus the absence of any run
+    directory, which is what separates "refused" from "refused after
+    creating".
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_dry_run_empty",
+        gitignore=".env\n__pycache__/\n*.py[cod]\n.venv/\n",
+        write_step=False,
+    )
+    results = tmp_path / "results"
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results.glob("*"))
+
+
+# ===========================================================================
+# H9a task 8 — `unit-executions`, and the agreement pin
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 8; design
+# Decision 11). `cli._handed_counts` RESTATES `runner.execute_plan`'s
+# four-way `execution.scope` dispatch and calls `runner._arm_keys` and
+# `runner._handed_keys` — it does not extract the narrowing, which would be
+# a second behaviour-preserving extraction on a shipped path, in phase 7,
+# outside the phases this slice is chartered to move.
+#
+# **What prevents the two from drifting is these two fixtures, not a shared
+# function.** Each runs the SAME config through `dry-run` and through a real
+# `run`, and the printed `unit-executions` must equal the summed
+# `len(io.units)` the run actually handed out. The expected value is
+# **summed from the run**, never computed as `roster / k × executions`:
+# that is arithmetic the code under test could be wrong about in exactly the
+# same way. The step appends its own count to a file **outside
+# `output_dir`**, so the evidence is not an artifact of the run being
+# measured.
+#
+# S and T give DIFFERENT answers (10 and 80), because two elements only ever
+# distinguish two readings — a fixture pair that coincided would be one
+# element wearing two names.
+# ===========================================================================
+
+_H9A_T8_COUNTING_STEP = """\
+from pathlib import Path
+
+from publishable import BaseStep, ContractError
+
+
+class Step(BaseStep):
+    scope = "SCOPE"
+
+    def run(self, cfg, io):
+        # `io.units` RAISES `E-STEP-UNITS-UNAVAILABLE` rather than returning
+        # `None` when this execution was handed no roster — a fold's `run`-
+        # and condition-scoped steps. Counting that as **zero** is the
+        # ground truth the printed line has to agree with, and writing it
+        # this way deliberately is what makes the None-contributes-zero
+        # mutation visible rather than blind.
+        try:
+            units = list(io.units)
+        except ContractError:
+            units = None
+        n = 0 if units is None else len(units)
+        with Path(r"COUNTER").open("a", encoding="utf-8") as fh:
+            fh.write(f"{{n}}\\n")
+        for unit in units or ():
+            io.record(unit.key, {{"present": True}})
+        return {{"n_units": n}}
+"""
+
+
+def _h9a_t8_counting_step(counter: Path, scope: str) -> str:
+    return _H9A_T8_COUNTING_STEP.replace("SCOPE", scope).replace("COUNTER", str(counter))
+
+
+def _h9a_t8_printed_unit_executions(cfg: Path, capsys) -> tuple[int, str]:
+    from publishable.cli import command_dry_run
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    (line,) = [ln for ln in out.splitlines() if ln.startswith("scale:")]
+    return int(line.split()[1]), out
+
+
+def test_h9a_fixture_s_unit_executions_agrees_with_a_real_fold_run(tmp_path: Path, capsys):
+    """Fixture S — a **fold**, with a `run`-scoped step so the
+    None-contributes-zero branch is live.
+
+    `k: 5` over 10 units: the five `repeat`-scoped executions are handed two
+    units each, and the one `run`-scoped execution is handed **no roster at
+    all** — no fold exists yet at that scope. So the ground truth is
+    `0 + 5 × 2 = 10`, and a build that counted the whole roster at `run`
+    scope would print 20.
+
+    `k > 1` and a `run`-scoped step are both load-bearing: with `k: 1` the
+    fold partition is the whole roster and the two readings coincide, and
+    with no `run`-scoped step there is no execution handed `None` for the
+    branch to be wrong about.
+    """
+    counter = tmp_path / "handed_s.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        replication={
+            "repeats": [{"kind": "fold", "k": 5}],
+            "order": "as_declared",
+            "rationale": "five folds: each repeat sees a fifth of the roster",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+        extra_steps=["over_the_whole_run"],
+        extra_step_source=_h9a_t8_counting_step(counter, "run"),
+    )
+    handed = [int(x) for x in counter.read_text().split()]
+    # The fixture's own premise, asserted rather than assumed: one execution
+    # really was handed nothing, and the rest really were handed a proper
+    # subset — a fold whose partition happened to be the whole roster would
+    # make mutation (b) blind.
+    assert handed.count(0) == 1
+    assert sorted(handed) == [0, 2, 2, 2, 2, 2], handed
+    assert sum(handed) == 10
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    # The printed claim itself, not only the total: a reader adding the
+    # per-execution counts up by hand would be short by exactly the
+    # executions handed nothing, so the output has to name them.
+    assert "1 of those executions are handed no unit list at all" in out
+
+
+def test_h9a_fixture_t_unit_executions_agrees_with_a_real_group_axis_run(tmp_path: Path, capsys):
+    """Fixture T — a **group axis**, whose arms are proper subsets of the
+    roster.
+
+    40 units split `by: arm` into two arms of 20 (`min_units_per_cell` is
+    `20` in what `init` writes, which is why the roster is 40 rather than
+    20), two conditions, two seed repeats: 4 executions × 20 units = 80. A
+    build that dropped `_arm_keys` would hand each execution the whole
+    40-unit roster and print 160.
+    """
+    counter = tmp_path / "handed_t.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["arm"],
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["x", "y"]}]},
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds, so the repeat directory component does not collapse",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+    )
+    handed = [int(x) for x in counter.read_text().split()]
+    # The premise mutation (a) rests on: each arm is a PROPER subset, so
+    # dropping `_arm_keys` changes the answer.
+    assert handed == [20, 20, 20, 20], handed
+    # `80`, against Fixture S's `10`: the pair's own non-coincidence, pinned
+    # as each fixture's own literal rather than as a separate comparison
+    # test, which would assert only that two literals differ.
+    assert sum(handed) == 80
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    # The negative of Fixture S's own line: no execution here is handed
+    # nothing, so the sentence must be ABSENT — an absence paired with the
+    # equality above, which must report.
+    assert "handed no unit list at all" not in out
+
+
+def test_h9a_fixture_v_unit_executions_agrees_with_a_real_holdout_run(tmp_path: Path, capsys):
+    """Fixture V — batch 3-5 fix round, Minor 3: the review found Decision 11's
+    third case (**holdout**) unfixtured, only reasoned about, and asked for
+    either a fixture or a stated reason none exists. This is the fixture.
+
+    `_handed_counts` has no `holdout` branch: `roster = prepared.eval_roster`
+    at the top is already the test partition (`_evaluation_roster` runs once,
+    inside phases 1-5, before `_handed_counts` is ever called), so the
+    fall-through `handed = scoped` is correct by construction. `prepared.roster`
+    (the FULL roster, pre-holdout) is what a build that re-derived the
+    narrowing wrongly, or lost it, would fall back to — so it is also the
+    mutation that must fail.
+
+    20 units, `frac: 0.2` at the pinned seed `4321` → a 4-unit test partition
+    (pinned already at `tests/test_cli.py::test_a_declared_holdout_now_validates_and_runs`,
+    `len(alloc["holdout"]["test"]) == 4`). Two seed repeats, no fold and no
+    group axis, so every execution is handed the same 4-unit partition:
+    `[4, 4]`, total 8 — never 20 or 40, which is what confusing `roster` for
+    `eval_roster` would print.
+    """
+    counter = tmp_path / "handed_v.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds, so the repeat directory component does not collapse",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+    )
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert len(alloc["holdout"]["test"]) == 4
+    handed = [int(x) for x in counter.read_text().split()]
+    assert handed == [4, 4], handed
+    assert sum(handed) == 8
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    assert "handed no unit list at all" not in out
+
+
+# ===========================================================================
+# H9a task 9 — wiring `dry-run` into `_dispatch`
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 9; Rulings R and
+# U). `dry-run` joins `OPERATION_COMMANDS`'s existing one-path arity arm —
+# the same arm task 4 gave its first pin, not a second enforcer —
+# `NOT_BUILT_COMMANDS` drops `"dry-run"`, and § Operation commands' row
+# carries the narrowed promise in both halves at once (`Status` and `Does`
+# are one fact seen from two ends). `_dispatch`'s branch order is untouched
+# (§ Corrections against the code, correction 16): the built branches are
+# still evaluated before the `NOT_BUILT_COMMANDS` lookups, which is what
+# makes adding a name to `OPERATION_COMMANDS` safe at all.
+# ===========================================================================
+
+
+def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: Path, capsys):
+    """`main(["dry-run", cfg])` over a real project: exit `0`, and the whole
+    transcript on **stdout**.
+
+    Every section of the printed output is asserted, because a build that
+    dropped one line would still exit `0`: the sweep header, a condition
+    line, the repeat plan, the seeds, the comparison mode read from
+    `data.units.allocation` (Decision 16 — a declaration, never a resolved
+    comparison list), the step list, the statistics basis, the
+    unit-execution count, both path lists' headers, **Ruling R's omission
+    sentence**, and `creates nothing`.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds",
+        },
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(doc["cfg"])]) == EXIT_OK
+    out, err = capsys.readouterr()
+    assert "sweep: 2 conditions (grid) × 2 repeats = 4 executions" in out
+    assert "  00_method=pearson  analysis.method=pearson" in out
+    assert "repeats: seed(n=2)" in out
+    assert "  seeds: [" in out
+    assert "  comparisons: paired (allocation: within)" in out
+    assert "steps: step01_summarize_units (repeat)" in out
+    assert "statistics: basis units (n=10 resolved); correction holm;" in out
+    assert "scale:  40 unit-executions (4 executions × 10 units handed to each)" in out
+    assert "would create 4 step directories under " in out
+    assert "and 7 fixed files in that directory:" in out
+    # The pointer a run repoints OUTSIDE the run directory. It is not in the
+    # brief's fixed-file list and not inside the parsed block, so nothing else
+    # in these tests holds it — and an unheld sentence in this output is the
+    # same fault Ruling R's omission sentence exists to prevent.
+    assert "/latest pointer is repointed too" in out
+    assert "artifact files inside a step directory are NOT listed" in out
+    assert "creates nothing" in out
+    # The transcript is stdout, not a combined stream: `run`'s own stdout is
+    # pinned (guard-pin arm B) and a diagnostic on stderr must not be read as
+    # part of this output.
+    assert "creates nothing" not in err
+
+
+def test_h9a_dry_run_sweep_header_does_not_double_count_baseline(tmp_path: Path, capsys):
+    """Major 1 (batch 3-5 review): `modes` seeded `["baseline"]` from
+    `is_baseline` and then appended every truthy `sweep` key — and `baseline`
+    is itself one of those keys whenever any condition `is_baseline`
+    (`sweep.expand` only sets `is_baseline=True` from the `if baseline:`
+    loop, so the key is always present when the seed fires). The only prior
+    assertion on this line used a grid-only config, the one arrangement
+    where the duplicate cannot appear — the worked example (`cohort-pilot`)
+    is baseline + grid, exactly this shape, which is why the review called
+    it the first thing a reader of the docs would run.
+
+    A config with BOTH `baseline` and `grid` is what separates the two
+    readings: seeding plus a naive re-count prints `(baseline + baseline +
+    grid)`; the fix must print `(baseline + grid)` once each.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds",
+        },
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(doc["cfg"])]) == EXIT_OK
+    out = capsys.readouterr().out
+    (line,) = [ln for ln in out.splitlines() if ln.startswith("sweep:")]
+    assert "baseline + baseline" not in line
+    assert line.count("baseline") == 1
+    assert "(baseline + grid)" in line
+
+
+def test_h9a_dry_run_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic(capsys):
+    """The one shipped answer this task moves, pinned rather than merely
+    disclosed — task 4's own shape for `draft`. Before: the two-token key
+    `"dry-run new"` was not in `NOT_BUILT_COMMANDS`, but the single-name
+    `"dry-run"` was, so `_report_not_built` printed the
+    specified-but-unbuilt diagnostic. After: `"dry-run"` is an
+    `OPERATION_COMMANDS` member, that lookup is never reached, and
+    `rest == ["new"]` is a single path — so the call proceeds into
+    `command_dry_run` and fails for an unrelated reason (`new` is not a
+    readable config), which is what `code != EXIT_INVOCATION` separates from
+    the three true arity failures below."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "dry-run" not in NOT_BUILT_COMMANDS
+    assert "dry-run new" not in NOT_BUILT_COMMANDS
+    code = main(["dry-run", "new"])
+    err = capsys.readouterr().err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    assert code != EXIT_INVOCATION
+
+
+_DRY_RUN_ARITY_MESSAGE = "`dry-run` takes exactly one path and no flags"
+
+
+def test_h9a_dry_run_with_no_path_is_an_invocation_error(capsys):
+    assert main(["dry-run"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_dry_run_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["dry-run", "a", "b"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_dry_run_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument,
+    so a build whose condition were a bare `len(rest) != 1` would pass the
+    two tests above and fail this one — task 4's own mutation, restated for
+    the second name to join that arm."""
+    assert main(["dry-run", "--json"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+# ===========================================================================
+# H9a task 10 — Fixtures V, W and X: `dry-run` probes the apparatus.
+#
+# One shared project builder, deliberately NOT `run_a_project`: every fixture
+# here must reach `dry-run` WITHOUT a real run in front of it. Fixture V's
+# whole evidence is a call count, and a preceding `run` would have made its
+# own run-start and per-execution calls into the same counter; W's probe
+# raises; X's config does not validate. A builder that runs is unusable for
+# all three.
+#
+# The probe comes from an INSTALLED distribution and the template from
+# `templates/**`, which is Fixture U's own arrangement and is forced rather
+# than chosen: `apparatus._probe_for` resolves a name through
+# `scan_group(PROBE_GROUP)` — package metadata — so there is no such thing as
+# a project-local probe, while a project-local TEMPLATE is discovered by path.
+# ===========================================================================
+
+_H9A_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("{template_name}")
+class H9aProbeAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "{probe_name}"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {{
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }}
+"""
+
+_H9A_PROBE_CONFIG = """\
+schema_version: "1.0"
+experiment_type: TEMPLATE_NAME
+template_version: "1.0.0"
+plugin: null
+
+metadata:
+  name: probe-pilot
+  description: "H9a task 10 — `dry-run` reaches outward"
+  authors: ["Kyungjoon Lee"]
+  institution: ""
+
+entrypoint: "ENTRYPOINT"
+
+data:
+  input_dir: INPUT_DIR
+  output_dir: OUTPUT_DIR
+  input_manifest_policy: hash_all
+  units:
+    from: index.csv
+    key: patient_id
+    attributes: []
+    allocation: within
+    assign: {}
+    cluster_by: null
+    weight_by: null
+    measurements: null
+    holdout: null
+
+parameters:
+  instrument:
+    model: MODEL_VALUE
+
+sweep:
+  grid: {instrument.model: [m1, m2]}
+
+replication:
+  repeats:
+    - {kind: seed, n: 1}
+  order: as_declared
+  rationale: "one seed: these fixtures assert probe calls, not dispersion"
+
+statistics:
+  correction: holm
+
+limits:
+  max_executions: 500
+  max_failed_fraction: 0.2
+  max_ineligible_fraction: 0.5
+  min_units_per_cell: 10
+  min_clusters: 10
+  min_reported_n: 5
+
+hypotheses: []
+"""
+
+
+def _h9a_probe_project(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    package: str,
+    template_name: str,
+    probe_name: str,
+    model_value: str = "m1",
+) -> Path:
+    """A committed, never-run project whose template declares `probe_name`.
+
+    `sweep.grid` over `instrument.model` gives **two** resolved conditions,
+    and two is the load-bearing count: with one condition, "one call per
+    resolved condition" and "one call per command" are the same number, so a
+    build that probed once for the whole command would pass. The entrypoint
+    lives outside both hashed trees on `sys.path`, the route `_h6a_t5_project`
+    and `_h6a_t8_project` already take.
+    """
+    proj = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    outside = tmp_path / "outside"
+    for path in (proj, data, results, outside):
+        path.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"u{i:02d}\n" for i in range(1, 21))
+    (data / "index.csv").write_text("patient_id\n" + rows)
+    pkg_dir = outside / package
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "experiment.py").write_text(_H6A_T5_PLAIN_EXPERIMENT)
+    monkeypatch.syspath_prepend(str(outside))
+
+    (proj / ".gitignore").write_text(".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    (proj / "pyproject.toml").write_text('[project]\nname = "probe-project"\nversion = "0.1.0"\n')
+    (proj / "uv.lock").write_text('version = 1\nrequires-python = ">=3.11"\n')
+    (proj / "src" / "pkg").mkdir(parents=True)
+    (proj / "src" / "pkg" / "step.py").write_text("a = 1\n")
+    # `code_hash` covers `templates/**`, so this must exist before the commit
+    # or the dirty gate refuses the tree — `run_a_project`'s own reason for
+    # writing `_local_template` before `git add`.
+    (proj / "templates").mkdir()
+    (proj / "templates" / f"{template_name}.py").write_text(
+        _H9A_PROBE_TEMPLATE.format(template_name=template_name, probe_name=probe_name)
+    )
+    cfg = proj / "configs" / "probe-pilot" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        _H9A_PROBE_CONFIG.replace("TEMPLATE_NAME", template_name)
+        .replace("ENTRYPOINT", f"{package}.experiment:Experiment")
+        .replace("INPUT_DIR", str(data))
+        .replace("OUTPUT_DIR", str(results))
+        .replace("MODEL_VALUE", model_value)
+    )
+    subprocess.run(["git", "init", "-q", "."], cwd=proj, check=True)
+    subprocess.run(["git", "add", "."], cwd=proj, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "probe"],
+        cwd=proj,
+        check=True,
+    )
+    return cfg
+
+
+# The counter file lives OUTSIDE `output_dir`, from an environment variable —
+# so the call count is evidence AND task 11's *Creates nothing* arm stays
+# true. A probe writing its own tally under `output_dir` would make the two
+# fixtures contradict each other.
+_H9A_V_PROBE_MODULE = """\
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_probe")
+def probe(cfg):
+    entries = Path(os.environ["H9A_V_CALLS"])
+    with entries.open("a") as fh:
+        fh.write(f"{cfg.parameters.instrument.model}\\n")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_H9A_V_NULL_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_null_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": None})
+"""
+
+_H9A_V_UNREACHABLE_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_unreachable_probe")
+def probe(cfg):
+    raise RuntimeError("the instrument did not answer")
+    return Apparatus(facts={})
+"""
+
+
+def test_h9a_fixture_v_the_probe_is_called_once_per_resolved_condition(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 1 of 3: `dry-run` reaches outward, once per resolved
+    condition, each under **that condition's own cfg**.
+
+    The evidence is the probe's own tally, written outside `output_dir` — not
+    a monkeypatched counter — and it is asserted as an ordered LIST of the
+    `instrument.model` value each call saw, `["m1", "m2"]`. That is what
+    distinguishes "one call per condition under the condition's cfg" from
+    every neighbouring reading a count alone would admit: two calls under the
+    wide cfg would tally `["m1", "m1"]` (`resolve_wide_cfg` leaves a swept
+    path at its declared value), and one call for the whole command would
+    tally one entry.
+    """
+    site = installed(
+        "dist-h9a-v", "1.0", {"publishable.probes": {"h9a_v_probe": "h9a_v_probe_mod:probe"}}
+    )
+    (site / "h9a_v_probe_mod.py").write_text(_H9A_V_PROBE_MODULE)
+    calls = tmp_path / "probe-calls.txt"
+    monkeypatch.setenv("H9A_V_CALLS", str(calls))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_v_pkg",
+        template_name="h9a_v_assay",
+        probe_name="h9a_v_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert calls.read_text().split() == ["m1", "m2"]
+    # The paired positive: the transcript really printed, so a pass here
+    # cannot be a command that probed and then died quietly.
+    assert "creates nothing" in out
+    # No ledger, and no run directory to hold one (Decision 7).
+    assert not list((tmp_path / "results").glob("*"))
+
+
+def test_h9a_fixture_v_a_declared_fact_that_came_back_null_warns(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 2 of 3: `W-APPARATUS-UNANSWERED` fires at `dry-run` for
+    a declared fact the probe did not answer.
+
+    This is the news § Before you spend it exists to deliver, and it is the
+    reason `warn_unanswered` is kept while `check_changed` is dropped. Both
+    conditions are named in the warning text, because `Observations` keys its
+    counts per (condition, fact) and this probe answers `null` for both — an
+    assertion on one condition alone would pass a build that warned once for
+    the whole command. The exit code is `0`: a warning never changes one, on
+    `W-ENV-UNLOCKED`'s precedent.
+    """
+    site = installed(
+        "dist-h9a-vn",
+        "1.0",
+        {"publishable.probes": {"h9a_v_null_probe": "h9a_v_null_mod:probe"}},
+    )
+    (site / "h9a_v_null_mod.py").write_text(_H9A_V_NULL_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_vn_pkg",
+        template_name="h9a_vn_assay",
+        probe_name="h9a_v_null_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert out.count("W-APPARATUS-UNANSWERED") == 2
+    assert (
+        "condition `00_model=m1`'s fact `model_revision` came back `null` on 1 of 1 probes"
+    ) in out
+    assert (
+        "condition `01_model=m2`'s fact `model_revision` came back `null` on 1 of 1 probes"
+    ) in out
+    assert "creates nothing" in out
+
+
+def test_h9a_fixture_v_an_unreachable_apparatus_exits_five(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 3 of 3: a probe that raises is the apparatus being
+    unreachable, `E-APPARATUS-RAISED`, and `dry-run` exits **5**.
+
+    `EXIT_EXTERNAL` is the class you retry, and this arm is what makes the
+    cost ordering's two codes mean something: Fixture X exits `1` on a config
+    that never reached the probe, this exits `5` on one that did. Both halves
+    of the containment's split are therefore asserted rather than only its
+    `except` shape — a copy that returned `EXIT_WRONG` here would pass an
+    exit-code-agnostic assertion on the message alone.
+
+    The transcript must NOT have printed: the round is sited before any
+    printing, so a build that probed after printing would leave `creates
+    nothing` on stdout.
+    """
+    site = installed(
+        "dist-h9a-vu",
+        "1.0",
+        {"publishable.probes": {"h9a_v_unreachable_probe": "h9a_v_unreach_mod:probe"}},
+    )
+    (site / "h9a_v_unreach_mod.py").write_text(_H9A_V_UNREACHABLE_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_vu_pkg",
+        template_name="h9a_vu_assay",
+        probe_name="h9a_v_unreachable_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_EXTERNAL
+    captured = capsys.readouterr()
+    assert "E-APPARATUS-RAISED" in captured.err
+    assert "the instrument did not answer" in captured.err
+    assert "creates nothing" not in captured.out
+    assert not list((tmp_path / "results").glob("*"))
+
+
+_H9A_W_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9a_w_assay")
+class H9aWAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9a_w_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9A_W_TOKEN"], "m2": ["H9A_W_TOKEN"]},
+        ),
+    }
+"""
+
+# The probe reads the declared variable and puts its VALUE in the message it
+# raises with — the shape a real plugin produces when a provider SDK echoes
+# the key it was handed back in an error string.
+_H9A_W_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_w_probe")
+def probe(cfg):
+    token = os.environ["H9A_W_TOKEN"]
+    raise RuntimeError(f"instrument rejected token {token}")
+    return Apparatus(facts={})
+"""
+
+
+def test_h9a_fixture_w_a_credential_in_a_probes_raise_is_redacted(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture W — the credential positive control, and the whole reason
+    Decision 14 exists.
+
+    `dry-run` runs user code: the probe. The containment copied around it is
+    `command_run`'s own, **with its `try`** — H8c's `report` lifted `freeze`'s
+    credential calls and left the `try` behind, and a declared credential
+    reached stderr in a case § Secrets promises to redact.
+
+    **The redaction is not vacuous**, and that is what the declaration buys:
+    the variable is named through `Param(requires_env=)`, is total over the
+    parameter's `choices`, and is actually SET in the environment, so
+    `declared_credential_names` finds it and `credential_values` reads a real
+    value for `redact` to match against. An undeclared variable would leave
+    the value set empty and this test would pass whether the wrapper redacted
+    or not.
+
+    Both halves are asserted — the secret is absent AND the marker is present
+    — because either alone is weak: a command that printed nothing at all
+    would satisfy the absence.
+    """
+    monkeypatch.setenv("H9A_W_TOKEN", "sk-h9a-w-do-not-print")
+    site = installed(
+        "dist-h9a-w", "1.0", {"publishable.probes": {"h9a_w_probe": "h9a_w_probe_mod:probe"}}
+    )
+    (site / "h9a_w_probe_mod.py").write_text(_H9A_W_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_w_pkg",
+        template_name="h9a_w_assay",
+        probe_name="h9a_w_probe",
+    )
+    # `_h9a_probe_project` writes its own template; this fixture needs the
+    # `requires_env`-bearing one, so the file is replaced and re-committed
+    # before anything runs — `templates/**` is hashed, so an uncommitted
+    # replacement would be a dirty tree under `run` (and `dry-run` passes the
+    # gate only because Decision 8 relaxes it, which is not what this arm is
+    # about).
+    (cfg.parents[2] / "templates" / "h9a_w_assay.py").write_text(_H9A_W_TEMPLATE)
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "w template"],
+    ):
+        subprocess.run(["git", *args], cwd=cfg.parents[2], check=True)
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_EXTERNAL
+    captured = capsys.readouterr()
+    whole = captured.out + captured.err
+    assert "sk-h9a-w-do-not-print" not in whole
+    assert "<redacted:" in captured.err
+    assert "E-APPARATUS-RAISED" in captured.err
+
+
+_H9A_X_PROBE_MODULE = """\
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_x_probe")
+def probe(cfg):
+    Path(os.environ["H9A_X_ENTERED"]).write_text("the probe was called\\n")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_h9a_fixture_x_a_config_that_does_not_validate_never_reaches_the_probe(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture X — the cost ordering IS the behaviour (Decision 15): validate
+    -> manifest -> probe, stopping at the first failure.
+
+    The config declares `instrument.model: m9`, outside the template's own
+    `choices`, so phases 1-5 refuse it and `dry-run` exits `1`. **The
+    assertion is the absence of the probe's entry file**, written as the
+    probe's first statement — an exit-code-only assertion would pass with the
+    ordering reversed, since a probe returning normally does not change the
+    exit code a validation error produces.
+
+    This is the arm that gives `1` and `5` their meaning: failed cheaply
+    versus failed expensively. Fixture V's third arm is the other half.
+    """
+    site = installed(
+        "dist-h9a-x", "1.0", {"publishable.probes": {"h9a_x_probe": "h9a_x_probe_mod:probe"}}
+    )
+    (site / "h9a_x_probe_mod.py").write_text(_H9A_X_PROBE_MODULE)
+    entered = tmp_path / "probe-entered.txt"
+    monkeypatch.setenv("H9A_X_ENTERED", str(entered))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_x_pkg",
+        template_name="h9a_x_assay",
+        probe_name="h9a_x_probe",
+        model_value="m9",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    assert "instrument.model" in out
+    assert not entered.exists(), "the probe ran before validation refused the config"
+    # The positive control for the entry file itself: the same probe DOES
+    # write it when the config validates, so its absence above is the
+    # ordering rather than a probe that could never write anything.
+    good = _h9a_probe_project(
+        tmp_path / "good",
+        monkeypatch,
+        package="h9a_x_pkg_ok",
+        template_name="h9a_x_assay",
+        probe_name="h9a_x_probe",
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(good)]) == EXIT_OK
+    assert entered.exists()
+
+
+# ===========================================================================
+# H9a task 11 — Fixture Y: *Creates nothing*, with the probe round running.
+#
+# **Why this arm exists rather than a fourth restatement of byte identity.**
+# The three arms above (`..._creates_nothing_under_output_dir_...`,
+# `..._leaves_an_existing_output_dir_byte_identical`, `..._against_a_live_lock_
+# ...`) all drive `_h6a_t5_project`, whose `experiment_type: generic` resolves
+# to `GenericTemplate.apparatus_probe = None` — so `_dry_run_probe` returns at
+# its first guard and the round never runs at all. The design's prescribed
+# mutation for Fixture Y is *"add `append_observation` to `dry-run`'s round"*,
+# and against a skipped block that mutation cannot append anything: **it is
+# blind on every one of those three arms.** The claim *creates nothing* is
+# only worth pinning where something outward-reaching actually happened, so
+# this arm is Y over a project whose template declares a probe, paired with
+# the probe's own tally as the positive that the round ran.
+# ===========================================================================
+
+
+def _h9a_snapshot(root: Path) -> dict[str, tuple[int, str] | None]:
+    """A recursive `{relative_path: (size, sha256)}` map of `root`, with
+    `None` for a directory.
+
+    Size AND digest, not either alone: a digest alone cannot see an
+    equal-content rename that changed nothing, and a size alone cannot see an
+    in-place edit that preserved length. Directories are entries in their own
+    right so a created-but-empty directory is a difference.
+    """
+    out: dict[str, tuple[int, str] | None] = {}
+    for path in sorted(root.rglob("*")):
+        key = str(path.relative_to(root))
+        if path.is_dir():
+            out[key] = None
+        else:
+            data = path.read_bytes()
+            out[key] = (len(data), hashlib.sha256(data).hexdigest())
+    return out
+
+
+def test_h9a_the_snapshot_helper_can_fail(tmp_path: Path):
+    """*Prove every sweep can fail* applies to a checker as much as to a
+    claim: a comparison helper that returned a constant would make every arm
+    built on it pass. Three differences it must see — a new file, an edit
+    that preserves length, and an empty directory — each asserted separately,
+    because a helper that saw only one of them would still pass a test that
+    asserted their disjunction.
+    """
+    root = tmp_path / "root"
+    (root / "d").mkdir(parents=True)
+    (root / "d" / "f.txt").write_text("abc")
+    base = _h9a_snapshot(root)
+    assert base == {"d": None, "d/f.txt": (3, hashlib.sha256(b"abc").hexdigest())}
+
+    (root / "d" / "g.txt").write_text("x")
+    assert _h9a_snapshot(root) != base
+    (root / "d" / "g.txt").unlink()
+    assert _h9a_snapshot(root) == base
+
+    (root / "d" / "f.txt").write_text("abd")  # same length, different bytes
+    assert _h9a_snapshot(root) != base
+    (root / "d" / "f.txt").write_text("abc")
+    assert _h9a_snapshot(root) == base
+
+    (root / "empty").mkdir()
+    assert _h9a_snapshot(root) != base
+
+
+def test_h9a_fixture_y_dry_run_creates_nothing_while_the_probe_round_runs(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture Y, the arm the other three cannot be: *Creates nothing* while
+    `_dry_run_probe` genuinely reaches outward.
+
+    `output_dir` already holds a completed run of the same config, so every
+    existing path and every existing byte is in the comparison — the empty
+    directory case passes for a command that merely failed to allocate, and
+    this one does not. Then `dry-run`, then the same snapshot.
+
+    **Paired with two positives**, so a pass cannot be a command that did
+    nothing: the probe's own tally (written outside `output_dir`, which is why
+    Fixture V's counter lives where it does) gains exactly one entry per
+    resolved condition, and the transcript printed.
+
+    **The scope is `output_dir`, and that is what the promise means rather
+    than a weakening of it** (Decision 12). A repo-wide assertion would fail:
+    `dry-run` imports the entrypoint and runs `discover_local`, which writes
+    `src/**/__pycache__/` and `templates/__pycache__/` exactly as `validate`
+    already does — § Templates' *"goes dirty at `validate`"* is the shipped
+    sentence about it, measured live by H6b batch 4. `creates nothing` is a
+    promise about the **artifacts of a run**, and a bytecode cache is not one;
+    an arm asserting repo-wide identity would fail and invite whoever met it
+    to weaken the assertion, which is the worst of the three outcomes.
+    """
+    site = installed(
+        "dist-h9a-y", "1.0", {"publishable.probes": {"h9a_v_probe": "h9a_y_probe_mod:probe"}}
+    )
+    (site / "h9a_y_probe_mod.py").write_text(_H9A_V_PROBE_MODULE)
+    calls = tmp_path / "probe-calls.txt"
+    monkeypatch.setenv("H9A_V_CALLS", str(calls))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_y_pkg",
+        template_name="h9a_y_assay",
+        probe_name="h9a_v_probe",
+    )
+    results = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted(results.glob("run_*"))
+    # The run wrote the ledger `dry-run` must not touch, so `apparatus/` is
+    # inside the snapshot as an existing path rather than as an absence.
+    assert (run_dir / "apparatus" / "probes.jsonl").exists()
+    before = _h9a_snapshot(results)
+    assert before, "the snapshot must not be empty, or this arm asserts nothing"
+    calls_before = len(calls.read_text().split())
+    assert calls_before, "the run's own probe rounds must have tallied, or the probe is inert"
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert _h9a_snapshot(results) == before
+    assert sorted(results.glob("run_*")) == [run_dir]
+    # Positive 1: the round ran, once per resolved condition (two, from the
+    # `sweep.grid` over `instrument.model`).
+    assert len(calls.read_text().split()) == calls_before + 2
+    # Positive 2: the transcript printed.
+    assert "creates nothing" in out

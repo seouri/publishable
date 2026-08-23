@@ -1381,19 +1381,39 @@ def test_cli_and_runner_call_sites_pass_the_named_constants():
     reversion of EITHER OF THESE TWO SITES back to a bare string fails
     this test rather than only failing silently under `python -O`.
 
-    **This pin's own scope is exactly these two function bodies** (batch
-    B2 review, Minor 3) — it inspects `command_run` and `execute_plan` and
-    nothing else, so a hypothetical THIRD literal call site added
-    elsewhere in `src/publishable/` would not be caught by this test; the
-    completeness claim ("there is no third site") rests on the
-    reading-then-grep enumeration in the task report, not on this
-    assertion alone."""
+    **This pin's own scope is an ENUMERATED list of function bodies**, not
+    a module and not one function (batch B2 review, Minor 3; RETARGETED
+    2026-08-23 by controller ruling after H9a task 2 moved the run-start
+    round out of `command_run` into `_execute_prepared`). A hypothetical
+    THIRD literal call site added elsewhere in `src/publishable/` would
+    still not be caught here; the completeness claim ("there is no third
+    site") rests on the reading-then-grep enumeration in the task report,
+    not on this assertion alone.
+
+    **Why an enumeration rather than the module's whole source.** Reading
+    the module would keep passing when a call site moves — which is what
+    just happened, and the second assertion below then passed VACUOUSLY,
+    because a literal absent from `command_run` is absent from it whether
+    the call site is there or not. An enumeration fails loudly when the
+    site moves, which is the moment a human should re-aim the pin. The
+    positive assertion is what makes the negative one non-vacuous: the
+    constant must be present in the same text the literal must be absent
+    from."""
     import inspect
 
     from publishable import cli as cli_mod
     from publishable import runner as runner_mod
 
-    cli_source = inspect.getsource(cli_mod.command_run)
+    # The enumerated bodies the run-start round may legally live in. A move
+    # to a function not on this list fails the positive assertion below.
+    cli_source = "\n".join(
+        inspect.getsource(fn)
+        for fn in (
+            cli_mod.command_run,
+            cli_mod._prepare_run,
+            cli_mod._execute_prepared,
+        )
+    )
     assert "phase=apparatus.PHASE_RUN_START" in cli_source
     assert 'phase="run_start"' not in cli_source
 

@@ -52,11 +52,14 @@ from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
 from publishable.provenance import (
+    GitInfo,
     find_repo_root,
     git_provenance,
     unignored_under_hashed_trees,
 )
 from publishable.replication import (
+    Repeat,
+    RepeatLevel,
     cross_levels,
     fold_members_for,
     order_seed_for,
@@ -68,10 +71,12 @@ from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
     StopSignal,
     _arm_keys,
+    _handed_keys,
     attrition,
     execute_plan,
     resolve_condition_cfg,
     resolve_wide_cfg,
+    step_dir_for,
 )
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
@@ -143,7 +148,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "run", "freeze", "report"}
+OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "freeze", "report"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -156,8 +161,6 @@ OPERATION_COMMANDS = {"validate", "run", "freeze", "report"}
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
     "docs": "Operation commands",
-    "draft": "Draft runs",
-    "dry-run": "Operation commands",
     "list-templates": "Operation commands",
     "reproduce": "Reproducing on another device",
     "resume": "Resuming",
@@ -2006,7 +2009,104 @@ def command_validate(config_path: Path) -> int:
     return c.exit_code()
 
 
-def command_run(config_path: Path) -> int:
+@dataclasses.dataclass(frozen=True)
+class Prepared:
+    """Everything phases 1-5 of `command_run` produce that phases 6-10 read.
+
+    Thirty-SIX values, and the count is the argument FOR the seam: nothing in
+    phases 6-10 can be re-entered without them, so a second entry either
+    receives them or recomputes them, and recomputing is what `resume` (H9b)
+    must not do.
+
+    Measured rather than chosen, and the measurement is stated because two of
+    the thirty-six are not like the others. An `ast` walk over `command_run`
+    found **38** names assigned before the `allocate_run_dir` call and loaded
+    after it; `u` and `r` are comprehension targets (comprehension-scoped, so
+    they never touch the outer binding) and `warn_c` is re-bound in phase 9
+    before its second read, which is the plan's § Corrections 13 and 17. That
+    leaves the **35** the plan's task 2 section lists, in that order.
+
+    `config_path` is the thirty-sixth, and the plan's list is short by exactly
+    it: a Store-walk **cannot see a parameter** -- `config_path` is an `arg`
+    node, never a `Name` in `Store` context -- and it is read after the seam at
+    the one site H8b Decision 7 added,
+    `(run_dir / "config.yaml").write_bytes(config_path.read_bytes())`. It was
+    found by `ruff`'s `F821`, not by the walk and not by `mypy`, which is the
+    plan's correction 20.
+
+    `c` is the run's live `Collector` -- a channel, not a value, and it is
+    named separately so a reader does not mistake it for state. It is carried
+    because a second entry into phases 1-5 needs the diagnostic channel those
+    phases rendered from. **No statement in phases 6-10 reads it at this
+    commit** -- every post-seam `c` is a comprehension target, and phase 9's
+    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`. It is
+    therefore the one field `_execute_prepared` does not unpack -- so of the
+    thirty-six, thirty-five are read in phases 6-10 and `c` is not.
+
+    Frozen on purpose: phases 6-10 must not write back into what phases 1-5
+    pinned. That is the property `resume` will rest on. `plan` is the one name
+    phases 6-10 re-bind (`_apply_execution_order` under `order: randomized`),
+    which is why `_execute_prepared` unpacks to locals rather than reading
+    attributes: a frozen field cannot be re-bound.
+    """
+
+    config_path: Path
+    c: Collector
+    doc: dict[str, Any]
+    repo_root: Path
+    git: GitInfo
+    digest: str
+    input_dir: Path
+    output_dir: Path
+    units_decl: dict[str, Any] | None
+    # Quoted: `Condition` is a `TYPE_CHECKING`-only import (line ~147) and a
+    # dataclass field annotation IS evaluated at runtime — this module has no
+    # `from __future__ import annotations`. Caught by importing, not by `ruff`
+    # or `mypy`, both of which passed clean with the bare name.
+    conditions: "list[Condition]"
+    run_template: BaseTemplate | None
+    credentials: dict[str, str]
+    roster: UnitList | None
+    beside_n: dict[str, Any]
+    weight_by: Any
+    weights: dict[str, Any] | None
+    weighted_beside: dict[str, Any]
+    cluster_by: Any
+    clusters: dict[str, str] | None
+    levels: list[RepeatLevel]
+    repeats: list[Repeat]
+    partitions: list[list[Unit]] | None
+    fold_members: dict[str, frozenset[str]] | None
+    group_axes: dict[str, ArmPlan]
+    holdout_plan: HoldoutPlan | None
+    eval_roster: UnitList | None
+    arm_members_map: dict[int, frozenset[str]] | None
+    plan: list[Execution]
+    cfgs: dict[int, Config]
+    ch: str
+    ph: str
+    manifest: dict[str, Any]
+    lock_path: Path | None
+    lock_hash: str | None
+    upstream_ledger: UpstreamLedger
+    upstream_resolver: UpstreamResolver
+
+
+def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
+    """Phases 1-5 of a run, for every command that is a second entry into them.
+
+    Returns `Prepared` or the exit code the run would have returned. **Every
+    caller checks the union with `isinstance`, never truthiness** -- `EXIT_OK`
+    is `0` and a truthiness test would mis-handle it. Phases 1-5 never return
+    `EXIT_OK` today, which is exactly why that mutation is blind and why the
+    rule is stated here rather than pinned: `mypy` is the enforcer, and task
+    1's arm E pins the four codes end to end instead.
+
+    `allow_dirty` is the one thing that varies between callers, and it varies
+    the GATE, never its PATHSPEC. `run` passes `False`, `draft` and `dry-run`
+    pass `True`. Widening what `E-CODE-DIRTY` covers is a separate, DECLINED
+    decision (H6b Decision 12) that lives one line from this one.
+    """
     c = Collector()
     experiment = _preloaded_experiment(config_path)
     # phases 1-2: resolve, walk up, load, validate
@@ -2025,7 +2125,7 @@ def command_run(config_path: Path) -> int:
     # call costs nothing. `reference.md` § Secrets & credentials.
     load_env(repo_root)
     git = git_provenance(config_path, config_path)  # phase 3: clean src/**+templates/**
-    if git.code_dirty:
+    if git.code_dirty and not allow_dirty:
         dirty_c = Collector()
         dirty_c.error(
             "E-CODE-DIRTY", "src/** or templates/**", "uncommitted changes; commit them first"
@@ -2426,6 +2526,101 @@ def command_run(config_path: Path) -> int:
     upstream_resolver = UpstreamResolver(
         output_dir=output_dir, repo_root=repo_root, ledger=upstream_ledger
     )
+
+    return Prepared(
+        config_path=config_path,
+        c=c,
+        doc=doc,
+        repo_root=repo_root,
+        git=git,
+        digest=digest,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        units_decl=units_decl,
+        conditions=conditions,
+        run_template=run_template,
+        credentials=credentials,
+        roster=roster,
+        beside_n=beside_n,
+        weight_by=weight_by,
+        weights=weights,
+        weighted_beside=weighted_beside,
+        cluster_by=cluster_by,
+        clusters=clusters,
+        levels=levels,
+        repeats=repeats,
+        partitions=partitions,
+        fold_members=fold_members,
+        group_axes=group_axes,
+        holdout_plan=holdout_plan,
+        eval_roster=eval_roster,
+        arm_members_map=arm_members_map,
+        plan=plan,
+        cfgs=cfgs,
+        ch=ch,
+        ph=ph,
+        manifest=manifest,
+        lock_path=lock_path,
+        lock_hash=lock_hash,
+        upstream_ledger=upstream_ledger,
+        upstream_resolver=upstream_resolver,
+    )
+
+
+def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
+    """Phases 6-10 of a run: allocate the run directory, execute, record.
+
+    Takes what `_prepare_run` pinned and nothing else, so that `run`, `draft`
+    and (H9b) `resume` are three entries into ONE execution path rather than
+    three copies of it.
+
+    The thirty-five names are read off `prepared` in one unpack block rather
+    than as attribute accesses scattered through the body, so that the body
+    itself is byte-identical to what `command_run` held -- which is the only
+    mechanical check a reviewer has on a 1495-line move. `c` is the one field
+    not unpacked: no statement below reads it (see `Prepared`), and a local
+    nothing reads is an `F841`.
+
+    `draft` is accepted here and reaches `assemble_run_yaml` in task 3, which
+    owns the `draft` command, its fixture Q and the mutation that catches the
+    wiring. It is threaded now rather than added later so that `command_draft`
+    is one call and not a second copy of this function.
+    """
+    config_path = prepared.config_path
+    doc = prepared.doc
+    repo_root = prepared.repo_root
+    git = prepared.git
+    digest = prepared.digest
+    input_dir = prepared.input_dir
+    output_dir = prepared.output_dir
+    units_decl = prepared.units_decl
+    conditions = prepared.conditions
+    run_template = prepared.run_template
+    credentials = prepared.credentials
+    roster = prepared.roster
+    beside_n = prepared.beside_n
+    weight_by = prepared.weight_by
+    weights = prepared.weights
+    weighted_beside = prepared.weighted_beside
+    cluster_by = prepared.cluster_by
+    clusters = prepared.clusters
+    levels = prepared.levels
+    repeats = prepared.repeats
+    partitions = prepared.partitions
+    fold_members = prepared.fold_members
+    group_axes = prepared.group_axes
+    holdout_plan = prepared.holdout_plan
+    eval_roster = prepared.eval_roster
+    arm_members_map = prepared.arm_members_map
+    plan = prepared.plan
+    cfgs = prepared.cfgs
+    ch = prepared.ch
+    ph = prepared.ph
+    manifest = prepared.manifest
+    lock_path = prepared.lock_path
+    lock_hash = prepared.lock_hash
+    upstream_ledger = prepared.upstream_ledger
+    upstream_resolver = prepared.upstream_resolver
 
     run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
     with RunLock(run_dir):
@@ -3886,6 +4081,7 @@ def command_run(config_path: Path) -> int:
             provenance=provenance,
             results=results,
             repeats=repeats,
+            draft=draft,
             aggregated=aggregated,
             condition_meta=condition_meta,
             vs_baseline=vs_baseline,
@@ -3924,6 +4120,460 @@ def command_run(config_path: Path) -> int:
     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
 
 
+def command_run(config_path: Path) -> int:
+    """`publishable run` -- phases 1-5, then phases 6-10, with the gate enforced.
+
+    `allow_dirty=False` is `run`'s whole difference from `draft`: the pathspec
+    `E-CODE-DIRTY` covers is `git_provenance`'s and is not this call's business
+    (H6b Decision 12 declined widening it, and Ruling T keeps the two edits
+    apart). `isinstance`, not truthiness -- `EXIT_OK` is `0`.
+
+    **The signpost, and it is load-bearing for a reader.** Until H9a this
+    function held all ten phases, so roughly forty-five comments, docstrings
+    and `reference.md` rows across this repository attribute a behaviour to
+    "`cli.command_run`" and mean "the `run` command". Every one of them is
+    still reachable in one hop: **phases 1-5 are `_prepare_run`** (validate,
+    the dirty gate, `E-CODE-EMPTY`, the roster, the repeat plan, the hashes,
+    the manifest, the upstream ledger) and **phases 6-10 are
+    `_execute_prepared`** (the run directory, the apparatus rounds,
+    `execute_plan`, aggregation, the correction family, `run.yaml`, the exit
+    code). Stated here rather than by rewriting those forty-five sites: a
+    rewrite of each would have to decide which half it now names, and a
+    pointer invents nothing (`CLAUDE.md` § Habits, *prefer deleting a claim to
+    rewriting it*). H9a task 2's report files the sweep as correction 22.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=False)
+    if not isinstance(prepared, Prepared):
+        return prepared
+    return _execute_prepared(prepared, draft=False)
+
+
+def command_draft(config_path: Path) -> int:
+    """`publishable draft` -- `run` with the dirty-tree gate relaxed.
+
+    `reference.md` § Draft runs: a provisional run whose code state is not
+    reachable from any commit. The gate exists to protect a RECORD's identity
+    claim; a draft's record says `draft: true` in its own top-level key, which
+    is what every reader keys on (`report.py` twice, `diff.py` once -- grepped,
+    all three read `record.get("draft")` and none reads `code_dirty`).
+
+    `git.code_dirty` stays a MEASUREMENT: a draft of a clean tree records
+    `false`, because `provenance.git_provenance` answers about the tree and
+    forcing it would make a provenance figure lie about the one thing
+    provenance is for. § Draft runs' conjunction is corrected in task 6.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=True)
+    if not isinstance(prepared, Prepared):
+        return prepared
+    if prepared.git.code_dirty:
+        # A notice, not a warning and not a finding: it changes no exit code
+        # and enters no record. stderr, because it is about the invocation
+        # rather than part of what the run reports -- and because `run`'s
+        # stdout is pinned (task 1, arm B) and this must not enter it.
+        print(
+            "notice  draft   src/** or templates/** is uncommitted; "
+            "recording draft: true and git.code_dirty: true",
+            file=sys.stderr,
+        )
+    return _execute_prepared(prepared, draft=True)
+
+
+# `run_.../` stands in for the run directory `dry-run` never allocates: every
+# printed step directory is relative to it, and `allocate_run_dir` is what
+# turns the placeholder into a name — a timestamp and a `code_hash` prefix
+# that cannot exist before the directory is claimed. Named once here so the
+# printed paths and the relativization cannot drift apart.
+_DRY_RUN_PLACEHOLDER = "run_..."
+
+# The seven a run always writes, in the order `_execute_prepared` writes them
+# in, plus three that each depend on a declaration. Every conditional is
+# answered by the STRUCTURAL fact that decides it in `_execute_prepared` --
+# `lock_path is not None`, `build_allocation_document(...) is not None`, and
+# the same `isinstance(declared_probe, str) and declared_probe` guard the run
+# uses -- rather than by a reserved name or a config key read a second time,
+# which is the proxy substitution this repository keeps paying for.
+_DRY_RUN_FIXED_FILES = (
+    "config.yaml",
+    "sweep.yaml",
+    "manifest/input.json",
+    "environment/pyproject.toml",
+    "environment/repo_root.txt",
+    "executions.jsonl",
+    "run.yaml",
+)
+
+
+def _handed_counts(prepared: Prepared) -> list[int | None]:
+    """How many units each planned execution would be handed -- `None` for one
+    handed no unit list at all.
+
+    A **restatement** of `runner.execute_plan`'s four-way `execution.scope`
+    dispatch, not an extraction of it (design Decision 11): extracting it
+    would be a second behaviour-preserving extraction on a shipped path, in
+    phase 7, outside the phases this slice is chartered to move. What prevents
+    the two from drifting is an **agreement pin** -- one fold fixture and one
+    group-axis fixture in which the printed `unit-executions` must equal the
+    summed `len(io.units)` a real `run` of the same config hands out -- rather
+    than a shared helper a re-routed call site could defeat silently.
+
+    The two narrowings themselves are NOT restated: `_arm_keys` and
+    `_handed_keys` are already single-call-site extracted functions in
+    `runner`, and they are what this calls. In `execute_plan`'s own order:
+
+    1. arm narrowing first, when a group axis is declared **and** the
+       execution has a condition index (a `run`- or `summary`-scoped
+       execution has neither, and keeps the whole roster);
+    2. then, under a declared **fold**, `run` and `condition` scope receive
+       `None` -- no fold exists yet there -- `repeat` scope receives
+       `_handed_keys`' partition of the arm-narrowed roster, and `summary`
+       receives the whole arm-narrowed roster, every fold having run by then;
+    3. under a declared **holdout**, every scope receives the test partition,
+       which is `prepared.eval_roster` already: `_cond_roster`'s
+       single-authority rule means the narrowing happened once, before the
+       plan, and `execute_plan` only attaches `.train` -- which changes no
+       length.
+
+    **An execution handed `None` contributes zero**, and the caller says so in
+    the printed output, because a fold's `run`- and condition-scoped steps see
+    no units at all and a reader adding the number up by hand would be short.
+    """
+    roster = prepared.eval_roster
+    counts: list[int | None] = []
+    for execution in prepared.plan:
+        scoped = roster
+        if (
+            prepared.arm_members_map is not None
+            and roster is not None
+            and execution.condition_index is not None
+        ):
+            arm_keys = _arm_keys(
+                execution.condition_index, {u.key for u in roster}, prepared.arm_members_map
+            )
+            scoped = UnitList([u for u in roster if u.key in arm_keys])
+        handed: UnitList | None
+        if prepared.fold_members is None or scoped is None:
+            handed = scoped
+        elif execution.scope in ("run", "condition"):
+            handed = None
+        elif execution.scope == "repeat":
+            keys = _handed_keys(
+                execution.repeat_label or "", {u.key for u in scoped}, prepared.fold_members
+            )
+            handed = UnitList([u for u in scoped if u.key in keys])
+        else:
+            handed = scoped
+        counts.append(None if handed is None else len(handed))
+    return counts
+
+
+def _dry_run_step_dirs(prepared: Prepared) -> list[str]:
+    """Every step directory a run of this config would create, relative to the
+    run directory, in plan order.
+
+    One per planned (step, condition, repeat) triple, and the path scheme is
+    **not re-derived**: `runner.step_dir_for` is called against a placeholder
+    root and the answer relativized, so a change to the layout moves this
+    output with it. `collapse` is `execute_plan`'s own
+    `len(repeats) <= 1` -- a degenerate repeat level adds no directory
+    component, and computing that here from anything else would be a second
+    answer to one question.
+    """
+    root = Path(_DRY_RUN_PLACEHOLDER)
+    collapse = len(prepared.repeats) <= 1
+    # `dict.fromkeys`, not a `set`: plan order is what makes the list readable.
+    # The de-duplication itself is defensive, not a case this plan can reach
+    # today: `collapse` is `len(prepared.repeats) <= 1`, so whenever it is
+    # true there is at most one repeat label per condition and no two
+    # `build_plan` entries for one step in one condition can share a path.
+    return list(
+        dict.fromkeys(
+            str(step_dir_for(root, execution, collapse).relative_to(root))
+            for execution in prepared.plan
+        )
+    )
+
+
+def _dry_run_fixed_files(prepared: Prepared) -> list[str]:
+    """The run-directory-relative files a run writes whose names are fixed by
+    core rather than by step code. See `_DRY_RUN_FIXED_FILES` for why each
+    conditional is answered by a structural fact."""
+    files = list(_DRY_RUN_FIXED_FILES)
+    if prepared.lock_path is not None:
+        files.append("environment/uv.lock")
+    if build_allocation_document(prepared.group_axes, prepared.holdout_plan) is not None:
+        files.append("allocation.json")
+    declared_probe = getattr(prepared.run_template, "apparatus_probe", None)
+    if isinstance(declared_probe, str) and declared_probe:
+        files.append("apparatus/probes.jsonl")
+    return sorted(files)
+
+
+def _dry_run_probe(prepared: Prepared) -> int | None:
+    """`dry-run`'s own apparatus round -- the exit code it must return, or
+    `None` to carry on printing.
+
+    **Decision 6: this is NOT phases 1-5.** The run-start round lives inside
+    `with RunLock(run_dir)`, after `allocate_run_dir`, so "phases 1-5 plus the
+    probe" is not a contiguous prefix and `dry-run` cannot obtain the probe by
+    re-entering phases 1-5. It gets a round of its own, assembled from the
+    shipped pure pieces -- `apparatus.observe_once` -> `apparatus.check_facts`
+    -> `Observations.record` -> `Observations.warn_unanswered` -- once per
+    resolved condition, each under **that condition's own cfg** from
+    `prepared.cfgs`, never the wide `cfgs[-1]`, which is `Observer.observe_round`'s
+    own rule for a `condition_index=None` round.
+
+    **No `Observer` is constructed, and that is a rejection rather than an
+    omission.** `Observer.__init__` requires `run_dir: Path` and
+    `_observe_one` calls `append_observation` unconditionally, before
+    recording and before the gate -- deliberately, so the moving observation
+    is on disk before anything can stop the run. `dry-run` creates no run
+    directory, so there is no ledger to append to. Defaulting `run_dir=None`
+    and skipping the append inside `_observe_one` was considered and rejected:
+    it is a fail-open shape on a class whose whole guarantee is that the
+    append happens first, and a later caller that forgot the argument would
+    lose the ledger silently. Calling the pieces directly changes
+    `apparatus.py` not at all.
+
+    **`check_changed` is not called, and the ground is read off the two
+    functions rather than argued from the absence of a run.**
+    `Observations.record` fills `_first_answered` from the facts it is handed;
+    `changed` compares the *next* facts against that entry. With one round --
+    one call per condition -- the value the gate would compare against **is
+    the value it was just given**, so `changed` can only return `None`. Not
+    "there is no baseline": there is one, and it is the observation itself.
+
+    **`warn_unanswered` IS kept** (Decision 6): `W-APPARATUS-UNANSWERED`
+    before a metered run is exactly the news § Before you spend it exists to
+    deliver, and it costs one in-memory `Observations`. A fresh `Collector`
+    rendered to stdout, never `prepared.c`, which phases 1-5 already rendered
+    and printed -- appending to it would re-print every earlier finding and
+    inflate the counts line. A warning never changes an exit code, on
+    `W-ENV-UNLOCKED`'s precedent.
+
+    **Decision 14: the containment travels with the calls.** Both `try`
+    blocks below are `command_run`'s own -- `except BaseException` (a probe
+    calling `sys.exit()` is covered; `except Exception` would end the command
+    with no diagnostic at all), `KeyboardInterrupt` re-raised **fresh and
+    argument-less** so a `KeyboardInterrupt("...secret...")` a probe body
+    constructed never reaches Python's own printer, and a **fresh
+    credential-bearing `Collector`** rendered to stderr, which is what
+    redacts. `main`'s `PublishableError` handler prints `{exc}` with no
+    collector in scope, so anything escaping here is un-redacted. This is
+    verbatim the fault `CLAUDE.md` names as *copying a recipe's calls without
+    its containment*: H8c's `report` lifted `freeze`'s credential wiring as
+    calls and left the `try` behind, and a declared credential reached stderr
+    in a case § Secrets promises to redact. The **return branches** are copied
+    with the `try`, not only its shape: a dispatch failure is `EXIT_WRONG`,
+    and at the call site `E-APPARATUS-RAISED` -- the apparatus itself
+    unreachable -- is the one code that earns `EXIT_EXTERNAL`, exactly as
+    `command_run`'s containment splits them.
+    """
+    declared_probe = getattr(prepared.run_template, "apparatus_probe", None)
+    # `validate._check_probe` is what refuses a non-`str` declaration, and
+    # `_prepare_run` has already run it -- this guard is the same shape the
+    # run-start round uses, so a template declaring nothing costs nothing.
+    if not (isinstance(declared_probe, str) and declared_probe):
+        return None
+    declared_facts = list(getattr(prepared.run_template, "apparatus_facts", None) or [])
+    try:
+        probe_fn = apparatus._probe_for(declared_probe)
+    except BaseException as exc:
+        # `_probe_for`'s middle step (`load_entry_point`) imports a plugin's
+        # top level -- user code -- so a load-time failure can carry a
+        # credential the plugin's own import-time body read.
+        # `validate._check_probe` answers only `E-PROBE-UNKNOWN` from package
+        # metadata and never loads anything, so this failure gets no verdict
+        # from phases 1-5 at all.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        dispatch_c = Collector()
+        dispatch_c.credentials = prepared.credentials
+        dispatch_code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
+        dispatch_c.error(dispatch_code, "experiment_type", str(exc))
+        print(dispatch_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    observations = apparatus.Observations()
+    try:
+        for condition in prepared.conditions:
+            returned = apparatus.observe_once(
+                probe_fn, prepared.cfgs[condition.index], probe_name=declared_probe
+            )
+            facts = apparatus.check_facts(
+                returned,
+                declared_facts,
+                probe_name=declared_probe,
+                credentials=prepared.credentials,
+            )
+            observations.record(apparatus.condition_key(condition.index, condition.label), facts)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        probe_c = Collector()
+        probe_c.credentials = prepared.credentials
+        code = exc.code if isinstance(exc, PublishableError) else "E-APPARATUS-RAISED"
+        probe_c.error(code, "experiment_type", str(exc))
+        print(probe_c.render(), file=sys.stderr)
+        if code == "E-APPARATUS-RAISED":
+            return EXIT_EXTERNAL
+        return EXIT_WRONG
+
+    warn_c = Collector()
+    warn_c.credentials = prepared.credentials
+    observations.warn_unanswered(warn_c, declared_facts)
+    if warn_c.findings:
+        print(warn_c.render())
+    return None
+
+
+def command_dry_run(config_path: Path) -> int:
+    """`publishable dry-run` -- phases 1-5, printed, and nothing written.
+
+    **Ruling R (design Decision 1): the promise narrows to what core can
+    derive.** § Operation commands used to promise "every artifact path that
+    *would* be written", which needs the `io.write` names inside step bodies --
+    and `design-principles.md` § Greenfield only says core never inspects the
+    body of user Python. A promise that can only be kept by breaking a stated
+    non-promise is the **document** being wrong, so the document changed
+    (task 9) and this prints step directories, the fixed files, and the
+    unit-execution count. **The output says what it omits and why**: printing
+    less without saying so would reproduce the defect in the one direction a
+    reader cannot see.
+
+    `allow_dirty=True` (Decision 8): the gate exists to protect a *record's*
+    identity claim, and this writes no record -- there is no `code_hash` in
+    this output at all, so there is no figure to mistake for one. That is a
+    second USE of Ruling T's parameter, never a widening of what the gate
+    covers.
+
+    **Creates nothing** is scoped to `output_dir` (Decision 12): importing the
+    entrypoint runs `discover_local`, which writes `__pycache__` under
+    `src/**` and `templates/**` exactly as `validate` already does, and a
+    bytecode cache is not an artifact of a run. No run directory is allocated,
+    so no lock is taken either -- pointing this at a live run is as ordinary as
+    reading the ledger.
+
+    **The apparatus is probed, and nothing is appended** (Decisions 6, 7 and
+    15): `_dry_run_probe` runs one round per resolved condition after the
+    manifest and before any printing, so the cost ordering is validate ->
+    manifest -> probe and a config that does not validate never reaches the
+    probe. `PHASE_DRY_RUN` keeps its constant and gains no call site: the
+    ledger lives inside a run directory this command never creates, so the
+    phase name is reserved rather than written.
+
+    **No comparison list is printed** (Decision 16): `contrasts.resolve_contrasts`
+    is reached only from phase 8, which this never enters, so the standing
+    unhashable-side precondition on H9 is discharged by construction. The
+    `comparisons:` line reads `data.units.allocation` -- a declaration -- and
+    resolves nothing.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=True)
+    if not isinstance(prepared, Prepared):
+        return prepared
+
+    # Decision 15's cost ordering, and the ordering IS the behaviour: validate
+    # -> manifest (both inside `_prepare_run`) -> probe, stopping at the first
+    # failure. A config that does not validate exits `1` with the probe never
+    # called, so a cheap fault is never paid for at apparatus prices; only a
+    # config that validates can reach `5`. That is what makes the two codes
+    # mean "failed cheaply" versus "failed expensively", and it is why the
+    # round is sited HERE rather than beside the printing below.
+    probe_exit = _dry_run_probe(prepared)
+    if probe_exit is not None:
+        return probe_exit
+
+    lines: list[str] = []
+    modes = ["baseline"] if any(c.is_baseline for c in prepared.conditions) else []
+    # `"baseline"` is itself a truthy key of `sweep` whenever the seed above
+    # fires (`sweep.expand` only sets `is_baseline=True` from its own
+    # `if baseline:` loop), so counting it again here double-prints it —
+    # `(baseline + baseline + grid)`, invisible to the only prior assertion
+    # on this line because that fixture was grid-only. Excluded rather than
+    # re-deduplicated after the fact: the seed already carries it.
+    modes += [k for k, v in (prepared.doc.get("sweep") or {}).items() if v and k != "baseline"]
+    n_conditions = len(prepared.conditions)
+    n_repeats = len(prepared.repeats)
+    executions = len(prepared.plan)
+    lines.append(
+        f"sweep: {n_conditions} conditions"
+        + (f" ({' + '.join(modes)})" if modes else "")
+        + f" × {n_repeats} repeats = {executions} executions"
+    )
+    for condition in prepared.conditions:
+        values = " ".join(f"{path}={value}" for path, value in condition.values.items())
+        label = condition_dir_name(condition.index, condition.label or "")
+        lines.append(f"  {label}" + (f"  {values}" if values else ""))
+    lines.append(
+        "repeats: "
+        + " × ".join(
+            f"{level.kind}(k={level.n})" if level.kind == "fold" else f"{level.kind}(n={level.n})"
+            for level in prepared.levels
+        )
+    )
+    lines.append(f"  seeds: {[r.seed for r in prepared.repeats]}  (auto, from design digest)")
+    allocation = ((prepared.units_decl or {}).get("allocation")) or "within"
+    lines.append(
+        f"  comparisons: {'paired' if allocation == 'within' else 'unpaired'} "
+        f"(allocation: {allocation})"
+    )
+    lines.append(
+        "steps: "
+        + " -> ".join(
+            f"{name} ({scope})"
+            for name, scope in dict.fromkeys((e.step_name, e.scope) for e in prepared.plan)
+        )
+    )
+    resolved = 0 if prepared.roster is None else len(prepared.roster)
+    correction = (prepared.doc.get("statistics") or {}).get("correction")
+    lines.append(
+        f"statistics: basis units (n={resolved} resolved); correction {correction}; "
+        "derived metric names come from the template's aggregate() and are not "
+        "knowable before the run"
+    )
+
+    counts = _handed_counts(prepared)
+    unit_executions = sum(count for count in counts if count is not None)
+    distinct = {count for count in counts if count is not None}
+    if len(distinct) == 1 and None not in counts:
+        detail = f"({executions} executions × {distinct.pop()} units handed to each)"
+    else:
+        detail = f"(over {executions} executions; the count handed varies by scope and partition)"
+    lines.append(f"scale:  {unit_executions} unit-executions {detail}")
+    if None in counts:
+        lines.append(
+            f"  {counts.count(None)} of those executions are handed no unit list at all — a "
+            "fold's `run`- and condition-scoped steps see no units, and each contributes zero"
+        )
+
+    step_dirs = _dry_run_step_dirs(prepared)
+    fixed_files = _dry_run_fixed_files(prepared)
+    lines.append(
+        f"would create {len(step_dirs)} step directories under "
+        f"{prepared.output_dir / _DRY_RUN_PLACEHOLDER}/"
+    )
+    lines += [f"  {d}" for d in step_dirs]
+    lines.append(f"and {len(fixed_files)} fixed files in that directory:")
+    lines += [f"  {f}" for f in fixed_files]
+    lines.append(
+        f"the {prepared.output_dir / 'latest'} pointer is repointed too; it sits beside the "
+        "run directory rather than inside it"
+    )
+    # Ruling R's own requirement, in the output rather than only in the
+    # document: a narrowed promise that does not say what it dropped is worse
+    # than the wrong one it replaces, because nothing marks it partial at the
+    # point of reading.
+    lines.append(
+        "artifact files inside a step directory are NOT listed: their names are `io.write`"
+    )
+    lines.append(
+        "  arguments in step code, which core never inspects, so they are declared nowhere"
+    )
+    lines.append("  in the config and cannot be known before the run")
+    lines.append("creates nothing")
+    print("\n".join(lines))
+    return EXIT_OK
+
+
 def _dispatch(command: str, rest: list[str]) -> int:
     if command in OPERATION_COMMANDS:
         if len(rest) != 1 or rest[0].startswith("-"):
@@ -3945,7 +4595,9 @@ def _dispatch(command: str, rest: list[str]) -> int:
 
         handlers: dict[str, Callable[[Path], int]] = {
             "validate": command_validate,
+            "dry-run": command_dry_run,
             "run": command_run,
+            "draft": command_draft,
             "freeze": command_freeze,
             "report": command_report,
         }

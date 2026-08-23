@@ -82,6 +82,22 @@ design disagrees with the scoping; the six marked **new here** were found while 
     2390), so `dry-run` inherits it. That is correct and worth stating: a config whose hashed trees
     hold no file is refused before any metered call, which is the cost ordering doing its job.
 
+**Appended 2026-08-23, batch 3–5 fix round (Major 4 of
+[`task-b4-review.md`](../2026-08-23-re-entry-seam/task-b4-review.md)) — correcting correction 11
+above, not replacing it (a dated record is appended to, never retro-edited):**
+
+20. **Correction 11's "the shared arm is pinned by nothing" is false — both greps in it were on
+    message text, which answered "where does this spelling appear" rather than "what does this
+    guard do."** The full-suite mutation that drops only the **count** half of the shared condition
+    (`if len(rest) != 1:`) fails two shipped tests that predate this slice
+    (`tests/test_cli.py::test_a_missing_argument_is_an_invocation_error` and
+    `::test_operation_commands_take_no_flags`, both `git log -S`-dated to `dc21d55`) — so the count
+    half was already pinned before task 4. Only the **flag** half
+    (`rest[0].startswith("-")`) was genuinely unpinned, which is what task 4's own mutation (dropping
+    only that half) actually shows. The task 4 pin itself stands; the claim about what it was a
+    *first* pin of does not. `docs/superpowers/specs/2026-08-23-re-entry-seam-design.md` Decision 13
+    carries the matching appended correction.
+
 ---
 
 ## Task 1
@@ -351,6 +367,17 @@ substitute for the mutation above.
 **Must not touch:** `tests/test_cli.py`'s `("dry-run", "NOT BUILT")` assertion — **task 9 is its sole
 authorized editor** — the `set(NOT_BUILT_COMMANDS)` equalities, which are self-maintaining, any other
 § CLI reference row, and `provenance.py`.
+
+**Correction (whole-branch fix round, 2026-08-23), replacing this section's "one shipped answer moves"
+sentence above:** measured through the real console script, `publishable draft new` does **not**
+"after this task reach the arity arm" and does **not** print the arity message with the same exit
+code. `rest == ["new"]` has length 1, so it never trips the arm's `len(rest) != 1` at all — it
+dispatches into `command_draft` and fails inside `_prepare_run`, unable to open `new` as a path: exit
+**1**, `` error   E-IO-FAILED          No such file or directory``. The built test's own docstring
+(`test_h9a_draft_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic`) already asserts this
+correctly — `code != EXIT_INVOCATION`, not the arity message — despite what its name and this
+paragraph both claimed. This was also wrong in the design's § 5 item 3 and in a dated
+§ Executability entry in the feasibility analysis; both are corrected the same way.
 
 ---
 
@@ -653,14 +680,38 @@ Three document edits, all in `reference.md`, and one sweep that must be run befo
    H6a's batch 6 restraint is the precedent: a Minor named rather than a self-authorized out-of-scope
    edit.
 
-**The sweep, before any edit.** `64 artifacts`, `would write`, and `every artifact path` over
+**The sweep, before any edit — AMENDED 2026-08-23, batch 3–5 fix round (Major 2 of
+[`task-b4-review.md`](../2026-08-23-re-entry-seam/task-b4-review.md)). This replaces the paragraph
+below it, which is left struck rather than deleted so the reason for the replacement stays legible:
+task 9's three unowned `reference.md` edits (its own report's Concern 1) already narrowed `:368`,
+`:3756` and `:3882` away from `every artifact path` before task 12 was dispatched, so a sweep for that
+phrase finds zero homes across all six files and "Measured already" below is stale — not because the
+edits were wrong (the review adjudicated their content correct) but because the plan was never
+amended to say what replaced what it swept for, which is exactly the omission
+`CLAUDE.md` § The development record warns against.**
+
+Sweep for `step directories` and `would write` instead — the phrasing task 9 actually landed — over
+the same six files, **named individually, never `*.md`**, and **never filter the output of a sweep
+whose job is to find a string; filter the file list.** Re-measured 2026-08-23 against `HEAD` at the
+start of this fix round: `step directories` has **four** homes, all in `reference.md`
+(`:368`, `:3673`, `:3756`, `:3882` — the last three task 9's, the first also task 9's but outside its
+own section, per its Concern 1); `would write` has **three**, all in `reference.md`
+(`:3094` — task 12's own, unedited; `:3673`, `:3756` — task 9's). `64 artifacts` keeps its one home,
+`:3094`. Zero hits in `README.md`, `docs/design-principles.md`, `docs/experimental-designs.md`, and
+`CLAUDE.md`. `docs/feasibility-llm-growth-studies.md` carries its own home of the artifact-path
+promise (plan correction 9), owned by task 14, not this sweep. **Attribute every hit individually** —
+a hit in a file already accounted for reads as noise, and that is how one claim's fifth and sixth
+homes were missed in one slice. Editing `:3094`'s `64 artifacts`/`would write` line per item 1 above
+will change its own count in a re-sweep; that is expected, not a discrepancy to chase.
+
+~~**The sweep, before any edit.** `64 artifacts`, `would write`, and `every artifact path` over
 `README.md`, `docs/design-principles.md`, `docs/experimental-designs.md`, `docs/reference.md`,
 `CLAUDE.md` and `docs/feasibility-llm-growth-studies.md` — **named individually, never `*.md`**, and
 **never filter the output of a sweep whose job is to find a string; filter the file list.** Measured
 already: `64 artifacts` and `would write` have **one home each**, both in `reference.md`; a third home
 of the artifact-path promise is in the feasibility analysis (task 14). **Attribute every hit
 individually** — a hit in a file already accounted for reads as noise, and that is how one claim's
-fifth and sixth homes were missed in one slice.
+fifth and sixth homes were missed in one slice.~~
 
 **`×` not `x`, including inside fenced blocks. Hyphens, never en dashes, in anything that becomes an
 anchor. No positional row locators** — name what a sibling row *does*.
