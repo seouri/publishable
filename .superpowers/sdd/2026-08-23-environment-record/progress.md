@@ -78,3 +78,36 @@ worth knowing before someone writes the first reader.
 **And a stale comment is already waiting.** `study.py` says `provenance.environment.hostname` *"is never
 written today (measured at …)"* — **task 3 falsified it**, it is task 7's by plan, and it is the fourth
 sentence in two slices to go false under its own slice's later change.
+
+## Batch 3 — tasks 4, 5 — the redaction reason and the two error rows
+
+Commits `b5a3da0` (Ruling Q's reason plus the end-to-end bundle pin), `9e292ea` (Ruling N's two § Errors
+rows), `991c849`, review `1927b21` (**both PASS, no findings**). Suite 2969 → **2971**.
+
+**The convenient answer was checked and turned out true, which is worth recording precisely because it was
+convenient.** The report claimed correction 15's gap — *no test asserts either git code through
+`main([...])`* — was **already closed by arm T**, built in batch 1 before task 5's brief existed. That is
+the most self-serving possible finding, so the reviewer ran arm T standalone, confirmed by `git log -S`
+that it predates the brief, and then **mutated the `E-GIT-NO-COMMIT` raise site to a silent fallback**:
+arm T fails on `assert 'E-GIT-NO-COMMIT' in ''`. **It exercises the code through the console entry rather
+than passing vacuously** — which is the difference between a closed gap and a gap closed by assertion.
+
+**Ruling N's rows account for a swallow, not just a raise.** `E-GIT-NO-REPO` has **one raise and six reach
+paths, three of them deliberate swallows** — and *a swallow is part of a code's behaviour*, so a row that
+describes only the raise would be narrower than its code, which is the exact shape that produced a
+whole-branch Major on two sub-slices and shipped twice in a third. Both codes' reach paths were
+re-derived by independent grep, and **the placement question was answered from the table's own scope
+sentence rather than from the design's instruction** — the correction of H6a's batch 4, where a review
+settled the same question by citing the design.
+
+**Ruling Q's pin is the point and it was proven able to fail.** A real bundle built outside the test suite
+carries `hostname` redacted and `os`/`hardware` verbatim; **extending the redaction to cover `os` fails
+the new fixture.** The `hostname` wiring had been written against a key nobody wrote until task 3, so
+until this batch there was nothing to pin. And § What `study add` redacts now says **why** — redaction is
+for identity and credentials, and a bundle reader needs the platform that produced a number — so the next
+reader does not re-litigate it.
+
+**One process note worth keeping: a reviewer's own CLI probe wrote stray `configs/` and `src/cohort_pilot/`
+into the repo's working tree**, caught before the gates were taken as final. A probe that runs a creation
+command inside the repo dirties the tree the dirty gate reads — **which this slice's sibling made
+load-bearing** — so a probe belongs outside the repo, the same rule the bundle fixtures already follow.
