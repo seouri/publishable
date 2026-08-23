@@ -4081,6 +4081,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             provenance=provenance,
             results=results,
             repeats=repeats,
+            draft=draft,
             aggregated=aggregated,
             condition_meta=condition_meta,
             vs_baseline=vs_baseline,
@@ -4145,6 +4146,36 @@ def command_run(config_path: Path) -> int:
     if not isinstance(prepared, Prepared):
         return prepared
     return _execute_prepared(prepared, draft=False)
+
+
+def command_draft(config_path: Path) -> int:
+    """`publishable draft` -- `run` with the dirty-tree gate relaxed.
+
+    `reference.md` § Draft runs: a provisional run whose code state is not
+    reachable from any commit. The gate exists to protect a RECORD's identity
+    claim; a draft's record says `draft: true` in its own top-level key, which
+    is what every reader keys on (`report.py` twice, `diff.py` once -- grepped,
+    all three read `record.get("draft")` and none reads `code_dirty`).
+
+    `git.code_dirty` stays a MEASUREMENT: a draft of a clean tree records
+    `false`, because `provenance.git_provenance` answers about the tree and
+    forcing it would make a provenance figure lie about the one thing
+    provenance is for. § Draft runs' conjunction is corrected in task 6.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=True)
+    if not isinstance(prepared, Prepared):
+        return prepared
+    if prepared.git.code_dirty:
+        # A notice, not a warning and not a finding: it changes no exit code
+        # and enters no record. stderr, because it is about the invocation
+        # rather than part of what the run reports -- and because `run`'s
+        # stdout is pinned (task 1, arm B) and this must not enter it.
+        print(
+            "notice  draft   src/** or templates/** is uncommitted; "
+            "recording draft: true and git.code_dirty: true",
+            file=sys.stderr,
+        )
+    return _execute_prepared(prepared, draft=True)
 
 
 def _dispatch(command: str, rest: list[str]) -> int:

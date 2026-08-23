@@ -20665,3 +20665,116 @@ def test_h9a_arm_e_the_zero_file_e_code_empty(tmp_path: Path, monkeypatch, capsy
     assert main(["run", str(cfg)]) == EXIT_WRONG
     assert "E-CODE-EMPTY" in capsys.readouterr().out
     assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+# ===========================================================================
+# H9a task 3 — `command_draft` (design Decision 3 / Ruling T;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 3). `draft` relaxes
+# the dirty-tree gate `_prepare_run`'s `allow_dirty` parameter guards, and
+# must not widen what the gate COVERS: the pathspec stays `src/**` and
+# `templates/**` (H6b Decision 12, declined, one line from this one).
+# Fixture Q is called directly against `command_draft`, since `draft` is not
+# dispatched by name until task 4.
+# ===========================================================================
+
+
+def test_h9a_fixture_q_a_draft_on_a_dirty_tree(tmp_path: Path, monkeypatch, capsys):
+    """Fixture Q: `draft` on a tree dirtied AFTER the commit, outside this
+    repository. `command_draft` must proceed where `run` would refuse
+    (Fixture arm E, sub-fixture 2 covers `run`'s own refusal on the
+    identical shape of dirt), record `draft: true` and
+    `provenance.git.code_dirty: true`, and print the notice on STDERR only
+    — asserted on that one stream, never on a combined capture, which is
+    this repo's own recorded trap (an absence asserted on the wrong stream
+    passes vacuously)."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is True
+
+    # The notice is on stderr, and stdout must not have absorbed it — `run`'s
+    # own stdout is pinned (task 1 arm B) and a draft must not join it there.
+    assert "notice" in err
+    assert "draft" in err
+    assert "src/** or templates/**" in err
+    assert "notice" not in out
+
+
+def test_h9a_fixture_q_a_draft_on_a_clean_tree_records_code_dirty_false(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The other half of Ruling T's own ground: `code_dirty` stays a
+    MEASUREMENT under `draft`, not a value forced by the command. A draft of
+    a clean tree records `draft: true` and `git.code_dirty: false` — the
+    conjunction § Draft runs documents today cannot be honoured on this
+    input, which is exactly Correction 12 (corrected in task 6). No notice
+    is printed, because there is nothing uncommitted to notice about."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_clean")
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is False
+    assert "notice" not in err
+
+
+def test_h9a_a_dirty_tree_still_refuses_plain_run(tmp_path: Path, monkeypatch, capsys):
+    """The other direction of the gate relaxation, on the identical dirtied
+    tree Fixture Q uses: `run` must still refuse. Pinning only `draft`'s
+    honouring would leave `run`'s refusal unpinned against a regression that
+    widens `allow_dirty` for both callers at once."""
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_run_refuses")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+    results_dir = tmp_path / "results"
+
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_fixture_q_draft_pathspec_does_not_widen_to_the_repo_root(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Ruling T's own trap, given its own fixture: a file dirtied OUTSIDE
+    `src/**` and `templates/**` — at the repository root — must not be seen
+    by the gate at all, under `draft` OR under `run`. H6b Decision 12
+    declined widening `E-CODE-DIRTY`'s pathspec to the repo root; `draft`
+    relaxing the gate must not close that declined decision sideways. Both
+    calls must proceed (exit 0) and both records must show `code_dirty:
+    false`, because the dirt sits outside `HASHED_TREES`."""
+    from publishable.cli import command_draft
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_q_root_dirt")
+    root = cfg.parents[2]
+    (root / "README_UNCOMMITTED.md").write_text("dirt at the repo root, not under src/**\n")
+
+    exit_code = command_draft(cfg)
+    out, err = capsys.readouterr()
+    assert exit_code == EXIT_OK, (exit_code, out, err)
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["provenance"]["git"]["code_dirty"] is False
+    assert "notice" not in err
+    shutil.rmtree(run_dirs[0])
+
+    assert main(["run", str(cfg)]) == EXIT_OK
