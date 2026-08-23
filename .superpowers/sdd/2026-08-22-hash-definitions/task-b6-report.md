@@ -420,3 +420,22 @@ string.
 
 **Nothing else in this report depends on either claim**, and no commit does: `f70499f` and `fe8ea47`
 cite no helper name.
+
+---
+
+## Second correction to this report, same day — two counts in the `CLAUDE.md` entry, fixed at `823e569`
+
+Found by re-reading my own entry against the ledger rather than against my memory of it. Neither is a
+claim any commit rests on; both are the kind of number this project re-derives rather than carries.
+
+1. *"batch 2 did and it was the slice's one Major"* — **wrong**. Batch 2's review recorded one Major;
+   batch 3's recorded **three**. Corrected to *"that was its own batch's only Major"*.
+2. *"Twice more the device caught a sentence going false under its own change"* — **undercounted**. The
+   ledger's batch-5 entry says *"the third time this slice has caught a sentence going false under its
+   own change"*, and the third is batch 1's Minor: `hashes.py`'s `code_hash` docstring saying it reads
+   the working tree *"not from git"*, true when written and false after task 5, which task 5 then
+   fixed (read at the current tree: *"**Which** files are read is `include`'s answer, and
+   `command_run`'s asks git"*). Corrected to three, all three named.
+
+`CLAUDE.md` is a live document rather than a development record, so this one is corrected in place and
+the correction recorded here.
