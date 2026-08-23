@@ -363,6 +363,19 @@ says so.
 **H6b task 18's** ruling (Decision 15): `validate` walks no tree and shells to no git today, so H6a
 added no check there.
 
+**AMENDED 2026-08-23, H6b task 6: Ruling P answers it — no seat.** No new `W-` code for
+`docs/reference.md` § Templates' *"goes dirty at `validate`"* sentence, confirmed true by measurement
+rather than by reading (a hand-assembled repo whose `.gitignore` omits `__pycache__/`, run through the
+actual CLI: `git status --porcelain` clean, `publishable validate` exits `0` and leaves
+`templates/__pycache__/` and `src/**/__pycache__/` untracked, a second `git status --porcelain` shows
+them, and `publishable run` on the same repo then refuses with `E-CODE-DIRTY`). Three grounds: a `W-`
+code is a registry seat, and this condition already has a downstream catch — `E-CODE-DIRTY` at `run` —
+so a warning at `validate` would be a second seat for one fact; the scaffold's own `.gitignore`
+excludes `__pycache__/` (`src/publishable/scaffold.py`'s `GITIGNORE` constant), so only a
+hand-assembled repo ever reaches this path; and `validate` walking a tree or shelling to git for a
+warning nobody asked for is exactly the added surface Decision 15 declines. No registry entry follows
+from this ruling.
+
 ## An unwritable or missing `output_dir` surfaced as a bare traceback — now fixed at the CLI
 
 `run_identity.allocate_run_dir` creates `output_dir` with `mkdir(parents=True,
@@ -9269,6 +9282,32 @@ is outside the gate's **pathspec**, not outside its exclude chain.
 decision and its own cost accounting (every uncommitted root file becomes a candidate the gate must
 rule on). H6b holds the `validate` tree-state ruling, which is the same question asked at the other
 surface. A successor should decide the two together rather than widening this one pathspec by hand.
+
+**AMENDED 2026-08-23, H6b task 6 (Ruling P and Decision 12, decided together as this entry asked):
+DECLINED, remains open, re-owned unassigned.** H6b considered widening the dirty gate's pathspec to
+cover an uncommitted root `.gitignore` and declines it. The gate's pathspec is `src/**` and
+`templates/**` by the same decision that scopes `code_hash` itself — [§ Three
+hashes](../reference.md#three-hashes) — and widening it to "every uncommitted root file that could
+be a `.gitignore`" is a behaviour change to a shipped command with a real cost: an ordinary
+uncommitted `README.md`, `NOTES.md`, or draft config at the repo root would have to be examined and
+ruled either relevant or not, and a false positive there stops a run that carries no identity defect
+at all. H6b is chartered additive (this file's own instructions above), and this is the one item in
+this entry's inbox that cannot be closed additively — closing it changes what `E-CODE-DIRTY` refuses
+for every existing repo, not only for the pathological one this entry measured. Decided *together with*
+the sibling question at `validate` (Ruling P, task 6, same commit): Ruling P answers that one with **no
+new seat** — no `W-` code, because a `W-` is a registry seat and the condition this entry describes is
+already caught downstream, at `run`, by `E-CODE-DIRTY` itself once a step actually executes. Answering
+this entry's question with "widen the gate" while Ruling P answers the neighbouring one with "add
+nothing" would decide the same shape of question in opposite directions in one slice, on no argument —
+so both stay narrow. **Re-owned: unassigned, with the reason** — no remaining chartered slice has
+`E-CODE-DIRTY`'s pathspec as its surface. H9 owns `reproduce`, `dry-run`, `draft`, `resume`, `demo` and
+`docs`, none of which touches the dirty gate's definition; H3c-3's remaining 14 tasks are folds and
+holdouts inside cells. **The closer's own cost accounting, named rather than deferred again:** a
+successor who does take this on must decide what an uncommitted root file that is **not** a
+`.gitignore` — a stray `README.md`, a half-written config, an editor swap file — should do at the same
+gate, since widening the pathspec to "the repo root" catches all of them, not only the one this entry
+measured; a design that stops a run over an unrelated root file is the failure this decline exists to
+avoid repeating on a wider scale.
 
 ## ~~under neutralized git configuration the dirty gate answers *clean* on a repository git considers dubiously owned~~ — STRUCK 2026-08-23 (H6a Ruling M): CLOSED, not by design
 
