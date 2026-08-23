@@ -9737,3 +9737,21 @@ surface — **H9b** is `resume`, **H9c** is `reproduce`, **H9d** is `demo`/`docs
 **H3c-3's remaining 14** is folds and holdouts inside cells. H9d is the nearest neighbour, since
 `demo`'s stop 4 prints this very line for a user's first `dry-run`, but printing a command's output is
 not the same surface as choosing its wording and taking it in passing is what this file rejects.
+
+## OPEN — `repo_root.txt` has a THIRD reader repeating the same refusal triple, and no shared guard — **Owner: unassigned, no remaining slice owns `freeze` and `report` together**
+
+**Measured at `4ed2fa5` on H9b's branch, filed after batches 1–2's review found the escalation lived only
+in a task report.** H9b's `read_repo_root` is the **third** copy of the read-and-refuse triple that
+`freeze` and `report` already carry for `environment/repo_root.txt`. Each copy re-implements the same
+three refusals over the same one-line file, and the copies have **already drifted**: this one omits the
+`encoding="utf-8"` both precedents pass.
+
+**Why H9b did not consolidate it.** Consolidating means one guard serving `freeze`, `report` and `resume`,
+which is a change to two shipped commands' read paths in a slice chartered for a third — and *the sibling
+that already got it right is the first place to look* argues for reusing a guard, not for rewriting two
+callers to reach a new one mid-slice.
+
+**Owner: unassigned, with the reason.** No remaining slice (H9c, H9d, H3c-3's remaining 14) owns `freeze`
+and `report` together; whoever consolidates should note the drift above is the argument, since **three
+copies of one refusal that already disagree in one keyword are three copies that will disagree in a
+refusal next.**
