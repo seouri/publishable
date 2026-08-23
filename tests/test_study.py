@@ -281,14 +281,24 @@ def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
 
 
 def test_study_add_leaves_hostname_untouched_when_absent_from_the_source(tmp_path: Path):
-    """The real-run counterpart of the fixture above: today's real records
-    never carry `hostname` at all, and redaction must not invent the key.
+    """Redaction must not INVENT `hostname` when the source lacks it.
 
     H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
     edits `_fixture_y_record`'s docstring only, which is not a body edit and
-    is not read as an arm edit."""
+    is not read as an arm edit.
+
+    EDITED 2026-08-23 by controller ruling, post-edit state specified in
+    advance: the assertion is byte-identical and the property is unchanged;
+    only the SOURCE of an absent-`hostname` record became explicit. This arm
+    was captured when a real run wrote no `hostname` at all, and H6b task 3
+    made real runs write one -- so the arm rested on a premise its own slice
+    then falsified. Deleting the key here says outright what the fixture used
+    to obtain by accident, which is what the arm was always testing: an
+    absent key stays absent rather than becoming `<redacted by study add>`."""
     run = _real_run(tmp_path, "proj1")
-    redacted = _redact(run["record"])
+    record = run["record"]
+    del record["provenance"]["environment"]["hostname"]
+    redacted = _redact(record)
     assert "hostname" not in redacted["provenance"]["environment"]
 
 
