@@ -77,3 +77,19 @@ line — the distinction the signpost exists to carry.
 mutation counts were **single-test-scoped and did not say so** — one reported as *"1 failed"* is
 `247 failed, 196 passed` over its own file. The mutations were real and the arms do fail; what was wrong
 was the number, which is the **ninth** miscount in four slices.
+
+## Fix round — batches 3–5 review (`task-b4-review.md` @ `574eba7`)
+
+Four Majors, five Minors — all closed or explicitly ruled open. Full detail in the dated addendum to
+`task-b4-report.md`. Two code fixes (`dry-run`'s double-counted `baseline`, the shared arity arm's
+mischaracterized pin), two document-only fixes (`reference.md:872`'s stale "resolves the run
+directory" clause, task 12's sweep target amended in the plan), and three test additions (a
+baseline+grid fixture pinning Major 1, Fixture V fixturing the holdout leg Minor 3 named, and a
+`main([...])`-driven arm closing Minor 4). Suite 3010 → 3012 (+2, the two brand-new test functions;
+no other count moved).
+
+**One deliberate non-fix, ruled rather than silently deferred:** Minor 5's `probes the apparatus`
+clause stays in `reference.md`'s `dry-run` row false-until-task-10, because task 10 — next in this
+same slice, same unmerged branch — is what makes it true, and narrowing it now would mean re-widening
+it again inside one slice. The whole-branch gate owns re-checking it; if task 10 doesn't land before
+merge, that promotes this to a Major at the gate.

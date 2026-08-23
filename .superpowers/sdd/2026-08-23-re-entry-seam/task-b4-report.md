@@ -500,3 +500,117 @@ demonstrated by one prose invocation and nothing else); the arity mutation above
    proxy for whether the narrowing runs — the agreement pin is.
 6. `.superpowers/sdd/.gitignore` was checked before each commit and was **not** clobbered during this
    batch.
+
+---
+
+## Fix round — 2026-08-23 (batches 3–5 review, `task-b4-review.md` @ `574eba7`)
+
+All four Majors and all five Minors closed this round. Suite **3012 passed, 1 skipped, 2 xfailed**
+(+2 over the review's 3010 = the two new test functions below; no other count moved). Gates clean:
+`ruff check .` (all passed), `ruff format .` (93 files unchanged — no `*.md` touched by it, confirming
+the house rule), `mypy` (52 source files, no issues).
+
+### Major 1 — `dry-run`'s sweep header double-counted `baseline` — CLOSED
+
+`src/publishable/cli.py::command_dry_run`: `modes` no longer re-adds `"baseline"` from the `sweep`
+dict once the `is_baseline` seed has already added it (`k != "baseline"` added to the list
+comprehension's filter). New test
+`test_h9a_dry_run_sweep_header_does_not_double_count_baseline` uses a config declaring **both**
+`baseline` and `grid` — the fixture the review named as the one that separates the two readings.
+**Read before fixing**: the test failed against the unfixed code with
+`sweep: 3 conditions (baseline + baseline + grid) × 2 repeats = 6 executions`, confirming the bug
+live. **Mutation** (revert to the pre-fix line): full run of the two relevant tests gives
+`1 failed, 1 passed` — the new test fails, the pre-existing grid-only end-to-end test
+(`test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript`) stays green, which is exactly
+the review's *fixture whose numbers agree with the bug* diagnosis reproduced and now closed by a
+fixture that cannot agree with it.
+
+### Major 2 — task 12's mandated sweep would find zero homes — CLOSED
+
+`docs/superpowers/plans/2026-08-23-re-entry-seam.md` § Task 12: the old sweep paragraph (`64
+artifacts`, `would write`, `every artifact path`) is struck (shown, not deleted) and replaced by an
+amended paragraph swept for `step directories` and `would write` — the phrasing task 9 actually
+landed. Re-measured 2026-08-23 against `HEAD`, each file named individually: `step directories` → 4
+homes (`reference.md:368,3673,3756,3882`); `would write` → 3 homes (`reference.md:3094,3673,3756`);
+`64 artifacts` → 1 home (`:3094`); zero hits in `README.md`, `design-principles.md`,
+`experimental-designs.md`, `CLAUDE.md`. `feasibility-llm-growth-studies.md`'s home stays task 14's per
+plan correction 9. The amendment says what it replaces and why, per `CLAUDE.md`'s append-not-retro-edit
+rule for the development record.
+
+### Major 3 — `reference.md:872` still claimed `dry-run` "resolves the run directory" — CLOSED
+
+Narrowed to *"it prints paths and creates nothing"*, with a parenthetical stating the load-bearing
+fact plainly: `dry-run` resolves no run *id* either, since the timestamp/hash-prefix name is claimed
+only by `allocate_run_dir`, so the paths it prints hold the literal `run_.../` placeholder. Linked to
+`#run-identity`, which already documents that naming scheme. `"takes no lock"` and `"creates
+nothing"` — the parts the review confirmed true and pinned — are untouched.
+
+### Major 4 — "the shared arity arm is pinned by nothing" was false — CLOSED
+
+Both the plan (`§ Corrections against the code`, new item 20) and the design (Decision 13, and § 3
+item 9, new item 14) carry appended corrections — not retro-edits — stating the narrower truth: a
+full-suite mutation dropping only the **count** half of the shared condition fails two tests
+predating this slice (`test_a_missing_argument_is_an_invocation_error`,
+`test_operation_commands_take_no_flags`, both `dc21d55`), so the count half was already pinned; only
+the **flag** half was genuinely unpinned, which is what task 4's own mutation demonstrates. The
+report's own claim from batch 4 stands corrected by this addendum rather than edited away.
+
+### Minor 1 — `test_operation_commands_take_no_flags`'s name outran its assertion — CLOSED
+
+Its two-argument call (`["run", "cfg.yaml", "--allow-dirty"]`) short-circuits on the count check
+before the flag half its name claims is ever reached. Added a second assertion,
+`main(["run", "--allow-dirty"])` (one argument, flag-shaped) — this isolates the flag half, since
+`len(rest) == 1` there and only `rest[0].startswith("-")` can produce `EXIT_INVOCATION`. **Mutation**:
+dropping the flag check (`if len(rest) != 1 or rest[0].startswith("-"):` → `if len(rest) != 1:`) fails
+the new assertion (`assert 1 == 2`) while the pre-existing assertion stays green — read from a
+scoped run of this one test, confirming the new line is what does the work now. Reverted, verified
+byte-identical by `diff`.
+
+### Minor 2 — task 5's "every hit attributed" over-claimed — left as the review found it
+
+Not separately re-edited this round: the review's own finding already states the correction (two
+pre-existing negative-side assertions at `tests/test_diff.py:531,738` were not named in the table, and
+neither changes a conclusion). No further action needed beyond what the review recorded — CLOSED by
+the review's own text, restated here so it is not read as still open.
+
+### Minor 3 — the holdout leg of `_handed_counts` was unfixtured — CLOSED, by building the fixture
+
+`test_h9a_fixture_v_unit_executions_agrees_with_a_real_holdout_run`: 20 units, `holdout.frac: 0.2` at
+the already-pinned seed `4321` (4-unit test partition, matching
+`test_a_declared_holdout_now_validates_and_runs`'s own count), two seed repeats, a repeat-scoped
+counting step. Ground truth observed from the real run (`[4, 4]`, sum 8), asserted against
+`dry-run`'s printed total. **Mutation**: `roster = prepared.eval_roster` → `roster = prepared.roster`
+(the full, pre-holdout roster) at the top of `_handed_counts` — full run of Fixtures S, T and V
+together: **1 failed** (V: `assert 40 == 8`), S and T unaffected, confirming the mutation is
+attributed to the holdout leg alone and that S/T's existing coverage does not already catch it.
+Reverted, verified byte-identical by `diff`.
+
+### Minor 4 — the *creates-nothing* arms called `command_dry_run` directly — CLOSED
+
+Appended a `main(["dry-run", str(cfg)])` arm to
+`test_h9a_dry_run_leaves_an_existing_output_dir_byte_identical`, re-running the same whole-tree
+byte-identity snapshot through the dispatched command. Passes; the direct-call arm above it is
+untouched (not replaced, since it also serves as the more surgical failure locator).
+
+### Minor 5 — the `probes the apparatus` clause is false until task 10 lands — left OPEN, by explicit ruling
+
+**Not fixed this round, on purpose.** Read `command_dry_run`'s body: no call to `apparatus.observe_once`
+or any probe dispatch exists yet — `_dry_run_fixed_files` only checks *whether* a probe is declared
+to decide if `apparatus/probes.jsonl` belongs in the fixed-file list, it does not run one. So the
+row's clause is false of the code today, exactly as the review found.
+
+The plan (`docs/superpowers/plans/2026-08-23-re-entry-seam.md` § Task 9) mandates this exact wording
+as content, not merely as a suggestion (*"wording yours, that content mandatory"*), on the ground
+that task 10 — the very next task in this same slice, landing on this same unmerged branch — is what
+makes it true. Narrowing the row now would mean re-widening it again within the same slice, which is
+the kind of churn `CLAUDE.md`'s development-record conventions exist to avoid, and this fix round's
+charter is batches 3–5 (tasks 3–9), not task 10. **Ruling: the clause stays, and the whole-branch gate
+(not this fix round) is the owner of re-checking it once task 10 either lands or is dropped** — matching
+the review's own adjudication at check 5, now recorded as a decision rather than left as an open
+question. If task 10 does not land before merge, this becomes a Major at the gate, not a Minor.
+
+### Commits
+
+Each Major/Minor above except 2 and 5 (documentation-only or explicitly-not-fixed) touches
+`src/publishable/cli.py` and/or `tests/test_cli.py`; Majors 2–4 touch only the plan/design/reference
+documents. See the commit log for this fix round for the exact split.
