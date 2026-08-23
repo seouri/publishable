@@ -66,7 +66,13 @@ from publishable.replication import (
     realize_order,
     resolve_repeats,
 )
-from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+from publishable.run_identity import (
+    IDENTITY_FILE,
+    RunLock,
+    allocate_run_dir,
+    identity_document,
+    point_latest,
+)
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
     StopSignal,
@@ -2567,6 +2573,29 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     )
 
 
+def _recorded_config_path(config_path: Path, repo_root: Path) -> str:
+    """`config_path` relative to `repo_root`, POSIX-separated, for
+    `identity.json`.
+
+    Relative and not absolute because a run directory may be read on a
+    machine where the repository sits somewhere else, and POSIX-separated
+    because the recorded name is a name rather than a local path.
+
+    The fallback records the absolute path. It is a fallback and not a
+    promise: `repo_root` is `find_repo_root(config_path)`'s answer, a WALK-UP
+    from the config itself, so a config outside its own repo root is not a
+    state this function can be handed by `_prepare_run`. An absolute recorded
+    path is refused on read (`run_identity.config_path_for`), so a directory
+    that somehow carried one refuses with `E-RESUME-NO-CONFIG` rather than
+    resolving something unrelated.
+    """
+    resolved = config_path.resolve()
+    try:
+        return resolved.relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
     """Phases 6-10 of a run: allocate the run directory, execute, record.
 
@@ -2641,6 +2670,27 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
         # re-dump: a re-dump would silently drop every comment `init` wrote.
         (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
         (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+
+        # `identity.json` — the three identity figures, the config's own path,
+        # and whether this is a draft, made durable BEFORE anything executes,
+        # because `resume` compares against them and a crashed run directory
+        # holds no `run.yaml` to read them from (design Decision 1). Written
+        # here rather than later for the same reason `config.yaml` and
+        # `repo_root.txt` are: inside the lock, before `sweep.yaml`, settled
+        # before the first execution and never touched again. Every figure is
+        # `Prepared`'s own -- a second derivation would be a second answer.
+        (run_dir / IDENTITY_FILE).write_text(
+            json.dumps(
+                identity_document(
+                    code_hash=ch,
+                    parameters_hash=ph,
+                    uv_lock_hash=lock_hash,
+                    config_path_rel=_recorded_config_path(config_path, repo_root),
+                    draft=draft,
+                ),
+                indent=2,
+            )
+        )
 
         # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
         # the first execution: `docs/reference.md` § The other files a run writes
@@ -4185,7 +4235,7 @@ def command_draft(config_path: Path) -> int:
 # printed paths and the relativization cannot drift apart.
 _DRY_RUN_PLACEHOLDER = "run_..."
 
-# The seven a run always writes, in the order `_execute_prepared` writes them
+# The eight a run always writes, in the order `_execute_prepared` writes them
 # in, plus three that each depend on a declaration. Every conditional is
 # answered by the STRUCTURAL fact that decides it in `_execute_prepared` --
 # `lock_path is not None`, `build_allocation_document(...) is not None`, and
@@ -4198,6 +4248,7 @@ _DRY_RUN_FIXED_FILES = (
     "manifest/input.json",
     "environment/pyproject.toml",
     "environment/repo_root.txt",
+    "identity.json",
     "executions.jsonl",
     "run.yaml",
 )

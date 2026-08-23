@@ -16446,6 +16446,7 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
         "config.yaml",
         "environment",
         "executions.jsonl",
+        "identity.json",
         "manifest",
         "run.yaml",
         "sweep.yaml",
@@ -21712,7 +21713,7 @@ def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: P
     # SELF-MAINTAINING and MUST NOT be edited: it is the second, independent
     # assertion that catches an entry added to the tuple but not written, or
     # written but not listed.
-    assert "and 7 fixed files in that directory:" in out
+    assert "and 8 fixed files in that directory:" in out
     # The pointer a run repoints OUTSIDE the run directory. It is not in the
     # brief's fixed-file list and not inside the parsed block, so nothing else
     # in these tests holds it — and an unheld sentence in this output is the
@@ -23005,3 +23006,132 @@ def test_h9b_arm_g_the_takeovers_mutual_exclusion(tmp_path: Path, monkeypatch, c
     assert (crashed / "run.yaml").exists()
     assert (crashed / "lock").exists() is False
     assert (crashed / "lock.takeover").exists() is False
+
+
+# --- H9b task 3: `identity.json`'s write site -------------------------------
+
+_H9B_IDENTITY_PROBE_MODULE = """\
+import json
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9b_identity_probe")
+def probe(cfg):
+    out = Path(cfg.data.output_dir)
+    (run_dir,) = sorted(p for p in out.glob("run_*"))
+    Path(os.environ["H9B_IDENTITY_SNAPSHOT"]).write_text(
+        json.dumps(sorted(p.name for p in run_dir.iterdir()))
+    )
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_h9b_identity_json_exists_while_the_lock_is_held(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """`identity.json` is written INSIDE `with RunLock(run_dir)`, before
+    anything executes.
+
+    **Guard-pin arm B cannot see this**, checked in advance rather than
+    assumed: arm B lists the root of a COMPLETED run directory, where the
+    file is present whether it was written inside the lock or after it. So
+    the position gets its own pin, and the only observer core has inside that
+    window is the apparatus run-start probe (`Observer.observe_round`, called
+    within the same `with` block).
+
+    The probe snapshots the run directory's own root, so the evidence is a
+    positive presence — `identity.json` there, `lock` there, `run.yaml` not
+    yet — rather than an absence that a probe which never ran would also
+    satisfy.
+    """
+    site = installed(
+        "dist-h9b-identity",
+        "1.0",
+        {"publishable.probes": {"h9b_identity_probe": "h9b_identity_probe_mod:probe"}},
+    )
+    (site / "h9b_identity_probe_mod.py").write_text(_H9B_IDENTITY_PROBE_MODULE)
+    snapshot = tmp_path / "snapshot.json"
+    monkeypatch.setenv("H9B_IDENTITY_SNAPSHOT", str(snapshot))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9b_identity_pkg",
+        template_name="h9b_identity_assay",
+        probe_name="h9b_identity_probe",
+    )
+    assert main(["run", str(cfg)]) == EXIT_OK
+    names = json.loads(snapshot.read_text())
+    assert "identity.json" in names, names
+    # Inside the lock, not merely before the record: the lock file is what
+    # marks that window, and `run.yaml` is written after it is released.
+    assert "lock" in names, names
+    assert "run.yaml" not in names, names
+
+
+def test_h9b_identity_json_records_the_runs_own_figures(tmp_path: Path):
+    """Every figure in `identity.json` is the one `run.yaml` records — not a
+    recomputation that happens to agree.
+
+    A second derivation is a second answer, so the comparison is against the
+    record the same run wrote, and `config_path` is compared against the
+    config file the run was given, relative to the repo root and
+    POSIX-separated.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    identity = json.loads((doc["run_dir"] / "identity.json").read_text())
+    assert list(identity) == [
+        "code_hash",
+        "parameters_hash",
+        "uv_lock_hash",
+        "config_path",
+        "draft",
+    ]
+    assert identity["code_hash"] == run_doc["code_hash"]
+    assert identity["parameters_hash"] == run_doc["parameters_hash"]
+    assert identity["uv_lock_hash"] == run_doc["provenance"]["environment"]["uv_lock_hash"]
+    assert identity["draft"] is False
+    # The recorded name is relative and POSIX-separated, and it resolves to
+    # the config the run was given — the honouring direction, which task 2's
+    # containment refusals do not prove.
+    assert identity["config_path"] == "configs/cohort-pilot/config.yaml"
+    assert (doc["root"] / identity["config_path"]).resolve() == doc["cfg"].resolve()
+    # `input_manifest_hash` is deliberately absent (design Decision 1): the
+    # manifest itself is the durable operand.
+    assert "input_manifest_hash" not in identity
+
+    def reject(name: str) -> object:
+        raise AssertionError(f"non-finite JSON token {name!r} in {identity}")
+
+    # The file survives a reader that REFUSES `NaN`/`Infinity`, which plain
+    # `json.loads` accepts (plan correction 22: "serializable by invariant"
+    # was a wrong ground, so the round trip is performed rather than argued).
+    text = (doc["run_dir"] / "identity.json").read_text()
+    assert json.loads(text, parse_constant=reject) == identity
+    with pytest.raises(AssertionError):
+        json.loads('{"code_hash": NaN}', parse_constant=reject)
+
+
+def test_h9b_a_draft_run_records_draft_true(tmp_path: Path):
+    """`draft` is read from `_execute_prepared`'s own parameter, so the two
+    entries into one execution path disagree here and nowhere else.
+
+    Both arms in one test on purpose: a `draft: true` assertion alone passes
+    for a build that hardcodes `true`, and the `run` arm above passes for one
+    that hardcodes `false`.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    assert json.loads((doc["run_dir"] / "identity.json").read_text())["draft"] is False
+    assert main(["draft", str(doc["cfg"])]) == EXIT_OK
+    (drafted,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    drafted_identity = json.loads((drafted / "identity.json").read_text())
+    assert drafted_identity["draft"] is True
+    # Everything else is the same run's own figures, so the flag is the only
+    # difference between the two records' identity claims.
+    assert (
+        drafted_identity["code_hash"]
+        == json.loads((doc["run_dir"] / "identity.json").read_text())["code_hash"]
+    )
