@@ -5,10 +5,8 @@ variable's NAME; the value lives in `.env`, which every scaffold gitignores.
 
 **Never touches provenance**, and the claim is structural rather than careful:
 nothing in this module imports `publishable.provenance` or writes into the
-document it builds, and `provenance.environment` is assembled from `os`,
-`hostname`, `hardware` and `uv.lock` alone. The one surface on which a value
-could reach a record is a failing step's exception text, which `redact` below
-exists for.
+document it builds. The one surface on which a value could reach a record is
+a failing step's exception text, which `redact` below exists for.
 """
 
 import os

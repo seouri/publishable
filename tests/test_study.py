@@ -157,9 +157,8 @@ def _real_run(tmp_path: Path, subdir: str) -> dict:
 def _fixture_y_record() -> dict:
     """Fixture Y: a record synthesized by hand, not one a real `run`
     produced — its only job is to exercise the `hostname` row of
-    § What `study add` redacts, which nothing in this build writes
-    (measured at `ebf642a`: `provenance.environment` is `{manager,
-    python_version, uv_lock, uv_lock_hash}`). Every other field here is
+    § What `study add` redacts with a value hand-picked for it, rather
+    than one a real run happened to produce. Every other field here is
     copied from a real record's shape so `read_record_file`'s own checks
     (a real `run_id`, this build's `schema_version`) pass, but the VALUES
     are hand-picked to exercise every redacted field at once.
