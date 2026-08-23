@@ -382,6 +382,18 @@ neither `unknown command` nor `is specified but not built`, and that nothing is 
 **Cost if wrong.** A flag reaches a parser, and `design-principles.md` § Everything is in the file is
 breached by the two commands whose whole existence is the argument for modes-as-names.
 
+**Appended 2026-08-23, batch 3–5 fix round (Major 4 of
+[`task-b4-review.md`](../2026-08-23-re-entry-seam/task-b4-review.md)) — correcting, not replacing,
+the "pinned by nothing today" claim above:** both greps that produced it were on **message text**
+(`"takes exactly one path"`, `"no flags"`), which answers where a spelling appears rather than what
+the guard does. A full-suite mutation dropping only the **count** half of the condition
+(`if len(rest) != 1:`, leaving the flag check) fails two tests that predate this slice —
+`test_a_missing_argument_is_an_invocation_error` and `test_operation_commands_take_no_flags`
+(`git log -S` → `dc21d55`) — so the count half was already pinned. Only the **flag** half was
+genuinely unpinned; task 4's mutation (dropping only that half, which fails exactly the two new
+`--json` tests and nothing predating this slice) is what actually demonstrates a first pin, and it
+demonstrates one for the flag half alone.
+
 ### Decision 14 — the probe's **credential wrapper** travels with the calls
 
 **Question.** `dry-run` runs user code — the probe. What contains a credential it read?
@@ -506,6 +518,13 @@ disagreements and all six were wrong. Each was found by measuring, and each meas
     (*"`run` and `draft` compute the…"*) and `runner.py`'s *"`draft` and `resume` when they land
     (H9)"*. Both must be re-read when `draft` lands — a sentence going false under its own slice's
     change is this family's most frequent single defect.
+14. **Appended 2026-08-23, batch 3–5 fix round (Major 4 of
+    [`task-b4-review.md`](../2026-08-23-re-entry-seam/task-b4-review.md)) — item 9 above is itself
+    false, not merely stale.** Both its greps were on message text; a full-suite mutation dropping
+    only the **count** half of the shared condition fails two tests predating this slice
+    (`test_a_missing_argument_is_an_invocation_error`, `test_operation_commands_take_no_flags`,
+    `dc21d55`). The count half was already pinned; only the **flag** half was unpinned. See Decision
+    13's appended correction for the full account.
 
 ---
 
