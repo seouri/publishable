@@ -145,3 +145,53 @@ escalation, not a silence.
 
 **And the review could not fault a single mutation count** — five disjoint mutations reconciling to
 exactly 10, three to exactly 7 — **the first batch in four slices where that was true.**
+
+## Batches 6 and 7, and the whole-branch gate
+
+Commits `204fbf7` (the probe round), `42019f5`, `efad33c` (the transcript and thirteen § Errors rows),
+`c925416`, `e133833` (both passes, § Executability), `66a24b4`, `12a9370`, reviews `a08cec7`
+(**all five tasks PASS**; gate **HOLD** on two Majors), fix round `bf2a76e` / `c6bec08`. Suite
+**3019 passed, 1 skipped, 2 xfailed** against `main`'s 2973 — **+46 test functions, derived by an `ast`
+walk rather than counted.**
+
+**The extraction is still behaviour-preserving at HEAD, and the gate re-measured it rather than inheriting
+batch 2's number.** Two editable installs with a positive control: `run.yaml` equal over **284 leaves in
+order**, the tree over **36 paths**, `sweep.yaml` over 31, `executions.jsonl` **key by key**, stdout,
+stderr and exit code — one difference, `config.yaml`, attributed to a normalization item and empty once
+paths are normalized. **Zero unattributed differences**, against a slice that moved 1916 lines of shipped
+code.
+
+**The deliberately-open finding closed.** The `dry-run` row's *probes the apparatus* clause was false when
+batch 5 shipped it, left open with a named escalation, and task 10 made it true — verified through the real
+console script with an installed probe distribution: **two probe calls, one per resolved condition, each
+under its own cfg** (`m1`, `m2` — not `m1`, `m1`), both warning, `output_dir` empty, exit 0. **Four homes,
+where the finding named one.** *An open finding with a named escalation is how a scope boundary should
+read*, and this is the instance where it worked.
+
+**Three mutations in these batches were claims that did not survive contact.** The design's Fixture Y
+mutation was **blind on every shipped arm** — all three drove a `generic` project with
+`apparatus_probe = None`, so `append_observation` had no round to add to; spliced in for real it gives
+1 failed, 3 passed. Fixture X's mutation is **not constructible** (`prepared` unbound). And a `dict.fromkeys`
+comment argued its de-duplication was *"real rather than defensive"* **for a case that cannot occur** —
+removing the call entirely left the suite unchanged, so **the comment was corrected to say defensive**,
+which is what *a safety argument in a comment is a claim* means when the claim turns out false rather than
+dangerous.
+
+**Major 1 is `CLAUDE.md`'s own insertion rule, failing in a new way.** Task 12's insertion into a
+§ Warnings row **displaced the antecedent of the following sentence**, so the row said `dry-run`'s counts
+are *"replayed from the ledger"* three clauses after saying they are *that round's own in-memory counts
+alone* — **the one thing the design's decision exists to deny.** *When you insert or remove a row, check
+every row it moved* now has a sibling: **check every sentence whose antecedent it displaced.** The other
+twelve row edits were swept in full context; only this one had the shape.
+
+**Major 2 is a disclosed behaviour change whose disclosure was wrong — including in a dated entry.** Three
+records said `publishable draft new` keeps its exit code and prints the arity message. Measured on both
+console scripts: exit **2 → 1**, the line is **`E-IO-FAILED`**, a config path **is** read, and the arity
+arm is **never reached** because `new` is a single token. **Task 4's own test docstring had it right the
+whole time.** Corrected by appending to the design, the plan and the § Executability entry, and in place in
+`CLAUDE.md`. **A wrong disclosure is worse than no disclosure**, because it tells a reader the change is
+smaller than it is — and this one was the only place a user would have looked.
+
+**And the tenth miscount: *fifteen* narrowed § Errors rows is thirteen** — fourteen counting the fix
+round's, whose fourteenth is a **widening**, not a narrowing. A count that merges two kinds is the shape
+behind three of this family's miscounts, so the widening is now stated as its own fact.
