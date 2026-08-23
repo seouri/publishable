@@ -2358,6 +2358,33 @@ def command_run(config_path: Path) -> int:
         return unignored_under_hashed_trees(repo_root, candidates)
 
     hashed = hashed_files(repo_root, _include)
+    # E-CODE-EMPTY, ONE emit site (H6a task 8, Ruling D): a record whose
+    # `code_hash` is `sha256:e3b0c442…` — the digest of nothing — proves
+    # nothing, and would otherwise be published, cited, and bundled with no
+    # diagnostic. Written as `if not hashed:`, testing the FILE LIST rather
+    # than comparing against the empty digest — `ch == "sha256:e3b0c442…"`
+    # answers "were there zero files?" with a digest comparison, a proxy a
+    # mutation swapping one for the other would pass every fixture in this
+    # slice on. `hashes.code_hash` itself still returns the empty digest for
+    # an empty tree: two tests in tests/test_hashes.py use exactly that value
+    # as a negative control, so the refusal belongs at this caller, not
+    # inside the pure hashing module. Reachable two ways — no file at all
+    # under either tree, or every file under them git-excluded — both named
+    # in docs/reference.md § Errors core raises' `E-CODE-EMPTY` row. Sits
+    # after unit resolution (a resolver's quota may already be spent) and
+    # before `allocate_run_dir` below, so a refusal here leaves no run
+    # directory behind.
+    if not hashed:
+        empty_c = Collector()
+        empty_c.error(
+            "E-CODE-EMPTY",
+            "src/** or templates/**",
+            "no file found under either tree once git's exclude rules are "
+            "applied; the run would otherwise publish sha256:e3b0c442… — "
+            "the digest of nothing — as its code_hash",
+        )
+        print(empty_c.render())
+        return EXIT_WRONG
     ch = code_hash_of(hashed)
     ph = parameters_hash(doc)
     manifest = build_manifest(

@@ -19559,3 +19559,132 @@ def test_h6a_fixture_m_one_record_carries_two_hash_definitions(tmp_path: Path, m
         "results",
     ]
     assert record["schema_version"] == upstream_record["schema_version"]
+
+
+# ---------------------------------------------------------------------------
+# H6a task 8 — `E-CODE-EMPTY`: zero hashed files refuses at the caller.
+#
+# Deliberately not `_h6a_t5_project`, which always writes `src/pkg/step.py`:
+# Fixture G needs `src/` to hold nothing at all, and neither fixture needs
+# `templates/**`, which that helper never creates either. Git does not track
+# an empty directory, so `src/` exists on disk with nothing committed under
+# it in both fixtures below — the "committed repo with an empty src/" the
+# design's Ruling D and § Corrections 6 both measured.
+# ---------------------------------------------------------------------------
+
+
+def _h6a_t8_project(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    package: str,
+    gitignore: str,
+    write_step: bool,
+) -> Path:
+    """A runnable project whose `src/pkg/` is either empty or wholly excluded.
+
+    The entrypoint lives outside both hashed trees, on `sys.path`, the same
+    route `_h6a_t5_project` and the guard pin's `_h6a_pin_project` use — so a
+    run reaches unit resolution and the hashing site without either tree
+    supplying the importable code.
+    """
+    proj = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    outside = tmp_path / "outside"
+    for path in (proj, data, results, outside):
+        path.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"u{i:02d},{'control' if i <= 10 else 'treatment'}\n" for i in range(1, 21))
+    (data / "index.csv").write_text("patient_id,arm\n" + rows)
+    pkg_dir = outside / package
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "experiment.py").write_text(_H6A_T5_PLAIN_EXPERIMENT)
+    monkeypatch.syspath_prepend(str(outside))
+
+    (proj / ".gitignore").write_text(gitignore)
+    (proj / "pyproject.toml").write_text('[project]\nname = "t8-project"\nversion = "0.1.0"\n')
+    (proj / "uv.lock").write_text('version = 1\nrequires-python = ">=3.11"\n')
+    (proj / "src" / "pkg").mkdir(parents=True)
+    if write_step:
+        (proj / "src" / "pkg" / "step.py").write_text("a = 1\n")
+    # The directory name must match `_H6A_T5_CONFIG`'s own `metadata.name: t5`
+    # (`E-NAME-DIR`), so this reuses task 5's directory name rather than a
+    # task-8-flavoured one.
+    cfg = proj / "configs" / "t5" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        _H6A_T5_CONFIG.replace("ENTRYPOINT", f"{package}.experiment:Experiment")
+        .replace("INPUT_DIR", str(data))
+        .replace("OUTPUT_DIR", str(results))
+    )
+    subprocess.run(["git", "init", "-q", "."], cwd=proj, check=True)
+    subprocess.run(["git", "add", "."], cwd=proj, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "t8"],
+        cwd=proj,
+        check=True,
+    )
+    return cfg
+
+
+def test_h6a_fixture_g_a_wholly_empty_src_refuses_e_code_empty(tmp_path: Path, monkeypatch, capsys):
+    """Fixture G, end to end (§ Corrections 6's counter-example carried
+    forward): a committed repo with an empty `src/`, no `templates/`, and an
+    entrypoint importable from outside both trees. Before task 8's guard this
+    is exactly the shape the H6 scoping measured producing a **completed run
+    at exit 0** with `code_hash: sha256:e3b0c442…` in its `run_id` — the
+    digest of nothing, published with no diagnostic.
+
+    Asserts exit 1, `E-CODE-EMPTY` in the rendered output, and — by listing
+    `output_dir` rather than trusting the exit code alone — that no run
+    directory was left behind. A refusal that leaves an empty run directory
+    is a different behaviour from one that does not, and `allocate_run_dir`
+    runs after this guard specifically so this holds.
+    """
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="t8_fixture_g",
+        gitignore=".env\n__pycache__/\n*.py[cod]\n.venv/\n",
+        write_step=False,
+    )
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h6a_fixture_h_a_wholly_ignored_src_refuses_e_code_empty(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture H — the situation task 5's exclude-aware hashing creates
+    (§ Corrections 6): a committed repo whose `.gitignore` is exactly `src/`,
+    whose `src/pkg/step.py` is untracked, and which holds no file under
+    `templates/**`. `git status --porcelain -- src templates` prints nothing
+    (the dirty gate passes — `src/pkg/step.py` is excluded, not modified),
+    and after task 5's `include` there are zero hashed files: every candidate
+    under `src/**` is git-excluded. **With a `templates/t.py` present the
+    refusal never fires** (§ Corrections 6's own measurement) — this fixture
+    is deliberately built without one, so a later edit that quietly adds one
+    would have to come back here.
+    """
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="t8_fixture_h",
+        gitignore="src/\n",
+        write_step=True,
+    )
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=cfg.parents[2],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert status.stdout == ""
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
