@@ -377,3 +377,46 @@ documents and no row of the table.
    commit. The design carries the wrong name in Decision 12 and in its own measurements table; nothing
    in `docs/` or `spec-defects.md` cites it, and a spec is not retro-edited, so it is reported rather
    than fixed. **This batch cites no helper name at all.**
+
+---
+
+## Correction to this report, appended the same day — concern 3 above is wrong in both of its claims
+
+**Appended rather than edited**, the way this project corrects a published claim. Written minutes after
+the commit above, on a grep run to check my own sentence — which is the point: *before repeating any
+claim a brief makes about the code, grep for it*, and I repeated one without doing so, in the report
+whose job was to check exactly that.
+
+**Concern 3 said the plan's § Corrections 9 is right and that nothing in `docs/` cites the name. Both
+halves are false, and the more important one is the first.**
+
+`grep -rn "_parameters_hash_for" docs/ src/ tests/`:
+
+```
+src/publishable/diff.py:419:def _parameters_hash_for(side: _Side) -> str:
+src/publishable/diff.py:457:    hash_a = _parameters_hash_for(side_a)
+src/publishable/diff.py:458:    hash_b = _parameters_hash_for(side_b)
+tests/test_diff.py:24,456,463,474,506  — imported and exercised by name
+docs/superpowers/spec-defects.md:4599  — cites `diff._parameters_hash_for`
+docs/superpowers/specs/2026-08-22-hash-definitions-design.md:49, 494  — the design's two citations
+docs/superpowers/plans/2026-08-22-hash-definitions.md:1449, 1450  — the correction itself
+```
+
+**`_parameters_hash_for` exists, at `diff.py:419`, and the design's citation of it is accurate.** The
+plan's § Corrections 9 — *"`diff.py`'s helper is `_compute_parameters_hash`, not
+`_parameters_hash_for`"* — **confuses the helper with the aliased import it calls**: `diff.py:28` does
+`from publishable.hashes import parameters_hash as _compute_parameters_hash`, and `_parameters_hash_for`
+calls that alias at line 439 for a config side while returning a run side's recorded string. Both names
+are real and they are two different things.
+
+**So a correction presented as measured is itself wrong**, and it instructed *"tasks 7 and 12 cite the
+real name where they cite one at all"* — which, had either task cited a name, would have made it cite
+the wrong one. Neither did, so nothing shipped on it. The **behavioural** claim both documents agree on
+is unaffected and still confirmed: only a config operand is recomputed, a run side reads the recorded
+string.
+
+**And the second half of concern 3 was false too:** `docs/superpowers/spec-defects.md:4599` does cite
+`diff._parameters_hash_for` — correctly, as it turns out. Nothing needs correcting there.
+
+**Nothing else in this report depends on either claim**, and no commit does: `f70499f` and `fe8ea47`
+cite no helper name.
