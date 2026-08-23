@@ -748,8 +748,7 @@ Three substantial pieces of both projects are not runs, and calling them runs wo
 | Calibration intercept and slope | Model fitting, beyond core aggregation | Template `aggregate` if derivable per condition from the unit table, else `summary` `Estimate` |
 | Gwet's AC1 with patient-bootstrap intervals | Not core aggregation | `summary` `Estimate` |
 | Latin-square counterbalancing of effort by block position | Core gives a randomized complete block; it has no per-unit condition sequence | Accept RCBD, or carry position into a `summary` step from the recorded order |
-| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by`. **`study new` and `study add` ship as of H8b/H8c** — see [§ Executability on this
-build](#executability-on-this-build) ([§ Executability on this build](#executability-on-this-build)) |
+| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by`. **`study new` and `study add` ship as of H8b/H8c** — see [§ Executability on this build](#executability-on-this-build) |
 | Disease-cap 200 versus 500 as a design axis | Same | Same |
 | Prevalence-adjusted PPV at 1% and 3% | Not a design axis at all | `report.prevalences` as a list `Param`, computed in `aggregate` |
 | Adaptive candidate selection inside one run | Refused | Two runs, selection recorded between them |
