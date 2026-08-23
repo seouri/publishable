@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import publishable.secrets
 from publishable.secrets import credential_values, load_env, missing_env, redact
 
 _NAME = "PUBLISHABLE_TEST_TOKEN"
@@ -145,3 +146,44 @@ def test_a_value_that_contains_another_value_is_redacted_whole():
     values = {"SHORT": "abc", "LONG": "abcdef"}
     assert redact("saw abcdef here", values) == "saw <redacted:LONG> here"
     assert redact("saw abc here", values) == "saw <redacted:SHORT> here"
+
+
+def test_h6b_fix_round_secrets_never_reaches_provenance():
+    """H6b whole-branch review, Minor 2 — `secrets.py`'s structural claim, pinned.
+
+    The module docstring's *"nothing in this module imports
+    `publishable.provenance`"* is a safety argument in a comment, and it was
+    true at HEAD by accident of nobody having added the import: adding
+    `import publishable.provenance` to `secrets.py` left
+    `tests/test_secrets.py`, `tests/test_study.py` and `tests/test_apparatus.py`
+    green (119 passed). A safety argument needs a mutation like any other.
+
+    Read from the file's own AST rather than from the imported module's
+    namespace: an `import publishable.provenance` binds `publishable` and
+    nothing new on `secrets`, so a namespace check would not see it. Both
+    halves of the mutation are covered — the `import`/`from` forms by the AST
+    walk, and a dynamic `importlib.import_module("publishable.provenance")` by
+    the source scan below the docstring.
+
+    Scoped to what the sentence says. The docstring's former trailing clause
+    *"or writes into the document it builds"* was deleted in the same fix
+    round rather than pinned here, because an import check answers it only by
+    proxy — this test's docstring is deliberately no broader than its
+    assertions.
+    """
+    import ast  # noqa: PLC0415
+
+    source = (Path(publishable.secrets.__file__)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "provenance" not in alias.name, alias.name
+        elif isinstance(node, ast.ImportFrom):
+            assert "provenance" not in (node.module or ""), node.module
+            for alias in node.names:
+                assert "provenance" not in alias.name, alias.name
+
+    body_start = tree.body[1].lineno if len(tree.body) > 1 else 1
+    below_the_docstring = "\n".join(source.split("\n")[body_start - 1 :])
+    assert "provenance" not in below_the_docstring

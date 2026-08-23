@@ -266,9 +266,16 @@ def test_study_add_redaction_is_not_secrets_redact_field_replacement_only():
 
 
 def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
-    """Fixture Y: the one row exercised only over a hand-built record,
-    because nothing in this build writes `provenance.environment.hostname`
-    today (it is H6's).
+    """Fixture Y: `study add` redacts `hostname` on a hand-built record.
+
+    The three claims this docstring used to open with are DELETED rather
+    than rewritten (H6b whole-branch review, Major 3): that nothing in this
+    build writes `provenance.environment.hostname`, that it is H6's, and
+    that this is the one row exercised only over a hand-built record. Task 3
+    made a real `run` write the key, and task 4's Fixture E
+    (`test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end`,
+    in this file) exercises the same row over a real bundled record — so all
+    three went false inside this slice.
 
     H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
     edits `_fixture_y_record`'s docstring only, which is not a body edit and
@@ -305,9 +312,12 @@ def test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end(tmp_pa
     redacted; `hostname` is. Added BESIDE the hand-built Fixture Y
     (`test_study_add_redacts_hostname_when_present_on_a_synthesized_record`),
     never in place of it -- Fixture Y exercises every redacted field at
-    once on a record nothing in this build yet writes; this fixture
-    exercises the wiring against a key H6b task 3 made `run` actually
-    write, end to end through a real bundle.
+    once on a hand-built record; this fixture exercises the wiring against
+    a key H6b task 3 made `run` actually write, end to end through a real
+    bundle. (The clause claiming that record is one "nothing in this build
+    yet writes" is DELETED: a real record now carries `hostname`,
+    `input_dir`, `output_dir` and `repo_root`, so it was true only of this
+    exact hand-built document -- H6b whole-branch fix round, Major 3.)
 
     The bundle sits under `tmp_path`, outside any repository -- `study new`
     and `study add` both refuse `E-STUDY-IN-REPO` otherwise. The SOURCE

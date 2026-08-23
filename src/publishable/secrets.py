@@ -4,9 +4,15 @@ docs/reference.md § Secrets & credentials. A config holds an environment
 variable's NAME; the value lives in `.env`, which every scaffold gitignores.
 
 **Never touches provenance**, and the claim is structural rather than careful:
-nothing in this module imports `publishable.provenance` or writes into the
-document it builds. The one surface on which a value could reach a record is
-a failing step's exception text, which `redact` below exists for.
+nothing in this module imports `publishable.provenance`. That half is pinned by
+`tests/test_secrets.py::test_h6b_fix_round_secrets_never_reaches_provenance`,
+which parses this file's own imports — before it existed, adding the import left
+the suite green (H6b whole-branch review, Minor 2). The trailing clause *"or
+writes into the document it builds"* is DELETED rather than rewritten: an import
+check answers it only by proxy, and answering a structural question with a
+correlated one is this repo's signature failure. The one surface on which a
+value could reach a record is a failing step's exception text, which `redact`
+below exists for.
 """
 
 import os
