@@ -935,3 +935,19 @@ output of a sweep whose job is to find a string.
   omit a defaulted parameter. The plan runs the suite and reports the real number.
 - **Whether any project in the wild carries a submodule under `src/**`.** Unknowable, which is why
   Decision 6's cost-if-wrong names the fallback rather than claiming there is none.
+
+---
+
+## Correction, 2026-08-23, from batch 6's review — Decision 15 misreads the sentence it proposes to change
+
+**Decision 15 reads § Templates' clause about a hand-assembled repo *"going dirty at `validate`"* as a
+claim that `validate` enforces the dirty gate, and proposes to change it on that ground. Read with its
+own subject, the clause says something else and something true**: discovery imports every file under
+`templates/` to find its registration, **which writes `templates/__pycache__/`** — so a repo whose
+`.gitignore` omits that line **becomes dirty as a result of running `validate`**, and then fails `run`.
+The sentence is about a side effect of validating, not about a gate inside it.
+
+**H6b task 18 owns re-reading it, and must re-read rather than delete on this decision's say-so.** The
+distinction matters more after Ruling F than before: with the hash honouring the repo's committed
+excludes, a `.gitignore` that omits `__pycache__` now changes **two** answers rather than one, and the
+unconditional `__pycache__` skip inside the hash is what keeps them from disagreeing.
