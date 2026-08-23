@@ -268,14 +268,15 @@ def test_study_add_redaction_is_not_secrets_redact_field_replacement_only():
 def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
     """Fixture Y: `study add` redacts `hostname` on a hand-built record.
 
-    The three claims this docstring used to open with are DELETED rather
-    than rewritten (H6b whole-branch review, Major 3): that nothing in this
-    build writes `provenance.environment.hostname`, that it is H6's, and
-    that this is the one row exercised only over a hand-built record. Task 3
-    made a real `run` write the key, and task 4's Fixture E
+    Three claims this docstring used to open with went false inside this
+    slice — task 3 made a real `run` write the key, and task 4's Fixture E
     (`test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end`,
-    in this file) exercises the same row over a real bundled record — so all
-    three went false inside this slice.
+    in this file) exercises the same row over a real bundled record. They are
+    DELETED rather than rewritten, and they are enumerated in the fix-round
+    section of the slice's whole-branch review (Major 3) rather than quoted
+    back here: quoting a superseded claim inside a test docstring plants new
+    hits for the next sweep to triage, which is the exact fault that let one
+    of them survive two sweeps of this file.
 
     H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
     edits `_fixture_y_record`'s docstring only, which is not a body edit and
