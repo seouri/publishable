@@ -210,3 +210,39 @@ has caught a sentence going false under its own change.
 
 **The Minor is the sixth miscount in two slices**: *"caught by arm F alone"* against a measured two. None
 of the six changed a conclusion.
+
+## Batch 6 — tasks 12, 13 — the records, reviewed rather than skimmed
+
+Commits `f70499f` (three entries struck, two gaps filed, the spine correction, `CLAUDE.md`), `fe8ea47`
+(the § Executability entry), `eb5b038` and five self-found corrections, review `d56eee3` (**both PASS**,
+no Critical, no Major, two Minors carried to the gate), controller follow-up closing both. Suite unmoved
+at **2955**; no file under `src/` or `tests/` touched.
+
+**§ Executability does not move, re-derived rather than repeated**, and the four-row table was
+**independently re-extracted and diffed byte-for-byte** against the preceding entry by the reviewer
+rather than accepted on the report's md5. Row 1 counts *errors* and `W-PARAM-UNSET` is a warning; the two
+new errors are raised by `command_run`, not `validate`; rows 2–3 name dependencies this slice does not
+touch; row 4 counts per-config dependencies and `code_hash` is computed for every run regardless of
+config. Whether `W-PARAM-UNSET` fires on those nine is **unknowable with a reason** — neither plugin is
+installable — which is the honest form of that answer.
+
+**The batch found two things wrong in its own authorities, which is what a records task is for.** The
+brief and the design both said H6a *"took none of the nine undocumented codes"* — **it took one**,
+`E-CODE-DIRTY`, in this slice's own batch-4 follow-up, found by `git log -S` rather than by reading. And
+**the plan's § Corrections 9 is itself wrong**: `_parameters_hash_for` **does** exist, and the correction
+confused it with the alias it calls. *A correction that is wrong is worse than no correction*, because a
+task told to distrust a name distrusts the right one.
+
+**Two Minors were left for the gate rather than fixed, and the restraint was the right call in one and
+the routing right in the other.** A `reference.md` row attributed the no-defaults-file rule to
+`design-principles.md` while its own link points into `reference.md` — **outside task 12's file list, and
+batch 2's Major was exactly a self-authorized out-of-scope edit**, so it was named rather than taken. And
+**Decision 15 misreads the sentence it proposes to change**: § Templates' *"goes dirty at `validate`"*,
+read with its own subject, says discovery's import writes `templates/__pycache__/` so **the tree becomes
+dirty as a result of validating** — which is true, and is a stronger claim after Ruling F than before,
+since a `.gitignore` omitting that line now changes two answers rather than one. Both are closed by the
+controller: the attribution edited, the misreading **appended** to the design rather than edited into it.
+
+**And the batch disclosed that its own mechanical checker produced eight false positives on first run.**
+That is the third time in two slices a sweep or checker could not be trusted until debugged — *prove
+every sweep can fail* is a rule about the checker as much as about the claim.
