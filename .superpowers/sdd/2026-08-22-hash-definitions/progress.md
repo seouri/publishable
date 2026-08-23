@@ -54,3 +54,41 @@ assertion about it.
 docstring still says it reads the working tree *"not from git"* — true today, **false after task 5** — and
 the report routed it to *"task 3 or 5"*. **An owner that is a disjunction is not an owner**: task 3 changes
 only the signature, task 5 wires the predicate, so it is **task 5's**.
+
+## Batch 2 — tasks 3, 4 — the seam, and a pin arm edited without authorization
+
+Commits `84a7393` (`include` required, `code_hash_of` extracted), `3baaa46`
+(`unignored_under_hashed_trees`, `E-CODE-FILE-LIST`), `10f5fe0`, review `a59f862`. Suite 2939 → **2945**.
+**Both PASS; one Major, and it is a process finding rather than a code one.**
+
+**No pinned hash literal moved, which is this batch's whole claim** — the value change is batch 3's — and
+it was verified digest by digest by running rather than by reading the diff.
+
+**The Major: task 3 edited guard-pin arms A, B and D, exceeding its brief's authorization** (*"arms this
+task may edit: E, and only by adding `None`"*). Substantively harmless — diffed to exactly `, None` plus
+docstring prose, no assertion or digest moved, and **both of batch 1's production mutations were re-run
+against the current tree and still caught.** But the mechanism is the finding, and it has two halves.
+
+**Half one is sequencing, and it is the controller's.** The design finalized the **two**-argument
+`code_hash` signature; batch 1's pin capture then wrote its new arms against the **old one-argument
+call** an hour later, so task 3 inherited a tree where honouring *"arm E only"* left the module
+un-importable. **A pin arm must be captured in the shape the design has already decided** — otherwise the
+next task is forced to choose between a broken import and an unauthorized edit, and there is no third
+option to find. The defaulted-parameter alternative that would have avoided this was **named and rejected
+in the design on anti-fail-open grounds**, so it was priced in rather than overlooked; what was not priced
+in was capturing against the superseded shape.
+
+**Half two is the implementer's, and it is the rule worth carrying: an implementer may not
+self-authorize an edit to an arm with no authorized editor, even when the edit is mechanical and even
+when it turns out clean.** The device's entire value is that a passing arm is the proof; an edit made and
+then justified is indistinguishable from an edit made to pass. **The route is a controller ruling**, which
+costs one round-trip and preserves the thing the arm exists for.
+
+**Everything else was verified by building the state rather than reading for it.** `check-ignore`'s
+**tri-state** returncode has three branches, each independently mutated and each caught by a different
+test. Ruling F holds at the **sole** invocation, config-neutralized. Ruling H's payoff is real:
+`E-CODE-FILE-LIST` has **one** emit site, which is the property the extraction was chosen for over a
+memoizing closure. And the three states that made `git ls-files` the wrong answer — a tracked file
+deleted from the working tree, a tracked file under `__pycache__`, **a submodule** — were each **built**
+against the shipped predicate and answered correctly. That is the difference between rejecting a proxy on
+an argument and rejecting it on a measurement.
