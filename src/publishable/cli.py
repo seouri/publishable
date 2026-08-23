@@ -4235,8 +4235,13 @@ def command_draft(config_path: Path) -> int:
 # printed paths and the relativization cannot drift apart.
 _DRY_RUN_PLACEHOLDER = "run_..."
 
-# The eight a run always writes, in the order `_execute_prepared` writes them
-# in, plus three that each depend on a declaration. Every conditional is
+# The eight a run always writes, plus three that each depend on a
+# declaration. (This comment used to claim the entries were "in the order
+# `_execute_prepared` writes them in", which was already false of the
+# shipped tuple -- the code writes `manifest/input.json` first and
+# `sweep.yaml` sixth, where the tuple lists them third and second. The
+# clause is deleted rather than rewritten: `_dry_run_fixed_files` sorts what
+# it prints, so no order here is load-bearing.) Every conditional is
 # answered by the STRUCTURAL fact that decides it in `_execute_prepared` --
 # `lock_path is not None`, `build_allocation_document(...) is not None`, and
 # the same `isinstance(declared_probe, str) and declared_probe` guard the run

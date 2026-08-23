@@ -292,7 +292,7 @@ this is.
 | `sweep.yaml` | **IDENTICAL**, leaf by leaf, with no normalization |
 | `executions.jsonl` | 5 lines each; **key sets identical line for line**; the ordered `(step, condition, repeat, status, error)` tuples identical |
 | `run` stdout / stderr / exit code | **IDENTICAL** after path normalization; exit `0` both sides |
-| `dry-run` transcript, line by line | **Exactly the two differences named in advance**: `and 7 fixed files in that directory:` → `and 8 …`, and one new line `  identity.json` in the fixed-file list, in write order. Nothing else, on either stream; exit `0` both sides |
+| `dry-run` transcript, line by line | **Exactly the two differences named in advance**: `and 7 fixed files in that directory:` → `and 8 …`, and one new line `  identity.json` in the fixed-file list — printed in **sorted** position, between `executions.jsonl` and `manifest/input.json`, because `_dry_run_fixed_files` ends `return sorted(files)`; the tuple's own order decides nothing about the transcript. Nothing else, on either stream; exit `0` both sides |
 
 **The one `run.yaml` difference, attributed by measurement rather than by argument.** The manifest
 records each input file's `mtime` alongside its size and sha256, and my fixture wrote the two sides'
@@ -335,8 +335,16 @@ arm D's literal (mine) and **`docs/reference.md`'s worked `dry-run` transcript, 
 the list** — filed below for the documents task; no `*.md` was touched here.
 
 In `src/`: `_DRY_RUN_FIXED_FILES`'s own comment said *"The seven a run always writes"* and now says
-*"The eight"*. That is the count phrase nearest the tuple, and the only one in `src/` — 
-`grep -rn "seven" src/publishable/cli.py` returns nothing else about this tuple.
+*"The eight"*. That is the count phrase nearest the tuple, and the only one in `src/`.
+
+**FINDING, in the same sentence I edited: its ordering clause was already false.** The comment claimed
+the entries were *"in the order `_execute_prepared` writes them in"*; the code writes
+`manifest/input.json` first and `sweep.yaml` sixth, while the tuple lists them third and second. So
+the claim was false at HEAD and I changed the count inside it without at first re-reading its
+justification. **The clause is deleted rather than rewritten** — `_dry_run_fixed_files` sorts what it
+prints, so no order in the tuple is load-bearing, and a deletion cannot invent. My own insertion point
+(after `environment/repo_root.txt`, as the brief prescribes) is unaffected: it is the local write
+order, and the transcript's order is `sorted`'s.
 
 **No test parses `reference.md`'s `dry-run` transcript**, grepped rather than assumed: the three
 `"would create"` hits in `tests/` are all assertions on the **command's** output
@@ -383,6 +391,19 @@ disagreements are filed above: the arm B/D editor number, and fixture B's unreac
   the crashed one) rather than asserting an absence, because an absence would also pass for a fixture
   whose first run never happened.
 
+## Filed, not fixed
+
+- **`environment/repo_root.txt` now has a third reader with the same three refusals.** `grep -rn
+  "repo_root.txt" src/publishable/` — the two shipped ones are `freeze` (`E-FREEZE-NO-CONFIG`) and
+  `report._read_repo_root` (`E-REPORT-OVERRIDE-REPO`), each refusing absent / empty / not-a-directory,
+  and `run_identity.read_repo_root` is the third (`E-RESUME-NO-CONFIG`). **Not consolidated, and the
+  reason is written into the docstring rather than left as a silence**: `freeze`'s copy does not raise
+  — it returns an exit code through its own `_refuse`, so it is not usable as a shared predicate — and
+  sharing one reader would change what two SHIPPED commands raise and print, with `freeze.py` a file
+  this task is forbidden to touch. The `StepIO._contained` precedent (one predicate, a `code=`
+  parameter, three callers) is the shape a consolidation should take; it needs a slice that owns
+  `freeze` and `report`.
+
 ## Concerns for the controller
 
 1. **The arm B / arm D editor number needs a ruling on the record**, even though batch 2 is complete:
@@ -393,7 +414,12 @@ disagreements are filed above: the arm B/D editor number, and fixture B's unreac
    name collision, refused by `E-STEP-KEY-COLLISION`). Its brief should say what separates the
    by-name and structural readings **without** a colliding recorded key, or say the mutation is blind
    and what replaces it.
-3. **The documents list above is longer than "one file added"** — in particular § `config.yaml` and
+3. **Task 9 must rule on whether `resume` re-writes `identity.json`.** The write sits in the block
+   `resume` re-enters, and its own comment repeats § The other files a run writes' *"settled before
+   the first execution and never touched again"* — which is a promise a second entry can break. Named
+   now rather than discovered at task 9; the honest options are *skip when the file exists* and
+   *rewrite identical bytes*, and they differ for a directory whose figures moved.
+4. **The documents list above is longer than "one file added"** — in particular § `config.yaml` and
    `environment/repo_root.txt`'s *"the pair … exactly the two facts"* sentence and the second
    `<run_dir>/` tree, which is behind H8b too. Worth naming in task 17's brief so it is not scoped to
    the artifact-layout tree alone.

@@ -183,6 +183,18 @@ def read_repo_root(run_dir: Path) -> Path:
     read ONCE: a caller re-entering a run needs this root for itself, and a
     second read of the same file inside the resolver would be a second answer
     to a question already answered.
+
+    **This is the THIRD reader of this file with these three refusals**, and
+    the other two are named rather than left for a grep: `freeze` refuses
+    `E-FREEZE-NO-CONFIG` for the same absent/empty/not-a-directory triple,
+    and `report._read_repo_root` refuses `E-REPORT-OVERRIDE-REPO` for it.
+    Not shared, and the reason is not convenience: `freeze`'s copy does not
+    raise at all — it returns an exit code through its own `_refuse`, so it
+    is not callable as a predicate — and consolidating the three would move a
+    reader into this module and change what two SHIPPED commands raise and
+    print. That is a behaviour change to `freeze` and `report`, outside this
+    slice, and `freeze.py` is a file this task may not touch. Filed for
+    consolidation rather than done quietly here.
     """
     path = run_dir / "environment" / "repo_root.txt"
     try:

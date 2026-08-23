@@ -289,8 +289,8 @@ def test_a_repo_root_naming_a_file_is_refused(tmp_path: Path):
     assert e.value.code == "E-RESUME-NO-CONFIG"
 
 
-def _repo_with_config(tmp_path: Path, relative: str) -> Path:
-    repo = tmp_path / "proj"
+def _repo_with_config(base: Path, relative: str) -> Path:
+    repo = base / "proj"
     target = repo / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("metadata: {}\n")
@@ -323,9 +323,12 @@ def test_a_recorded_path_escaping_the_repo_root_is_refused(tmp_path: Path):
     something else — because a resolver that returned the escaped path would
     hand a caller a file to validate and execute against.
     """
-    repo = _repo_with_config(tmp_path, "configs/config.yaml")
-    secret = tmp_path.parent / "secret"
-    secret.mkdir(exist_ok=True)
+    # The repo is nested one level deeper than the other fixtures' so the
+    # escape target stays inside `tmp_path`: a test writing into the shared
+    # pytest root is a test that can collide with another test's fixture.
+    repo = _repo_with_config(tmp_path / "work", "configs/config.yaml")
+    secret = tmp_path / "secret"
+    secret.mkdir()
     (secret / "config.yaml").write_text("metadata: {}\n")
     run_dir = _run_dir_with_root(tmp_path, f"{repo}\n")
     escaping = _document(config_path="../../secret/config.yaml")
