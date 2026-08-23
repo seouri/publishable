@@ -596,7 +596,7 @@ above** — the wrong function name in the row it convicted, and the sixth home 
 
 ## Addendum, same day — Major 1's FOURTH reach path was false too, and two corrections to the section above
 
-Commit `9d59033`, gates re-run after it: `ruff check` clean, `ruff format --check` 93 unchanged,
+Commit `6fcc6bc` (this line first cited `9d59033`, a SHA that never existed — corrected in place, since Minor 1 is exactly why an unresolvable SHA is worse than none), gates re-run after it: `ruff check` clean, `ruff format --check` 93 unchanged,
 `mypy` 52 files clean, full suite **2973 passed, 1 skipped, 2 xfailed** in 207 s.
 
 **The clause I carried verbatim while rewriting the sentence around it.** The row's fourth reach path
