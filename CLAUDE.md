@@ -25,9 +25,9 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9, then H3c-3's remaining
+**Order of the slices that remain: H9b, H9c, H9d, then H3c-3's remaining
 14 — the H4, H5, H6, H7 and H8 families are all complete, H6a and H6b both having merged on
-2026-08-23.**
+2026-08-23, and H9a on the same day.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -196,6 +196,49 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H9a (the re-entry seam, `draft` and `dry-run`) merged on 2026-08-23 — the first of H9's four, and
+NOT additive.** `command_run`'s ten phases are split at the seam every second entry needs: phases 1-5
+are `cli._prepare_run`, returning a frozen `Prepared` of **thirty-six** values or the exit code the run
+would have returned, and phases 6-10 are `cli._execute_prepared`. `draft` relaxes the dirty gate for a
+mode and nothing else — the pathspec `E-CODE-DIRTY` covers is byte-unchanged, H6b's declined widening
+still declined — records `draft: true` unconditionally while `git.code_dirty` stays a **measurement**,
+and prints a notice to stderr when it relaxed. `dry-run` runs phases 1-5 plus a probe round of its own
+and prints the resolved conditions, the repeat plan, the step list with scopes, the execution and
+**unit-execution** counts, the step directories and the fixed files — and says what it omits and why.
+**It retires no refusal and unblocks ZERO configs**, and the reason is structural rather than
+incidental: both commands are *second entries into a sequence these configs already reach or do not*,
+neither runs at `validate` nor from a step, and all nine validate against `generic`, whose
+`apparatus_probe` resolves to `None`, so the probe round never fires for any of them. The four-row
+table in [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this
+build is repeated unchanged — quote that table rather than any number from this paragraph.
+
+Four things worth carrying. **A promise that can only be kept by breaking a stated non-promise is the
+document being wrong** (Ruling R): § Operation commands promised `dry-run` prints *"every artifact path
+that would be written"*, which needs the `io.write` names inside step bodies — and `reference.md`
+itself promises core never inspects them. Two artifacts are conditional on *runtime* facts on top of
+that. So the promise narrowed to step directories and fixed files, **the counting rule went into the
+document beside the number** (one directory per planned (step, condition, repeat) triple — 20 for the
+worked example), and **the 20 was verified by running a real 4-scope, 3-condition, 5-seed project**
+rather than by trusting the arithmetic. A narrowed promise that does not say what it dropped is worse
+than the wrong one it replaces, so the output names its own omission. **A prescribed mutation was
+blind on every shipped arm, and only building the arm showed it**: the design's Fixture Y mutation is
+*"add `append_observation` to `dry-run`'s round"*, and all three shipped *creates nothing* arms drive a
+`generic` project, whose `apparatus_probe` is `None` — so the round returns at its first guard and
+there is no round to add to. Spliced in for real, the three shipped arms **pass** and only the new
+probe-declaring arm fails. *Naming a seam is not testing it*, one layer up: the mutation was named,
+checked for two differing branches, and still could not reach the code. **Fifteen § Errors / § Warnings
+rows were narrower than their code, every one narrowed by this slice itself** — `dry-run` is a new emit
+surface for six apparatus and plugin codes (`E-APPARATUS-RAISED`'s *three* outcomes became four,
+`W-APPARATUS-UNANSWERED`'s *second* surface a third), and the extraction plus two new commands made
+`run`, `draft` and `dry-run` all meet the six dual-surface roster rows that said *"`command_run` … at
+`run`"*. § Errors carries one row per code covering **every** emit site, and each table's own scope
+sentence limits no command — so a slice that adds a command owes that sweep whether or not it minted
+a code, and this one minted none. And **an amendment to a sweep is a claim like any other**: the fix
+round that corrected task 12's sweep target — because the old target had zero homes — re-measured the
+new one at **three** homes for `would write` when it had **four**, and the missed hit was a line that
+same round's own report quoted. Caught by attributing every hit individually rather than reconciling
+against the amendment's table, which is the rule the amendment was written to enforce.
 
 **H6b (the environment record and the diagnostic debt) merged on 2026-08-23 — the last of H6's two,
 and ADDITIVE throughout.** `provenance.environment` gains the three keys § The two files has always

@@ -2542,6 +2542,27 @@ and the one `reference.md` already implies by making `dry-run` an honest prefix 
 or add `contrasts.resolve_contrasts`'s own guard. This is a **precondition on H9, not a bug at
 HEAD**: `run` always validates, so no live path reaches the unguarded function today.
 
+**AMENDED 2026-08-23 (H9a task 13): still OPEN, and one of its three commands is discharged.**
+`dry-run` is built, and it creates **no** such caller: `resolve_contrasts` is reached from `cli.py`
+only through `_baseline_comparisons` and `_declared_comparisons`, both in the aggregate phase —
+phase 8, inside `_execute_prepared`, which `dry-run` never enters — and `dry-run`'s own phase 1 **is**
+`validate_config`, through the shared `cli._prepare_run`. So H9a took the cheaper of the two answers
+this entry names, by construction rather than by adding a guard, and `contrasts.py` is untouched.
+`draft` is discharged the same way and more simply: it delegates to `_execute_prepared`, so it *is*
+`run`'s own sequence rather than a second entry into part of it. **Amended rather than struck**
+because the precondition still binds `resume` (H9b) and `reproduce` (H9c), both of which re-enter the
+sequence at a point past phase 1 and neither of which exists yet — striking it because H9a discharged
+its own third would leave two live obligations unowned, the *"whichever slice next touches X"* failure
+this file rejects by name.
+
+**Reproduced before amending**, by reading the chain rather than by counting a grep.
+`grep -n "resolve_contrasts" src/publishable/cli.py` prints **eight** lines, of which two are calls
+(`cli.py:280` in `_baseline_comparisons`, `cli.py:291` in `_declared_comparisons`), one is the import
+and five are prose. Walked with `ast`, those two wrappers are called only from `_compute_vs_baseline`
+and `_compute_declared_contrasts`, and those two only from `_execute_prepared` (2570-4120) — which
+`command_dry_run` (4427-4572) does not call at all. `command_dry_run`'s only call into the sequence is
+`_prepare_run` (2095-2567), whose phase 1 is `validate_config`.
+
 **AMENDED 2026-08-11 (task 14 of the S5 checkpoint plan):** A fourth unguarded `expand(doc)` call
 in this same function, found and closed in the same task. `_check_contrasts` calls `expand(doc)`
 directly to resolve `of`/`against` against condition labels, and a `sweep.grid` axis value of
@@ -8358,7 +8379,27 @@ declined to build toward either answer, since building one would commit `freeze`
 
 **Found by:** H8b task 5 step 3 (named, not filed there), filed by task 12 per its own brief.
 
-## OPEN — no build appends a `PHASE_DRY_RUN` ledger line, and § Operation commands and § The apparatus files contradict each other about whether one belongs — Owner: H9
+## ~~OPEN~~ STRUCK 2026-08-23 (H9a task 13) — no build appends a `PHASE_DRY_RUN` ledger line, and § Operation commands and § The apparatus files contradict each other about whether one belongs — Owner: H9
+
+**CLOSED by H9a, and the two questions this entry left for its owner are both answered.** `dry-run`
+is built (H9a tasks 7-11) and it **probes without appending**: `cli._dry_run_probe` runs
+`observe_once` -> `check_facts` -> `Observations.record` -> `warn_unanswered` once per resolved
+condition and calls `append_observation` at no point, because the ledger lives inside a run directory
+`dry-run` never creates. So (a) no `PHASE_DRY_RUN` line is appended, and (b) `replay_ledger`'s
+`PHASE_RUN_START`/`PHASE_PRE_EXECUTION` filter **does not widen** — there is no `dry_run` line for a
+`freeze` baseline to admit, and the two shipped fixtures that feed it one keep testing exactly the
+exclusion they were written for. The contradiction is resolved in the **document**: § The apparatus
+files no longer lists `dry-run` among the phases the ledger is written at, and states in one sentence
+that `dry_run` is a reserved phase name no build appends. The constant stays, on H9a Decision 7's
+measured ground rather than on taste — `apparatus.py`'s `PHASES` docstring now carries that reason
+and cites the decision rather than this entry.
+
+**Reproduced before striking**, since a filing's claims go stale like any other comment:
+`grep -rn "PHASE_DRY_RUN" src/` prints **six** lines, and the entry's claim is about the two that are
+code — `apparatus.py:446` (the definition) and `apparatus.py:450` (its membership in `PHASES`). The
+other four are prose naming the constant: `apparatus.py`'s `PHASES` docstring (one line), its
+`append_observation` docstring (two), and `cli.command_dry_run`'s (one). **No call site passes it**, which is the
+entry's own measurement, still true and now true *by decision* rather than by omission.
 
 `src/publishable/apparatus.py` defines `PHASE_DRY_RUN` and lists it in `PHASES`, but no call site in
 `src/` passes it — grepped, zero hits outside the constant's own definition and its membership in
@@ -9522,3 +9563,119 @@ still hits the same `fatal:` and the same silent-clean reading, under either mec
 residual case is `_git`'s own `check=False` convention swallowing a returncode at a call site never
 designed to refuse, exists independently of Ruling F, L or M, predates all three, and is **not filed
 here**: it is not a consequence of this mechanism, so it is not this entry's to carry.
+
+## NOT A DEFECT — this file holds **eight** H9-owned entries, not the six H9's scoping counted — recorded 2026-08-23 by H9a task 13
+
+Recorded rather than taken, because a count H9b, H9c and H9d will each read off a scoping is worth
+being right. `H9-SCOPING.md` § 8 tabulates **six**; the file holds **eight**, and the two it misses
+belong to different parts.
+
+| Entry | Part it belongs to | Why the scoping missed it |
+|---|---|---|
+| Whether a missing `uv.lock` should refuse the run instead of warning is unresolved | **H9c** (`reproduce`) | Owned as *"H9 Reproduction and the other modes"* rather than by an `Owner: H9` line the § 8 pass matched |
+| `UpstreamLedger.record` copies a missing hash as `None` rather than refusing it | **H9c** | Same — `reproduce` walks a chain of ancestors, so the missing hash is its question |
+| `discover_local`'s bytecode cache can serve a STALE `templates/*.py` | **H9d** (`demo`, `docs`, `list-templates`) | Counted |
+| A plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under | **H9b** (`resume`) | Counted |
+| ~~no build appends a `PHASE_DRY_RUN` ledger line~~ | **H9a — CLOSED 2026-08-23**, struck in this file | Counted |
+| A same-size, same-second rewrite of a report override is silently not picked up | **H9d** | Counted |
+| `diff`'s `uv.lock` row prints two digests and never names the package whose pin moved | **H9c** | Counted |
+| The S4c-task-9 `resolve_contrasts` precondition | **H9a discharged its own third; H9b and H9c still bound** — amended, not struck | Its owner line is an `AMENDED 2026-08-11` paragraph naming *"H9 Reproduction and the other modes"*, not a heading |
+
+**The shape worth carrying, not the number.** Both missed entries name their owner in **prose inside
+an amendment** rather than in a heading's `— **Owner: H9**` suffix, which is the form a heading-level
+sweep finds. A scoping that counts owners by heading under-counts by exactly the entries that were
+re-owned after they were filed — and every re-owning in this file happens in an appended paragraph,
+because a dated record is appended to rather than retro-edited. **Count by owner, over the whole
+entry, not over its heading.**
+
+## OPEN — the worked example's seed **labels** cannot be produced by the seed **values** printed beside them — **Owner: unassigned, with the reason**
+
+`reference.md` § `sweep.yaml` — the resolved plan prints `labels: [seed17, seed42, seed137, seed1009, seed2027]` and
+§ Before you spend it prints `seeds: [17, 42, 137, 1009, 2027]`, and `replication._seed_members`
+cannot produce the first list from the second. Its rule is `f"seed{s % 100:02d}"`, with the
+full-value form `f"seed{s}"` used **only** as a collision fallback when the two-digit labels are not
+all distinct.
+
+**Reproduced 2026-08-23**, on the documented values rather than on a live run, since a run's seeds
+come from the design digest and cannot be forced:
+
+```
+$ uv run python -c "print([f'seed{s % 100:02d}' for s in [17,42,137,1009,2027]])"
+['seed17', 'seed42', 'seed37', 'seed09', 'seed27']
+```
+
+All five are distinct, so the fallback never fires and the labels a run of the worked example would
+write are `seed37`, `seed09` and `seed27` where the documents show `seed137`, `seed1009` and
+`seed2027`. Three of the five documented labels are unreachable from the documented seeds.
+
+**Two answers, and this entry deliberately picks neither.** Either the documents' seed *values* move
+(to five values whose last two digits are `17`, `42`, `137`… which is impossible for the three-and
+four-digit ones, so really: to five values under 100), or the labels move to the two-digit form, or
+`_seed_members` gains a rule that keeps a short value whole. The third is a behaviour change to a
+shipped label that appears in run-directory paths, `sweep.yaml`, `run.yaml` and `executions.jsonl`,
+so it is not a documentation fix wearing a code fix's clothes.
+
+**Not H9a's, and not fixed in passing.** `CLAUDE.md` § The worked example pins the worked example's
+numbers — *"those intervals were checked numerically and must not be narrowed back"* — and the seed
+list belongs to that example, so moving either side is an edit to it. Measured: the three unreachable
+labels have three homes, all in `reference.md` (`:905`, `:923`, and § Before you spend it's transcript
+at `:3101`); `README.md`'s run-directory tree shows only `seed17` and `seed42`, both of which the
+shipped rule does produce, so nothing there moves either way. **Owner: unassigned, with the reason**: no
+remaining slice (H9b `resume`, H9c `reproduce`, H9d `demo`/`docs`, H3c-3's remaining 14) has
+`replication.py`'s label rule or § `sweep.yaml` — the resolved plan's worked example as its surface. Related but
+distinct from the existing entry on `_seed_members` honouring a declared seed, which is about a
+*declared* value being ignored rather than about a label a documented value cannot produce.
+
+**Found by** H9a task 12, while deriving the step-directory list for § Before you spend it: the
+transcript needs one directory component per repeat, so it needs the labels, and the labels a real
+`dry-run` printed (`seed01`, `seed96`, `seed06`, `seed78`, `seed39` — two digits, every one) did not
+have the documented shape. The transcript H9a landed uses the documents' own labels, so this entry is
+the *only* place the disagreement is recorded rather than propagated.
+
+## OPEN — 195 `src/`/`tests/` references to `command_run` describe code that now lives in `_prepare_run` or `_execute_prepared`, and a **signpost docstring** is the whole mitigation — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-23 by H9a task 13, as plan correction 22's residue.** H9a task 2 extracted phases 1-5
+of `cli.command_run` into `cli._prepare_run` and phases 6-10 into `cli._execute_prepared`, leaving
+`command_run` a nine-line delegator. Every comment, docstring and test name that attributes a
+behaviour to `command_run` and means *the `run` command* is still true of the command and no longer
+true of the function.
+
+**Measured 2026-08-23, and the count the plan carried was a lower bound.** `grep -rn "command_run"
+src/ tests/` prints **195** lines across 22 files — `tests/test_cli.py` 79, `cli.py` 34,
+`validate.py` 13, `apparatus.py` 10, and eighteen more files with 1-6 each. The plan's *"roughly
+forty-five"* was measured over a narrower pattern; the class is the same and the number is four times
+larger.
+
+**What was fixed rather than filed.** The **normative** homes are closed: `reference.md`'s five
+location rows now name `cli._prepare_run` (H9a task 2), its six dual-surface roster rows now name
+`cli._prepare_run` and enumerate `run`, `draft` and `dry-run` (H9a task 12 — those had gone from
+*imprecise* to *narrower than the code*, since two new commands meet the same raises), and § The one
+config file's `null_test` clause now says `cli.py`, matching its four sibling clauses. **One
+`command_run` mention is left in `reference.md` on purpose**, at § Errors core raises' *"since H9a, in
+`cli._prepare_run`, which `command_run` calls"* — it exists to describe the split, so it is the one a
+grepping reader should land on.
+
+**The mitigation, and its limit, checked rather than assumed.** `command_run`'s own docstring carries
+a signpost naming which phases live in which helper. A reader who greps `command_run` in `cli.py`
+lands on it: it is inside the function every one of those 34 hits names. A reader who greps
+`reference.md` lands on the § Errors core raises sentence, which says the same thing. **A reader who
+greps `tests/` — 101 of the 195 hits, against `src/`'s 94 — lands on neither**, and that is the residue this entry is for:
+a test named `test_command_run_aggregate_resolves_a_project_local_template` still names the command
+correctly and the function misleadingly, and nothing points from there to the split.
+
+**Why a rewrite is not obviously right, which is why this is filed rather than done.** A rewrite of
+each site has to **decide which half it now names**, and *a rewrite invents; a deletion cannot*
+(`CLAUDE.md` § Habits). For most of the 195 the honest edit is a **deletion** — `command_run` →
+*the `run` command* — which loses nothing and invents nothing; H9a made exactly that edit at the one
+normative site where it applied. The work is mechanical, large, and touches test names, which is a
+different risk profile from a docstring.
+
+**Owner: unassigned, with the reason.** No remaining slice has `cli.py`'s phase split as its surface:
+**H9b** is `resume`, **H9c** is `reproduce`, **H9d** is `demo`/`docs`/`list-templates`, and **H3c-3's
+remaining 14** is folds and holdouts inside cells. H9b and H9c will each add a **third and fourth**
+caller of `_prepare_run`, which makes the residue grow rather than shrink — so the natural moment is
+whichever of them first finds a `command_run` claim it cannot leave standing, and it should re-read
+this entry rather than re-derive the count.
+
+**Reproduce:** `grep -rc "command_run" src/publishable/*.py tests/*.py | grep -v ':0$'` — 22 files;
+`grep -rn "command_run" src/ tests/ | wc -l` — 195.

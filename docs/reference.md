@@ -1015,12 +1015,14 @@ This is the rule the code already enforces; it was reachable only by colliding w
 
 ### The apparatus files
 
-`apparatus/probes.jsonl` is the append-only ledger every probe writes to — at `dry-run`, at run start, before each execution, and at [`freeze`](#cli-reference):
+`apparatus/probes.jsonl` is the append-only ledger every probe writes to — at run start, before each execution, and at [`freeze`](#cli-reference):
 
 ```json
 {"at": "2026-08-06T14:02:11Z", "phase": "run_start", "condition": "00_baseline",
  "probe": "llm_deployment", "facts": {"model_revision": "gpt-5.5-2026-06-11"}}
 ```
+
+**`dry_run` is a reserved phase name that no build appends, and naming it is deliberate.** [`dry-run`](#before-you-spend-it) probes — it is the first and cheapest of [the four places a probe runs](#the-apparatus-core-can-only-observe) — but it writes no ledger line, because the ledger lives inside a run directory `dry-run` never creates. The name stays in the phase vocabulary so that vocabulary is total over the places a probe runs, and so a reader who finds no `dry_run` line in a real ledger sees the reason stated rather than an absence.
 
 `provenance.apparatus.facts` in `run.yaml` is the first *answered* observation of each fact — what the [gate](#the-apparatus-core-can-only-observe) compares against, per fact rather than per probe, since a probe that answered three of four facts pinned three of them. A fact still unanswered when the run ends stays `null` there, and `provenance.apparatus.unobserved` counts how many probes left it so. The ledger is every observation, nulls included, so a run that failed on a moved apparatus still shows the evaluable earlier period, and a fact that only started answering halfway through is visible as exactly that. [`apparatus.expected.json`](#reproducing-on-another-device), written by `reproduce` into the checkout rather than into a run directory, is that same per-condition mapping with nothing else in it: `{"probe": …, "facts": {"00_baseline": {…}}}`. It is the one file here you are expected to edit.
 
@@ -4079,7 +4081,7 @@ Publishing is "push to GitHub" — that's all `--plugin owner/repo` expects.
 
 Credentials are the one thing that doesn't belong in the config. A config is meant to be shared and archived, so a key in it becomes a leaked key the moment someone uses the config as intended.
 
-**The config stores the environment variable's *name*; the value lives in `.env`.** **Core loads `.env` via `python-dotenv` at two moments**, never reads it into provenance, and gitignores it in every scaffold. [`validate`](#validation) loads it because some of its checks ask whether a variable is *set*, and every command that executes loads it again before any step runs, because a step is about to read one — loading is a precondition of executing rather than a side effect of checking. The load never overrides a variable already exported, so a machine supplying its credentials through a secret manager needs no file at all, and a stale `.env` cannot silently redirect a run. **This is not an exception to [`validate`'s promise](#operation-commands)**, which is that it creates nothing and reaches nothing *off the machine*: a file in the repository root is on-machine. In this build the executing site is `run`; [`draft`, `resume` and `dry-run`](#cli-reference) inherit it when each is built.
+**The config stores the environment variable's *name*; the value lives in `.env`.** **Core loads `.env` via `python-dotenv` at two moments**, never reads it into provenance, and gitignores it in every scaffold. [`validate`](#validation) loads it because some of its checks ask whether a variable is *set*, and every command that executes loads it again before any step runs, because a step is about to read one — loading is a precondition of executing rather than a side effect of checking. The load never overrides a variable already exported, so a machine supplying its credentials through a secret manager needs no file at all, and a stale `.env` cannot silently redirect a run. **This is not an exception to [`validate`'s promise](#operation-commands)**, which is that it creates nothing and reaches nothing *off the machine*: a file in the repository root is on-machine. In this build the executing sites are `run`, `draft` and [`dry-run`](#before-you-spend-it), which share the same phases and so the same `load_env` call; `resume` inherits it when it is built.
 
 ```bash
 # .env — never committed

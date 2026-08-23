@@ -458,12 +458,22 @@ only converts an already-committed typo into a crash — and under
 even that. Say it once: the constants are the guarantee, the assert only
 backs them up.
 
-`PHASE_DRY_RUN` is named here and called by NOTHING at this commit — no
-build appends a `dry_run` line. `reference.md` § Operation commands says
-`dry-run` "creates nothing," while § The apparatus files lists `dry_run`
-as one of the four phases, and both cannot hold until that gap is closed —
-`docs/superpowers/spec-defects.md` § "no build appends a `PHASE_DRY_RUN`
-ledger line" is the filing, owner H9.
+`PHASE_DRY_RUN` is **reserved**: `dry-run` probes — one round per
+resolved condition, `cli._dry_run_probe` — and appends no ledger line,
+because the ledger lives inside a run directory `dry-run` never creates.
+So the constant has no `append_observation` call site and is not expected
+to gain one; H9a Decision 7 is where that was decided, and it rejected
+deleting the name. Two reasons, both measured rather than argued. The
+vocabulary is total over `reference.md` § The apparatus core can only
+observe's four places a probe runs, and an absent name would read as an
+oversight where a present one reads as a decision. And `dry_run` is
+load-bearing in the tests: `tests/test_apparatus.py`'s vocabulary test
+enumerates all four literals, and two fixtures (`tests/test_apparatus.py`,
+`tests/test_freeze.py`) use a well-formed `dry_run` line as the phase
+`replay_ledger` must EXCLUDE — deleting it would leave `freeze` as the
+only excluded phase and collapse two distinct exclusion reasons into one
+(a `freeze` line is not the run's own baseline; a `dry_run` line is not an
+observation of this run at all).
 
 **Measured cost when `append_observation`'s assert fires**, 2026-08-20, by
 patching it to raise and driving a real `run` through `main(["run", …])`
@@ -503,9 +513,11 @@ def append_observation(
 
     `phase` is one of `PHASES`, the closed vocabulary of four named above:
     `PHASE_RUN_START`, `PHASE_PRE_EXECUTION`, `PHASE_DRY_RUN`, `PHASE_FREEZE`.
-    Part A only ever calls this with the first two; the other two are named
-    so H8's and H9's callers do not mint a fifth spelling of a phase this
-    module already has a name for. **The assert below is the FIRST
+    Part A only ever calls this with the first two; `PHASE_FREEZE` gained
+    its caller in H8b, and `PHASE_DRY_RUN` is **reserved** and gains none --
+    `dry-run` probes and appends nothing (H9a Decision 7). Both are named
+    here so no caller mints a fifth spelling of a phase this module already
+    has a name for. **The assert below is the FIRST
     statement, deliberately** — above the `mkdir`, above the line dict,
     above the open — so a bogus phase never gets a byte onto disk; placed
     after the write, it would still raise but leave that bogus line behind.
@@ -543,7 +555,9 @@ def replay_ledger(run_dir: Path) -> Observations:
     gate never adopted, so a second `freeze` would report a change the run
     will never fail on — the false stop H7d Part B's null handling exists to
     prevent. A `dry_run` line is excluded for the same reason, and one more:
-    nothing appends one yet (§ Refusals routes that gap to H9). A line whose
+    nothing appends one at all -- `dry-run` probes without writing a ledger,
+    which H9a Decision 7 settled, so this filter is deliberately unwidened
+    rather than waiting on a caller. A line whose
     `phase` is neither of these two names — including a well-formed `freeze`
     or `dry_run` line, and any future phase this build has no name for — is
     SKIPPED rather than refused: the ledger is append-only, and refusing an
