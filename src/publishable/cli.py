@@ -71,10 +71,12 @@ from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
     StopSignal,
     _arm_keys,
+    _handed_keys,
     attrition,
     execute_plan,
     resolve_condition_cfg,
     resolve_wide_cfg,
+    step_dir_for,
 )
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
@@ -4175,6 +4177,257 @@ def command_draft(config_path: Path) -> int:
             file=sys.stderr,
         )
     return _execute_prepared(prepared, draft=True)
+
+
+# `run_.../` stands in for the run directory `dry-run` never allocates: every
+# printed step directory is relative to it, and `allocate_run_dir` is what
+# turns the placeholder into a name — a timestamp and a `code_hash` prefix
+# that cannot exist before the directory is claimed. Named once here so the
+# printed paths and the relativization cannot drift apart.
+_DRY_RUN_PLACEHOLDER = "run_..."
+
+# The seven a run always writes, in the order `_execute_prepared` writes them
+# in, plus three that each depend on a declaration. Every conditional is
+# answered by the STRUCTURAL fact that decides it in `_execute_prepared` --
+# `lock_path is not None`, `build_allocation_document(...) is not None`, and
+# the same `isinstance(declared_probe, str) and declared_probe` guard the run
+# uses -- rather than by a reserved name or a config key read a second time,
+# which is the proxy substitution this repository keeps paying for.
+_DRY_RUN_FIXED_FILES = (
+    "config.yaml",
+    "sweep.yaml",
+    "manifest/input.json",
+    "environment/pyproject.toml",
+    "environment/repo_root.txt",
+    "executions.jsonl",
+    "run.yaml",
+)
+
+
+def _handed_counts(prepared: Prepared) -> list[int | None]:
+    """How many units each planned execution would be handed -- `None` for one
+    handed no unit list at all.
+
+    A **restatement** of `runner.execute_plan`'s four-way `execution.scope`
+    dispatch, not an extraction of it (design Decision 11): extracting it
+    would be a second behaviour-preserving extraction on a shipped path, in
+    phase 7, outside the phases this slice is chartered to move. What prevents
+    the two from drifting is an **agreement pin** -- one fold fixture and one
+    group-axis fixture in which the printed `unit-executions` must equal the
+    summed `len(io.units)` a real `run` of the same config hands out -- rather
+    than a shared helper a re-routed call site could defeat silently.
+
+    The two narrowings themselves are NOT restated: `_arm_keys` and
+    `_handed_keys` are already single-call-site extracted functions in
+    `runner`, and they are what this calls. In `execute_plan`'s own order:
+
+    1. arm narrowing first, when a group axis is declared **and** the
+       execution has a condition index (a `run`- or `summary`-scoped
+       execution has neither, and keeps the whole roster);
+    2. then, under a declared **fold**, `run` and `condition` scope receive
+       `None` -- no fold exists yet there -- `repeat` scope receives
+       `_handed_keys`' partition of the arm-narrowed roster, and `summary`
+       receives the whole arm-narrowed roster, every fold having run by then;
+    3. under a declared **holdout**, every scope receives the test partition,
+       which is `prepared.eval_roster` already: `_cond_roster`'s
+       single-authority rule means the narrowing happened once, before the
+       plan, and `execute_plan` only attaches `.train` -- which changes no
+       length.
+
+    **An execution handed `None` contributes zero**, and the caller says so in
+    the printed output, because a fold's `run`- and condition-scoped steps see
+    no units at all and a reader adding the number up by hand would be short.
+    """
+    roster = prepared.eval_roster
+    counts: list[int | None] = []
+    for execution in prepared.plan:
+        scoped = roster
+        if (
+            prepared.arm_members_map is not None
+            and roster is not None
+            and execution.condition_index is not None
+        ):
+            arm_keys = _arm_keys(
+                execution.condition_index, {u.key for u in roster}, prepared.arm_members_map
+            )
+            scoped = UnitList([u for u in roster if u.key in arm_keys])
+        handed: UnitList | None
+        if prepared.fold_members is None or scoped is None:
+            handed = scoped
+        elif execution.scope in ("run", "condition"):
+            handed = None
+        elif execution.scope == "repeat":
+            keys = _handed_keys(
+                execution.repeat_label or "", {u.key for u in scoped}, prepared.fold_members
+            )
+            handed = UnitList([u for u in scoped if u.key in keys])
+        else:
+            handed = scoped
+        counts.append(None if handed is None else len(handed))
+    return counts
+
+
+def _dry_run_step_dirs(prepared: Prepared) -> list[str]:
+    """Every step directory a run of this config would create, relative to the
+    run directory, in plan order.
+
+    One per planned (step, condition, repeat) triple, and the path scheme is
+    **not re-derived**: `runner.step_dir_for` is called against a placeholder
+    root and the answer relativized, so a change to the layout moves this
+    output with it. `collapse` is `execute_plan`'s own
+    `len(repeats) <= 1` -- a degenerate repeat level adds no directory
+    component, and computing that here from anything else would be a second
+    answer to one question.
+    """
+    root = Path(_DRY_RUN_PLACEHOLDER)
+    collapse = len(prepared.repeats) <= 1
+    # `dict.fromkeys`, not a `set`: plan order is what makes the list readable,
+    # and the de-duplication is real rather than defensive -- under `collapse`
+    # two repeat executions of one step in one condition share a directory.
+    return list(
+        dict.fromkeys(
+            str(step_dir_for(root, execution, collapse).relative_to(root))
+            for execution in prepared.plan
+        )
+    )
+
+
+def _dry_run_fixed_files(prepared: Prepared) -> list[str]:
+    """The run-directory-relative files a run writes whose names are fixed by
+    core rather than by step code. See `_DRY_RUN_FIXED_FILES` for why each
+    conditional is answered by a structural fact."""
+    files = list(_DRY_RUN_FIXED_FILES)
+    if prepared.lock_path is not None:
+        files.append("environment/uv.lock")
+    if build_allocation_document(prepared.group_axes, prepared.holdout_plan) is not None:
+        files.append("allocation.json")
+    declared_probe = getattr(prepared.run_template, "apparatus_probe", None)
+    if isinstance(declared_probe, str) and declared_probe:
+        files.append("apparatus/probes.jsonl")
+    return sorted(files)
+
+
+def command_dry_run(config_path: Path) -> int:
+    """`publishable dry-run` -- phases 1-5, printed, and nothing written.
+
+    **Ruling R (design Decision 1): the promise narrows to what core can
+    derive.** § Operation commands used to promise "every artifact path that
+    *would* be written", which needs the `io.write` names inside step bodies --
+    and `design-principles.md` § Greenfield only says core never inspects the
+    body of user Python. A promise that can only be kept by breaking a stated
+    non-promise is the **document** being wrong, so the document changed
+    (task 9) and this prints step directories, the fixed files, and the
+    unit-execution count. **The output says what it omits and why**: printing
+    less without saying so would reproduce the defect in the one direction a
+    reader cannot see.
+
+    `allow_dirty=True` (Decision 8): the gate exists to protect a *record's*
+    identity claim, and this writes no record -- there is no `code_hash` in
+    this output at all, so there is no figure to mistake for one. That is a
+    second USE of Ruling T's parameter, never a widening of what the gate
+    covers.
+
+    **Creates nothing** is scoped to `output_dir` (Decision 12): importing the
+    entrypoint runs `discover_local`, which writes `__pycache__` under
+    `src/**` and `templates/**` exactly as `validate` already does, and a
+    bytecode cache is not an artifact of a run. No run directory is allocated,
+    so no lock is taken either -- pointing this at a live run is as ordinary as
+    reading the ledger.
+
+    **No comparison list is printed** (Decision 16): `contrasts.resolve_contrasts`
+    is reached only from phase 8, which this never enters, so the standing
+    unhashable-side precondition on H9 is discharged by construction. The
+    `comparisons:` line reads `data.units.allocation` -- a declaration -- and
+    resolves nothing.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=True)
+    if not isinstance(prepared, Prepared):
+        return prepared
+
+    lines: list[str] = []
+    modes = ["baseline"] if any(c.is_baseline for c in prepared.conditions) else []
+    modes += [k for k, v in (prepared.doc.get("sweep") or {}).items() if v]
+    n_conditions = len(prepared.conditions)
+    n_repeats = len(prepared.repeats)
+    executions = len(prepared.plan)
+    lines.append(
+        f"sweep: {n_conditions} conditions"
+        + (f" ({' + '.join(modes)})" if modes else "")
+        + f" × {n_repeats} repeats = {executions} executions"
+    )
+    for condition in prepared.conditions:
+        values = " ".join(f"{path}={value}" for path, value in condition.values.items())
+        label = condition_dir_name(condition.index, condition.label or "")
+        lines.append(f"  {label}" + (f"  {values}" if values else ""))
+    lines.append(
+        "repeats: "
+        + " × ".join(
+            f"{level.kind}(k={level.n})" if level.kind == "fold" else f"{level.kind}(n={level.n})"
+            for level in prepared.levels
+        )
+    )
+    lines.append(f"  seeds: {[r.seed for r in prepared.repeats]}  (auto, from design digest)")
+    allocation = ((prepared.units_decl or {}).get("allocation")) or "within"
+    lines.append(
+        f"  comparisons: {'paired' if allocation == 'within' else 'unpaired'} "
+        f"(allocation: {allocation})"
+    )
+    lines.append(
+        "steps: "
+        + " -> ".join(
+            f"{name} ({scope})"
+            for name, scope in dict.fromkeys((e.step_name, e.scope) for e in prepared.plan)
+        )
+    )
+    resolved = 0 if prepared.roster is None else len(prepared.roster)
+    correction = (prepared.doc.get("statistics") or {}).get("correction")
+    lines.append(
+        f"statistics: basis units (n={resolved} resolved); correction {correction}; "
+        "derived metric names come from the template's aggregate() and are not "
+        "knowable before the run"
+    )
+
+    counts = _handed_counts(prepared)
+    unit_executions = sum(count for count in counts if count is not None)
+    distinct = {count for count in counts if count is not None}
+    if len(distinct) == 1 and None not in counts:
+        detail = f"({executions} executions × {distinct.pop()} units handed to each)"
+    else:
+        detail = f"(over {executions} executions; the count handed varies by scope and partition)"
+    lines.append(f"scale:  {unit_executions} unit-executions {detail}")
+    if None in counts:
+        lines.append(
+            f"  {counts.count(None)} of those executions are handed no unit list at all — a "
+            "fold's `run`- and condition-scoped steps see no units, and each contributes zero"
+        )
+
+    step_dirs = _dry_run_step_dirs(prepared)
+    fixed_files = _dry_run_fixed_files(prepared)
+    lines.append(
+        f"would create {len(step_dirs)} step directories under "
+        f"{prepared.output_dir / _DRY_RUN_PLACEHOLDER}/"
+    )
+    lines += [f"  {d}" for d in step_dirs]
+    lines.append(f"and {len(fixed_files)} fixed files in that directory:")
+    lines += [f"  {f}" for f in fixed_files]
+    lines.append(
+        f"the {prepared.output_dir / 'latest'} pointer is repointed too; it sits beside the "
+        "run directory rather than inside it"
+    )
+    # Ruling R's own requirement, in the output rather than only in the
+    # document: a narrowed promise that does not say what it dropped is worse
+    # than the wrong one it replaces, because nothing marks it partial at the
+    # point of reading.
+    lines.append(
+        "artifact files inside a step directory are NOT listed: their names are `io.write`"
+    )
+    lines.append(
+        "  arguments in step code, which core never inspects, so they are declared nowhere"
+    )
+    lines.append("  in the config and cannot be known before the run")
+    lines.append("creates nothing")
+    print("\n".join(lines))
+    return EXIT_OK
 
 
 def _dispatch(command: str, rest: list[str]) -> int:

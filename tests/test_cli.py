@@ -21074,3 +21074,326 @@ def test_h9a_fixture_r_a_draft_of_a_clean_tree_records_code_dirty_false(
     # about the notice rather than about a command that did nothing.
     assert "run.yaml →" in out
     assert "notice" not in err
+
+
+# ===========================================================================
+# H9a task 7 — `dry-run` (docs/superpowers/plans/2026-08-23-re-entry-seam.md
+# task 7; design Decisions 1, 8, 11, 12 and 16). Called DIRECTLY here:
+# `dry-run` does not dispatch by name until task 9, which is task 3's own
+# precedent for `command_draft`.
+#
+# **Ruling R** is the claim these fixtures exist to hold: § Operation
+# commands promised "every artifact path that *would* be written", which
+# needs the `io.write` names inside step bodies — and core never inspects
+# the body of user Python. So the command prints step directories, the fixed
+# files, and the unit-execution count, **and says in its own output what it
+# omits and why**. A narrowed promise that does not say what it dropped is
+# worse than the wrong one it replaced, because nothing marks it partial at
+# the point of reading — so the omission sentence gets its own assertion.
+# ===========================================================================
+
+_H9A_DRY_RUN_FIXED_HEADER = "fixed files in that directory:"
+
+
+def _h9a_parse_dry_run(out: str) -> tuple[set[str], set[str]]:
+    """The step-directory list and the fixed-file list, off the transcript.
+
+    Both counts in the two header lines are checked against the lengths of
+    the lists they introduce, so a build whose count and whose list disagree
+    fails here rather than being read past.
+    """
+    lines = out.splitlines()
+    (i,) = [k for k, line in enumerate(lines) if line.startswith("would create ")]
+    (j,) = [k for k, line in enumerate(lines) if line.endswith(_H9A_DRY_RUN_FIXED_HEADER)]
+    step_dirs = {line.strip() for line in lines[i + 1 : j]}
+    assert all(line.startswith("  ") for line in lines[i + 1 : j]), lines[i + 1 : j]
+    fixed: set[str] = set()
+    k = j + 1
+    while k < len(lines) and lines[k].startswith("  "):
+        fixed.add(lines[k].strip())
+        k += 1
+    assert lines[i].startswith(f"would create {len(step_dirs)} step directories under ")
+    assert lines[j] == f"and {len(fixed)} {_H9A_DRY_RUN_FIXED_HEADER}"
+    return step_dirs, fixed
+
+
+def _h9a_fixture_u(cfg: Path, run_dir: Path, capsys, *, artifact_names: set[str]) -> set[str]:
+    """Fixture U's own body: `dry-run`'s two lists, compared **set to set**
+    against the tree a real `run` of the same config created.
+
+    Neither list is compared against a literal or against a count: a count
+    literal that happens to match is the fixture-agrees-with-the-bug shape,
+    and a path literal would be this module re-deriving the layout
+    `runner.step_dir_for` owns.
+
+    **The residue is enumerated, never filtered by pattern.** A completed run
+    directory holds exactly two kinds of file: the fixed ones core names, and
+    the artifacts step code named through `io.write` — which is precisely
+    what Ruling R says cannot be listed in advance. So the real tree is
+    partitioned by `dry-run`'s own step-directory set, the artifact half is
+    asserted to be exactly `artifact_names` inside each step directory
+    (`units.parquet` for every fixture here, from `io.record`'s own collapse),
+    and the remaining half must equal the fixed-file list exactly.
+
+    The step-directory set is derived from the real tree with no name
+    exclusion of its own: a step directory is a **leaf** directory (nothing
+    creates a directory inside one) that is not the parent of a fixed file —
+    which is what makes `environment/`, `manifest/` and `apparatus/` fall out
+    on their own rather than being listed here as exceptions.
+    """
+    capsys.readouterr()
+    from publishable.cli import command_dry_run
+
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    step_dirs, fixed = _h9a_parse_dry_run(out)
+
+    real_dirs = {str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_dir()}
+    real_files = {str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()}
+    leaf_dirs = {
+        d for d in real_dirs if not any(o != d and o.startswith(f"{d}/") for o in real_dirs)
+    }
+    fixed_parents = {str(Path(f).parent) for f in fixed}
+    assert step_dirs == leaf_dirs - fixed_parents, (step_dirs, leaf_dirs, fixed_parents)
+    artifacts = {f for f in real_files if str(Path(f).parent) in step_dirs}
+    assert artifacts == {f"{d}/{name}" for d in step_dirs for name in artifact_names}
+    assert real_files - artifacts == fixed
+
+    # Ruling R's own requirement: the output names its omission. Asserted on
+    # a phrase nothing else in the transcript can produce — `io.write` appears
+    # nowhere else, and the surrounding lines name step directories and fixed
+    # files rather than artifact files.
+    assert "artifact files inside a step directory are NOT listed" in out
+    assert "core never inspects" in out
+    return step_dirs
+
+
+def test_h9a_fixture_u_the_two_lists_match_a_real_runs_tree(tmp_path: Path, capsys):
+    """Fixture U, arm 1 of 3: the base fixed-file set — no lockfile, no
+    drawn axis, no probe — and four step directories.
+
+    `n: 2` seed repeats, and the count is load-bearing rather than
+    incidental: `execute_plan`'s `collapse = len(repeats) <= 1` means that
+    with **one** repeat a degenerate level adds no directory component, so
+    `step_dir_for(..., collapse_repeats=True)` and `False` return the same
+    tree and this fixture's prescribed mutation would be blind. Two repeats
+    is the smallest count at which the two readings differ.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds: one would collapse the repeat directory component",
+        },
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    step_dirs = _h9a_fixture_u(doc["cfg"], doc["run_dir"], capsys, artifact_names={"units.parquet"})
+    # This arm is the NEGATIVE for all three conditional branches: no
+    # lockfile resolved, no drawn axis declared, no probe declared, so the
+    # fixed-file list is the base seven and nothing more. Asserted through
+    # the set comparison above; the count is stated here so an arm that
+    # silently stopped planning executions is visible.
+    assert len(step_dirs) == 4
+
+
+def test_h9a_fixture_u_the_conditional_fixed_files_uv_lock_and_allocation(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture U, arm 2 of 3: two of the three conditional branches, each
+    exercised by a config that earns it.
+
+    `_h6a_t5_project` writes a real `uv.lock` at the project root, so
+    `lock_path is not None` and `environment/uv.lock` is written; and it
+    declares `sweep.groups`, so `_resolved_group_axes` is non-empty and
+    `build_allocation_document` returns a document, which is what puts
+    `allocation.json` on disk. Its `replication.repeats` is edited to `n: 2`
+    after the commit — `configs/**` is in neither hashed tree, so this
+    dirties nothing the gate reads — for the same collapse reason arm 1
+    states.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_u")
+    doc = yaml.safe_load(cfg.read_text())
+    doc["replication"]["repeats"] = [{"kind": "seed", "n": 2}]
+    cfg.write_text(yaml.safe_dump(doc))
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted((tmp_path / "results").glob("run_*"))
+    assert (run_dir / "environment" / "uv.lock").exists()
+    assert (run_dir / "allocation.json").exists()
+
+    step_dirs = _h9a_fixture_u(cfg, run_dir, capsys, artifact_names={"units.parquet"})
+    assert len(step_dirs) == 4
+
+
+_H9A_U_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_u_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_H9A_U_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9a_u_assay")
+class H9aUAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9a_u_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+
+def test_h9a_fixture_u_the_conditional_fixed_file_apparatus_probes_jsonl(
+    installed, registries, tmp_path, capsys
+):
+    """Fixture U, arm 3 of 3: the third conditional branch. A template
+    declaring `apparatus_probe` is what puts `apparatus/probes.jsonl` on
+    disk, and without this arm that predicate is untested — naming a branch
+    is not testing it.
+
+    `dry-run` does not CALL the probe at this task (task 10 owns the probe
+    round); the claim here is only that a run of this config writes that
+    ledger and that `dry-run` says so.
+    """
+    site = installed(
+        "dist-h9a-u", "1.0", {"publishable.probes": {"h9a_u_probe": "h9a_u_probe_mod:probe"}}
+    )
+    (site / "h9a_u_probe_mod.py").write_text(_H9A_U_PROBE_MODULE)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h9a_u_assay",
+        parameters={"instrument": {"model": "m1"}},
+        _local_template=_H9A_U_TEMPLATE,
+    )
+    assert (doc["run_dir"] / "apparatus" / "probes.jsonl").exists()
+    _h9a_fixture_u(doc["cfg"], doc["run_dir"], capsys, artifact_names={"units.parquet"})
+
+
+def test_h9a_dry_run_creates_nothing_under_output_dir_on_a_never_run_project(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """*Creates nothing*, arm 1: scoped to `output_dir` (Decision 12).
+
+    Repo-wide byte identity is deliberately NOT asserted, and the reason is
+    measured rather than predicted: importing the entrypoint runs
+    `discover_local`, which writes `src/**/__pycache__/` and
+    `templates/__pycache__/` exactly as `validate` already does (§ Templates'
+    own "goes dirty at `validate`"). A bytecode cache is not an artifact of a
+    run, and an arm asserting repo-wide identity would fail and invite
+    whoever met it to weaken the assertion instead.
+
+    Proved path by path, before and after, rather than by reading the code
+    for absent `mkdir` calls — and **paired with a positive**: the transcript
+    really printed, so a pass here cannot be a command that did nothing.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_creates_nothing")
+    results = tmp_path / "results"
+    before = sorted(p.relative_to(results) for p in results.rglob("*"))
+    assert before == []  # the project has never been run
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    after = sorted(p.relative_to(results) for p in results.rglob("*"))
+    assert after == before
+    assert not list(results.glob("run_*"))
+    # The paired positive: something must have reported.
+    assert "creates nothing" in out
+    assert out.startswith("sweep: ")
+
+
+def test_h9a_dry_run_leaves_an_existing_output_dir_byte_identical(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """*Creates nothing*, arm 2: an `output_dir` that already holds a run.
+
+    The stronger arm, because the empty-directory case above passes for a
+    command that merely fails to allocate: here every existing path and every
+    existing byte is compared before and after, so a `dry-run` that appended
+    a ledger line or repointed `latest` fails.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_identical")
+    results = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    def snapshot() -> dict[str, bytes | None]:
+        return {
+            str(p.relative_to(results)): (None if p.is_dir() else p.read_bytes())
+            for p in results.rglob("*")
+        }
+
+    before = snapshot()
+    assert before, "the snapshot must not be empty, or this arm asserts nothing"
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert snapshot() == before
+
+
+def test_h9a_dry_run_against_a_live_lock_completes_and_takes_none(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Decision 12's second arm: § One execution at a time says pointing a
+    read command at a live run is "as ordinary as reading the ledger", and
+    `dry-run` takes no lock at all, so it is a stronger case than `freeze`'s.
+
+    A `lock` file is written by hand into the completed run directory — a
+    CONSTRUCTED live-run state, `tests/test_freeze.py::_mid_run`'s own shape
+    — and must be untouched afterwards.
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_live_lock")
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted((tmp_path / "results").glob("run_*"))
+    lock = run_dir / "lock"
+    lock.write_text(json.dumps({"host": "elsewhere", "pid": 1}))
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert json.loads(lock.read_text()) == {"host": "elsewhere", "pid": 1}
+
+
+def test_h9a_dry_run_inherits_e_code_empty_from_phases_1_to_5(tmp_path: Path, monkeypatch, capsys):
+    """§ Corrections against the code, correction 19: `E-CODE-EMPTY`'s
+    refusal sits INSIDE phases 1-5 — the print and the exit both — so
+    `dry-run` inherits it by calling `_prepare_run`, and that is correct: a
+    config whose hashed trees hold no file is refused before any metered
+    call, which is the cost ordering doing its job.
+
+    An inherited refusal nobody tests is how a mode silently diverges from
+    the command it re-enters, so this pins it: the same
+    `_h6a_t8_project(write_step=False)` tree that guard-pin arm E drives
+    through `run` is driven through `dry-run` here, and both the exit code
+    and the printed code are asserted — plus the absence of any run
+    directory, which is what separates "refused" from "refused after
+    creating".
+    """
+    from publishable.cli import command_dry_run
+
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_dry_run_empty",
+        gitignore=".env\n__pycache__/\n*.py[cod]\n.venv/\n",
+        write_step=False,
+    )
+    results = tmp_path / "results"
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results.glob("*"))
