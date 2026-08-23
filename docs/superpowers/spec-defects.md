@@ -8711,9 +8711,10 @@ describes at its own source.
 the "Why unassigned" paragraph above is now WRONG about H6.** Task 5 gave `E-GIT-NO-REPO` its own
 § Errors core raises row under Ruling N, and that row was written to cover **all six reach paths**
 rather than the single raise: it names the two that surface the code uncaught (`command_run` and the
-`generate`/`init` dispatch, at `main`'s printer, exit `1`), the three that catch it **by code** as their
-own pass branch (`validate._check_data`, `validate.validate_config`, `study._refuse_if_in_repo`), and
-`cli._load_experiment_for`'s `except Exception`. **So both halves of this entry's headline are answered
+`generate`/`init` dispatch, at `main`'s printer, exit `1`), the two that catch it **by code** as their
+own pass branch (`validate._check_data`, `study._refuse_if_in_repo`), and the two that catch it **by
+type**, testing no code (`validate.validate_config`'s bare `except ContractError`,
+`cli._preloaded_experiment`'s `except Exception`). **So both halves of this entry's headline are answered
 for that one code** — it has a row, and the two uncaught call sites are described at their own source.
 The paragraph reading *"H6 owns hashes and provenance proper (not the registry question of which codes
 get rows)"* is what a reader would trust and it is false as of today: H6b took exactly that registry
