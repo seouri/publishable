@@ -174,3 +174,39 @@ no sibling to match, there was nothing to be inconsistent with.
 --porcelain` over the two trees, so **untracked files count and ignored ones do not** — which lets the row
 state Ruling F's real payoff: **the gate and the hash now consider the same set of files, and did not
 before.** That was the defect this slice opened with, stated from the other end.
+
+## Batch 5 — task 11 alone — `W-PARAM-UNSET`, and Ruling B's replacement payoff
+
+Commit `c4dea36`, review `0c0a92c` (**PASS**, one Minor). Suite 2953 → **2955**.
+
+**Ruling B's rejection of the charter's own clause is now paid for rather than merely argued.**
+`parameters_hash` is not normalized against `parameter_spec` — normalizing would give **one identity claim
+to a config that runs and a config that cannot**, since an omitted `parameter_spec` default validates
+clean and then its step dies. What H6a ships instead is the diagnostic that makes the omission visible at
+`validate`, as a **warning rather than an error**, because omitting a defaulted parameter is what almost
+every config in this repo does and core cannot know whether a step reads it without reading user Python.
+
+**Three different blast-radius numbers were in play and the reviewer measured rather than picked.** The
+design said *"5 tests assert `✓ config valid`, 4 assert the `N problems` line"*; the plan's correction 7
+said *"zero `✓`, three not four"*; and the task then measured **eight** pre-existing tests firing the new
+warning where the design said seven. Measured independently: **zero and three** (correction 7 right), and
+**nine total firings, eight of them pre-existing** (the task right, the design wrong). **Three sources,
+two of them wrong, none of them wrong in a way anything downstream would have caught** — which is the
+whole reason this project re-measures instead of carrying.
+
+**The shared-helper extraction was checked the way that class of change has to be checked.** A
+comprehension moved out of `_check_versions` and gained a second reader, and *when you move a call site,
+grep the suite for patches aimed at what you moved* — a monkeypatch left pointing at a name the code no
+longer calls defuses itself while its test keeps passing. None existed, and the reviewer then **blanked
+the helper's body and confirmed BOTH readers' tests fail**, which is the direct question rather than the
+grep's proxy for it.
+
+**Both directions are pinned by distinct mutations** — deleting the call site fails only the positive
+arm; inverting the condition fails four tests. And **a true claim was deliberately kept**: the design
+ruled that *prefer deleting to rewriting* does **not** license deleting `W-TEMPLATE-VERSION`'s clause,
+because it is true. The clause deleted was a different one — a shipped docstring's *"so a defaulted
+parameter it omits is not reported"*, **made false by this very task**, which is the third time this slice
+has caught a sentence going false under its own change.
+
+**The Minor is the sixth miscount in two slices**: *"caught by arm F alone"* against a measured two. None
+of the six changed a conclusion.
