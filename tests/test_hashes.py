@@ -644,7 +644,7 @@ def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_dig
     (`test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not`
     and this test), all of which needed the same mechanical `None` for the
     module to import at all — not just typecheck. None of the four is a 15th
-    *production* call site; `code_hash` still has exactly one in `src/`.
+    *production* call site.
     """
     assert code_hash(tmp_path / "nonexistent_empty_repo", None) == _H6A_EMPTY_DIGEST
     # Not implied by the line above: an existing directory holding nothing the
