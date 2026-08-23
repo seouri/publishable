@@ -148,3 +148,47 @@ with a can-fail control.
 parenthetical and instead **substituted new prose** — true, but redundant with the next sentence. Closed
 by making the deletion. *A rewrite invents; a deletion cannot* is not a preference to be traded against
 a marginally nicer sentence.
+
+## Batches 5 and 6 — tasks 8, 9, 10, 11 — the records, the passes, and § Executability
+
+Commits `2a62bbe` (`spec-defects.md`), `49c8a33` (`CLAUDE.md`), `9b7cc54` (both consistency passes),
+`4a3b9fc` (§ Executability), `b1b58db`, `df1796c`, review `841eeef` (**all four PASS**, one Minor),
+follow-up `1b5f0cd`. Suite unmoved at **2971**.
+
+**§ Executability does not move, re-derived rather than repeated**, and the four-row table was **diffed
+byte-for-byte** against H6a's entry by the reviewer independently of the report's own script. **Whether
+`W-PARAM-UNSET` fires on those nine stays unknowable with a reason** — neither plugin is installable.
+
+**A records task found two of its own brief's claims false, which is the third slice running where the
+authorities were wrong rather than the work.** `environment` is **not** the only sub-block whose key order
+matches the example — `git`'s six keys match too, and did **before** H6b — and the
+`allocation`/`allocation_hash` row was **amended, never struck**, which is precisely why that entry still
+read as three open rows two slices later. **An amendment left where a strike belonged is how a closed gap
+keeps recruiting readers.**
+
+**And the design's own arm count was wrong.** Decision 16 says four arms have no authorized editor; the
+ledger, the dispatch and batch 1's review all say **five** — six arms, one editor, so five. The design is
+a dated record and was **not** retro-edited; the count is corrected here and in the review.
+
+**Two ordinals were asserted and then derived, which is the shape this project keeps paying for.** The
+*"sixth consecutive entry"* phrase in § Executability was **asserted in the first draft** and rewritten to
+be **derived** from the diff — the exact carried-summary-phrase failure that section's two dated
+corrections exist about. **A number in a document is a claim, and an ordinal is the easiest kind to carry
+without checking.**
+
+**One real pre-existing mechanical defect was fixed rather than stepped around**: the feasibility
+analysis' *Class-ratio* row **wrapped across two source lines**, rendering a bogus one-cell row with the
+same § Executability link duplicated at the wrap — on `main` since `bc20b13`. **The wrap is the same
+mechanism that hid two of a false sentence's five homes last slice**: prose that wraps defeats both a
+`grep -F` and a table parser.
+
+**The Minor is a heading disagreeing with its own body.** The root-`.gitignore` entry's heading still read
+`Owner: H6b` after its own 2026-08-23 amendment re-owned it **unassigned** — *a heading naming a closed
+slice reads as live work somebody holds*, which is the failure the re-owning rule exists to prevent, in
+its smallest possible form. Task 8 was forbidden to touch that entry and **reported it instead of
+reaching for it**, which is right; the controller closed it.
+
+**Left for a successor with its reason: `## Cost and execution summary` sits between § Executability's
+entries**, so every entry from 2026-08-20 on is structurally nested under it. Pre-existing, and repairing
+it moves a heading **six links** point at — so it is disclosed rather than fixed in a slice chartered
+additive.
