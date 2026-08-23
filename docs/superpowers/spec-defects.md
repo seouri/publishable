@@ -3573,7 +3573,7 @@ source; it does not run over a `Unit` a caller builds by hand and hands to `fina
 Task 8's docstring in `src/publishable/artifacts.py` (`_finalize_columns`) states this in code; see
 the entry below for the filing.
 
-## Six `provenance` and `results` keys in the `run.yaml` example that no code writes
+## ~~Six `provenance` and `results` keys in the `run.yaml` example that no code writes~~ — STRUCK 2026-08-23 (H6b task 8): CLOSED, every key the table routes is now written
 
 Confirmed by task 9 as pre-existing drift, filed by task 16. `reference.md` § The two files'
 `run.yaml` example shows `provenance.environment.os`, `.hostname`, `.hardware`,
@@ -3591,8 +3591,8 @@ Routed by feature:
 
 | Keys | Owner |
 |---|---|
-| `provenance.environment.os`, `.hostname`, `.hardware` | **H6 Hashes and provenance** — environment capture is its subject |
-| `provenance.allocation`, `provenance.allocation_hash` | **H3 Units**, which lands `allocation` and `holdout`; both write the one `allocation.json` the hash covers |
+| ~~`provenance.environment.os`, `.hostname`, `.hardware`~~ | **CLOSED 2026-08-23 (H6b task 3).** `command_run` writes all three — see the 2026-08-23 amendment at the end of this entry |
+| ~~`provenance.allocation`, `provenance.allocation_hash`~~ | **CLOSED 2026-08-13 (H3c1 task 14), struck here on 2026-08-23** — the 2026-08-13 amendment below recorded the write and left the row unstruck, which is why this entry still read as three open rows |
 | ~~`provenance.upstream`~~ | **CLOSED 2026-08-20 (H8a task 7).** `command_run` now writes it — see the 2026-08-20 amendment below, not the 2026-08-13 one directly beneath this table, whose own last sentence still says `upstream` is unwritten (dated; superseded in the same file, not contradicted) |
 
 **Also recorded, and deliberately not fixed:** the example's `provenance` key order differs from
@@ -3623,6 +3623,62 @@ deliberately not fixed" key-order note (naming the divergence between `cli.py`'s
 order and § The two files' example) is unaffected by this amendment: `upstream` was inserted at
 `cli.py`'s own last position (after `allocation_hash`), which is a cosmetic divergence from § The
 two files' example in exactly the pre-existing way that note already covers, not a new one.
+
+**STRUCK 2026-08-23 (H6b task 8): CLOSED. Every key this entry's table routes is written, and the
+three claims were verified at HEAD rather than read off the amendments above.**
+
+- **`provenance.environment.os`, `.hostname`, `.hardware` — written by H6b task 3.** `cli.command_run`'s
+  `provenance["environment"]` literal now carries `os` (`platform.system()`-`release()`-`machine()`,
+  three components on every platform, chosen over `platform.platform()` which reports the marketing
+  name), `hostname` (`socket.gethostname()`, the spelling `run_identity` already uses for the run lock)
+  and `hardware` (`{"cpu_count": os.cpu_count()}`, a mapping, `None` written through when the platform
+  cannot answer). **A GPU is not among them, by Ruling O**: core cannot probe one without a dependency
+  or a subprocess, so it is an apparatus fact, and § The two files' example lost its `gpu` line in the
+  same slice.
+- **`provenance.allocation` / `.allocation_hash` — written since H3c1 task 14, re-verified here.** The
+  keys are literals inside one dict rather than subscript assignments, so a `grep` for
+  `provenance["allocation"]` finds nothing and proves nothing: read the literal, which carries
+  `"allocation": "allocation.json" if alloc_doc is not None else None` beside `"allocation_hash":
+  alloc_hash`.
+- **`provenance.upstream` — written since H8a task 7, re-verified here.** `"upstream":
+  upstream_ledger.entries()`, the last key of the same literal.
+
+**Reproduce (all three at once), on the file rather than on a line range:**
+
+```
+python3 - <<'EOF'
+import re
+src = open('src/publishable/cli.py').read()
+i = src.index('provenance: dict[str, Any] = {')
+for line in src[i:i + 6000].split('\n'):
+    m = re.match(r'^(\s+)"([a-z_]+)":', line)
+    if m:
+        print(len(m.group(1)), m.group(2))
+EOF
+```
+
+The indent column separates `provenance`'s own keys from a sub-block's, and every key named above
+appears in the output.
+
+**The "Also recorded, and deliberately not fixed" key-order note STAYS, and this closure does not cover
+it.** H6b added no top-level `provenance` key and reordered nothing: the divergence that note describes
+is at `provenance`'s **top level**, where `cli.py` builds `publishable_version` and `plugin_versions`
+before `units`/`units_hash`/`allocation`/`allocation_hash`/`upstream` and § The two files' example shows
+them after. That is untouched.
+
+**And one measured correction to the shape of that note.** `environment`'s seven keys now appear in
+`cli.py` in exactly the order § The two files shows them — `manager`, `python_version`, `os`,
+`hostname`, `uv_lock`, `uv_lock_hash`, `hardware` — which came about by **matching the document while
+writing three new keys into it**, not by reordering an example to match code (the thing the note argues
+against). It is **not** the only sub-block that matches: `git`'s six keys match too, and did before
+H6b. Measured with the extraction above rather than by reading, because this task's own brief asserted
+`environment` was the one and only sub-block that matched.
+
+**A stated non-gap, recorded here once so it is not filed later: `diff` gains no sixth row for
+`os`/`hardware`, and `report` renders neither.** Design Decision 14. § What `diff` compares says *five
+rows* in its own prose, `uv_lock_hash` is the environment fingerprint that command compares, and
+`os`/`hardware` are descriptive rather than identity claims. The five-row shape is documented and
+deliberate, so **no owner is invented for this** — it is a refusal with a reason, not a defect.
 
 ## `UpstreamLedger.record` copies a missing hash as `None` rather than refusing it
 
@@ -3895,7 +3951,7 @@ as its surface — H5 is `units.parquet` integrity and the reserved-column names
 and provenance, H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, H3c-3 is folds inside
 cells, and none of them touches this pair of comparisons. **Owner: unassigned.**
 
-## Nine undocumented run-time and creation-command `E-` codes
+## Five undocumented run-time and creation-command `E-` codes — filed as NINE; four have since been documented (count chain in the 2026-08-23 amendment)
 
 Found by task 7's reviews while landing the validate-time `E-` registry (see "Validate-time `E-`
 identifiers have no registry" above): comparing every raised `E-` identifier against the four
@@ -3909,15 +3965,15 @@ declaration-shape family is:
 
 | Code | Raised by | Surface |
 |---|---|---|
-| `E-GIT-NO-REPO` | `provenance.find_repo_root` | no git repository found walking up from the given path |
-| `E-GIT-NO-COMMIT` | `provenance.git_provenance` | a repo with no commits yet |
-| `E-CODE-DIRTY` | `cli.command_run`'s phase-2 gate | uncommitted changes under `src/**`/`templates/**` |
+| ~~`E-GIT-NO-REPO`~~ | `provenance.find_repo_root` | **DOCUMENTED 2026-08-23 (H6b task 5, Ruling N)** — its own § Errors core raises row, covering the one raise and all six reach paths |
+| ~~`E-GIT-NO-COMMIT`~~ | `provenance.git_provenance` | **DOCUMENTED 2026-08-23 (H6b task 5, Ruling N)** — its own § Errors core raises row, naming why it precedes `E-CODE-DIRTY` |
+| ~~`E-CODE-DIRTY`~~ | `cli.command_run`'s phase-2 gate | **DOCUMENTED 2026-08-22 (H6a batch 4, `4c79905`)** — see the 2026-08-22 appended note below |
 | `E-INPUT-CHANGED` | `cli.command_run` / `verify_manifest` | the input manifest changed since it was recorded |
 | `E-RUN-LOCKED` | `run_identity` | a run directory another process holds the lock on |
 | `E-RUN-ID-EXHAUSTED` | `run_identity` | all 26 suffixes for one commit+day already taken |
 | `E-PROJECT-EXISTS` | `generators.scaffold_project` | `new`'s target directory already exists and is non-empty |
 | `E-EXPERIMENT-EXISTS` | `generators.generate_experiment` | `src/<pkg>/` already exists |
-| `E-EXPERIMENT-UNKNOWN` | `generators.step.generate_step` | `generate step` named a package with no `src/<pkg>/` to add a step into |
+| ~~`E-EXPERIMENT-UNKNOWN`~~ | `generators.step.generate_step` | **DOCUMENTED 2026-08-21 (H8c task 16, `c794029`)** — see the 2026-08-22 appended note below |
 
 These were originally proposed for `reference.md` § Errors core raises by three ledger entries
 above ("New error identifiers: `E-STEP-EXISTS`, `E-EXPERIMENT-EXISTS`, `E-PROJECT-EXISTS`" among
@@ -3993,6 +4049,112 @@ documentation of that code**, which is the distinction this entry's own heading 
 **The widening question is untouched and stays the spine owner's.** H6a took `E-CODE-DIRTY` because it
 sat one row from a row this slice was already writing, not because the charter grew; nothing here
 picks between this entry's two options.
+
+**APPENDED 2026-08-23 (H6b task 8): the count is FIVE, and it is derived here rather than carried.**
+H6b took **two** of the nine under Ruling N — `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT`, both raised by
+`provenance.py`, the file H6a rewrote, which is a fact about the emit site rather than an argument from
+the word *provenance*. Verified by reading `docs/reference.md` and not this entry's own amendments:
+`grep -n "E-GIT-NO-REPO\|E-GIT-NO-COMMIT" docs/reference.md` returns four hits, of which two are the
+new § Errors core raises rows (the other two are `E-REPORT-OVERRIDE-REPO`'s and `E-STUDY-IN-REPO`'s
+cells, which named the code before it had a row of its own and are what the entry three sections below
+this one was filed about).
+
+**The chain, each link a documented commit, so the earlier numbers read as way-points rather than as
+contradictions:**
+
+| Count | What closed it |
+|---|---|
+| **nine** | as filed, when every raised `E-` was compared against the four documents |
+| **eight** | `E-CODE-DIRTY`, H6a batch 4's controller follow-up (`4c79905`) — the 2026-08-22 note below |
+| **seven** | `E-EXPERIMENT-UNKNOWN`, H8c task 16 (`c794029`) — measured in the same note |
+| **five** | `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT`, H6b task 5 |
+
+**The five that remain**, and none of them is `E-STEP-EXISTS`: `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
+`E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`. **`E-STEP-EXISTS` was never one of the
+nine** — this entry's own paragraph above calls it *"the one sibling that is documented, and only
+partially"* — and counting it in is what turned five into six in both the H6b design's and the H6b
+plan's first drafts, corrected in both before dispatch. It is recorded as a separate observation at the
+end of this amendment.
+
+**Their "a mention inside another code's row is not documentation of that code" states, re-swept
+2026-08-23 over the four documents named individually** — `README.md`,
+`docs/design-principles.md`, `docs/experimental-designs.md`, `docs/reference.md`:
+
+| Code | State |
+|---|---|
+| `E-INPUT-CHANGED` | **nowhere in any of the four** |
+| `E-RUN-LOCKED` | **nowhere in any of the four** |
+| `E-RUN-ID-EXHAUSTED` | **nowhere in any of the four** |
+| `E-PROJECT-EXISTS` | one hit: § Exit codes and diagnostics' shared *"every generator with something to protect"* sentence. **No § Errors row.** That sentence is still narrower than the code — `plugin_scaffold.py` raises it for `plugin new` too, which the sentence does not name |
+| `E-EXPERIMENT-EXISTS` | two hits, **neither a row of its own**: one inside `E-EXPERIMENT-UNKNOWN`'s § Errors row, which is exactly the mention this entry's heading says is not documentation, and one in the same § Exit codes sentence |
+
+**One correction to the 2026-08-22 sweep, measured rather than carried.** That note placed
+`E-EXPERIMENT-EXISTS` in the *"appear only inside other codes' prose"* bucket, alongside
+`E-GIT-NO-REPO`. It belonged in `E-PROJECT-EXISTS`'s bucket — a sentence in § Exit codes and
+diagnostics plus no row — and had since 2026-08-14:
+measured with
+
+```
+git log --oneline -S 'generate experiment` reports `E-EXPERIMENT-EXISTS' -- docs/reference.md
+```
+
+which names `075455e`, eight days before that sweep. **So the distinction this entry's heading rests on has
+now gone stale for one row twice**, which is the argument for re-sweeping it on every amendment rather
+than carrying the bucket assignment.
+
+**Owner: unassigned, with the reason.** No remaining chartered slice has `run_identity.py`, the input
+manifest path, or `generators/`/`scaffold.py` as its surface. **H9** is `reproduce`, `dry-run`,
+`draft`, `resume`, `demo` and `docs` — it reads a run's identity claim and re-derives it, and touches
+neither the run lock's own refusals nor a creation command's overwrite guard. **H3c-3's remaining 14
+tasks** are folds and holdouts inside cells. The widening question this entry poses — one slice for the
+raise-time registry's remainder, or a tenth slice — is **still the spine owner's** and H6b does not
+pick between the two options above; taking two codes because their emit site sat inside the file this
+family rewrote is not the charter growing.
+
+**Recorded separately, and NOT one of the five: `E-STEP-EXISTS`.** One hit across the four documents,
+the § Exit codes and diagnostics sentence, and no § Errors core raises row — the same state
+`E-PROJECT-EXISTS` is in, which is why the entry filed at *"`E-GIT-NO-REPO` is named in two normative
+§ Errors cells…"* treats the two as one family question. It is an observation about the prose-only
+convention, not a tenth code, and it must not be counted into the five.
+
+**Sweep discipline, reported because a checker is a claim too.** Every sweep above ran over a **named
+file list**, never over `*.md` and never with the output filtered. Can-fail control:
+`grep -c "E-PARAM-MISSING" docs/reference.md` → **1**, on the same four-file list that returns **0** for
+`E-INPUT-CHANGED`, so the sweep can find a code the document does carry.
+
+## OPEN — `validate_config`'s bare `except ContractError` around `find_repo_root` is wider than its comment claims — **Owner: unassigned**
+
+**Filed 2026-08-23 (H6b task 8), while documenting `E-GIT-NO-REPO`'s six reach paths for Ruling N's
+§ Errors row.** `validate.validate_config` calls `find_repo_root(config_path)` inside a
+`try` whose handler is a bare `except ContractError`, with a comment reading *"No repo at all."* The
+handler sets `repo_root = None`, which skips project-local template discovery and lets every other
+check run — correct for `E-GIT-NO-REPO`, and **wider than the comment's claim**: any coded fault the
+walk-up ever raises, now or later, is swallowed into the same *"no repo at all"* reading, and a config
+whose local template exists then reports `E-TEMPLATE-UNKNOWN` for a reason the diagnostic cannot name.
+
+**Reproduce, by reading the two catch sites side by side rather than by perturbing either:**
+
+```
+grep -n "find_repo_root" src/publishable/validate.py
+```
+
+Two call sites. The one in `_check_data` catches **by code** — `except ContractError as exc:` then
+`if exc.code == "E-GIT-NO-REPO": return` and `raise` otherwise. The one in `validate_config` catches
+`except ContractError:` with no code test at all. **The neighbour that already got it right is in the
+same file**, which is what makes this a divergence rather than a missing convention.
+
+**Not H6b's.** Narrowing it is a behaviour change to `validate` — a fault the walk-up raises today
+would start surfacing where it is currently silent — and H6b is chartered additive: it writes three
+`provenance` keys, documents two codes, and edits documents.
+
+**Owner: unassigned, with the reason.** No remaining chartered slice has `validate`'s
+template-discovery path as its surface: H9 owns `reproduce`, `dry-run`, `draft`, `resume`, `demo` and
+`docs`, none of which is `validate_config`'s walk-up; H3c-3's remaining 14 tasks are folds and holdouts
+inside cells.
+
+**Cost if wrong / if unclaimed:** low today — `find_repo_root` raises exactly one code — and it grows
+with every future coded fault added to the walk-up, which is precisely when nobody will re-read this
+handler's comment.
 
 ## `E-NAME-DIR` is silently skipped when `validate` is run from inside the config's own directory
 
@@ -8501,7 +8663,7 @@ than fixing here is deliberate, not an oversight.
 **The check its owner must make.** Add `` `report` accepts `--format` `` (or equivalent) to the
 parenthetical, the same way `experiment`'s `--plugin` is already named there.
 
-## OPEN — `E-GIT-NO-REPO` is named in two normative § Errors cells for the first time on this branch, with no row of its own, and two call sites let it reach the user uncaught — **Owner: unassigned**
+## PARTLY CLOSED 2026-08-23 (H6b task 5) — ~~`E-GIT-NO-REPO` is named in two normative § Errors cells for the first time on this branch, with no row of its own, and two call sites let it reach the user uncaught~~; the wider prose-only family stays OPEN — **Owner: unassigned**
 
 **Found by:** H8c task-b9 review (Minor 7 / attack 7), on the batch's own concern in its task report
 that stopped one step short of a filing.
@@ -8544,6 +8706,28 @@ sibling and no slice was ever chartered to do that half.
 **Cost if wrong / if unclaimed:** a reader following a normative code reference finds nothing at the
 destination, and `run`/`generate` outside a repository print a diagnostic this document never
 describes at its own source.
+
+**AMENDED 2026-08-23 (H6b task 8): the `E-GIT-NO-REPO` half is CLOSED; the family question is not, and
+the "Why unassigned" paragraph above is now WRONG about H6.** Task 5 gave `E-GIT-NO-REPO` its own
+§ Errors core raises row under Ruling N, and that row was written to cover **all six reach paths**
+rather than the single raise: it names the two that surface the code uncaught (`command_run` and the
+`generate`/`init` dispatch, at `main`'s printer, exit `1`), the three that catch it **by code** as their
+own pass branch (`validate._check_data`, `validate.validate_config`, `study._refuse_if_in_repo`), and
+`cli._load_experiment_for`'s `except Exception`. **So both halves of this entry's headline are answered
+for that one code** — it has a row, and the two uncaught call sites are described at their own source.
+The paragraph reading *"H6 owns hashes and provenance proper (not the registry question of which codes
+get rows)"* is what a reader would trust and it is false as of today: H6b took exactly that registry
+question for two codes, on the narrow ground that both are raised by `provenance.py`, the file H6a
+rewrote. It is amended here rather than rewritten in place, because the sentence was true on its date.
+
+**What stays open is the family, unchanged in scope:** `E-PROJECT-EXISTS`, `E-STEP-EXISTS` and
+`E-TEMPLATE-EXISTS` each still have only the § Exit codes and diagnostics *"every generator with
+something to protect"* sentence and no § Errors row, and `E-EXPERIMENT-EXISTS` is in the same state —
+re-swept 2026-08-23 over the four documents named individually, with `grep -c "E-PARAM-MISSING"
+docs/reference.md` → **1** as the can-fail control. `E-PROJECT-EXISTS`'s sentence still does not name
+`plugin new`, which this entry asked for and no slice has done. **Owner stays unassigned, with the same
+reason**, and H6b taking two codes does not make it H6's: the two were taken by emit site, not by a
+charter that grew.
 
 ## OPEN — a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0` — **Owner: H9**
 
