@@ -138,3 +138,39 @@ say *"report never calls it"*, which is true and claims nothing more.
 catches it, **so the silence was the finding rather than a hole** — corrected by appending, never by
 editing the heading. That is the fifth instance in two slices of *dropping a clause is legitimate;
 dropping it silently is not.*
+
+## Batch 4 — tasks 8, 9 — the zero-file refusal
+
+Commits `758f8a7` (`E-CODE-EMPTY` at the caller, Fixtures G and H, two § Errors rows), `c09e937` (the
+filing re-owned, the report), review `9262b45` (**both PASS**, one Minor), controller follow-up `b7a2ad0`.
+Suite 2951 → **2953**.
+
+**Ruling D is closed and the guard's placement was proven by the design's own evidence.** The reviewer
+**moved the guard into `hashes.py` in a scratch copy** and watched the two negative-control tests break
+there — which is the argument for putting it at the caller, made as a measurement instead of as a
+sentence. Both directions of the refusal are pinned by different mutations: deleting the guard restores
+the old empty-digest behaviour (a completed run whose `run_id` ends `_e3b0c44`), while **moving it past
+`allocate_run_dir` fails on the *no run directory* assertion instead** — different failures for different
+faults, which is what *pinned in both directions* means.
+
+**One thing the batch review got wrong, and the shape is worth more than the fix.** It settled where
+`E-CODE-EMPTY`'s § Errors row belongs by **citing the design's instruction** — *"the design directs it to
+§ Errors core raises, so the report's self-doubt was unfounded."* That is **answering from a proxy**: the
+direct question is what the table's own scope sentence and column header say. They say **"Raised by |
+Type · code"**, over a preamble that introduces an exception hierarchy and describes *"the surfaces that
+raise instead"* — and `E-CODE-EMPTY` raises nothing, which is why the task had to invent a `Type` cell
+reading *(no exception; a `Collector` diagnostic)*. **A design can direct a row into a table whose scope
+does not admit it, and then the design is what is wrong.**
+
+**The fix names the third category once rather than moving the row.** `validate` neither hashes nor
+consults git status, so these codes do not belong in § Errors `validate` reports either; a reader who
+meets one at `run` looks in § Errors core raises. So that section's preamble now says **two of its rows
+are refusals a command makes through a fresh `Collector`**, and why. **And `E-CODE-DIRTY` gained the row
+it never had** — a shipped code documented nowhere, which is *the documented-rule-with-no-code defect
+running in reverse*, and whose very absence is what made the invented `Type` cell look acceptable: with
+no sibling to match, there was nothing to be inconsistent with.
+
+**The new row's claims were each checked against the code before it was written** — `git status
+--porcelain` over the two trees, so **untracked files count and ignored ones do not** — which lets the row
+state Ruling F's real payoff: **the gate and the hash now consider the same set of files, and did not
+before.** That was the defect this slice opened with, stated from the other end.
