@@ -28,13 +28,6 @@ def test_code_hash_covers_src_and_templates_only(tmp_path: Path):
     assert code_hash(tmp_path, None) != before
 
 
-def test_code_hash_ignores_pycache(tmp_path: Path):
-    write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path, None)
-    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path, None) == before
-
-
 def test_code_hash_is_prefixed_and_short_takes_seven(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
     h = code_hash(tmp_path, None)
@@ -103,10 +96,44 @@ def test_code_hash_skip_list_matches_relative_path_not_absolute(tmp_path: Path):
 
 
 def test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree(tmp_path: Path):
-    write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path, None)
-    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path, None) == before
+    """The fixed skip set drops `__pycache__` **unconditionally** — whatever
+    git says about the files inside it.
+
+    **This test absorbed a twin.** `test_code_hash_ignores_pycache` was
+    byte-identical in body — same file, same `.pyc`, same assertion — so
+    deleting either one alone left the suite green and one of the two was
+    doing no work. What survives is the half that can fail for a reason the
+    other could not: the tracked arm below asks git.
+
+    `src/pkg/__pycache__/keep.py` is **tracked** (`git add -f`), and git
+    reports it as **not excluded** — asserted here as `check-ignore`'s
+    returncode 1, not assumed. The digest is unmoved all the same, which is
+    what *unconditionally* means and what separates this test from guard-pin
+    arm D's second tree: that arm calls `code_hash(..., None)`, so git is
+    never asked at all, and a predicate applied before the fixed skip set
+    would pass it.
+    """
+    import subprocess
+
+    tree = _h6a_base_repo(tmp_path / "tree")
+    (tree / "src" / "pkg" / "loose.pyd").write_text("X")
+    _h6a_commit_more(tree, "src/pkg/loose.pyd")
+    before = code_hash_of(hashed_files(tree, _h6a_include(tree)))
+    assert before == "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+    # The untracked half the removed twin held, kept: a real `.pyc` written by
+    # the interpreter moves nothing.
+    write(tree, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
+    # The tracked half, which the twin could not hold at all.
+    write(tree, "src/pkg/__pycache__/keep.py", "k = 1\n")
+    _h6a_commit_more(tree, "src/pkg/__pycache__/keep.py")
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/__pycache__/keep.py"], cwd=tree, capture_output=True
+    )
+    assert asked.returncode == 1, "git must report this tracked file as NOT excluded"
+
+    assert code_hash_of(hashed_files(tree, _h6a_include(tree))) == before
+    assert code_hash(tree, None) == before
 
 
 def test_code_hash_handles_a_dot_git_intermediate_path_component(tmp_path: Path):
@@ -755,3 +782,50 @@ def test_h6a_fixture_d_a_tracked_file_matching_a_pattern_is_still_hashed(tmp_pat
     # pre-slice definition cannot tell them apart at all.
     assert code_hash(d_prime, None) == tracked_pyd
     assert code_hash_of(hashed_files(d_prime, _h6a_include(d_prime))) == _H6A_BASE_DIGEST
+
+
+# ---------------------------------------------------------------------------
+# H6a task 6 — Fixture J: the hash and the dirty gate agree.
+
+
+def test_h6a_fixture_j_the_gate_and_the_hash_agree_on_an_excluded_file(tmp_path: Path):
+    """Fixture J, one tree and two assertions, so neither half can move alone.
+
+    **They do not share a file list, and a docstring claiming they did would be
+    a false claim.** They share `HASHED_TREES` — one constant, one pathspec —
+    and ask git two different questions: `git status --porcelain -- src
+    templates` (has anything moved?) and `git check-ignore` (is this path
+    excluded?). `status` never lists a clean tracked file, so it cannot
+    produce the hash's file list. What is pinned here is behavioural
+    agreement.
+
+    The four states of a file under the two trees, and what each is now:
+
+      * untracked and not excluded — **dirty**, and **hashed**
+      * tracked and modified — **dirty**, and **hashed**
+      * tracked and clean — not dirty, and **hashed**
+      * present but excluded — **neither**
+
+    Before this slice the last one was *not dirty and hashed*: the gate
+    consulted git and the hash did not, so one mechanism said *nothing
+    changed* while the other said *the code moved*. That disagreement is what
+    this slice closed, and this is the tree it closed it on — Fixture B's,
+    the credentials case.
+    """
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/.env", "OPENAI_API_KEY=sk-live-1\n")
+    # `config_path` is the gate's second argument and answers a different
+    # question (`config_committed`); any tracked path in the repo serves, and
+    # this one is committed by `_h6a_base_repo`.
+    committed = repo / "src" / "pkg" / "step.py"
+
+    assert git_provenance(repo, committed).code_dirty is False
+    assert "src/pkg/.env" not in {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+    # The control: the gate CAN see this tree, and the hash CAN see a path
+    # under it. Without it both halves would pass over a repository where
+    # nothing was measured at all.
+    write(repo, "src/pkg/loose.py", "c = 3\n")
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/loose.py" in {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
