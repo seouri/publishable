@@ -25,14 +25,17 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H6 Hashes and provenance, H9, then H3c-3's remaining
+**Order of the slices that remain: H6b, H9, then H3c-3's remaining
 14 — the H4, H5, H7 and H8 families are all complete, H5a and H5b both having merged on 2026-08-22.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
-H5a's change was additive to what `io.write` accepts.** **H6 is chartered as independent** in the spine
+H5a's change was additive to what `io.write` accepts.** **H6 was chartered as independent** in the spine
 design and was omitted from this sentence for several slices while it was narrowed around the families
-being worked; `spec-defects.md` carries live entries owned by it, which is how the omission was caught. **The spine design's own nine-row charter table was never amended for either
+being worked; `spec-defects.md` carried live entries owned by it, which is how the omission was caught —
+and **H6a's appended correction to that charter narrows the verdict in one direction, H6 before H9**,
+since `reproduce` re-derives an identity claim and so must be built against the hash definitions rather
+than before them. **The spine design's own nine-row charter table was never amended for either
 H8's three-way split or H5's two-way one** — it read as nine slices while the work had become fourteen,
 and an appended amendment dated 2026-08-22 now records both. Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
@@ -189,6 +192,47 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H6a (the two hash definitions) merged on 2026-08-22 — the first of H6's two, and a VALUE CHANGE.**
+`code_hash` no longer folds a file the repo's own committed exclude rules skip, so **one published
+identity claim moves for an unchanged tree at an unchanged commit**. Measured end to end through the
+installed console script on a byte-identical project: `09a843b1…` before, `f6a935cf…` after, with
+`run_id` and `results/latest` following. **Exactly one hash moves and the other ten the record carries
+do not** — `parameters_hash`, `input_manifest_hash`, the per-file manifest digests, `uv_lock_hash`,
+`units_hash`, `allocation_hash`, `apparatus.hash`, `design_digest`, the copied upstream
+`parameters_hash`, and every derived seed — enumerated rather than counted, and pinned as literals by
+a seven-arm guard pin whose arm C exists to make *"exactly one hash moves"* a pin rather than a
+sentence. Two errors are minted (`E-CODE-EMPTY`, `E-CODE-FILE-LIST`, one emit site each) and one
+warning (`W-PARAM-UNSET`, at `validate`, for the `parameters` block only). **It retires no refusal and
+unblocks ZERO configs**: § Executability's four-row table in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) is repeated character for character,
+because row 1 counts *errors* and `W-PARAM-UNSET` is a warning, both new errors are raised by
+`command_run` rather than by `validate`, rows 2 and 3 name dependencies this slice does not touch, and
+`code_hash` is computed for every run regardless of config. **`parameters_hash`'s code did not change**
+— the charter's normalization clause is rejected with grounds rather than deferred.
+
+Four things worth carrying. **The disclosure is `uv.lock` and nothing else, by ruling.** A
+`provenance.hash_definition` key, a fourth hash, a `schema_version` bump and a `diff` row of its own
+were each *refused* rather than merely unbuilt — a bump makes `lineage.read_record_file` reject every
+record on disk — so **`diff` prints `code_hash DIFFERS` for identical code across this boundary**, and
+the only machine-readable carrier of *why* is the lockfile's `publishable` version. That claim is the
+guard pin's seventh arm, with **no authorized editor**, because it reads like a defect and is a
+consequence, and is therefore precisely the claim a later slice will want to soften. **Ruling C's
+sharpest cost is that one record can carry two hash definitions at once**: `provenance.upstream[]`
+copies an upstream run's `code_hash` verbatim, so a record written after this slice can hold its own
+digest under the new rule beside a copied one under the old, **with nothing marking which is which** —
+the reader's route is the two runs' `uv_lock_hash`. **The exclude chain is narrowed rather than
+disclosed as machine-dependent**: every `check-ignore` runs with the global and system git config
+neutralized, so only rules that travel with the tree decide — *a rule that does not travel with the
+tree cannot define the tree's identity* — and the dirty gate's machine-dependence was rejected as a
+precedent, because a gate asks *may this run proceed here*, which is local by nature, while a hash asks
+*is this the same code*, which is not. `.git/info/exclude` is the one residue no flag can disable and
+is disclosed by name. **And an implementer may not self-authorize an edit to a guard-pin arm with no
+authorized editor, even a mechanical one that turns out clean** — batch 2 did and it was the slice's
+one Major; batch 3 met the same need, took the route instead, and the controller's ruling named the
+post-edit state in advance, which is the whole difference. Twice more the device caught a sentence
+going false under its own change: an arm's docstring asserting a call-site count **this very batch
+falsified**, and a shipped test's docstring asserting an exclusivity `W-PARAM-UNSET` had just removed.
 
 **H5b (non-numeric columns downstream to `aggregate`) merged on 2026-08-22 — the last of H5's two, and
 the first behaviour change since H7d Part B to what an existing key *reports*.** A recorded column that is

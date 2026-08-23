@@ -153,7 +153,7 @@ any subclass that does not override it; this is harmless in practice because eve
 the four documents' vocabulary rebinds `steps` to its own list rather than appending to the
 inherited one, so no two experiments can alias the same list object through normal use.
 
-## `code_hash` is not `.gitignore`-aware (S1 deviation, not a spec defect)
+## ~~`code_hash` is not `.gitignore`-aware (S1 deviation, not a spec defect)~~ — STRUCK 2026-08-22 (H6a task 12): CLOSED by H6a
 
 § How the three are computed says `code_hash` is taken from the working tree "skipping
 whatever `.gitignore` skips". S1 skips a fixed set instead — `__pycache__`, `.pyc`/`.pyo`,
@@ -167,7 +167,62 @@ shells to git. Do that in hardening, or relax the purity rule and say so.
 slice. **Owner: H6 Hashes and provenance** (spine § The hardening slices), which owns both branches
 — the `is_ignored` predicate and the purity rule that forced the divergence.
 
-## `parameters_hash` does not normalize to what `init` would have materialized
+**STRUCK 2026-08-22 (H6a task 12): CLOSED by H6a's Decision 1 and controller Ruling F.** `code_hash`
+now asks git which of its candidate paths are excluded, so § How the three are computed's *"skipping
+whatever `.gitignore` skips"* is honoured rather than approximated — with the chain narrowed, below.
+
+**The entry's own sentence above is false, and was false when it was written.** *"In practice nothing
+else gitignored appears under `src/**` or `templates/**`, so the two agree today"* is falsified by
+**three of the scaffold's own four patterns**. Reproduced on this branch on 2026-08-22, one
+perturbation at a time against a committed base tree (`src/pkg/step.py` = `a = 1\n`, `templates/t.py`
+= `b = 2\n`, the scaffold's own four-line `.gitignore`), whose baseline digest is
+`sha256:71bf339c…` under **both** definitions:
+
+| Perturbation | pre-slice (`include=None`) | post-slice (the shipped predicate) |
+|---|---|---|
+| untracked `src/pkg/.env` | **MOVES** | SAME |
+| untracked `src/.venv/lib/site.py` | **MOVES** | SAME |
+| untracked `src/pkg/loose.pyd` | **MOVES** | SAME |
+| untracked `src/pkg/__pycache__/x.pyc` | SAME | SAME |
+| untracked `src/pkg/loose.pyc` | SAME | SAME |
+
+The last two rows are a **coincidence rather than a partial honouring**: `hashes._SKIP_DIRS` and
+`_SKIP_SUFFIXES` happen to name `__pycache__` and `.pyc`/`.pyo`, that fixed set is applied *before*
+git is asked, and it stays applied afterwards (Decision 3) — so those two rows read SAME for a reason
+that has nothing to do with `.gitignore`.
+
+**Reproduce:** build the base tree above under a `git init`-ed directory, commit it, then compare
+`code_hash_of(hashed_files(root, None))` against
+`code_hash_of(hashed_files(root, lambda c: unignored_under_hashed_trees(root, c)))` after adding each
+file in turn.
+
+**The resolution this entry itself named is what shipped, with one correction to its shape.**
+*"Passing an `is_ignored` predicate in from the caller, which already shells to git"* is
+`provenance.unignored_under_hashed_trees`, bound at `command_run`'s single hashing site through
+`hashed_files`' **required** `include` parameter. It is a **batch keep-predicate over the whole
+candidate list**, not a per-path `is_ignored` — one `git check-ignore -z --stdin` call answers for the
+whole tree, which is what leaves `E-CODE-FILE-LIST` with one emit site (Decision 4, Ruling H).
+
+**And the predicate answers about neither `.gitignore` alone nor git's whole exclude chain.** Ruling F
+neutralizes the user's global and system git configuration
+(`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`, `-c core.excludesFile=`), so what decides is the
+repo's **own committed rules** — a `.gitignore` at any depth — plus `.git/info/exclude`, the one
+residue no flag can disable. `docs/reference.md` § How the three are computed carries the four-case
+table and discloses that residue by name; **that disclosure was judged sufficient and no separate gap
+is filed for it** (H6a task 12), because it names the residue, states its consequence — a file it
+excludes is unhashed here and hashed by whoever clones the repo — and names the action, which is to
+commit the file. Confirmed live on 2026-08-22: an untracked `src/pkg/local_note.py` moves the digest
+from `sha256:19b9b39f…` to `sha256:7c39b295…`, and writing `local_note.py` into `.git/info/exclude`
+returns it to `sha256:19b9b39f…`.
+
+**The other branch this entry named — *"or relax the purity rule and say so"* — is answered in the
+spine design's appended correction rather than here.** No such rule exists in `design-principles.md`:
+grepped 2026-08-22 for `pur(e|ity)`, case-insensitive, over the four documents named individually, one
+hit total and it is `reference.md`'s *"`parameters_hash` is a pure function of the file"*, a different
+claim about a different function. `hashes.py` was never pure in the sense this entry's sentence
+implies either — it `rglob`s, reads bytes, and carries `_SKIP_DIRS`, which is filesystem policy.
+
+## ~~`parameters_hash` does not normalize to what `init` would have materialized~~ — STRUCK 2026-08-22 (H6a task 12): CLOSED AS RULED, NOT AS BUILT
 
 § How the three are computed says values are "normalized to what `init` would have
 materialized before hashing — an omitted `cluster_by` and an explicit `cluster_by: null`
@@ -183,6 +238,39 @@ provenance**, which owns `parameters_hash` normalization against `parameter_spec
 purity question entry 89 raises. The two must be decided together: both turn on whether `hashes.py`
 may take an argument it does not compute.
 
+**STRUCK 2026-08-22 (H6a task 12): CLOSED AS RULED, NOT AS BUILT.** `parameters_hash`'s code did not
+change and will not (Ruling B, Decision 9) — a task finding itself editing `covered_config`'s body or
+`parameters_hash` was told to report a disagreement instead, and none did.
+
+**Which of this entry's own two options H6a took: the second**, *"state in § How the three are
+computed that normalization is the caller's job and name the caller"* — and it took it
+**subtractively**. Task 10 **deleted** the normalization sentence rather than relocating it, and
+deleted its false `diff` justification beside it, leaving standing the rule the code actually
+implements: `parameters_hash` covers the config as written, a hand-trimmed config and the file `init`
+wrote are two declarations, and `diff` names the key that differs. *Prefer deleting a claim to
+rewriting it* is why the sentence is gone rather than restated somewhere a reader would have to
+reconcile with the code.
+
+**The ground for rejecting normalization outright, rather than narrowing it**: normalizing would hand
+**one identity claim to a config that runs and a config that cannot** — an omitted `parameter_spec`
+default validates clean and then kills the step that reads it, with `E-STEP-PARAM-UNKNOWN`. What H6a
+shipped in its place is the diagnostic that makes that omission visible before anything executes:
+`W-PARAM-UNSET` at `validate`, for the `parameters` block **only**. The identical symptom through an
+omitted **core-schema** key is filed rather than built — see *An omitted core-schema key validates
+clean and then kills every execution*, at the end of this file.
+
+**`hashes.covered_config`'s docstring was re-read before this strike and needs no further edit.**
+Task 10 re-pointed it: it now reads *"**Does not normalize, by decision.** `parameters_hash` covers
+the config as written … Normalizing was ruled against on three independent grounds (H6a, Decision
+9)"*, which points at the ruling rather than at this entry as an open gap. A filing's claims about the
+code go stale like any other comment, and this is the one that would have.
+
+**The AMENDED note's *"the two must be decided together"* held, and they were decided in opposite
+directions.** The `.gitignore` entry above closed by **building** the predicate; this one closed by
+**rejecting** the charter clause. What they had in common was never the answer, only the question —
+whether `hashes.py` may take an argument it does not compute — and the answer is yes, given by
+`include`.
+
 ## Two `git_provenance` environment facts worth keeping (not defects)
 
 Verified empirically while hardening `commit`'s empty-string case (see the
@@ -195,7 +283,7 @@ mismatch between `find_repo_root`'s resolved repo root (used as `cwd`) and an
 unresolved `config_path` string resolves correctly — git normalizes the
 pathspec against `cwd` internally, so `ls-files --error-unmatch` still matches.
 
-## `code_hash` over zero files is indistinguishable from several distinct situations
+## ~~`code_hash` over zero files is indistinguishable from several distinct situations~~ — STRUCK 2026-08-22 (H6a task 12): CLOSED by `E-CODE-EMPTY`
 
 "No `src/` at all", "an empty `src/`", and the now-fixed absolute-path skip-list bug all
 produced the identical empty-tree digest `sha256:e3b0c442...`, which is what made that bug
@@ -224,6 +312,30 @@ task 18's ruling (Decision 15 in `docs/superpowers/specs/2026-08-22-hash-definit
 undecided as of this correction. **Owner: H6a task 8**, which built the guard, the
 `E-CODE-EMPTY` § Errors row, and the tests pinning it (`docs/superpowers/plans/2026-08-22-hash-definitions.md`
 Task 8; `docs/reference.md` § Errors core raises' `E-CODE-EMPTY` row).
+
+**STRUCK 2026-08-22 (H6a task 12): CLOSED by `E-CODE-EMPTY` (H6a task 8, Ruling D), after the
+`RE-OWNED` correction above, which is left standing rather than folded in.** A run whose candidate
+file list is empty no longer publishes the digest of nothing at exit 0: `command_run` refuses through
+a fresh `Collector`, and the row in `docs/reference.md` § Errors core raises names **both** reachable
+situations — no file under `src/**`/`templates/**` at all, and every candidate excluded by a rule the
+repo commits.
+
+**One emit site, and it is the only one.** `grep -rn '"E-CODE-EMPTY"' src/publishable/` on
+2026-08-22 returns exactly one hit, `cli.py:2380`; the guard sits after unit resolution and **before**
+`allocate_run_dir`, so a refusal leaves no run directory behind. The guard tests the **file list**,
+never the digest: a `ch == "sha256:e3b0c442…"` one-liner answers *were there zero files?* with a digest
+comparison and was forbidden by name rather than left to review.
+
+**The empty-tree return value is unchanged, which this entry's `RE-OWNED` note already recorded and
+this strike re-verified rather than carried.** `hashes.code_hash` still returns `sha256:e3b0c442…`
+for zero files, and `grep -n "nonexistent_empty_repo" tests/test_hashes.py` on 2026-08-22 still names
+the two negative controls that depend on it (plus guard-pin arm E, which pins the same digest as a
+literal). So a reader looking for this guard inside `hashes.py` will not find it, and the § Errors row
+says so.
+
+**What this strike does not decide.** Whether `validate` ever gains a seat for a tree-state warning is
+**H6b task 18's** ruling (Decision 15): `validate` walks no tree and shells to no git today, so H6a
+added no check there.
 
 ## An unwritable or missing `output_dir` surfaced as a bare traceback — now fixed at the CLI
 
@@ -3812,6 +3924,36 @@ ledger:
 
 This entry does not pick between them; that decision is the spine owner's, made with the argument
 above in hand, not silently defaulted by a documentation task.
+
+**APPENDED 2026-08-22 (H6a task 12): H6a documented its own two new codes and took ONE of the nine —
+not none, which is what this slice's own design and task brief both say.** The correction matters
+because the brief's sentence would have left a documented code sitting in the table above as
+undocumented.
+
+- **Its own two**, both minted by H6a and both given a row in `docs/reference.md` § Errors core
+  raises: `E-CODE-EMPTY` (one emit site, `cli.command_run`) and `E-CODE-FILE-LIST` (one emit site,
+  `provenance.unignored_under_hashed_trees`).
+- **`E-CODE-DIRTY`, which is one of the nine in the table above, gained the row it never had** — H6a
+  batch 4's controller follow-up, commit `4c79905`, verified with
+  `git log -S "E-CODE-DIRTY" --oneline -- docs/reference.md`. It was documented because the batch-4
+  review found `E-CODE-EMPTY`'s new row had **no sibling to be consistent with**, which is what made
+  an invented `Type` cell reading *(no exception; a `Collector` diagnostic)* look acceptable. So the
+  count in the heading above is now **eight**, and `E-CODE-DIRTY` is no longer H6b task 17's to
+  document.
+
+**One further row of the table above is stale for a reason that is not H6a's**, measured here rather
+than assumed: `E-EXPERIMENT-UNKNOWN` has had its own § Errors core raises row since H8c task 16
+(`git log -S "E-EXPERIMENT-UNKNOWN" --oneline -- docs/reference.md` → `c794029`). Swept the same day
+over the four documents named individually, the remaining seven fall in three states — `E-GIT-NO-REPO`
+and `E-EXPERIMENT-EXISTS` appear only inside *other* codes' prose and have no row of their own;
+`E-PROJECT-EXISTS` has a sentence in § Exit codes and diagnostics and no row, exactly as
+`E-STEP-EXISTS` does; and `E-GIT-NO-COMMIT`, `E-INPUT-CHANGED`, `E-RUN-LOCKED` and
+`E-RUN-ID-EXHAUSTED` appear nowhere in any of the four. **A mention inside another code's row is not
+documentation of that code**, which is the distinction this entry's own heading rests on.
+
+**The widening question is untouched and stays the spine owner's.** H6a took `E-CODE-DIRTY` because it
+sat one row from a row this slice was already writing, not because the charter grew; nothing here
+picks between this entry's two options.
 
 ## `E-NAME-DIR` is silently skipped when `validate` is run from inside the config's own directory
 
@@ -8974,3 +9116,95 @@ needed correcting; neither presents the function as having a production caller.
 without the file list, calls, and its zero-caller state in `src/` today is a fact about who
 currently needs the file list — `command_run` does, for a guard not yet built when task 3 wrote
 the wrapper — not a duplicate implementation needing deletion. Nothing owes this entry.
+
+## An omitted core-schema key validates clean and then kills every execution — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-22, H6a task 12, per Decision 10 and Ruling B.** H6a's `W-PARAM-UNSET` covers the
+`parameters` block only. The identical symptom reaches core's **own** schema envelope — `limits`,
+`replication`, `data`, and every other block core writes — and nothing reports it: a config that omits
+a key `init` materialized validates with zero findings, and a step that reads the omitted path through
+`cfg` dies with `E-STEP-PARAM-UNKNOWN` at every execution.
+
+**Reproduced end to end through the installed console script**, not derived from emit sites:
+
+```
+publishable new proj
+publishable generate experiment --name cohort-pilot --template generic \
+    --input-dir <outside-repo> --output-dir <outside-repo>
+# delete the single line `  min_reported_n: 10` from configs/cohort-pilot/config.yaml
+publishable validate configs/cohort-pilot/config.yaml
+    ✓ config valid · configs/cohort-pilot/config.yaml            (exit 0, zero findings)
+# add `floor = cfg.limits.min_reported_n` to the scaffolded step's run(), commit, then
+publishable run configs/cohort-pilot/config.yaml
+    run.yaml: status: failed
+    error: 'E-STEP-PARAM-UNKNOWN ContractError: limits.min_reported_n is not a path this config holds'
+```
+
+**The code is the same one the `parameters` half names, and that was checked rather than assumed.**
+`Node.__getattr__` (`config.py`) raises `E-STEP-PARAM-UNKNOWN` for any absent path, with no special
+case for the `parameters` subtree — so the § Warnings row's stated consequence for
+`cfg.parameters.<path>` is true verbatim of `cfg.limits.<path>` too. What differs is only that one
+half has a warning in front of it.
+
+**Why the exposure is narrower than the `parameters` half, which is the reason this was filed rather
+than built.** Core reads its own schema keys **defensively** — `.get` with a default, or a check that
+runs before the read — so an omitted core-schema key does not break core itself; the run above reaches
+`allocate_run_dir`, writes a `run.yaml`, and records every execution's failure. The only casualty is a
+**step** reaching for the key through `cfg`, and core cannot know whether a step does that without
+reading the body of user Python, which `CLAUDE.md` § Invariants refuses by name (*"Greenfield only —
+core validates declarations and verifies effects; it never inspects the body of user Python"*).
+
+**Closing it needs one of two things this project forbids or has already rejected.** Either a
+**defaults structure for the core schema** — the separate defaults file `reference.md` § There is no
+separate defaults file forbids, and which does not exist as data today (`materialize_config`
+builds literal text lines; only `_parameters_block` reads a `parameter_spec`) — or the greenfield line
+crossed so core can see which paths a step reads. Warning on *every* omitted core-schema key without
+either would fire on almost every hand-written config for a consequence that usually never arrives,
+which is the failure mode `W-PARAM-UNSET` was deliberately narrowed to avoid.
+
+**Owner: unassigned, with the reason.** No remaining slice has core's **schema envelope** as its
+surface: H6b is the environment keys, the raise-time registry's remaining rows, and the ruling on
+whether `validate` gains a tree-state seat; H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`;
+H3c-3's remaining 14 are folds and holdouts inside cells. This is deliberately **not** *"whichever
+slice next touches the schema"*, the form this file rejects by name.
+
+## `git check-ignore` costs 835 ms at ten thousand paths, and the second axis is unmeasured — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-22, H6a task 12, per controller Ruling G, which accepted the cost as a disclosure
+rather than designing around it.** `code_hash` now makes one `git check-ignore -z --stdin` call per
+`run`, over every candidate path under `src/**` and `templates/**`. On an ordinary repo that is
+invisible — 12.1 ms over this repo's own 53 paths. On a large tree it is not.
+
+**Re-measured on 2026-08-22 on this branch** (the plan measured the same shape at `f8450f9` and got
+875 ms; this is a re-run, not a carry), against a committed tree of **10,002** files under the two
+hashed trees with the scaffold's four-pattern `.gitignore`, five runs each, minimum reported:
+
+| Call | Time |
+|---|---|
+| `git -c core.excludesFile= check-ignore -z --stdin`, config-neutralized, all 10,002 paths | **835 ms** |
+| `git ls-files -z -co --exclude-standard` — the shape Decision 2 **rejected** | **16 ms** |
+| `code_hash_of(hashed_files(root, None))` — the whole walk, read and fold | **370 ms** |
+
+So the exclude question costs **~51× the rejected shape** and **~2.3× the entire hash it is one input
+to**. **Decision 2 is not reopened by this filing and must not be reopened by citing it**: `ls-files`
+answers a correlated question, its three failure modes are real, and one of them — a submodule's
+contents silently dropped from the hash — is silent. Correctness outranks under a second, once per
+run, on a tree larger than anything this project has seen.
+
+**The second axis is unmeasured, and that is half of why this is filed.** Both measurements — the
+53-path one and the 10,002-path one — were taken against a **four-pattern** `.gitignore`. Cost
+plausibly scales with **pattern count** as well as path count, and a repo carrying hundreds of
+committed patterns is unmeasured in either direction. Nothing here licenses the claim that paths are
+the only axis.
+
+**What a successor reaches for, so it is not re-derived.** H6a's design Decision 6 records the
+fallback: `git ls-files -z -co --exclude-standard` **plus** explicit handling of its three failure
+modes — a tracked file deleted from the working tree, a tracked file under `__pycache__`, and a
+submodule's contents. Each of the three was built against the shipped predicate in H6a batch 2 and
+answered correctly, so the comparison a successor needs already exists as tests.
+
+**Owner: unassigned, with the reason.** No remaining slice has hashing **performance** as its surface,
+and none has `hashes.py` or `provenance.py` at all: H6b is the `provenance.environment` keys, the
+raise-time `E-` registry's remaining rows, and the `validate` tree-state ruling; H9 is `reproduce` and
+the other second-entry commands; H3c-3's remaining 14 are folds and holdouts inside cells. Not
+*"whichever slice next touches the hash"*.

@@ -149,6 +149,55 @@ metric's **`p_value`** moves in a third, every **`report_by` level's** keys move
 things newly stop or newly warn**. *A count is not an enumeration, and the exposure of a
 behaviour-changing slice is the enumeration.*
 
+**Correction, 2026-08-22, appended as H6a completes — this corrects the H6 row of the table above and
+edits nothing.** Three of that row's claims are wrong, and a fourth thing it never received is its
+split.
+
+**1. *"`parameters_hash` normalization against `parameter_spec`"* is REJECTED, not deferred and not
+narrowed.** H6a's Decision 9, on the controller's Ruling B, refuses to build it, and `parameters_hash`'s
+code did not change. The grounds, sharpest first: normalizing would hand **one identity claim to a
+config that runs and a config that cannot** — an omitted `parameter_spec` default validates clean today
+and then kills the step that reads it with `E-STEP-PARAM-UNKNOWN` — so the two configs the charter
+wanted to hash *alike* are not alike in the only respect a hash of a declaration is for. Second, it
+would move published verdicts: `diff <config> <run>` recomputes the config side and reads the run
+side's recorded string, so every run already on disk would start comparing differently. Third, it needs
+a defaults structure for the core schema that this project forbids by name. **What H6a shipped instead
+is the diagnostic that makes the omission visible** — `W-PARAM-UNSET` at `validate`, for the
+`parameters` block only, with the core-schema half filed unassigned in
+[`spec-defects.md`](../spec-defects.md).
+
+**2. *"the purity rule that forced both"* names a rule that is not in `design-principles.md` at all,
+and that `hashes.py` already broke in its own terms.** Grepped 2026-08-22, case-insensitive, for
+`pur(e|ity)` over the four documents named individually: **one hit**, `reference.md`'s *"`parameters_hash`
+is a pure function of the file"*, which is a claim about one function's inputs rather than a rule
+forbidding a module to take an argument it does not compute. The rule's real home is a **plan's**
+sentence, quoted in the ledger entry this row was derived from — *"this plan makes `hashes.py` pure so
+it can be tested without a repository"* — which is an implementation convenience, not a normative
+constraint. And `hashes.py` was never pure in the sense the row implies: it `rglob`s the working tree,
+reads bytes, and carries `_SKIP_DIRS`/`_SKIP_SUFFIXES`, which is filesystem policy. H6a's `include`
+parameter therefore relaxed nothing that was written down.
+
+**3. The *"Independent"* verdict is too strong in one direction: H6 before H9.** `reproduce` is what
+reads the environment back and re-derives an identity claim, so it must be built against the hash
+definitions rather than before them — H6a moves `code_hash`'s value for an unchanged tree, and a
+`reproduce` written first would have been written against the old one. The other direction is
+unaffected: nothing in H6 waits on H9. The scoping's § 9 makes the same argument and nothing measured
+during H6a disturbed it.
+
+**4. The row never received H6's split, the same omission the amendment above exists to record.**
+H6 split two ways on the value-changing / additive seam, measured in
+[`H6-SCOPING.md`](../H6-SCOPING.md) at 20 tasks: **H6a** the two hash definitions (value-changing) ·
+**H6b** the `provenance.environment` keys and the diagnostic debt (additive). H6a merged 2026-08-22.
+**And its size moved in the direction every re-scoping in this file has moved**: the scoping said 12
+and H6a's own design says *"Twelve tasks"*, while
+`grep -c '^## Task ' docs/superpowers/plans/2026-08-22-hash-definitions.md` returns **13** — a count
+copied from the document being tested rather than from the plan that shipped, which is exactly what the
+two corrections above this one were already about, for H5a's 9-versus-13 and H5b's 10-versus-16.
+
+**One thing the row got right and this correction does not touch:** *"`code_hash`'s `.gitignore`
+awareness and its zero-file case"* is precisely what H6a built — a batch keep-predicate asking git, and
+`E-CODE-EMPTY` at the caller.
+
 ### Order, amended against outside evidence
 
 **AMENDMENT, 2026-08-14, from an executability measurement of
