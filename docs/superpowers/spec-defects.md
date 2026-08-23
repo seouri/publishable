@@ -9432,7 +9432,7 @@ raise-time `E-` registry's remaining rows, and the `validate` tree-state ruling;
 the other second-entry commands; H3c-3's remaining 14 are folds and holdouts inside cells. Not
 *"whichever slice next touches the hash"*.
 
-## OPEN — an uncommitted root `.gitignore` decides what `code_hash` covers, and the dirty gate cannot see it — **Owner: H6b**
+## OPEN — an uncommitted root `.gitignore` decides what `code_hash` covers, and the dirty gate cannot see it — **Owner: unassigned (see the 2026-08-23 amendment; H6b considered and declined it)**
 
 **Filed 2026-08-23, H6a's whole-branch fix round, from the gate's Major 3.** `code_hash`'s exclude
 question is `git check-ignore`, which answers from the **working tree**. So a `.gitignore` that is
