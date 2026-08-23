@@ -286,3 +286,99 @@ otherwise — including the one section this repo built specifically so that bui
 The report's own addendum named the rule (*when you edit one line of a block, diff the block*) and both
 survivors are one step further out: **when a batch falsifies a claim, grep for every record that
 carries it — including the ones a later task will repeat it from.**
+
+---
+
+## Whole-branch fix round — 2026-08-23, at `bf2a76e`
+
+All five findings closed. No code defect; the one `src/` edit is a comment correction, behaviour
+unchanged (verified below). Full suite re-run directly in the foreground after clearing stale
+`pytest-of-joon` dirs and `__pycache__`: **3019 passed, 1 skipped, 2 xfailed in 217.22s** — identical to
+the gate's figure, nothing regressed. `ruff check .` → *All checks passed!* · `ruff format --check .` →
+*93 files already formatted* · `mypy` → *Success: no issues found in 52 source files*.
+
+**Major 1 — CLOSED.** `docs/reference.md` § Warnings core reports, the `W-APPARATUS-UNANSWERED` row:
+moved the "Its counts are the run's own accumulated `run_start`/`pre_execution` history, replayed from
+the ledger ... plus the one round `freeze` itself just probed" sentence to sit immediately after the
+`freeze` sentence it describes, and bound it explicitly (`` **`freeze`'s own counts** are...``). The
+`dry-run` sentence now ends on its own clause ("over that round's own in-memory counts alone ... printed
+to stdout through a fresh `Collector` before the transcript") with no trailing claim about a ledger.
+Checked the other twelve edited rows in the same table for the same displaced-antecedent shape by
+re-reading each in full context (not just the row cell) — none has a pronoun whose referent moved; each
+either replaces a name in place or appends at a clause boundary. The edit is confined to one table cell;
+no other row's content or any anchor moved (confirmed by `git diff` — the file diff is a single line).
+
+**Major 2 — CLOSED.** Measured through the real installed console script before touching anything:
+`uv run publishable draft new` → exit `1`, `` error   E-IO-FAILED          No such file or
+directory``; `uv run publishable dry-run new` → the same; `uv run publishable draft a b` → exit `2`,
+the arity message (unaffected — item (2)'s claim, correct). So item (3)'s claim ("same exit code,
+different line, and again no config is read") is wrong on all three counts: exit code changes 2 → 1,
+the line printed is not the arity message, and `_prepare_run` does read `"new"` as a path and fails to
+open it. `"new"` is a single token, so `rest == ["new"]` never trips the shared arm's
+`len(rest) != 1` at all — the call dispatches straight into `command_draft`/`command_dry_run` and fails
+inside `_prepare_run`, never reaching the arity arm. Task 4's own test docstring already said this
+correctly. **Appended, never retro-edited:**
+- `docs/superpowers/specs/2026-08-23-re-entry-seam-design.md` § 5, after item 4 and "What does not
+  move" — a dated correction replacing item 3's last two sentences.
+- `docs/superpowers/plans/2026-08-23-re-entry-seam.md` Task 4 — a dated correction replacing the "one
+  shipped answer moves" paragraph's claim.
+- `docs/feasibility-llm-growth-studies.md` § Executability on this build, inside the
+  "Measured on 2026-08-23 against commit `c925416`" entry itself — a dated correction appended after
+  the entry's closing paragraph, on the precedent of the two corrections already living in that section.
+  No figure in the entry's table moved and no fifth number was minted; the correction is to the
+  description of change (3), not to any row's count.
+
+**Minor 1 (§ Errors/§ Warnings row count) — CLOSED.** `CLAUDE.md`'s H9a paragraph said "Fifteen § Errors
+/ § Warnings rows were narrower than their code, every one narrowed by this slice itself." Corrected to
+**"Thirteen ... each narrowed by this slice itself"**, with a new sentence stating the fourteenth
+(`E-CODE-DIRTY`) separately: that row had gone wide in an earlier batch and was narrowed back by the
+same fix round — a widening caught and closed, not one of the thirteen narrowings this slice's own
+additions caused. This is not a dated record, so corrected in place rather than appended.
+
+**Minor 2 (`command_run`-residue mitigation sentence) — CLOSED.** `docs/superpowers/spec-defects.md`'s
+open filing said "A reader who greps `command_run` in `cli.py` lands on it: it is inside the function
+every one of those 34 hits names." Re-measured by `ast` span over `cli.py`: `command_run`'s own span is
+`(4123, 4148)`; of the 34 lines matching `command_run`, exactly **2** fall inside that span
+(`[4123, 4134]`), the other 32 belonging to other functions' docstrings/comments
+(`_resolved_group_axes`, `_cond_beside_n`, `_make_null_fn`, `_resolved_resample`, and others) that merely
+name `command_run` in passing. Corrected the mitigation sentence to say the signpost is reached by 2 of
+34 `cli.py` hits (2 of 195 overall), not by all 34; the filing's ownership routing (unassigned, with the
+reason) is unchanged — this is `spec-defects.md`'s live list, corrected in place rather than appended,
+since a live list is not one of the dated records.
+
+**Minor 3 (`_dry_run_step_dirs` comment) — CLOSED.** The comment argued the `dict.fromkeys`
+de-duplication is "real rather than defensive — under `collapse` two repeat executions of one step in
+one condition share a directory." `collapse` is exactly `len(prepared.repeats) <= 1`
+(`src/publishable/cli.py:_dry_run_step_dirs`), and `scope.build_plan` emits at most one
+`(step, condition, repeat_label)` triple per repeat label per condition — when `collapse` is true there
+is by definition at most one repeat label, so two repeat executions of one step in one condition sharing
+a directory cannot occur. **Made the case happen, per the rule that a safety argument in a comment needs
+a mutation**: replaced the `dict.fromkeys(...)` call with a bare list comprehension (no de-duplication
+at all) and re-ran the full `h9a`- and `dry_run`-scoped selection —
+`uv run pytest tests/test_cli.py -q -k "h9a"` → **46 passed** (unchanged from before the mutation);
+`-k "dry_run"` → **11 passed** (unchanged). The de-duplication is provably dead for every shipped
+fixture, confirming the case cannot occur rather than merely being untested. Reverted by copying the
+pre-mutation file back and re-running the same selection (46 passed, 11 passed) — verified by
+behaviour, not by `git status`. Corrected the comment to state the de-duplication is defensive rather
+than to argue a case that cannot occur.
+
+**Nothing regressed.** The extraction's behaviour-preservation claim, `dry-run` creating nothing,
+`draft`'s relax-without-widen, and the `probes the apparatus` clause at its four homes are all
+untouched by this round — no file under `src/` changed except the one comment above, confirmed
+behaviour-identical by the mutation-and-revert above and by the unchanged suite count (3019/1/2).
+
+**Grepped for every claim this round makes about other rows, files, or code, newline-insensitively,
+and every hit attributed:**
+- `grep -rn "Fifteen § Errors" CLAUDE.md docs/*.md docs/**/*.md` → 0 hits after the fix (was 1, in
+  `CLAUDE.md`, now corrected); `grep -n "Thirteen § Errors" CLAUDE.md` → 1 hit, the corrected sentence.
+- `grep -n "rest == \[\"new\"\]\|never trips" docs/superpowers/specs/2026-08-23-re-entry-seam-design.md
+  docs/superpowers/plans/2026-08-23-re-entry-seam.md docs/feasibility-llm-growth-studies.md` → one hit
+  in each of the three files, each the appended correction — attributed individually above.
+- `git diff --stat` against the pre-round commit → exactly the seven files this report edited, no
+  others; `git diff` on `docs/reference.md` → a single changed table line, no other row touched.
+- The `_dry_run_step_dirs` mutation-and-revert is a behavioural check, not a `git status` check, per the
+  branch's own recurring rule about verifying a revert.
+
+**Suite delta:** none. 3019 passed / 1 skipped / 2 xfailed before and after this round, identical count
+and identical composition (the round added no test and removed none — its only `tests/`-adjacent action
+was the mutate-and-revert above, left reverted).
