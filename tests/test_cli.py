@@ -20849,3 +20849,160 @@ def test_h9a_draft_with_a_flag_is_an_invocation_error(capsys):
     fail this test while passing the two above."""
     assert main(["draft", "--json"]) == EXIT_INVOCATION
     assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+# ===========================================================================
+# H9a task 5 — `draft`'s three readers, against a REAL draft
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 5). All three
+# readers ship, and until this task all three were testable only against a
+# SYNTHESIZED record: `tests/test_report.py::
+# test_fixture_t_a_draft_run_is_refused_not_rendered` and
+# `::test_fixture_t_bundle_flags_a_draft_member_at_exit_0` and
+# `tests/test_diff.py::test_h8b_a_draft_run_earns_the_draft_label_in_the_header`
+# each hand-edit `draft: true` onto a completed run's record and say so in
+# their own docstrings ("`draft` itself is H9's, so a GENUINE draft run
+# cannot be produced at this task"). Now that `draft` dispatches (task 4),
+# each reader gets the real thing.
+#
+# **Stated as a difference, not as a count**: the three tests below do not
+# replace those three — the pairs are two ends of one check, and neutering
+# a reader's `record.get("draft") is True` test fails BOTH ends. That is
+# what this task's mutations measured, and it is the honest form of "new
+# coverage".
+# ===========================================================================
+
+
+def _h9a_t5_clean_and_draft(tmp_path: Path, capsys) -> dict[str, Any]:
+    """One project, two runs: a `run` of the committed tree, then a `draft`
+    of the same tree with `src/**` dirtied afterwards.
+
+    Built on `run_a_project` — this module's one end-to-end driver, and the
+    same builder all three synthesized-record tests above use — rather than
+    on a second scaffold-and-commit dance. The draft comes SECOND on
+    purpose: `run` refuses a dirty tree (`E-CODE-DIRTY`), so the clean run
+    has to happen while the tree is still clean.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, aggregate_returns="r")
+    clean_dir = doc["run_dir"]
+    root = doc["root"]
+    # Dirty a file inside `src/**`, which is one of the two trees the gate
+    # covers — not the repo root, which H6b Decision 12 declined to widen to.
+    step_files = sorted(root.glob("src/*/steps/*.py")) or sorted(root.glob("src/*/*.py"))
+    assert step_files, "the scaffold must have written something under src/**"
+    step_files[0].write_text(step_files[0].read_text() + "\n# uncommitted edit\n")
+    capsys.readouterr()
+    assert main(["draft", str(doc["cfg"])]) == EXIT_OK
+    capsys.readouterr()
+    draft_dirs = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != clean_dir]
+    assert len(draft_dirs) == 1, draft_dirs
+    draft_dir = draft_dirs[0]
+    # The fixture's own premise, verified rather than assumed: one record
+    # really carries `draft: true` and the other really does not, so a test
+    # below that finds no difference has found a reader defect rather than a
+    # fixture that never differed.
+    draft_record = yaml.safe_load((draft_dir / "run.yaml").read_text())
+    clean_record = yaml.safe_load((clean_dir / "run.yaml").read_text())
+    assert draft_record["draft"] is True
+    assert clean_record["draft"] is False
+    return {
+        "clean_dir": clean_dir,
+        "draft_dir": draft_dir,
+        "clean_record": clean_record,
+        "draft_record": draft_record,
+    }
+
+
+def test_h9a_t5_report_refuses_a_real_draft(tmp_path: Path, capsys):
+    """`report` over a run `publishable draft` actually produced.
+
+    Both directions, because testing the refusal and never the honouring is
+    this repo's own recorded shape: the clean run of the same project must
+    still render at exit 0, so a mutation that refuses every record fails
+    here too.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+
+    capsys.readouterr()
+    code = main(["report", str(pair["draft_dir"] / "run.yaml")])
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG
+    assert captured.out == ""
+    assert "E-REPORT-DRAFT" in captured.err
+
+    # The honouring half, on the identical project's clean run.
+    assert main(["report", str(pair["clean_dir"] / "run.yaml")]) == EXIT_OK
+    assert "## Conditions" in capsys.readouterr().out
+
+
+def test_h9a_t5_a_bundle_flags_a_real_draft_member_and_still_renders(tmp_path: Path, capsys):
+    """Decision 7's asymmetry against real drafts: a single run is refused
+    (above), a bundle MEMBER is flagged and the render succeeds.
+
+    The bundle lives outside any repository (`study new` refuses one inside
+    a repo with `E-STUDY-IN-REPO`), and both member names — `sensitivity`
+    and `primary` — carry no substring of `draft`, which is
+    `test_fixture_t_bundle_flags_a_draft_member_at_exit_0`'s own recorded
+    fix: its first version named the member `draft_run` and asserted bare
+    `"draft" in out`, which the `## draft_run` heading already satisfied.
+    The flagged member's block is split off from the clean member's before
+    asserting, so only the flag's own sentence can satisfy it.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+    bundle = tmp_path / "bundle"
+
+    assert main(["study", "new", str(bundle), "--title", "H9a task 5 bundle"]) == EXIT_OK
+    assert (
+        main(
+            [
+                "study",
+                "add",
+                str(bundle),
+                str(pair["draft_dir"] / "run.yaml"),
+                "--as",
+                "sensitivity",
+            ]
+        )
+        == EXIT_OK
+    )
+    assert (
+        main(["study", "add", str(bundle), str(pair["clean_dir"] / "run.yaml"), "--as", "primary"])
+        == EXIT_OK
+    )
+
+    capsys.readouterr()
+    code = main(["report", str(bundle / "study.yaml")])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    sensitivity_block, primary_block = out.split("## primary", 1)
+    assert "not reachable from any commit" in sensitivity_block
+    assert "not reachable from any commit" not in primary_block
+    assert "## Conditions" in primary_block
+
+
+def test_h9a_t5_diff_labels_a_real_draft_on_one_side_only(tmp_path: Path, capsys):
+    """`diff` over a real draft and a real `run` of the same project.
+
+    Asserted PER SIDE, on the tokens of each side's own header line, never
+    as a substring of the whole output: `assert "draft" in out` has already
+    passed in this repository because a bundle member was named
+    `draft_run`, and a `run` tag's pin has already passed on a bundle
+    header's `##`. The two header lines are found by their leading `A`/`B`
+    letter, which is `_header_line`'s own first field.
+    """
+    pair = _h9a_t5_clean_and_draft(tmp_path, capsys)
+
+    capsys.readouterr()
+    code = main(
+        [
+            "diff",
+            str(pair["draft_dir"] / "run.yaml"),
+            str(pair["clean_dir"] / "run.yaml"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    lines = out.splitlines()
+    (side_a,) = [line for line in lines if line.split()[:1] == ["A"]]
+    (side_b,) = [line for line in lines if line.split()[:1] == ["B"]]
+    assert "draft" in side_a.split()
+    assert "draft" not in side_b.split()
