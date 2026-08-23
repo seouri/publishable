@@ -47,7 +47,12 @@ from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash_of, design_digest, hashed_files, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
-from publishable.lineage import UpstreamLedger, UpstreamResolver
+from publishable.lineage import (
+    UpstreamLedger,
+    UpstreamResolver,
+    attempt_counts,
+    read_execution_ledger,
+)
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
@@ -70,8 +75,11 @@ from publishable.run_identity import (
     IDENTITY_FILE,
     RunLock,
     allocate_run_dir,
+    config_path_for,
     identity_document,
     point_latest,
+    read_identity,
+    read_repo_root,
 )
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
@@ -2853,46 +2861,69 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     upstream_ledger = prepared.upstream_ledger
     upstream_resolver = prepared.upstream_resolver
 
-    run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
+    # phase 6: the run directory. `resume` re-enters an EXISTING one, which is
+    # why `E-RUN-ID-EXHAUSTED` is unreachable from it — it allocates nothing.
+    if resumed is not None:
+        run_dir = resumed.run_dir
+        # `manifest` is the RECORDED manifest from here down (Decision 8), so
+        # phase 8's `verify_manifest` asks whether the inputs moved during
+        # THIS attempt rather than comparing now against now, and
+        # `run.yaml`'s `input_manifest_hash` is the first attempt's figure.
+        manifest = resumed.recorded_manifest
+    else:
+        run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))
+    # The lock is taken here for BOTH entries, unchanged. `resume`'s takeover
+    # of a dead holder's `lock` — Ruling W's exclusive token, the liveness
+    # test, and the unlink — is plan task 14's and happens before
+    # `_execute_prepared` is called at all; this acquisition is what task 14's
+    # step 4 ends with, and it stays the only claim in the system.
     with RunLock(run_dir):
-        (run_dir / "manifest").mkdir()
-        (run_dir / "manifest" / "input.json").write_text(json.dumps(manifest, indent=2))
-        (run_dir / "environment").mkdir()
-        # `pyproject.toml` always exists (uv is mandatory) so it is always captured;
-        # `uv.lock` is copied only when one was found.
-        (run_dir / "environment" / "pyproject.toml").write_bytes(
-            (repo_root / "pyproject.toml").read_bytes()
-        )
-        if lock_path is not None:
-            (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
-
-        # `freeze` (H8b) needs the config as it was and the repo it came from — the
-        # two facts a mid-run command cannot otherwise obtain or compute, since
-        # `run.yaml` embeds the config only once, at the end. A byte copy, never a
-        # re-dump: a re-dump would silently drop every comment `init` wrote.
-        (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
-        (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
-
-        # `identity.json` — the three identity figures, the config's own path,
-        # and whether this is a draft, made durable BEFORE anything executes,
-        # because `resume` compares against them and a crashed run directory
-        # holds no `run.yaml` to read them from (design Decision 1). Written
-        # here rather than later for the same reason `config.yaml` and
-        # `repo_root.txt` are: inside the lock, before `sweep.yaml`, settled
-        # before the first execution and never touched again. Every figure is
-        # `Prepared`'s own -- a second derivation would be a second answer.
-        (run_dir / IDENTITY_FILE).write_text(
-            json.dumps(
-                identity_document(
-                    code_hash=ch,
-                    parameters_hash=ph,
-                    uv_lock_hash=lock_hash,
-                    config_path_rel=_recorded_config_path(config_path, repo_root),
-                    draft=draft,
-                ),
-                indent=2,
+        # Every run-start artifact below is skipped on a resume: they were
+        # written before the first execution and `docs/reference.md` § The
+        # other files a run writes calls them "settled before the first
+        # execution and never touched again". Rewriting one would replace a
+        # record of what the first attempt did with a record of what this
+        # attempt recomputed — and `identity.json` in particular is what
+        # `resume` just compared itself against.
+        if resumed is None:
+            (run_dir / "manifest").mkdir()
+            (run_dir / "manifest" / "input.json").write_text(json.dumps(manifest, indent=2))
+            (run_dir / "environment").mkdir()
+            # `pyproject.toml` always exists (uv is mandatory) so it is always captured;
+            # `uv.lock` is copied only when one was found.
+            (run_dir / "environment" / "pyproject.toml").write_bytes(
+                (repo_root / "pyproject.toml").read_bytes()
             )
-        )
+            if lock_path is not None:
+                (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
+
+            # `freeze` (H8b) needs the config as it was and the repo it came from — the
+            # two facts a mid-run command cannot otherwise obtain or compute, since
+            # `run.yaml` embeds the config only once, at the end. A byte copy, never a
+            # re-dump: a re-dump would silently drop every comment `init` wrote.
+            (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
+            (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+
+            # `identity.json` — the three identity figures, the config's own path,
+            # and whether this is a draft, made durable BEFORE anything executes,
+            # because `resume` compares against them and a crashed run directory
+            # holds no `run.yaml` to read them from (design Decision 1). Written
+            # here rather than later for the same reason `config.yaml` and
+            # `repo_root.txt` are: inside the lock, before `sweep.yaml`, settled
+            # before the first execution and never touched again. Every figure is
+            # `Prepared`'s own -- a second derivation would be a second answer.
+            (run_dir / IDENTITY_FILE).write_text(
+                json.dumps(
+                    identity_document(
+                        code_hash=ch,
+                        parameters_hash=ph,
+                        uv_lock_hash=lock_hash,
+                        config_path_rel=_recorded_config_path(config_path, repo_root),
+                        draft=draft,
+                    ),
+                    indent=2,
+                )
+            )
 
         # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
         # the first execution: `docs/reference.md` § The other files a run writes
@@ -2919,22 +2950,30 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         if mode == "randomized":
             plan = _apply_execution_order(plan, execution_order)
 
-        (run_dir / "sweep.yaml").write_text(
-            yaml.safe_dump(
-                sweep_document(
-                    conditions,
-                    levels,
-                    repeats,
-                    digest,
-                    mode,
-                    execution_order,
-                    order_seed,
-                    partitions=partitions,
-                    sample_seed=sample_seed_for(doc),
-                ),
-                sort_keys=False,
+        # Written by the FIRST attempt only. A resume reads this file rather
+        # than re-deriving the order (Decision 9); plan task 10 owns that
+        # reader, and until it lands the re-realization above stands, which
+        # for an unedited `sweep.yaml` is the same answer — `order_seed_for`
+        # is a pure function of the design digest, and the digest is one of
+        # the figures `resume` refuses on. What the reader adds is the case
+        # this cannot see: a recorded order the seed does not reproduce.
+        if resumed is None:
+            (run_dir / "sweep.yaml").write_text(
+                yaml.safe_dump(
+                    sweep_document(
+                        conditions,
+                        levels,
+                        repeats,
+                        digest,
+                        mode,
+                        execution_order,
+                        order_seed,
+                        partitions=partitions,
+                        sample_seed=sample_seed_for(doc),
+                    ),
+                    sort_keys=False,
+                )
             )
-        )
 
         # `allocation.json` — settled beside `sweep.yaml`, before the first
         # execution and never touched again, per § The other files a run
@@ -2958,7 +2997,17 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         alloc_doc = build_allocation_document(group_axes, holdout_plan)
         alloc_hash: str | None = None
         if alloc_doc is not None:
-            (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+            # The WRITE is the first attempt's; the hash is computed either
+            # way, because `provenance.allocation_hash` is a figure this
+            # attempt's record carries. Plan task 11 overrides the
+            # memberships themselves from the recorded `allocation.json`
+            # through `dataclasses.replace` on `Prepared` — before this line
+            # — so that a DRAWN axis is read rather than re-drawn; until it
+            # lands this document is the re-derivation, which agrees for
+            # every by-attribute axis and is exactly what task 11's own
+            # drawn-axis fixture separates.
+            if resumed is None:
+                (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
             alloc_hash = allocation_hash(alloc_doc)
 
         # `apparatus_probe` declared on the resolved template — the ordinary
@@ -3016,6 +3065,26 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # `stop.reason` rather than re-deriving why the plan came up
             # short.
             stop = StopSignal()
+            # The plan `run_status` is measured against is the WHOLE plan, on
+            # both entries: `full_plan` below is what `planned=` gets, and
+            # `plan` is what actually executes. On a resume the two differ by
+            # exactly the triples that already completed, and the difference
+            # is what `resumed.prior_results` puts back — so the bare
+            # `assert len(results) >= planned` in `run_status` is satisfied
+            # BY CONSTRUCTION rather than relaxed (Decision 6), and its
+            # docstring's claim that a short list with no recorded stop
+            # reason is a core defect stays true of `resume` too.
+            full_plan = plan
+            if resumed is not None:
+                already = {
+                    (r.execution.step_name, r.execution.condition_index, r.execution.repeat_label)
+                    for r in resumed.prior_results
+                }
+                plan = [
+                    e
+                    for e in plan
+                    if (e.step_name, e.condition_index, e.repeat_label) not in already
+                ]
             results = execute_plan(  # phase 7
                 plan=plan,
                 run_dir=run_dir,
@@ -3137,7 +3206,37 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                     return EXIT_EXTERNAL
                 return EXIT_WRONG
 
-        status = run_status(results, planned=len(plan), stop=stop.reason)
+        attempts: dict[tuple[str, int | None, str | None], int] | None = None
+        if resumed is not None:
+            # `attempts` is the number of records a triple holds in
+            # `executions.jsonl` (§ Resuming). `resumed.attempts` is that
+            # count as of RE-ENTRY, so every triple this attempt executed
+            # needs its own line added: `execute_plan` appends exactly one
+            # line per `ExecutionResult`, in the same loop iteration that
+            # builds it, unconditionally and whatever the status — including
+            # the iteration a `max_failed_fraction` `break` ends, whose write
+            # precedes the `break`. So this is one-for-one with what is on
+            # disk rather than an estimate of it, and it is computed BEFORE
+            # the prior results are prepended, since those triples wrote no
+            # line this time.
+            attempts = dict(resumed.attempts)
+            for executed in results:
+                # `attempt_key`, not `key`: this function's body binds `key`
+                # twice further down at `str`, and reusing the name here is
+                # what `mypy` caught rather than what a reader would.
+                attempt_key = (
+                    executed.execution.step_name,
+                    executed.execution.condition_index,
+                    executed.execution.repeat_label,
+                )
+                attempts[attempt_key] = attempts.get(attempt_key, 0) + 1
+            # Prepended, never appended: the aggregate phase and
+            # `_execution_block` both read this list in order, and the
+            # reconstituted triples ran FIRST. A list rather than a tuple
+            # because `results` is a `list` on every other path and this
+            # line must not change what phases 8-10 receive.
+            results = list(resumed.prior_results) + results
+        status = run_status(results, planned=len(full_plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
         # that case, instead of every condition reporting a misleading empty
@@ -4339,6 +4438,9 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             vs_baseline=vs_baseline,
             contrasts=contrasts_out,
             hypotheses=hypothesis_verdicts,
+            # `None` on every other entry, which is what makes
+            # `_execution_block` write the `1` it always wrote.
+            attempts=attempts,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
@@ -4428,6 +4530,123 @@ def command_draft(config_path: Path) -> int:
             file=sys.stderr,
         )
     return _execute_prepared(prepared, draft=True)
+
+
+def command_resume(run_dir: Path) -> int:
+    """`publishable resume <run_dir>` — a SECOND entry into phases 6-10 of a
+    run that stopped without writing `run.yaml`.
+
+    Not dispatched yet: `resume` is still in `NOT_BUILT_COMMANDS` and plan
+    task 15 adds the branch and moves guard-pin arm E. This function is the
+    entry point, callable and tested; `main(["resume", …])` still prints the
+    unbuilt diagnostic until that task lands.
+
+    **Order, and it is the whole of what makes a refusal safe**: everything
+    below happens before `_execute_prepared` is reached, so a refusal costs
+    nothing and touches no artifact.
+
+    1. `identity.json` — `E-RESUME-NO-IDENTITY`.
+    2. a `run.yaml` present — `E-RESUME-RUN-ENDED`. That run ENDED, and its
+       record is never modified.
+    3. `environment/repo_root.txt` and the recorded `config_path`, contained
+       under that root — `E-RESUME-NO-CONFIG`.
+    4. `_prepare_run` on that config, with the dirty gate relaxed exactly
+       when the record says `draft` (Decision 12: a resumed draft stays a
+       draft, and `allow_dirty` and `draft` come from the SAME recorded flag
+       — a resumed draft recording `draft: false` would be citable).
+    5. the three hashes and the input manifest, recomputed by that call and
+       compared against the recorded figures.
+    6. the ledger, the reconstitution, the attempt counts.
+
+    **This deviates from the plan's stated order in one place, deliberately.**
+    The task section lists the hash comparison BEFORE `_prepare_run`. Doing it
+    there would mean computing `code_hash`, `parameters_hash` and the lockfile
+    digest here, a second derivation of three figures `Prepared` already holds
+    — the *second answer to one question* fault this repository names. Design
+    Decision 7's requirement is that the comparison refuse **before the lock
+    is taken and before anything executes**, and it does: `_prepare_run` is
+    phases 1-5, which allocate nothing, take no lock and execute no step. The
+    visible cost is that a hash mismatch prints `validate`'s findings first,
+    which is the same order `run` prints them in.
+
+    **What is not here yet, each owned by a named later task rather than
+    left to be discovered.** The lock takeover is task 14's — Ruling W's
+    exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
+    against this host's `gethostname()`, and the unlink — and until it lands
+    this function takes no lock of its own and `_execute_prepared`'s
+    `RunLock` refuses a directory whose crashed holder left a `lock` behind.
+    `sweep.yaml`'s recorded `execution_order` (task 10), `allocation.json`
+    (task 11), the manifest refusal's own arm (task 12), the apparatus
+    baseline replay (task 13) and the fourteen refusals' diagnostics
+    (task 16) are the rest.
+    """
+    identity = read_identity(run_dir)
+    if (run_dir / "run.yaml").exists():
+        raise ContractError(
+            f"{run_dir / 'run.yaml'} exists, so this run ended; a run record is never "
+            "modified. Start a new run instead.",
+            code="E-RESUME-RUN-ENDED",
+        )
+    repo_root = read_repo_root(run_dir)
+    config_path = config_path_for(run_dir, repo_root, identity)
+    draft = bool(identity["draft"])
+    prepared = _prepare_run(config_path, allow_dirty=draft)
+    if not isinstance(prepared, Prepared):
+        # `isinstance`, never truthiness: `EXIT_OK` is `0` (H9a's own rule,
+        # repeated rather than re-derived — the swap is blind because phases
+        # 1-5 never return `EXIT_OK`, and `mypy` is the enforcer).
+        return prepared
+
+    for recorded_key, recomputed, code in (
+        ("code_hash", prepared.ch, "E-RESUME-CODE-MOVED"),
+        ("parameters_hash", prepared.ph, "E-RESUME-PARAMS-MOVED"),
+        ("uv_lock_hash", prepared.lock_hash, "E-RESUME-LOCKFILE-MOVED"),
+    ):
+        if identity[recorded_key] != recomputed:
+            raise ContractError(
+                f"{run_dir / IDENTITY_FILE} records {recorded_key} "
+                f"{identity[recorded_key]!r}; this tree computes {recomputed!r}. The "
+                "run cannot be continued under a different one — start a new run.",
+                code=code,
+            )
+
+    recorded_manifest_path = run_dir / "manifest" / "input.json"
+    try:
+        recorded_manifest = json.loads(recorded_manifest_path.read_text())
+    except (OSError, ValueError):
+        raise ContractError(
+            f"{recorded_manifest_path} is absent or unreadable, so what this run read "
+            "cannot be compared against what is there now",
+            code="E-RESUME-INPUT-MOVED",
+        ) from None
+    if manifest_hash(recorded_manifest) != manifest_hash(prepared.manifest):
+        raise ContractError(
+            f"the inputs under {prepared.input_dir} no longer hash to what "
+            f"{recorded_manifest_path} recorded",
+            code="E-RESUME-INPUT-MOVED",
+        )
+
+    records = read_execution_ledger(run_dir)
+    return _execute_prepared(
+        prepared,
+        draft=draft,
+        resumed=Resumed(
+            run_dir=run_dir,
+            prior_results=_reconstitute(
+                prepared.plan,
+                run_dir=run_dir,
+                records=records,
+                collapse=len(prepared.repeats) <= 1,
+            ),
+            attempts=attempt_counts(records),
+            # Task 13's: replayed from `apparatus/probes.jsonl`. `None` is
+            # also the correct value for a run that declared no probe, which
+            # is every config that does not name one — so this is a seam
+            # rather than a hole.
+            baseline=None,
+            recorded_manifest=recorded_manifest,
+        ),
+    )
 
 
 # `run_.../` stands in for the run directory `dry-run` never allocates: every

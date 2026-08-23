@@ -23737,3 +23737,349 @@ class Step(BaseStep):
     assert list(rows["p1"].keys()) == ["unit", "a", "b"]
     assert rows["p1"] == {"unit": "p1", "a": 0.0, "b": None}
     assert rows["p2"] == {"unit": "p2", "a": 1.0, "b": 1.0}
+
+
+# ===========================================================================
+# H9b task 9 — `resumed` wired into `_execute_prepared`, and
+# `cli.command_resume` (design Decision 14).
+#
+# **These call `command_resume` DIRECTLY, and they remove the crashed run's
+# `lock` first.** Two reasons, both structural rather than convenient:
+# `resume` is not dispatched until plan task 15, so `main(["resume", …])`
+# still prints the unbuilt diagnostic and exits 2 (§ Corrections against the
+# code, correction 11) — which is why guard-pin arm A's resume half stays
+# `xfail`, and why a green suite says nothing about this wiring: `xfail(
+# strict=True)` absorbs every failure reason. And the takeover that removes
+# a dead holder's `lock` is task 14's, so until it lands the test does by
+# hand exactly what Ruling W's step 3 will do after a liveness verdict.
+# ===========================================================================
+
+
+def _h9b_resume(crashed: Path) -> int:
+    """`command_resume` against a crashed directory whose stale `lock` this
+    helper removes — task 14's takeover, done by hand and named as such."""
+    from publishable.cli import command_resume
+
+    lock = crashed / "lock"
+    assert lock.exists(), "the crash fixture must leave a lock behind"
+    lock.unlink()
+    return command_resume(crashed)
+
+
+def test_h9b_a_crash_and_resume_round_trip_equals_the_straight_through_golden(tmp_path: Path):
+    """**The claim Decision 4 and Decision 14 exist for**, measured by the one
+    route available before `resume` dispatches: a crashed run resumed to
+    completion produces `run.yaml` leaf for leaf equal to the straight-through
+    run's, against the SAME golden guard-pin arm A captured.
+
+    Not an arm and not a copy of one: arm A owns the claim, this test is a
+    third consumer of arm A's one captured literal (its own docstring's "one
+    capture, two consumers" reasoning), and arm A's `xfail` marker is left in
+    place because the marker is about `main(["resume", …])`, which task 15
+    owns. A leaf-by-leaf equality is what Decision 4 requires and no per-key
+    assertion substitutes for it: `_gather_repeats` builds its column order
+    from row iteration order and `summarize_step` derives a metric's from
+    that, so a parquet round trip can move `run.yaml`'s column order with
+    every value correct.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+# Fixture C's own step: a triple that FAILS on its first attempt (a raise,
+# contained — the run keeps going and the ledger line IS written) and a later
+# triple that dies mid-execution (`os._exit`, no line at all). Two trips off
+# one counter, so both are deterministic.
+#
+# **Why two mechanisms rather than one.** Design § Fixtures as claims gives
+# fixture C `attempts: 2` for "the crashed triple", and that is FALSE of this
+# build: `execute_plan` writes the ledger line AFTER the execution returns, so
+# an `os._exit` leaves the interrupted triple no record at all and its resumed
+# attempt is its FIRST record. A second record exists only for a triple whose
+# earlier attempt reached the write — i.e. one that failed and was contained.
+# Measured, reported as a finding, and built the way the code behaves.
+_H9B_FAIL_THEN_CRASH_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return 0
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == 4:
+        os._exit(9)
+    return n
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        n = _tick()
+        if n == 2:
+            raise RuntimeError("this attempt fails and the next one does not")
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * 2.0}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_h9b_an_interrupted_triple_gets_one_record_not_two(tmp_path: Path):
+    """**A design claim measured and found false, pinned as what the code
+    does.** Design § Fixtures as claims gives fixture C `attempts: 2` for the
+    crashed triple. `execute_plan` writes the ledger line AFTER the execution
+    returns, so a triple killed mid-execution by `os._exit` leaves NO record —
+    and its resumed attempt is therefore its first. Every triple in this
+    round trip ends at `attempts: 1`.
+
+    The complement is the next test, which produces a genuine `2` through the
+    only mechanism that can: an attempt that FAILED and was contained, so its
+    line reached disk.
+
+    Asserted on both the ledger and the record, so a record agreeing with a
+    miscounted ledger cannot pass, and on the ledger's own line count, so a
+    fixture that never crashed at all would fail here rather than pass
+    quietly.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert len(_h9b_ledger(crashed)) == 2  # the two lines before the trip
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert set(_h9b_ledger_attempts(crashed).values()) == {1}
+    assert set(_h9b_recorded_attempts(crashed).values()) == {1}
+    # 2 conditions × 4 repeats × 2 repeat-scope steps, every one accounted
+    # for exactly once.
+    assert len(_h9b_ledger(crashed)) == 16
+
+
+def test_h9b_a_contained_failure_then_a_resume_records_two_attempts(tmp_path: Path):
+    """Fixture C's claim, through the mechanism that can produce it: a triple
+    whose first attempt raised (contained, ledger line written, `status:
+    failed`) is re-executed by the resume and reports `attempts: 2`, while
+    every neighbour reports `1`.
+
+    The neighbours' `1` is what makes the `2` non-vacuous — a counter that
+    counted the whole file, or one keyed on the step name, would report `2`
+    for all sixteen. And the failed line is asserted present in the crashed
+    ledger BEFORE the resume, so the `2` is a second attempt at a first
+    attempt that genuinely happened.
+    """
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        # `max_failed_fraction: 1.0`, and it is load-bearing rather than
+        # incidental: one contained failure fails every unit of that
+        # execution, so the shipped `0.2` STOPS the run — which writes
+        # `run.yaml` and makes the directory `E-RESUME-RUN-ENDED` rather than
+        # resumable. Measured (exit 3, a `run.yaml` present) before this line
+        # was added.
+        limits={
+            "max_executions": 500,
+            "max_failed_fraction": 1.0,
+            "max_ineligible_fraction": 0.5,
+            "min_units_per_cell": 20,
+            "min_clusters": 10,
+            "min_reported_n": 10,
+        },
+        _starter_step=_H9B_FAIL_THEN_CRASH_STEP.replace("__CONTROL__", repr(str(control))),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+    crashed = _h9b_crash_subprocess(doc, control, trip=4)
+    failed_before = [e for e in _h9b_ledger(crashed) if e["status"] == "failed"]
+    assert len(failed_before) == 1
+    failed_key = (
+        failed_before[0]["step"],
+        failed_before[0]["condition"],
+        failed_before[0]["repeat"],
+    )
+    assert _h9b_resume(crashed) == EXIT_OK
+    counts = _h9b_ledger_attempts(crashed)
+    assert counts[failed_key] == 2
+    assert {key for key, value in counts.items() if value == 2} == {failed_key}
+    recorded = _h9b_recorded_attempts(crashed)
+    assert recorded[failed_key] == 2
+    assert {key for key, value in recorded.items() if value == 2} == {failed_key}
+    # The retried execution's own status is what the record reports for the
+    # triple: the failed first attempt is not reconstituted (only a
+    # `completed` record is) and the retry succeeded.
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+
+
+def _h9b_crash_subprocess(doc: dict[str, Any], control: Path, *, trip: int) -> Path:
+    """`_h9b_crash_run`'s shape for a fixture whose trip is not
+    `_H9B_CRASH_TRIP`: same subprocess, same `os._exit` requirement, its own
+    expected counter value. Not a widening of that helper — it is guard-pin
+    arm A's fixture and this task may not touch it."""
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    assert control.read_text().strip() == str(trip), control.read_text()
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    return crashed
+
+
+def _h9b_recorded_attempts(run_dir: Path) -> dict[tuple[str, Any, Any], int]:
+    """`run.yaml`'s own `attempts` per triple, for every repeat-scope leaf."""
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    recorded: dict[tuple[str, Any, Any], int] = {}
+    for cond in run_doc["execution"]["conditions"]:
+        for step, entry in cond["steps"].items():
+            for label, leaf in entry.items():
+                recorded[(step, cond["index"], label)] = leaf["attempts"]
+    return recorded
+
+
+def _h9b_ledger_attempts(run_dir: Path) -> dict[tuple[str, Any, Any], int]:
+    from publishable.lineage import attempt_counts, read_execution_ledger
+
+    return attempt_counts(read_execution_ledger(run_dir))
+
+
+def test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest(tmp_path: Path):
+    """Two claims a leaf equality would carry silently, asserted so a reader
+    can see them: the prior attempt's units are IN the published `n` (a
+    `resume` that dropped the reconstituted results would publish intervals
+    over the re-executed triples only, at exit 0, with nothing marking them),
+    and `input_manifest_hash` is the FIRST attempt's recorded figure rather
+    than one recomputed now.
+
+    The manifest arm is asserted against `manifest/input.json`'s own digest,
+    which is what Decision 8 means by "compared, not rebuilt".
+    """
+    from publishable.manifest import manifest_hash
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    straight = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+    assert run_doc["results"]["conditions"] == straight["results"]["conditions"]
+    recorded_manifest = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert run_doc["provenance"]["input_manifest_hash"] == manifest_hash(recorded_manifest)
+
+
+def test_h9b_a_resume_rewrites_no_run_start_artifact(tmp_path: Path):
+    """§ The other files a run writes: the run-start artifacts are "settled
+    before the first execution and never touched again". So a resume must
+    leave every one of them byte-identical — `identity.json` in particular,
+    which is what the resume just compared itself against.
+
+    Bytes, not mtimes: a rewrite producing identical content is still a
+    rewrite, but a content comparison is what the document's claim is about,
+    and `config.yaml`'s is a byte copy either way. The `sweep.yaml` arm is
+    the one a re-derivation would move if the recorded order and a fresh
+    realization ever disagreed.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    names = (
+        "config.yaml",
+        "identity.json",
+        "sweep.yaml",
+        "manifest/input.json",
+        "environment/repo_root.txt",
+        "environment/pyproject.toml",
+        "allocation.json",
+    )
+    before = {name: (crashed / name).read_bytes() for name in names if (crashed / name).exists()}
+    # Not an empty set — an absence assertion would pass for a fixture that
+    # wrote nothing at all.
+    assert {"config.yaml", "identity.json", "sweep.yaml", "manifest/input.json"} <= set(before)
+    assert _h9b_resume(crashed) == EXIT_OK
+    after = {name: (crashed / name).read_bytes() for name in before}
+    assert after == before
+
+
+def test_h9b_run_status_is_handed_the_full_plans_length(tmp_path: Path, monkeypatch):
+    """`planned=` is the UNFILTERED plan's length (Decision 6), which is how
+    `run_status`'s bare `assert len(results) >= planned` stays satisfied by
+    construction rather than relaxed.
+
+    **Asserted through a wrapper around `run_status` because the value is
+    otherwise invisible**: `planned` feeds nothing but that assert, so a
+    resume passing the FILTERED length produces a byte-identical `run.yaml`
+    and the prescribed mutation is blind to every record-level assertion —
+    reported as such rather than claimed caught. What it would cost is the
+    tripwire itself: the assert would stop catching a core defect that
+    truncated a resumed plan.
+
+    The wrapper's own call count is asserted, because a monkeypatch aimed at
+    a name the code no longer calls is silently inert.
+    """
+    import publishable.cli as cli_module
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    seen: list[tuple[int, int | None]] = []
+    real = cli_module.run_status
+
+    def spy(results, *, planned=None, stop=None):
+        seen.append((len(results), planned))
+        return real(results, planned=planned, stop=stop)
+
+    monkeypatch.setattr(cli_module, "run_status", spy)
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert len(seen) == 1
+    results_len, planned = seen[0]
+    # 2 conditions × 4 repeats × 2 repeat-scope steps.
+    assert planned == 16
+    assert results_len == 16
+    # And the tripwire it exists for still fires, on a genuinely short list.
+    with pytest.raises(AssertionError):
+        real([], planned=1, stop=None)
+
+
+def test_h9b_the_run_path_is_untouched_by_the_resumed_parameter(tmp_path: Path):
+    """`resumed=None` is every existing caller, and the straight-through run
+    inside the round-trip fixture is itself the control: it goes through the
+    changed `_execute_prepared` and is compared against the golden guard-pin
+    arm A captured BEFORE any of this task's code existed.
+
+    Stated as its own test rather than left implicit in the round trip: the
+    real-command review of this batch is over exactly this path, and green
+    tests are not that review's evidence.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+    for name in ("config.yaml", "identity.json", "sweep.yaml", "executions.jsonl"):
+        assert (doc["run_dir"] / name).exists(), name
