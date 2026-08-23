@@ -845,18 +845,28 @@ def test_h6a_fixture_j_the_gate_and_the_hash_agree_on_an_excluded_file(tmp_path:
 # arms below are sized so that each half of the neutralization has a mutation
 # that fails, which took measuring which route each half actually closes:
 #
-#   route the rule takes                     | killed by `-c` | killed by env
-#   -----------------------------------------|----------------|--------------
-#   global config `[core] excludesFile`      | yes            | yes
-#   the XDG default `~/.config/git/ignore`   | yes            | NO
-#   repo-local `.git/config` `excludesFile`  | yes            | NO
-#   global `[status] showUntrackedFiles=no`  | NO             | yes (gate only)
+#   route the rule takes                     | `excludesFile=` | `showUntrackedFiles=normal`
+#   -----------------------------------------|------------------|------------------------------
+#   global config `[core] excludesFile`      | yes              | no
+#   the XDG default `~/.config/git/ignore`   | yes              | no
+#   repo-local `.git/config` `excludesFile`  | yes              | no
+#   global `[status] showUntrackedFiles=no`  | no               | yes (gate only)
+#   repo-local `status.showUntrackedFiles=no`| no               | yes (gate only)
 #
-# So no exclude route pins the environment half — `-c core.excludesFile=`
-# closes every one of them on its own — and the environment half is pinned on
-# the gate instead, where a global `status.showUntrackedFiles` reaches and no
-# `-c` about excludes does. That is why the two constants are shared between
-# the two call sites rather than written twice.
+# CONTROLLER RULING M (2026-08-23, appended after this fix round) replaced
+# the environment-variable form (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=
+# /dev/null`) that originally closed the `status.showUntrackedFiles` route
+# with the second `-c` flag above: the two exclude-chain and
+# untracked-files questions are now both closed by command-line overrides,
+# and NOTHING is neutralized through the environment. The table's "killed
+# by env" column from the original fix round is gone because that mechanism
+# is gone — `-c status.showUntrackedFiles=normal` closes its route directly,
+# and additionally reaches a REPO-LOCAL `status.showUntrackedFiles`, which
+# the environment form never did. See `provenance.py`'s module-level comment
+# for why the environment form was replaced: it also discarded
+# `core.fileMode`/`core.autocrlf`, which are legitimately machine-local, and
+# doing so made an unedited file (a mode bit changed by nothing) read as
+# dirty.
 
 
 def _h6a_exclude_rule_file(root: Path, pattern: str) -> Path:
@@ -996,16 +1006,17 @@ def test_h6a_ruling_l_a_global_excludesfile_cannot_blind_the_dirty_gate(
 def test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate(
     tmp_path: Path, monkeypatch
 ):
-    """Ruling L, the environment half — the arm that pins
-    `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`.
+    """Ruling L, the second override — the arm that pins
+    `-c status.showUntrackedFiles=normal` (Ruling M, 2026-08-23: a `-c`
+    override, not the environment-variable form this arm originally pinned).
 
     `status.showUntrackedFiles = no` in a machine's global config removes
     every untracked file from `git status --porcelain`, and no `-c` about
     excludes touches it. Under it the gate saw a clean tree while an
     uncommitted `src/pkg/loose.py` was folded into `code_hash` — the same
     hole as the arm above, reached through a setting that is not an exclude
-    rule at all, which is why the environment neutralization is not
-    redundant with the command-line one.
+    rule at all, which is why this override is not redundant with the
+    exclude one.
 
     **The positive control is the first assertion**: a bare `git status
     --porcelain` under the same environment must print nothing, or the
@@ -1034,3 +1045,73 @@ def test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate(
 
     assert git_provenance(repo, committed).code_dirty is True
     assert "src/pkg/loose.py" in _h6a_kept(repo)
+
+
+# ---------------------------------------------------------------------------
+# CONTROLLER RULING M (2026-08-23) — the surgical neutralization, and the
+# regression it exists to prevent. Ruling F's own ground is that a rule which
+# does not travel with the tree may not decide the tree's identity, and that
+# is a claim about EXCLUDE rules — not about every git setting. The prior
+# form (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) discarded a whole
+# `~/.gitconfig`, including settings that answer HOW git reads the
+# filesystem rather than WHICH files it considers: `core.fileMode`,
+# `core.autocrlf`, `core.symlinks`. This arm pins the regression that
+# neutralizing them caused and Ruling M closes: an UNEDITED tracked file,
+# whose only difference is a mode bit a machine has been told to ignore,
+# must not read as `code_dirty True`.
+
+
+def test_h6a_ruling_m_a_global_core_filemode_false_does_not_go_unedited_dirty(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling M. `core.fileMode`/`core.autocrlf` are deliberately NOT among
+    the settings `_NEUTRALIZED_CONFIG_ARGS` overrides.
+
+    Before Ruling M, `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null` threw
+    away the machine's entire `~/.gitconfig` to reach `status.showUntrackedFiles`,
+    and took `core.fileMode` down with it. A machine that sets
+    `core.fileMode = false` — because its filesystem does not reliably
+    preserve executable bits — would then see `git_provenance`'s gate answer
+    a question the machine had explicitly said not to ask, and a `chmod` on a
+    tracked file with no content change reads as `code_dirty True`: a run
+    refused on a tree nothing actually edited.
+
+    The repo's OWN `.git/config` would ordinarily win regardless of the
+    global setting (the mitigating fact the whole-branch review named), so
+    this fixture explicitly unsets any `core.filemode` `git init` wrote
+    locally to reach the case the global setting decides.
+
+    **The positive control is the first assertion**: an ordinary `git status
+    --porcelain` under the same `HOME` must already read the mode-only
+    change as clean, or the fixture's global config is one git never read
+    and the rest proves nothing.
+    """
+    import subprocess
+
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    tracked = repo / "src" / "pkg" / "step.py"
+    subprocess.run(["git", "config", "--unset", "core.filemode"], cwd=repo, check=False)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[core]\n\tfileMode = false\n")
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+
+    tracked.chmod(0o755)
+
+    control = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert control.stdout == "", (
+        "the fixture's global core.fileMode=false must be one git really reads"
+    )
+
+    assert git_provenance(repo, tracked).code_dirty is False

@@ -25,35 +25,57 @@ class GitInfo:
 # The exclude chain is narrowed to what travels with the tree (Ruling F), and
 # the dirty gate is narrowed the same way (Ruling L, 2026-08-23): a rule that
 # does not travel with the tree may define neither the tree's identity nor
-# whether the tree is clean. The two halves are ONE pair of constants because
-# the two questions must be asked of the same git, and two copies would drift.
+# whether the tree is clean. The two `-c` overrides below are ONE tuple shared
+# by both call sites because the two questions must be asked of the same git,
+# and two copies would drift.
 #
-# Neither half is redundant, and the routes each closes were measured:
-#   * `-c core.excludesFile=` closes every exclude route on its own — a global
-#     config's `core.excludesFile`, the XDG default `~/.config/git/ignore` that
-#     no config entry names, and a repo-local `.git/config` entry, which the
-#     environment variables below cannot reach at all.
-#   * `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null` close what is NOT the
-#     exclude chain: a global `status.showUntrackedFiles = no` blinds the dirty
-#     gate to every untracked file under the two trees, and no `-c` about
-#     excludes touches it.
-_NEUTRALIZED_CONFIG_ARGS = ("-c", "core.excludesFile=")
-_NEUTRALIZED_CONFIG_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
-
-
-def _neutralized_env() -> dict[str, str]:
-    return dict(os.environ, **_NEUTRALIZED_CONFIG_ENV)
+# CONTROLLER RULING M (2026-08-23) replaced a total neutralization
+# (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`, applied through the
+# environment) with these two command-line overrides, applied through `-c`.
+# Ruling F's own ground is about EXCLUDE rules — "a rule that does not travel
+# with the tree cannot define the tree's identity" — not about every git
+# setting, and the environment form neutralized far more than that:
+#   * `-c core.excludesFile=` closes every exclude route on its own, measured
+#     in a throwaway repo: a global config's `core.excludesFile`, the XDG
+#     default `~/.config/git/ignore` that no config entry names, and a
+#     repo-local `.git/config` entry. The environment variables never closed
+#     the last one — `GIT_CONFIG_GLOBAL`/`SYSTEM` reach only the global and
+#     system config FILES, not a repo's own `.git/config` — so they were
+#     never load-bearing for excludes.
+#   * `-c status.showUntrackedFiles=normal` closes what is NOT the exclude
+#     chain: a global OR repo-local `status.showUntrackedFiles = no` blinds
+#     the dirty gate to every untracked file under the two trees, and no
+#     flag about excludes touches it. Unlike the environment form, `-c` wins
+#     over a repo-local setting too, which `GIT_CONFIG_GLOBAL/SYSTEM` never
+#     reached.
+#
+# Deliberately NOT neutralized: `core.fileMode`, `core.autocrlf`,
+# `core.symlinks`, `safe.directory` and everything else the environment form
+# used to discard as a side effect. Those are legitimately machine-local —
+# they exist because filesystems differ — and wiping them made an UNEDITED
+# file read as dirty (measured: a global `core.fileMode = false` with a
+# tracked file's mode bit changed by nothing more than a `chmod`, once the
+# repo's own `.git/config` does not set `core.filemode` itself). Blocking a
+# run on a correct tree is a worse failure than the one this mechanism
+# closes, and it lands hardest on users least able to diagnose it — a
+# Windows checkout with `autocrlf`, a network mount without executable bits.
+_NEUTRALIZED_CONFIG_ARGS = (
+    "-c",
+    "core.excludesFile=",
+    "-c",
+    "status.showUntrackedFiles=normal",
+)
 
 
 def _git(repo: Path, *args: str, neutralized: bool = False) -> str:
     """`git` in `repo`, stdout stripped, returncode discarded.
 
-    `neutralized=True` asks the question with the machine's own git
-    configuration out of the way, exactly as `unignored_under_hashed_trees`
+    `neutralized=True` asks the question with the two machine-local settings
+    named above out of the way, exactly as `unignored_under_hashed_trees`
     does — it is for the questions whose answer must be a property of the
     tree rather than of the machine. Only the dirty gate passes it; `ls-files`
-    and `rev-parse` ask about the index and the commit graph, which no
-    exclude rule reaches.
+    and `rev-parse` ask about the index and the commit graph, which neither
+    exclude rules nor `status.showUntrackedFiles` reach.
     """
     cmd = ["git", *(_NEUTRALIZED_CONFIG_ARGS if neutralized else ()), *args]
     result = subprocess.run(
@@ -62,7 +84,6 @@ def _git(repo: Path, *args: str, neutralized: bool = False) -> str:
         capture_output=True,
         text=True,
         check=False,
-        env=_neutralized_env() if neutralized else None,
     )
     return result.stdout.strip()
 
@@ -85,15 +106,15 @@ def unignored_under_hashed_trees(repo_root: Path, candidates: list[str]) -> set[
     than the filesystem's.
 
     **The exclude chain is narrowed to what travels with the tree** (Ruling
-    F): the call neutralizes the user's global and system git config through
-    `_NEUTRALIZED_CONFIG_ARGS`/`_NEUTRALIZED_CONFIG_ENV`, so only the repo's
-    own `.gitignore` files (root and per-directory, at whatever the working
-    tree holds) and `.git/info/exclude` decide what is excluded. Those two
-    constants are shared with the dirty gate, which is narrowed the same way
-    (Ruling L) so that the two mechanisms honour one exclude chain rather than
-    two. See docs/reference.md § How the three are computed for the four-case
-    rule this is one half of, and for the residues that survive the
-    narrowing.
+    F): the call overrides the user's `core.excludesFile` through
+    `_NEUTRALIZED_CONFIG_ARGS` (Ruling M, 2026-08-23 — a `-c` override, not an
+    environment neutralization), so only the repo's own `.gitignore` files
+    (root and per-directory, at whatever the working tree holds) and
+    `.git/info/exclude` decide what is excluded. That constant is shared with
+    the dirty gate, which is narrowed the same way (Ruling L) so that the two
+    mechanisms honour one exclude chain rather than two. See
+    docs/reference.md § How the three are computed for the four-case rule
+    this is one half of, and for the residues that survive the narrowing.
 
     This is NOT built on `_git`: that helper runs `check=False` and returns
     `result.stdout.strip()`, discarding the returncode — exactly the
@@ -107,14 +128,12 @@ def unignored_under_hashed_trees(repo_root: Path, candidates: list[str]) -> set[
         # "nothing excluded", so this is an optimization stated as one, not
         # a correctness fix.
         return set()
-    env = _neutralized_env()
     payload = b"\0".join(c.encode() for c in candidates) + b"\0"
     result = subprocess.run(
         ["git", *_NEUTRALIZED_CONFIG_ARGS, "check-ignore", "-z", "--stdin"],
         cwd=repo_root,
         input=payload,
         capture_output=True,
-        env=env,
         check=False,
     )
     if result.returncode not in (0, 1):
@@ -150,11 +169,15 @@ def find_repo_root(start: Path) -> Path:
 
 def git_provenance(start: Path, config_path: Path) -> GitInfo:
     repo = find_repo_root(start)
-    # `neutralized=True` (Ruling L): the gate asks the same git the hash asks.
-    # Without it a file the machine's global config excludes is clean to the
-    # gate and folded into `code_hash` — a recorded identity covering a file
-    # no clone of the commit contains — and a global `status.showUntrackedFiles
-    # = no` hides an uncommitted file from the gate entirely.
+    # `neutralized=True` (Ruling L, surgical form per Ruling M): the gate
+    # asks the same git the hash asks. Without it a file the machine's
+    # global OR repo-local `core.excludesFile` excludes is clean to the gate
+    # and folded into `code_hash` — a recorded identity covering a file no
+    # clone of the commit contains — and a global or repo-local
+    # `status.showUntrackedFiles = no` hides an uncommitted file from the
+    # gate entirely. `core.fileMode`/`core.autocrlf`/`safe.directory` are
+    # deliberately left alone (Ruling M): they answer how git reads the
+    # filesystem, not which files it considers.
     dirty = bool(_git(repo, "status", "--porcelain", "--", *HASHED_TREES, neutralized=True))
     # `config_path` is resolved before being handed to git: `_git` runs with
     # `cwd=repo`, so a path that is relative to some OTHER cwd (e.g. the caller
