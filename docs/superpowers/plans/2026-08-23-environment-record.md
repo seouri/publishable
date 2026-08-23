@@ -521,9 +521,10 @@ three and not nine. The scoping recommended *"take these three, leave six"*, but
 `grep -n "E-CODE-DIRTY" docs/reference.md` returns one hit and it is a full § Errors core raises row.
 So what remains is `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT`. **Take both.** Grounds: H6's surface is
 hashes and provenance, and both are raised by the git layer H6a just rewrote — **a code whose emit site
-this slice's own work touched is inside the charter.** The other six belong to their own surfaces;
+this slice's own work touched is inside the charter.** The others belong to their own surfaces;
 **each is filed with an owner that is a fact with a reason**, never *"whichever slice next touches X"*
-— that is task 8's. **One row per code covering EVERY emit site** — that shape was the whole-branch
+— that is task 8's. **The ruling as it arrived said *"the other six"*; § Corrections 18 re-derives it
+to FIVE, and task 8 uses five.** **One row per code covering EVERY emit site** — that shape was the whole-branch
 Major on two sub-slices, shipped twice in a third, and miscounted twice in H5b. **And check each
 table's own SCOPE SENTENCE, not this plan's instruction**: H6a's batch 4 put a row in a table whose
 scope did not admit it, and its batch review settled the question by **citing the design**, which is
@@ -713,9 +714,21 @@ report them, do not retro-edit them.
 > \<owner\>"* once existed only in a ledger while the defects file had no such entry. **An entry naming
 > its owner as *"whichever slice does X"* points at a closed slice once X lands.**
 
-**RULING N's filing half, restated:** H6b takes `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT`. **The other six
+**RULING N's filing half, restated:** H6b takes `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT`. **The others
 belong to their own surfaces; file each with an owner that is a fact with a reason**, never *"whichever
 slice next touches X"*.
+
+**THE COUNT IS FIVE, NOT SIX, AND YOU MUST NOT CARRY EITHER NUMBER WITHOUT RE-DERIVING IT.** The ruling
+as it arrived said *"the other six"*. That subtracted `E-CODE-DIRTY` from the nine and **not**
+`E-EXPERIMENT-UNKNOWN`, which H8c task 16 documented (`c794029`, recorded in the entry's own appended
+note). Derived: the nine are `E-GIT-NO-REPO`, `E-GIT-NO-COMMIT`, `E-CODE-DIRTY`, `E-INPUT-CHANGED`,
+`E-RUN-LOCKED`, `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`,
+`E-EXPERIMENT-UNKNOWN`; minus the two already documented leaves **seven**; minus H6b's two leaves
+**five**. **`E-STEP-EXISTS` is NOT one of the nine** — the entry names it as *"the one sibling that is
+documented, and only partially"* — so it is recorded as a separate observation and never counted in.
+**Re-derive this yourself from the entry's table before writing the number**, and report the
+derivation; a count carried forward without re-deriving what it counted is the failure this repo has
+made twice, and this plan's own first draft made it a third time.
 
 **Steps**
 
@@ -736,12 +749,12 @@ slice next touches X"*.
       reading the entry's own amendments** — H6a's batch 6 found that both its brief and its design
       said H6a *"took none"* when it had taken one, found by `git log -S` rather than by reading. State
       the remaining count and enumerate what remains: `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
-      `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`, and `E-STEP-EXISTS`'s partial
-      documentation (a sentence in § Exit codes and diagnostics, no row). **Owner: unassigned, with the
+      `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS` and `E-EXPERIMENT-EXISTS` — **five, derived above and
+      not carried**, and the heading's count goes from nine to five. **Owner: unassigned, with the
       reason** — no remaining chartered slice has `run_identity.py`, the manifest path or `generators/`
       as its surface: H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, H3c-3's remaining 14
       are folds and holdouts inside cells. **And re-verify the entry's own "a mention inside another
-      code's row is not documentation of that code" states** for each of the six, by sweeping the four
+      code's row is not documentation of that code" states** for each of the five, by sweeping the four
       documents **named individually** — that distinction is the entry's heading, and it went stale for
       one row before.
 - [ ] **File: `validate_config`'s bare `except ContractError` around `find_repo_root` is wider than its
@@ -750,6 +763,10 @@ slice next touches X"*.
       while this one does not. Narrowing it is a behaviour change to `validate`, so it is not H6b's.
       **Owner: unassigned, with the reason** — no remaining chartered slice has `validate`'s
       template-discovery path as its surface.
+- [ ] **Record `E-STEP-EXISTS` as a separate observation, NOT as one of the nine.** It has a sentence
+      in § Exit codes and diagnostics and no § Errors row, and the entry already calls it *"the one
+      sibling that is documented, and only partially."* Counting it in is what turned five into six in
+      this plan's own first draft; label it as what it is, beside the five.
 - [ ] **Record as a stated non-gap, not as a filing:** `diff` gains no row for `os`/`hardware`
       (Decision 14). § What `diff` compares says *five rows* and the five-row shape is documented and
       deliberate, so no owner is invented for it. Say this **once**, in the six-unwritten-keys closure,
@@ -783,8 +800,8 @@ spec or a scoping is **appended** to, never retro-edited. § Executability (task
       refusals retired and ZERO configs unblocked**; Ruling O's trade — a GPU is an apparatus fact and
       the example lost it, so a bundle reader cannot tell what hardware produced a number unless the
       producer declared a probe; Ruling Q's reason, and that **the pin is the point** because H8c wrote
-      the redaction against a key nobody wrote; Ruling N's two rows and the six that stay filed with
-      the count corrected; Ruling P's *no seat*; and Decision 12's **decline** of the
+      the redaction against a key nobody wrote; Ruling N's two rows and the **five** that stay filed,
+      with the heading's count corrected from nine and the derivation given; Ruling P's *no seat*; and Decision 12's **decline** of the
       root-`.gitignore` filing, with the reason — a slice chartered additive cannot widen a shipped
       gate's pathspec.
 - [ ] **Say § Executability does not move, and do not quote a number.** Either point at the table or
@@ -954,6 +971,24 @@ as a list, never as a count of zero.**
 17. **`study new` refuses a bundle inside a git repository**, so Fixture E's bundle must live under
     `tmp_path` outside the project. Read at `study._refuse_if_in_repo`, whose pass branch is
     `E-GIT-NO-REPO` — the same code task 5 documents, reached from a third direction.
+
+18. **The controller ruling's *"the other six"* is FIVE, re-derived from the entry's own table.** Nine
+    minus `E-CODE-DIRTY` (H6a batch 4) minus `E-EXPERIMENT-UNKNOWN` (H8c task 16, `c794029`) is seven
+    undocumented before H6b; minus H6b's two is **five**: `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
+    `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`. This plan's and the design's first
+    drafts both said six and both filled the sixth slot with **`E-STEP-EXISTS`, which was never one of
+    the nine.** Corrected in both before dispatch. Reported here rather than silently fixed, because
+    **a disagreement with the authority that commissioned the work is exactly the kind this repo asks
+    to be surfaced**, and because task 8 writes the number into a live filing.
+19. **Thirteen other tests read `docs/reference.md` as text, and none extracts § The two files'
+    `run.yaml` block.** Seven sites in `tests/test_cli.py`, five in `tests/test_diff.py`, one in
+    `tests/test_report.py`. Swept for every literal of the environment block (`hardware`, `A100`,
+    `hms-gpu-node`, `Linux-6.8.0`, `manager: uv`, `python_version:`, `uv_lock:`, `environment:`,
+    `The two files`), control `grep -c "uv_lock_hash" tests/test_cli.py` → **4**. The only `A100` hits
+    are `tests/test_report.py`'s **apparatus** fixture facts, which are correct and which task 2 must
+    not move. **So arm R is the only pin task 2's edit can reach, and no additional post-edit state is
+    owed.** Measured because the alternative — one checked pin and thirteen unchecked — is how H6a's
+    batch-2 Major happened.
 
 ---
 

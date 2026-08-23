@@ -179,8 +179,8 @@ count is now **eight**. Taking it again would be documenting a documented code.
 The two that remain are inside the charter for a reason that is a fact rather than a word: **both are
 raised by `provenance.py`, the file H6a rewrote** — the neutralized `_git`, the walk-up, the dirty
 gate's pathspec. A code whose emit site this slice's own family touched is inside the charter; the
-other six are `run_identity.py`, `generators/` and the manifest path, which no H6 task has ever
-opened.
+other **five** are `run_identity.py`, `generators/` and the manifest path, which no H6 task has ever
+opened. (**Five, and it was re-derived rather than carried** — see the count below.)
 
 **One row per code, covering EVERY emit site — and here the interesting half is not the emit site.**
 Each of the two has exactly one `raise`. `E-GIT-NO-REPO` has **six** paths that reach it, three of
@@ -202,8 +202,8 @@ rather than reported by `validate` — so the preamble's own reason for siting `
 with no widening. **Neither row needs an invented `Type` cell**, which is the failure H6a's batch-4
 review found when a design directed a row into a table whose scope did not admit it.
 
-**Alternatives rejected.** *Take all nine* — six of them are `run_identity.py` and `generators/`,
-surfaces no H6 task opens; inheriting them is the "description standing in for a slice" failure the S5
+**Alternatives rejected.** *Take all nine* — five of them are `run_identity.py`, `generators/` and
+the manifest path, surfaces no H6 task opens, and two are already documented; inheriting them is the "description standing in for a slice" failure the S5
 checkpoint closed once already. *Take none and file* — the two sit one row from a row this family has
 already written, and the entry's own option 1 exists precisely for them.
 
@@ -212,10 +212,17 @@ early and the tenth slice's list is shorter by two — recoverable. If they are 
 undocumented behind a charter boundary nobody will cross, which is the state the entry has been in
 since H1.
 
-**What is filed instead, each owner a fact with a reason.** The remaining six —
-`E-INPUT-CHANGED`, `E-RUN-LOCKED`, `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`,
-and `E-STEP-EXISTS`'s partial documentation — are **appended to the nine-codes entry** with the count
-corrected and with H6b's reason stated: no remaining chartered slice has `run_identity.py`, the
+**What is filed instead, each owner a fact with a reason — and the count is FIVE, re-derived from the
+entry's own table rather than carried from the ruling that commissioned it.** The controller ruling
+that widened this charter said *"the other six"*; that subtracted `E-CODE-DIRTY` from the nine and not
+`E-EXPERIMENT-UNKNOWN`, which H8c task 16 documented at `c794029`. Derived here: the nine are
+`E-GIT-NO-REPO`, `E-GIT-NO-COMMIT`, `E-CODE-DIRTY`, `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
+`E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`, `E-EXPERIMENT-UNKNOWN`; minus
+`E-CODE-DIRTY` (H6a batch 4) and `E-EXPERIMENT-UNKNOWN` (H8c task 16) leaves **seven** undocumented
+before H6b; minus H6b's two leaves **five**. The remaining five —
+`E-INPUT-CHANGED`, `E-RUN-LOCKED`, `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS` and
+`E-EXPERIMENT-EXISTS` — are **appended to the nine-codes entry** with the heading's count corrected
+from nine to five and with H6b's reason stated: no remaining chartered slice has `run_identity.py`, the
 manifest path or `generators/` as its surface — H9 is
 `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, H3c-3's remaining 14 are folds and holdouts
 inside cells. **Owner: unassigned, with the reason**, never *"whichever slice next touches a creation
@@ -694,7 +701,8 @@ batch 6 ran and which found two wrong authorities.
 | Widening `E-CODE-DIRTY`'s pathspec to the repository root | **Declined, and re-owned unassigned with the reason**, Decision 12. Not additive; every uncommitted root file becomes a gate candidate. No remaining chartered slice has that pathspec as its surface |
 | Narrowing `validate_config`'s bare `except ContractError` around `find_repo_root` | **Filed, unassigned with the reason.** The catch is wider than the comment's claim (*"No repo at all"*) and would swallow any future coded fault from the walk-up. Narrowing it is a behaviour change to `validate`, and no remaining slice has `validate`'s template-discovery path as its surface |
 | A sixth `diff` row, or any `report` rendering, for `os`/`hardware` | **Refused by ruling**, Decision 14. Recorded as a stated non-gap rather than filed, since the five-row shape is documented and deliberate |
-| The remaining six undocumented `E-` codes | **Filed, unassigned with the reason**, Decision 1. `run_identity.py`, `generators/` and the manifest path are nobody's chartered surface |
+| The remaining **five** undocumented `E-` codes | **Filed, unassigned with the reason**, Decision 1. `run_identity.py`, `generators/` and the manifest path are nobody's chartered surface. **Five, not six** — the count was re-derived from the entry's table, and `E-STEP-EXISTS` is a **separate** observation rather than a member of the nine |
+| A § Errors row for `E-STEP-EXISTS` | **Not one of the nine, and not H6b's.** The entry describes it as *"the one sibling that is documented, and only partially"* — a sentence in § Exit codes and diagnostics and no row. Recorded in the filing as its own observation so a later reader does not count it into the nine |
 | A reader for `BaseTemplate.field_convention` | **Not H6b's, and re-verified rather than carried.** `grep -rn "field_convention" src/` at `2b18435` returns three hits — the declaration on `BaseTemplate`, `generic`'s copy of it, and a generator comment saying the file would be *"a string nothing reads"* — and no reader. It is still the sole standing example of *an unbuilt reader of a shipped surface*, and H6b creates no new one: `os` and `hardware` are **record data**, not declarations, and the § Errors rows document codes that are raised |
 
 ---
@@ -738,3 +746,32 @@ batch 6 ran and which found two wrong authorities.
 - **The uncommitted-root-`.gitignore` gap was not re-perturbed.** Decision 12 declines it and relies
   on H6a's 2026-08-23 measurement, whose reproduction recipe is in the entry. A decline does not need
   a re-measurement; a strike would have.
+
+
+---
+
+## Correction, 2026-08-23, made before dispatch — the remaining-codes count is five, not six
+
+**Ruling N as it reached this design said *"the other six belong to their own surfaces"*. Re-derived
+from the entry's own nine-row table, the number is FIVE**, and both the ruling's arithmetic and this
+design's first draft carried the same omission: nine minus `E-CODE-DIRTY` is eight, but
+`E-EXPERIMENT-UNKNOWN` was documented at H8c task 16 (`c794029`, recorded in the entry's own appended
+note), so seven were undocumented before H6b and five remain after it. The first draft also filled the
+sixth slot with **`E-STEP-EXISTS`, which was never one of the nine** — the entry names it as *"the one
+sibling that is documented, and only partially."* Decision 1 and § What this slice refuses to build are
+corrected above; `E-STEP-EXISTS` is recorded as a separate observation. **This is the shape
+`CLAUDE.md` names twice — a count carried forward without re-deriving what it counted — caught here
+before it reached a live filing.**
+
+## Correction, 2026-08-23, made before dispatch — the other thirteen document-reading tests were swept
+
+The design's *"`_H5A_ARM_D_LITERALS` contains nothing on the `hardware` line"* checked **one** pin.
+`tests/` holds **thirteen** other sites that read `docs/reference.md` as text — seven in
+`tests/test_cli.py`, five in `tests/test_diff.py`, one in `tests/test_report.py`. All were swept for
+every literal of the environment block (`hardware`, `A100`, `hms-gpu-node`, `Linux-6.8.0`,
+`manager: uv`, `python_version:`, `uv_lock:`, `environment:`, `The two files`), with
+`grep -c "uv_lock_hash" tests/test_cli.py` → **4** as the control proving the sweep can find a string
+that is present. **No test extracts § The two files' `run.yaml` fenced block.** The only `A100` hits are
+`tests/test_report.py`'s **apparatus** fixture facts (`{"gpu": "A100"}`), which are correct and which
+task 2 must not move; the only *"The two files"* hit is a docstring mention. So task 2's edit reaches no
+pin beyond arm R, and **no additional post-edit state is owed.**
