@@ -115,7 +115,7 @@ load-bearing** — so a probe belongs outside the repo, the same rule the bundle
 ## Batch 4 — tasks 6, 7 — Ruling P confirmed, three stale claims, and NO implementer report
 
 Commits `596985a` (Ruling P confirmed, Decision 12 declined and re-owned), `1bd9483` (three stale
-claims), `2a9c05b` (a follow-up deletion), review `4f891c0` (**both PASS**, one Major on process, one
+claims), `6497284` (a follow-up deletion), review `4f891c0` (**both PASS**, one Major on process, one
 Minor). Suite unmoved at **2971**.
 
 **The implementing agent stalled — it built a monitor and waited on it, which this repo forbids in every
@@ -153,7 +153,7 @@ a marginally nicer sentence.
 
 Commits `2a62bbe` (`spec-defects.md`), `49c8a33` (`CLAUDE.md`), `9b7cc54` (both consistency passes),
 `4a3b9fc` (§ Executability), `b1b58db`, `df1796c`, review `841eeef` (**all four PASS**, one Minor),
-follow-up `1b5f0cd`. Suite unmoved at **2971**.
+follow-up `912c57d`. Suite unmoved at **2971**.
 
 **§ Executability does not move, re-derived rather than repeated**, and the four-row table was **diffed
 byte-for-byte** against H6a's entry by the reviewer independently of the report's own script. **Whether
@@ -192,3 +192,17 @@ reaching for it**, which is right; the controller closed it.
 entries**, so every entry from 2026-08-20 on is structurally nested under it. Pre-existing, and repairing
 it moves a heading **six links** point at — so it is disclosed rather than fixed in a slice chartered
 additive.
+
+
+## Correction, 2026-08-23, from the whole-branch gate — two commit SHAs in this ledger did not exist
+
+**Batch 4's entry cited `2a9c05b` and batches 5–6's cited `1b5f0cd`; neither resolves to anything in this
+repository.** The real commits are `6497284` (*fixture Y's docstring gets the deletion its brief asked
+for*) and `912c57d` (*the root-`.gitignore` entry's heading now agrees with its own amendment*), and the
+citations above are corrected in place — a ledger's job is to be followable, and a SHA that resolves to
+nothing is worse than no SHA, because a reader spends the lookup before learning that.
+
+**Both were written by the controller, from memory of a commit it had just made rather than from
+`git log`.** That is the same fault as every carried summary phrase this project has recorded: **a value
+that was cheap to derive was asserted instead**, and nothing downstream needed it, so nothing caught it
+until a reviewer tried to follow one.
