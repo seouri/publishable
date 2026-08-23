@@ -270,7 +270,11 @@ def test_study_add_redaction_is_not_secrets_redact_field_replacement_only():
 def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
     """Fixture Y: the one row exercised only over a hand-built record,
     because nothing in this build writes `provenance.environment.hostname`
-    today (it is H6's)."""
+    today (it is H6's).
+
+    H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
+    edits `_fixture_y_record`'s docstring only, which is not a body edit and
+    is not read as an arm edit."""
     record = _fixture_y_record()
     redacted = _redact(record)
     assert redacted["provenance"]["environment"]["hostname"] == REDACTED
@@ -278,7 +282,11 @@ def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
 
 def test_study_add_leaves_hostname_untouched_when_absent_from_the_source(tmp_path: Path):
     """The real-run counterpart of the fixture above: today's real records
-    never carry `hostname` at all, and redaction must not invent the key."""
+    never carry `hostname` at all, and redaction must not invent the key.
+
+    H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
+    edits `_fixture_y_record`'s docstring only, which is not a body edit and
+    is not read as an arm edit."""
     run = _real_run(tmp_path, "proj1")
     redacted = _redact(run["record"])
     assert "hostname" not in redacted["provenance"]["environment"]

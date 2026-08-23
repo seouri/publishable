@@ -2,6 +2,7 @@ import hashlib
 import importlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections import namedtuple
@@ -16393,6 +16394,8 @@ def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
     this is the SAME claim, restated here so H8b's own pin is self-contained
     and does not depend on H8a's docstring surviving unedited. Not new
     coverage; carried forward deliberately.
+
+    H6b guard-pin arm Q: sole authorized editor NONE.
     """
     doc = run_a_project(
         tmp_path,
@@ -16443,6 +16446,8 @@ def test_h8b_arm_d_the_five_figures_diff_reads(tmp_path):
     is H8a's arm B), but this is the first place all five are pinned as one
     group, which is new coverage for the group even where an individual
     figure's value is not.
+
+    H6b guard-pin arm P: sole authorized editor task 3.
     """
     doc = run_a_project(
         tmp_path,
@@ -17270,6 +17275,8 @@ def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
     `ci95: [-0.213, -0.125]` to `[-0.113, -0.125]`: this test now fails
     for `REFERENCE` (see the report's Fix round 1 section for the full
     mutation record).
+
+    H6b guard-pin arm R: sole authorized editor NONE.
     """
     text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
     assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]
@@ -19049,6 +19056,10 @@ def test_h6a_arm_b_an_excluded_env_file_moves_the_hash_today(tmp_path: Path, mon
     alone, so no list is pinned twice and task 5 — this arm's sole editor — has
     nothing of arm C's to reach. Two slices pinned one list twice and edited
     both; that is what this sentence exists to prevent.
+
+    H6b guard-pin arm U: sole authorized editor NONE. (H6a's task 5, named
+    above, is this test's editor within H6a's own slice; H6b adds no
+    top-level key this arm's individual-key assertions could see move.)
     """
     base = _h6a_base_tree(tmp_path / "base", with_env=True)
     assert code_hash(base, _h6a_live_include(base)) == _H6A_BASE_WITH_ENV_DIGEST
@@ -19106,6 +19117,11 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     — `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit` and
     `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` in this file.
     Grepped for before writing this arm rather than assumed absent.
+
+    H6b guard-pin arm U: sole authorized editor NONE. It asserts individual
+    `environment` keys rather than the mapping as a whole, so H6b's three
+    insertions (`os`, `hostname`, `hardware`) are invisible to it — a passing
+    arm after task 3 is the proof that the additive claim held here too.
     """
     cfg = _h6a_pin_project(tmp_path, monkeypatch, with_env=True)
     assert main(["run", str(cfg)]) == EXIT_OK
@@ -19688,3 +19704,84 @@ def test_h6a_fixture_h_a_wholly_ignored_src_refuses_e_code_empty(
     assert main(["run", str(cfg)]) == EXIT_WRONG
     assert "E-CODE-EMPTY" in capsys.readouterr().out
     assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h6b_arm_t_the_git_layers_two_codes_at_the_cli(tmp_path, capsys, monkeypatch):
+    """H6b guard-pin arm T: SOLE AUTHORIZED EDITOR — NONE.
+
+    New coverage. Both codes are raised by `provenance.py` and neither is
+    asserted through `main([...])` anywhere in `tests/` at `2b18435`
+    (grepped newline-insensitively, flattening whitespace first: nine hits —
+    two direct calls in `tests/test_provenance.py`, five in
+    `tests/test_validate.py` (four monkeypatched raise sites plus one
+    comment), one docstring each in `tests/test_lineage.py` and
+    `tests/test_study.py` — none through `main`). H6b task 5 documents these
+    two codes and changes no behaviour, so this arm is what makes the two new
+    § Errors rows checkable against behaviour rather than against prose.
+
+    Measured at the installed console script before it was written:
+      * `run` on a project whose `.git` was removed  -> E-GIT-NO-REPO, exit 1
+      * `generate experiment` with cwd outside a repo -> E-GIT-NO-REPO, exit 1
+      * `run` in a `git init`-ed repo with no commit -> E-GIT-NO-COMMIT, exit 1,
+        and NOT E-CODE-DIRTY, even though both hashed trees are untracked
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    # Invocation 1: `run` on a project whose `.git` was removed.
+    root1 = tmp_path / "proj1"
+    assert main(["new", str(root1)]) == EXIT_OK
+    cfg1 = generate_experiment(
+        repo_root=root1,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results1"),
+    )
+    doc1 = yaml.safe_load(cfg1.read_text())
+    doc1["metadata"]["description"] = "arm T invocation 1"
+    doc1["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg1.write_text(yaml.safe_dump(doc1))
+    subprocess.run(["git", "add", "."], cwd=root1, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "experiment"],
+        cwd=root1,
+        check=True,
+    )
+    shutil.rmtree(root1 / ".git")
+    assert main(["run", str(cfg1)]) == EXIT_WRONG
+    err1 = capsys.readouterr().err
+    assert "E-GIT-NO-REPO" in err1
+
+    # Invocation 2: `generate experiment` with cwd outside any repository.
+    # `find_repo_root(Path.cwd())` is called before the option-completeness
+    # check, so no `--template`/`--input-dir`/`--output-dir` need be valid.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    assert main(["generate", "experiment"]) == EXIT_WRONG
+    err2 = capsys.readouterr().err
+    assert "E-GIT-NO-REPO" in err2
+    monkeypatch.undo()
+
+    # Invocation 3: `run` in a `git init`-ed repo with no commit at all.
+    root3 = tmp_path / "proj3"
+    assert main(["new", str(root3)]) == EXIT_OK
+    cfg3 = generate_experiment(
+        repo_root=root3,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results3"),
+    )
+    doc3 = yaml.safe_load(cfg3.read_text())
+    doc3["metadata"]["description"] = "arm T invocation 3"
+    doc3["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg3.write_text(yaml.safe_dump(doc3))
+    shutil.rmtree(root3 / ".git")
+    subprocess.run(["git", "init", "-q"], cwd=root3, check=True)
+    assert main(["run", str(cfg3)]) == EXIT_WRONG
+    err3 = capsys.readouterr().err
+    assert "E-GIT-NO-COMMIT" in err3
+    assert "E-CODE-DIRTY" not in err3
