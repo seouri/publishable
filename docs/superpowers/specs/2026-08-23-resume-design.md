@@ -989,3 +989,20 @@ read the whole arm as coverage.** The `run` half — the straight-through golden
 and is what **batches 2 and 3 are held to**, alongside task 4's real-command review. The resume half
 is `xfail(strict=True)` naming task 9. Arm G is `xfail(strict=True)` in full until task 14, and task
 4's real-command review is the actual guard over that window.
+
+---
+
+## Correction, 2026-08-23, from batch 1 — the guard pin's editor parenthetical named the wrong task
+
+**§ The guard pin gives arms B and D the editor parenthetical "H9b task 4". That is wrong and this
+replaces it: their editor is the task that WRITES `identity.json`, which is plan task 3.** Plan task 4 is
+the comparison that may touch nothing, and plan task 3's own text already grants the authority — so the
+design's parenthetical contradicts the plan while the two sibling parentheticals (arm C → task 6, arm E →
+task 15) are correct, which is what makes this one a slip rather than a scheme.
+
+**Recorded rather than edited because a wrong editor name is the failure mode the device exists to
+prevent.** An arm names its sole authorized editor *in advance* so that any other task touching it is
+visibly out of order; an arm naming a task that cannot legally edit it invites the next implementer either
+to stop on a false blocker or to self-authorize on the grounds that the name must be a typo. **Batch 1 did
+neither** — it wrote clauses naming the task descriptively **and** stating the discrepancy, which is the
+third option and the right one.
