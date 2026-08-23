@@ -1812,3 +1812,93 @@ contrasts` entry with `resample` over a column this analysis' non-numeric drop t
 unmoved by this correction** — it corrects the count of newly-firing things, not the executability table.
 **No fifth row is minted here either**, matching the earlier correction's own rule: this is a count in
 prose, and the table above takes no fifth number.
+
+### Measured on 2026-08-22 against commit `f70499f` — after H6a
+
+**H6a (the two hash definitions) changes what `code_hash` computes and nothing about which of these
+nine configs can run.** A file the repo's own committed exclude rules skip stops moving the identity
+claim; a run with no file to hash refuses instead of publishing the digest of nothing; two errors
+(`E-CODE-EMPTY`, `E-CODE-FILE-LIST`) and one warning (`W-PARAM-UNSET`) are minted; and
+`parameters_hash`'s code does not change. **§ Executability does not move, and that was derived rather
+than assumed** — the derivation is below, ahead of the table, so a reader can check it rather than
+check that the characters match.
+
+**The commit pinned above is this branch's tip at the records task, and it names the same executable
+tree the figures below were derived against.** The last commit on this branch to touch `src/` or
+`tests/` is `c4dea36` (task 11); `git diff --name-only c4dea36..HEAD -- src tests` is **empty**, so
+every commit after it — `f70499f` included — carries the same executable tree, and the measurements
+below, run before `f70499f` existed, describe it. Stated rather than left to a reader, on the H5b
+entry's own precedent.
+
+**Row 1 counts configs validating with zero *errors*, and `W-PARAM-UNSET` is a warning.** Read at
+`validate.py`'s single emit site: it is `c.warn("W-PARAM-UNSET", …)`, not `c.error`. Confirmed by
+running rather than by reading — a scaffolded `generic` project with `parameters.analysis.confidence`
+deleted prints
+
+```
+warning W-PARAM-UNSET        parameters
+        carries a default and is left unset here; a step reading it as cfg.parameters.<path>
+        raises E-STEP-PARAM-UNKNOWN: analysis.confidence
+1 problem (0 errors, 1 warning)
+```
+
+at **exit 0**. The error count is what row 1 reads, and a warning cannot move it.
+
+**Neither new error is reachable from `validate` at all.** Both are raised by `command_run`:
+`E-CODE-EMPTY` at its single hashing site through a fresh `Collector`, `E-CODE-FILE-LIST` from the one
+`git check-ignore` call that site makes. `grep -c "E-CODE-EMPTY\|E-CODE-FILE-LIST"
+src/publishable/validate.py` returns **0**; the control, `grep -c "E-PARAM-MISSING"
+src/publishable/validate.py`, returns **3**, so the sweep can find a code `validate` does emit.
+
+**Rows 2 and 3 name dependencies this slice does not touch** — `io.reuse_from`'s plugin-side call and
+the `report_by`-under-`resample` construction inside `summarize_step`. H6a is `hashes.py`,
+`provenance.py`, `cli.command_run`'s hashing phase and `validate._check_parameters`; none of those is
+either surface.
+
+**Row 4 counts configs free of every core-side dependency this analysis can name, and `code_hash` is
+computed for every run regardless of config.** There is no declaration that opts into it and none that
+opts out, so **no config gains or loses a dependency** — which is a different claim from "the hash did
+not change", and it is the one row 4 rests on.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+
+**Rows 1, 2 and 3 above are the H8a entry's, character for character, for the fifth consecutive
+entry**, and row 4's cell text is repeated unchanged too — the whole table was copied out of the
+immediately preceding entry with `sed -n` and `diff`-ed against that extraction rather than retyped,
+and the diff is empty. This plan's own reproduction of the table in its opening was **not** used: a
+second source of truth is how both of this analysis' wrong figures were made. **No fifth number is
+minted, and no single figure is quoted for this analysis' executability** — quote the table, or name
+the dependency: `io.reuse_from`'s plugin-side call for six, the `report_by`-under-`resample` gap for
+seven, and 8 of 8 validating clean, which is the only figure `validate` can see.
+
+**What newly stops and what newly warns, for these nine.** Following H5b's own dated correction —
+whose finding was a miscounted *newly-firing* thing rather than a moved row — this is stated in prose
+and separately from the table:
+
+- **`E-CODE-EMPTY` and `E-CODE-FILE-LIST` cannot fire for any of them.** Both are properties of a
+  **repository** rather than of a config: the first fires when no file survives under `src/**` and
+  `templates/**`, the second when git cannot answer whether a candidate path is excluded (a committed
+  submodule under a hashed tree being the reachable instance). No config in this analysis names a
+  repository at all, and neither code reads any declaration, so no substitution of these configs'
+  `data`/`statistics` blocks can reach either.
+- **`W-PARAM-UNSET`'s effect on these nine is UNKNOWABLE, with the reason.** It fires on
+  `parameter_spec` paths that carry a default and that the config leaves unset — so the answer depends
+  entirely on the `growth_screen` and `growth_shortcut` templates' own `parameter_spec`, which no
+  measurement can read: **neither `growth_screen` nor `publishable-llm` is installable in any build**,
+  which is the same limit every entry in this section since the H7b ones has recorded. Guessing from
+  the `parameters` blocks shown above would measure the guess, not the build. What is certain is only
+  the shape: if it fires it is a warning, at exit 0, and row 1 is unmoved either way.
+
+**One thing changes for these configs and it is not a row.** Any run of any of these nine made before
+this build and any made after would compare as `code_hash DIFFERS` for **identical code**, whenever the
+project carried a file under `src/**` or `templates/**` that its own committed exclude rules skip — the
+scaffolded `.gitignore`'s `.env` and `.venv/` being the two a real LLM project is most likely to carry.
+`schema_version` is deliberately not bumped and no marker is written, so `uv.lock`'s `publishable`
+version is the only carrier of *why*. **That is a fact about comparisons across the boundary, not about
+executability, and it mints no row.**

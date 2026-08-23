@@ -1,0 +1,399 @@
+# H6a batch 3 — tasks 5 and 6 — the value change
+
+Commits `9685ae0` (task 5) and `c98b24e` (task 6). Suite **2945 → 2951 passed**, 1 skipped,
+2 xfailed. `ruff check`, `ruff format --check`, `mypy` all clean.
+
+**After this batch `code_hash` computes a different digest for an unchanged tree.** A file
+under `src/**` or `templates/**` that git excludes is no longer read, so a repo carrying the
+scaffold's own `.env`, `.venv/` or `*.py[cod]` files publishes a different `code_hash` and a
+different `run_id` than it did yesterday for byte-identical code.
+
+## The disclosure — every hash whose value moves, and what it moves from
+
+`schema_version` is **not** bumped (bumping makes `lineage.read_record_file` refuse every
+record on disk), so **`uv.lock` is the carrier** and the obligation lands here and on the
+record.
+
+| Figure | Moves? | From → to, on the trees this batch measured |
+|---|---|---|
+| `code_hash` | **yes**, whenever an excluded file sits under the two trees | base tree + `src/pkg/.env`: `ebc5ee53…` → `71bf339c…`; the runnable pin project + `.env`: `a74f3d44…` → `f6a935cf…`; the probe project + three excluded files: `09a843b1…` → `f6a935cf…`; base tree + untracked `loose.pyd`: `eec1541e…` → `71bf339c…`; Fixture C's tree: `1947d2a2…` → `71bf339c…` |
+| `run_id` | **yes**, it carries `short(code_hash)` | `…_a74f3d4` → `…_f6a935c`; the probe's would have been `…_09a843b` and is `…_f6a935c` |
+| `parameters_hash` | no | Decision 9 / Ruling B: no code changed |
+| `design_digest`, `input_manifest_hash`, `units_hash`, `allocation_hash`, `uv_lock_hash`, `apparatus.hash`, every derived seed | no | guard-pin arm C, unedited and green |
+| a tree with **no** excluded file under either hashed tree | no | arm A, unedited and green — `71bf339c…` and `f6a935cf…` before and after |
+
+**A `diff` across this boundary prints `code_hash DIFFERS` for identical code.** That claim is
+arm N's (`tests/test_diff.py`, no authorized editor); it was **not touched and it passes** —
+verified by running the full suite, not by reading the file.
+
+**The five carriers of the moved hash (§ Corrections 12), pinned or derived:**
+
+* `run.yaml`'s own `code_hash` — **pinned**, arm B and Fixture C's end-to-end test.
+* `run_id` and the run directory's name — **pinned**, arm B's suffix literal.
+* `provenance.upstream[].code_hash` — **pinned**, Fixture M, and it is the copied *upstream*
+  value, which does **not** move: `lineage.py` copies the string a prior record holds.
+* the bundled copy in a `study` — **derived**: `study add` copies a run's `run.yaml`
+  verbatim, so the record's own pin covers it.
+* the `latest` pointer — **derived**: `point_latest` names the run **directory**, so the
+  `run_id` arm covers it. Also **observed** in the console-script probe below, where
+  `results/latest` resolves to `run_2026-08-23T00-37-18Z_f6a935c`.
+
+## Task 5 — the wiring
+
+`cli.command_run`'s hashing site is now
+
+```python
+def _include(candidates: list[str]) -> set[str]:
+    return unignored_under_hashed_trees(repo_root, candidates)
+
+hashed = hashed_files(repo_root, _include)
+ch = code_hash_of(hashed)
+```
+
+built and called at **phase 5**, where the hash is taken — not at the phase-3 dirty gate.
+`cli.py` gained `code_hash_of`/`hashed_files` from `publishable.hashes` and
+`unignored_under_hashed_trees` from `publishable.provenance`; `code_hash` is no longer
+imported there, because it has no caller left in `src/`. The site did not move: it still sits
+after unit resolution and before `allocate_run_dir`.
+
+**`hashes.code_hash`'s docstring claim, ruled task 5's by batch 2's review, is closed by
+deletion rather than rewriting.** *"Read from the working tree, not from git"* became false
+the moment `command_run` passed a git-backed predicate. What replaced it says what is still
+true — contents are read from the working tree — and points at `hashed_files` and
+§ How the three are computed for **which** files, rather than restating the rule.
+
+### Arm B — the four literals in their post-edit state, and the one edit they entailed
+
+| What | Before | After |
+|---|---|---|
+| `_H6A_BASE_WITH_ENV_DIGEST` | `sha256:ebc5ee53ac39…` | `sha256:71bf339cc946…` |
+| `_H6A_RUN_WITH_ENV_DIGEST` | `sha256:a74f3d44dc1d…` | `sha256:f6a935cfc291…` |
+| the run directory suffix | `_a74f3d4` | `_f6a935c` |
+| the recorded `code_hash` | — | the same constant as the second, unedited |
+
+**Both constant NAMES survive and only their values changed.** That is what arm C's own
+docstring promised — it reads `_H6A_RUN_WITH_ENV_DIGEST` by name — and arm C therefore passes
+with **zero lines of it changing**. Swapping arm B's assertion to reference `_H6A_BASE_DIGEST`
+instead would have broken that promise; grepped before editing:
+`grep -rn "_H6A_BASE_WITH_ENV_DIGEST\|_H6A_RUN_WITH_ENV_DIGEST" tests/` names arm B, arm C and
+nothing else. `tests/test_diff.py`'s `_H6A_OLD_DEFINITION_HASH` is arm N's own separate
+literal, over hand-written records, and is untouched.
+
+**One edit beyond the four, entailed by them and disclosed rather than absorbed.** Arm B's two
+direct halves called `code_hash(tree, None)`, and `None` bypasses `include` entirely: with it,
+literals 1 and 2 **cannot** move at all, and the assertion would be a claim about *hash every
+file these trees hold* — true on both sides of this slice and therefore not a pin of anything
+it changed. Both halves now take `_h6a_live_include`, a new helper that builds `command_run`'s
+own predicate. Arm B's docstring records this; the stale sentence *"Task 3's touch is the same
+mechanical `None` as arm A's"* was **deleted**, not rewritten. Arm A keeps `None` and passes
+unchanged, because its tree has nothing excluded and the two predicates agree there.
+
+### No arm without an editor needed to move
+
+Arms A, C, D, E, F and N were **not opened and not edited**; all pass. The proof is the full
+suite, run after the batch: had any of them needed to move, it would be failing rather than
+reported.
+
+### The disagreements with the brief
+
+1. **Fixture C, D and M cannot be run end to end over the plan's base tree.** `templates/t.py`
+   holding `b = 2` is discovered as a project-local template and `validate` refuses with
+   `E-TEMPLATE-LOAD` — the same disagreement batch 1 recorded for arms A and B, and any file
+   that makes the tree runnable changes the digest. So step 4's *"assert `1947d2a2…` is not
+   what the run records"* and step 9's *"the new record's own `code_hash` is `71bf339c…`"* are
+   unreachable as written. What shipped instead: the **direct** half over the plan's tree with
+   the plan's literals (`tests/test_hashes.py`), and the **end-to-end** half over a runnable
+   project of task 5's own whose hashed trees hold exactly `src/pkg/step.py`, digest
+   `f6a935cf…` computed by building it. `_h6a_t5_project` is deliberately a second builder
+   rather than a use of the pin's `_h6a_pin_project`: that helper is shared by three arms, two
+   with no editor, and these fixtures need their own experiment source.
+2. **A resolver that writes into `src/**` on its FIRST call cannot be the mutation-7 fixture.**
+   `command_run` validates first and `validate` dispatches the resolver too, so the write lands
+   *before* the dirty gate and the run refuses with `E-CODE-DIRTY` — measured, it is what the
+   first version of the fixture did. The shipped resolver counts its calls in a file outside
+   the repository and writes `src/pkg/generated.py` from the **second** call on, which is the
+   window the mutation is about. The test asserts the counter reached 2, so the window is a
+   measurement rather than a story.
+3. **Task 6's delta is +1 −1, not +2 −1.** Fixture J is one new test; the twin's removal is
+   one; the tracked arm went **into the survivor**, as the brief's own step 2 required, rather
+   than becoming a second test. Suite total is unaffected either way.
+
+## The end-to-end evidence, through the installed console script
+
+`/Users/joon/src/tries/publishable/.venv/bin/publishable run configs/t5/config.yaml`, over a
+committed project holding `src/pkg/step.py` plus three untracked excluded files
+(`src/pkg/.env`, `src/.venv/lib/site.py`, `src/pkg/loose.pyd`), exit **0**, read key by key
+out of the written `run.yaml`:
+
+```
+top-level keys : schema_version run_id status draft config parameters_hash code_hash
+                 provenance layout execution results
+schema_version : 1.0                     (unchanged — Ruling C: no bump, no marker)
+run_id         : run_2026-08-23T00-37-18Z_f6a935c
+status         : completed
+draft          : False
+parameters_hash: sha256:a1718a2974…      (Ruling B: not normalized, not moved)
+code_hash      : sha256:f6a935cfc291…
+provenance     : git environment apparatus input_manifest input_manifest_hash
+                 input_manifest_changed publishable_version plugin_versions units
+                 units_hash allocation allocation_hash upstream
+upstream       : []
+results/latest → run_2026-08-23T00-37-18Z_f6a935c
+```
+
+The same tree under the **pre-slice** definition (`code_hash(root, None)`) is
+`sha256:09a843b15e23…`, so that run would have been `run_…_09a843b` yesterday. The files
+actually hashed are exactly `['src/pkg/step.py']`. This is the probe; the pins are the tests
+below it.
+
+## Mutations — every one against the FULL, unfiltered suite, with the count read
+
+| # | Mutation | Failures **read** | Which |
+|---|---|---|---|
+| 2 | `hashed_files` computes `include` and ignores it | **8** | arm B, arm C, Fixture C (both halves), Fixture D/D′, Fixture J, `test_code_hash_delegates_to_code_hash_of_over_hashed_files`, Fixture F |
+| 4 | `check-ignore --no-index` | **3** | Fixture D (`eec1541e…` → `71bf339c…`), task 6's survivor, Fixture I |
+| 5 | ask git **before** the fixed skip set | **1** | task 6's survivor — and only it, which is the catch the plan assigned to task 6 |
+| 7 | evaluate the predicate at phase 3, reuse at phase 5 | **1** | the resolver fixture; the digest differed by one file |
+| P2 | `hashed_files(...)` then `code_hash(repo_root, _include)` — the naive shape | **1** | the count pin, reading `2` `check-ignore` invocations |
+| task 6 step 3 | `__pycache__` out of `_SKIP_DIRS` | **2** | task 6's survivor and guard-pin arm D |
+
+**A property-preserving arm of each leaves the suite green**, checked in advance rather than
+asserted: for 2, applying `include` by any other equivalent expression; for 4, any flag that
+does not change git's answer (`-z` stays); for 5, moving the skip set's *test* while still
+applying it before git is asked; for 7, constructing the closure early and **calling** it late
+(this one matters — building `_include` at phase 3 is a no-op, since the subprocess fires on
+call, and a mutation that only moved the `def` would have been blind); for P2, folding the same
+one list by any route; for step 3, reordering `_SKIP_DIRS`' members.
+
+**Each mutation was checked against the body of the test it names before it was run.** Every
+revert was done by **editing the file back**, `diff`-ed against a pre-mutation copy
+(`REVERT-IDENTICAL` each time), `__pycache__` cleared, and re-run.
+
+## The tests
+
+`tests/test_cli.py` (+4): Fixture C end to end; the phase-5 predicate against a resolver that
+writes into `src/**` during resolution; the one-`check-ignore`-per-run count; Fixture M.
+`tests/test_hashes.py` (+2 for task 5): Fixture C direct, both branches; Fixtures D and D′.
+`tests/test_hashes.py` (+1 −1 for task 6): Fixture J; the survivor's tracked arm; the twin
+removed.
+
+**The removed test, by its full name: `test_code_hash_ignores_pycache`** (`tests/test_hashes.py`).
+It was byte-identical in body to `test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree`.
+`grep -rn "test_code_hash_ignores_pycache" tests/ src/ docs/reference.md docs/design-principles.md
+docs/experimental-designs.md README.md CLAUDE.md` → one hit, the survivor's own docstring naming
+what it absorbed.
+
+**Fixture M's top-level key set is asserted as a literal**, eleven keys, so a future slice that
+mints a marker fails there and has to come back and read Ruling C. Its upstream is genuinely
+produced by `_build_fixture_f_upstream` with only `code_hash` rewritten in place; `run_id` is
+deliberately left carrying the digest the upstream really computed, stated in the docstring
+rather than quietly inconsistent.
+
+## Existing tests whose expectation moved
+
+**Exactly one: guard-pin arm B**, `test_h6a_arm_b_an_excluded_env_file_moves_the_hash_today`.
+It is a **correct move, not a weakened pin**: the arm was captured with its post-edit state
+written out in advance, task 5 is its named sole editor, the four literals moved to exactly the
+values the docstring specified, and the fifth edit is disclosed above with the argument that
+literals 1 and 2 are unreachable without it. Nothing was deleted from the arm except a sentence
+that had become false, and no assertion was removed.
+
+**No other test moved.** That is measured, not claimed: the full suite went 2945 → 2951 with
+zero failures, so every other pin — arms A, C, D, E, F, N included — holds unedited.
+
+## Claims about other tests and other code, and what was grepped for each
+
+* *"arm C reads arm B's constant by name"* — `grep -rn "_H6A_BASE_WITH_ENV_DIGEST\|_H6A_RUN_WITH_ENV_DIGEST" tests/`
+  → arm B's definitions and arm C's single reference; nothing else.
+* *"the removed twin was byte-identical in body"* — both bodies read side by side before the
+  removal: same file written, same `.pyc` written, same assertion.
+* *"arm D calls `code_hash(..., None)`, so git is never asked there"* —
+  `grep -n "code_hash(e_tree, None)\|code_hash(d_tree, None)" tests/test_hashes.py` → both hits.
+* *"`_build_fixture_f_upstream` reads its step name back out of its own `run.yaml`"* — read.
+* *"no other command computes a `code_hash`"* — **re-measured in this session**, because
+  § Corrections' own grep was taken at `f8450f9`, before batch 2 added `code_hash_of`:
+  `grep -rn "code_hash\b\|code_hash_of\|hashed_files" src/publishable/*.py` → the two
+  computing sites are `hashes.py`'s own definitions and `cli.command_run`; `diff.py`,
+  `report.py`, `study.py` and `lineage.py` every one **read a recorded string**, and
+  `freeze.py` does not mention a code hash at all. So no shipped command computes one
+  definition while `run` records the other, which was the live defect this batch could have
+  created. **A consequence worth a reviewer's eye: `hashes.code_hash` now has zero production
+  callers** — `command_run` calls the two-step form — and is held by tests and by task 3's
+  identity test alone. Not filed here, because it is neither task 5's nor task 6's surface.
+* *"no live reference to the removed test"* — the grep above, over `tests/`, `src/`, the four
+  documents and `CLAUDE.md`.
+* *"`E-CODE-FILE-LIST` has one emit site"* — `grep -rn "E-CODE-FILE-LIST" src/ tests/ docs/*.md`
+  → one `raise` in `provenance.py`, its assertions in `tests/test_provenance.py`, **no § Errors
+  row**. The row is task 8's by plan (Batching, item ii), unchanged by this batch — but note
+  that **`run` is now a live surface for that code**: a submodule under `src/**` refuses at
+  `run` from today, where before this batch nothing in `src/` reached the helper with a real
+  predicate. Task 8's row must cover that, and it already names `run` as the command.
+* **The two-case sweep.** The rule with more than two cases here is *which files are hashed*.
+  It is enumerated **once**, in `reference.md` § How the three are computed (task 1's table);
+  every site this batch wrote links to it rather than restating — `cli.py`'s comment,
+  `hashes.code_hash`'s docstring. Swept newline-insensitively with a regex over the four
+  documents, `hashes.py`, `provenance.py`, `cli.py`, `tests/test_hashes.py` and
+  `tests/test_provenance.py` for any sentence combining *hash* with *exclude/ignore*: the only
+  enumerations found are the § How the three are computed table, its links, and Fixture J's
+  docstring, which states the **four** gate/hash states task 6's step 1 asked for. No two-case
+  version.
+
+## Concerns for the reviewer
+
+1. **The entailed fifth edit to arm B** is the thing to check first. It is disclosed, argued and
+   confined to the second argument of two direct calls; a reviewer who disagrees can ask whether
+   arm B should instead have kept `None` and left literals 1 and 2 unmoved — that reading makes
+   the arm's own advance specification unsatisfiable, which is why it was not taken.
+2. **`_h6a_t5_project` is a second project builder** beside the pin's. Deliberate (no arm's
+   helper moves), but it is duplication a reviewer should price.
+3. **The resolver fixture's call counter** is the load-bearing trick: if a future change makes
+   `validate` stop dispatching resolvers, the write moves to the first call and the fixture
+   refuses with `E-CODE-DIRTY` rather than silently passing. It fails loudly, which is the right
+   direction, but it is a coupling worth knowing about.
+4. **`E-CODE-FILE-LIST` is now reachable from `run`** and still has no § Errors row until task 8.
+
+---
+
+## 2026-08-22 — batch 3 fix round, against `task-b3-review.md` (reviewed at `d959b34`)
+
+Three Majors, six Minors. All closed or explicitly disposed below; nothing above this line was
+edited.
+
+### Major 1 — arm E's stale sentence
+
+**Closed by Ruling J.** Deleted exactly the clause `; \`code_hash\` still has exactly one in
+\`src/\`` from `tests/test_hashes.py`'s arm E docstring, leaving the paragraph's other, past-tense
+count (the 13 call sites the six named tests already had "when task 3's brief was written")
+untouched, and no assertion moved. `diff` against the pre-edit file shows exactly that one clause
+removed. Re-ran the arm's test alone: passes.
+
+### Major 2 — `hashes.code_hash`'s zero production callers
+
+**Measured per Ruling K, then closed** — filed and resolved in the same entry, appended to
+`docs/superpowers/spec-defects.md` ("`hashes.code_hash` has zero production call sites — measured
+and closed"). The measurement: `code_hash`'s body is `return
+code_hash_of(hashed_files(repo_root, include))` — literally the two functions `command_run`
+calls directly — and `test_code_hash_delegates_to_code_hash_of_over_hashed_files` pins the two
+forms equal on both an `include=None` tree and a real narrowing filter. That is **one**
+implementation of the fold, not two that could drift, so Ruling K's "duplicate goes" branch does
+not apply — there is no duplicate to delete. `reference.md`'s two mentions
+(`W-STUDY-CODE-HASH-MISMATCH`'s row, § Building one) both say `report` never calls
+`hashes.code_hash`, which is true and claims no other caller, so neither needed correcting. Owner
+question answered by measurement rather than deferred: the entry is closed, not left open with an
+owner, because nothing needs building or deciding — `code_hash` stays as the single-call
+convenience form, kept alive by its own guard-pin test.
+
+### Major 3 — mutation 14, dropped without disclosure
+
+**Closed by disclosure, here, appended rather than editing the "every one" heading or the six-row
+table above.** Mutation 14 (recompute the upstream's hash at ledger time) was not run against the
+full suite when the report was written; the string "mutation 14" did not appear. Re-verified
+independently in this fix round, not merely trusted from the review: changed
+`lineage.py:321`'s `"code_hash": record.get("code_hash")` to `"code_hash": None`, cleared
+`__pycache__`, ran the full suite filtered to the three named tests —
+
+```
+FAILED tests/test_cli.py::test_fixture_r_an_entrys_hashes_are_the_upstreams_own_read_back_not_literals
+FAILED tests/test_cli.py::test_h6a_fixture_m_one_record_carries_two_hash_definitions
+FAILED tests/test_diff.py::test_h8b_fixture_u_upstream_block_and_the_differ_only_line
+3 failed, 3 passed
+```
+
+— matching the review's proxy exactly (Fixture M plus two pre-existing pins). Reverted by editing
+the line back, diffed against the pre-mutation copy (`REVERT-IDENTICAL`), and re-ran the same
+three: 6 passed. The finding was the silence, not a hole, and the silence is now on the record: the
+step was skipped in the original report and is disclosed here rather than folded into the earlier
+table.
+
+### Minor 1 — "No other test moved" was false as stated
+
+**Correction appended, original sentence left as written.** Task 6 rewrote an existing test —
+`test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree` — replacing a three-line body
+over `tmp_path` with a committed repository, a new literal (`eec1541e…`) and three new assertions.
+That is an existing test whose expectation moved, in addition to arm B. It was already disclosed
+in § The tests and § Mutations, so no information was missing from the report — only the summary
+sentence overclaimed. And separately: a green suite proves a test's expectation was *satisfied*,
+not that it was *unchanged* — an updated expectation passes too. Both points stand corrected here.
+
+### Minor 2 — `E-CODE-FILE-LIST`'s new reachability, disclosed properly
+
+**Disclosed here, in the place a hash-boundary section covers it, rather than left inside a grep
+bullet.** A project with a git submodule under `src/**` used to `run` to completion and now exits
+1 with `E-CODE-FILE-LIST` — this batch's `include` predicate asks git about every candidate path,
+and `git check-ignore` refuses to answer for a path inside a submodule. Re-verified in this fix
+round: `git check-ignore --no-index -z --stdin` against a repo-relative path inside a committed
+submodule returns nonzero with `fatal: Pathspec '<path>' is in submodule '<name>'` on the git
+installed in this environment. No § Errors row exists for any `E-CODE-*` code today
+(`grep -n "E-CODE-" docs/reference.md` → zero hits) — that gap is task 8's by plan (Batching, item
+ii) and unchanged by this fix round, which does not touch task 8's surface. Recorded here as what
+Minor 2 asked for: this is a hash-boundary disclosure, not merely a claim about other code.
+
+### Minor 3 — the end-to-end inequality, now a pinned literal
+
+**Closed by pinning.** `tests/test_cli.py::test_h6a_fixture_c_a_run_records_the_narrowed_digest`
+now asserts `code_hash(root, None) == _H6A_T5_PRE_SLICE_DIGEST` (in addition to the existing
+inequality against `_H6A_T5_RUN_DIGEST`), where `_H6A_T5_PRE_SLICE_DIGEST =
+"sha256:09a843b15e23fe355b389aec9ae6a1566f4a6211bf249781884f2e4c82f842cc"` — recomputed from the
+algorithm directly (`code_hash(proj, None)` over a hand-built tree matching `_h6a_t5_project`'s
+shape plus the fixture's three excluded writes), not copied from the review's prose. This is the
+same value the review's own console-script probe reported for this exact tree
+(`sha256:09a843b15e23…`). Re-ran the test alone: passes.
+
+### Minor 4 — the docstring-fix description
+
+**Corrected here, description only, no code touched.** § Task 5's "closed by deletion rather
+than rewriting" overclaims: the shipped edit deletes the false clause *"not from git"* and adds
+two new clauses (contents genuinely come from the working tree; `command_run`'s `include` asks
+git). The correct description is a deletion **and** an addition, not a pure deletion. Both new
+clauses were independently checked in the review and are not in question — only the sentence
+describing the edit was wrong, and only the sentence is corrected.
+
+### Minor 5 — `study add` does not copy `run.yaml` "verbatim"
+
+**Corrected here; the conclusion it was defending is unchanged.** § The disclosure's claim that
+"`study add` copies a run's `run.yaml` **verbatim**, so the record's own pin covers the bundled
+copy" is false of the code: `study_add` reads the record, deep-copies it, overwrites four
+host-identifying fields (`_redacted`), and re-serializes with `yaml.safe_dump` — not a byte copy.
+The conclusion survives on a different ground, stated here: `code_hash` is a top-level scalar and
+is not among `_REDACTED_DATA_FIELDS` or the provenance fields `_redacted` overwrites
+(`config.data.input_dir`/`output_dir`, `provenance.git.repo_root`,
+`provenance.environment.hostname`, `provenance.input_manifest`), and a scalar survives a
+deepcopy-then-YAML-round-trip unchanged — so the bundled figure really is the record's own value
+and the record's pin really does cover it. "Verbatim" is retracted; "the record's own pin covers
+the bundled copy" is not.
+
+### Minor 6 — Fixture J's docstring names four states, instantiates two
+
+**Corrected here by naming where the other two are pinned, per the review's own findings, rather
+than adding assertions to Fixture J.** *Tracked and clean → not dirty* is pinned by
+`tests/test_provenance.py::test_a_clean_tree_is_not_dirty`. *Tracked and modified → dirty* is
+pinned by `tests/test_provenance.py::test_only_the_hashed_trees_make_it_dirty`. *Tracked and
+clean → hashed* is pinned by every digest literal in this slice computed over a tree of tracked,
+clean files — arm A, arm D, Fixture C, Fixture D all fail under a rule that dropped such files.
+Fixture J's own docstring should be read as naming the seam, not as claiming to instantiate all
+four states itself; this section is that naming.
+
+### What changed in this fix round
+
+* `tests/test_hashes.py` — one clause deleted from arm E's docstring (Major 1). No assertion
+  touched. Arms A, B, C, D, F, N: byte-unchanged (`git diff` confirms).
+* `tests/test_cli.py` — one new module-level literal, `_H6A_T5_PRE_SLICE_DIGEST`, and one new
+  assertion added to Fixture C's end-to-end test (Minor 3).
+* `docs/superpowers/spec-defects.md` — one entry appended, filed and closed in the same edit
+  (Major 2).
+* This report — this section, appended.
+
+No other file changed. No guard-pin arm without an editor was opened. No arm's assertion,
+literal, or test name moved except the one Ruling J authorized.
+
+### Verification
+
+Full suite re-run after all edits, `__pycache__` cleared first:
+
+```
+2951 passed, 1 skipped, 2 xfailed
+```
+
+Same count as the review recorded — the fix round's edits are a docstring clause, a new literal
+plus a stronger assertion on an existing passing test, and a spec-defects entry, none of which
+add or remove a test. `ruff check .`, `ruff format --check .`, and `mypy` all re-run clean.

@@ -42,13 +42,17 @@ from publishable.generators.experiment import generate_experiment
 from publishable.generators.report import generate_report
 from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
-from publishable.hashes import code_hash, design_digest, parameters_hash
+from publishable.hashes import code_hash_of, design_digest, hashed_files, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.lineage import UpstreamLedger, UpstreamResolver
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
-from publishable.provenance import find_repo_root, git_provenance
+from publishable.provenance import (
+    find_repo_root,
+    git_provenance,
+    unignored_under_hashed_trees,
+)
 from publishable.replication import (
     cross_levels,
     fold_members_for,
@@ -2340,7 +2344,48 @@ def command_run(config_path: Path) -> int:
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
-    ch = code_hash(repo_root)
+    # Built HERE and called HERE, not at the dirty gate: `resolve_units` above
+    # runs a plugin resolver — user code that may create or remove files under
+    # `src/**` — so an exclude answer captured before it ran would answer
+    # "what did git see before user code ran", which is not the question this
+    # hash asks. State read at the wrong moment is a proxy (H7a's corollary).
+    # One call, folded once: `hashed_files` walks the two trees and asks git a
+    # single `check-ignore` question, and `code_hash_of` folds the list it
+    # returns, so neither the walk nor the subprocess happens twice. Which
+    # files that leaves is docs/reference.md § How the three are computed's
+    # four-case rule, stated there and not restated here.
+    def _include(candidates: list[str]) -> set[str]:
+        return unignored_under_hashed_trees(repo_root, candidates)
+
+    hashed = hashed_files(repo_root, _include)
+    # E-CODE-EMPTY, ONE emit site (H6a task 8, Ruling D): a record whose
+    # `code_hash` is `sha256:e3b0c442…` — the digest of nothing — proves
+    # nothing, and would otherwise be published, cited, and bundled with no
+    # diagnostic. Written as `if not hashed:`, testing the FILE LIST rather
+    # than comparing against the empty digest — `ch == "sha256:e3b0c442…"`
+    # answers "were there zero files?" with a digest comparison, a proxy a
+    # mutation swapping one for the other would pass every fixture in this
+    # slice on. `hashes.code_hash` itself still returns the empty digest for
+    # an empty tree: two tests in tests/test_hashes.py use exactly that value
+    # as a negative control, so the refusal belongs at this caller, not
+    # inside the pure hashing module. Reachable two ways — no file at all
+    # under either tree, or every file under them git-excluded — both named
+    # in docs/reference.md § Errors core raises' `E-CODE-EMPTY` row. Sits
+    # after unit resolution (a resolver's quota may already be spent) and
+    # before `allocate_run_dir` below, so a refusal here leaves no run
+    # directory behind.
+    if not hashed:
+        empty_c = Collector()
+        empty_c.error(
+            "E-CODE-EMPTY",
+            "src/** or templates/**",
+            "no file found under either tree once git's exclude rules are "
+            "applied; the run would otherwise publish sha256:e3b0c442… — "
+            "the digest of nothing — as its code_hash",
+        )
+        print(empty_c.render())
+        return EXIT_WRONG
+    ch = code_hash_of(hashed)
     ph = parameters_hash(doc)
     manifest = build_manifest(
         input_dir,

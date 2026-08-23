@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,18 @@ def short(hash_str: str) -> str:
     return hash_str.split(":", 1)[-1][:7]
 
 
-def hashed_files(repo_root: Path) -> list[tuple[str, Path]]:
-    """Sorted (repo-relative path, file) pairs across src/** and templates/**."""
+def hashed_files(
+    repo_root: Path, include: Callable[[list[str]], set[str]] | None
+) -> list[tuple[str, Path]]:
+    """Sorted (repo-relative path, file) pairs across src/** and templates/**.
+
+    `include` is handed EVERY candidate path that survived the fixed skip set,
+    as repo-relative posix strings, and returns the subset to keep. It is
+    positional and required: `None` is not a default, it is the explicit claim
+    `hash every file these trees hold`, which only a caller without a
+    repository can honestly make. See docs/reference.md § How the three are
+    computed for the four-case rule `include` is one half of.
+    """
     found: list[tuple[str, Path]] = []
     for tree in HASHED_TREES:
         base = repo_root / tree
@@ -34,23 +45,42 @@ def hashed_files(repo_root: Path) -> list[tuple[str, Path]]:
             if path.suffix in _SKIP_SUFFIXES:
                 continue
             found.append((path.relative_to(repo_root).as_posix(), path))
-    return sorted(found)
+    found.sort()
+    if include is None:
+        return found
+    kept = include([rel for rel, _ in found])
+    return [(rel, path) for rel, path in found if rel in kept]
 
 
-def code_hash(repo_root: Path) -> str:
-    """sha256 over the sorted list of (relative path, sha256 of contents) pairs.
+def code_hash_of(pairs: list[tuple[str, Path]]) -> str:
+    """The fold, over a file list the caller already holds.
 
-    Read from the working tree, not from git, so `run` and `draft` compute the
-    same function over a clean and a dirty tree alike.
+    sha256 over the sorted list of `(relative path, sha256 of contents)`
+    pairs, folded as `sha256(path) \\0 sha256(contents) \\n` and prefixed. This
+    is `code_hash`'s own construction, extracted so a caller who also needs
+    the file list (a zero-file guard, say) does not walk the two trees twice
+    to get both — see docs/reference.md § How the three are computed's
+    disclosure of what that duplication used to cost.
     """
     outer = hashlib.sha256()
-    for rel, path in hashed_files(repo_root):
+    for rel, path in pairs:
         inner = hashlib.sha256(path.read_bytes()).hexdigest()
         outer.update(rel.encode())
         outer.update(b"\0")
         outer.update(inner.encode())
         outer.update(b"\n")
     return _prefixed(outer.hexdigest())
+
+
+def code_hash(repo_root: Path, include: Callable[[list[str]], set[str]] | None) -> str:
+    """sha256 over the sorted list of (relative path, sha256 of contents) pairs.
+
+    Contents are read from the working tree, so `run` and `draft` compute the
+    same function over a clean and a dirty tree alike. **Which** files are
+    read is `include`'s answer, and `command_run`'s asks git — see
+    `hashed_files` and docs/reference.md § How the three are computed.
+    """
+    return code_hash_of(hashed_files(repo_root, include))
 
 
 def _canonical(payload: Any) -> bytes:
@@ -68,12 +98,15 @@ def covered_config(config: dict[str, Any]) -> dict[str, Any]:
     are host paths, not declarations, and excluded for the same reason
     `metadata` is: neither is part of "same code, different parameters."
 
-    **Does not normalize.** § Three hashes' "Values are normalized to what
-    `init` would have materialized before hashing" is not implemented here —
-    see `docs/superpowers/spec-defects.md` §
-    "`parameters_hash` does not normalize to what `init` would have
-    materialized", an OPEN gap owned by H6. Closing it needs the template's
-    `parameter_spec`, which this function deliberately does not take.
+    **Does not normalize, by decision.** `parameters_hash` covers the config
+    as written, and § How the three are computed states both that rule and its
+    consequence: a hand-trimmed config and the file `init` wrote are two
+    declarations, they hash differently, and `diff` names the key that
+    differs. Normalizing was ruled against on three independent grounds (H6a,
+    Decision 9), the sharpest being that a config omitting a defaulted
+    parameter validates clean and then dies with `E-STEP-PARAM-UNKNOWN` at the
+    step that reads it — so normalizing would hand one identity claim to a
+    config that runs and a config that cannot.
     """
     covered = {k: v for k, v in config.items() if k != "metadata"}
     data = covered.get("data")

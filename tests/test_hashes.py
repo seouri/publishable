@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from publishable.hashes import code_hash, covered_config, design_digest, parameters_hash, short
+from publishable.hashes import (
+    code_hash,
+    code_hash_of,
+    covered_config,
+    design_digest,
+    hashed_files,
+    parameters_hash,
+    short,
+)
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -12,26 +20,43 @@ def write(root: Path, rel: str, text: str) -> None:
 def test_code_hash_covers_src_and_templates_only(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
     write(tmp_path, "templates/mine.py", "b = 2\n")
-    before = code_hash(tmp_path)
+    before = code_hash(tmp_path, None)
     write(tmp_path, "docs/notes.md", "unrelated\n")
     write(tmp_path, "configs/c/config.yaml", "x: 1\n")
-    assert code_hash(tmp_path) == before, "changes outside the two trees must not move it"
+    assert code_hash(tmp_path, None) == before, "changes outside the two trees must not move it"
     write(tmp_path, "src/pkg/step.py", "a = 2\n")
-    assert code_hash(tmp_path) != before
-
-
-def test_code_hash_ignores_pycache(tmp_path: Path):
-    write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path)
-    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path) == before
+    assert code_hash(tmp_path, None) != before
 
 
 def test_code_hash_is_prefixed_and_short_takes_seven(tmp_path: Path):
     write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    h = code_hash(tmp_path)
+    h = code_hash(tmp_path, None)
     assert h.startswith("sha256:")
     assert len(short(h)) == 7
+
+
+def test_code_hash_delegates_to_code_hash_of_over_hashed_files(tmp_path: Path):
+    """H6a task 3, step 3. Two implementations of one fold is what
+    `covered_config` was extracted to prevent (H8b task 7) — this is the same
+    property for `code_hash`/`code_hash_of`/`hashed_files`, pinned as an
+    identity rather than left to a docstring's claim.
+
+    Asserted on a bare `include=None` tree AND on a tree with a real,
+    non-trivial `include`, so the identity holds for both of `code_hash`'s
+    two behaviours — hashing everything, and narrowing to a caller's filter.
+    """
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    write(tmp_path, "src/pkg/other.py", "b = 2\n")
+    write(tmp_path, "templates/t.py", "c = 3\n")
+    assert code_hash(tmp_path, None) == code_hash_of(hashed_files(tmp_path, None))
+
+    def drop_other(candidates: list[str]) -> set[str]:
+        return {c for c in candidates if not c.endswith("other.py")}
+
+    assert code_hash(tmp_path, drop_other) == code_hash_of(hashed_files(tmp_path, drop_other))
+    # The filter actually narrowed something, or the second assertion would be
+    # indistinguishable from the first.
+    assert code_hash(tmp_path, drop_other) != code_hash(tmp_path, None)
 
 
 def test_parameters_hash_excludes_metadata_and_the_two_paths():
@@ -63,25 +88,59 @@ def test_code_hash_skip_list_matches_relative_path_not_absolute(tmp_path: Path):
     # components inside src/**  or templates/** may be excluded.
     repo = tmp_path / "__pycache__" / "repo"
     write(repo, "src/pkg/step.py", "a = 1\n")
-    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
-    h = code_hash(repo)
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo", None)
+    h = code_hash(repo, None)
     assert h != empty_digest
     write(repo, "src/pkg/step.py", "a = 2\n")
-    assert code_hash(repo) != h
+    assert code_hash(repo, None) != h
 
 
 def test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree(tmp_path: Path):
-    write(tmp_path, "src/pkg/step.py", "a = 1\n")
-    before = code_hash(tmp_path)
-    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
-    assert code_hash(tmp_path) == before
+    """The fixed skip set drops `__pycache__` **unconditionally** — whatever
+    git says about the files inside it.
+
+    **This test absorbed a twin.** `test_code_hash_ignores_pycache` was
+    byte-identical in body — same file, same `.pyc`, same assertion — so
+    deleting either one alone left the suite green and one of the two was
+    doing no work. What survives is the half that can fail for a reason the
+    other could not: the tracked arm below asks git.
+
+    `src/pkg/__pycache__/keep.py` is **tracked** (`git add -f`), and git
+    reports it as **not excluded** — asserted here as `check-ignore`'s
+    returncode 1, not assumed. The digest is unmoved all the same, which is
+    what *unconditionally* means and what separates this test from guard-pin
+    arm D's second tree: that arm calls `code_hash(..., None)`, so git is
+    never asked at all, and a predicate applied before the fixed skip set
+    would pass it.
+    """
+    import subprocess
+
+    tree = _h6a_base_repo(tmp_path / "tree")
+    (tree / "src" / "pkg" / "loose.pyd").write_text("X")
+    _h6a_commit_more(tree, "src/pkg/loose.pyd")
+    before = code_hash_of(hashed_files(tree, _h6a_include(tree)))
+    assert before == "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+    # The untracked half the removed twin held, kept: a real `.pyc` written by
+    # the interpreter moves nothing.
+    write(tree, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
+    # The tracked half, which the twin could not hold at all.
+    write(tree, "src/pkg/__pycache__/keep.py", "k = 1\n")
+    _h6a_commit_more(tree, "src/pkg/__pycache__/keep.py")
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/__pycache__/keep.py"], cwd=tree, capture_output=True
+    )
+    assert asked.returncode == 1, "git must report this tracked file as NOT excluded"
+
+    assert code_hash_of(hashed_files(tree, _h6a_include(tree))) == before
+    assert code_hash(tree, None) == before
 
 
 def test_code_hash_handles_a_dot_git_intermediate_path_component(tmp_path: Path):
     repo = tmp_path / ".git" / "repo"
     write(repo, "src/pkg/step.py", "a = 1\n")
-    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
-    assert code_hash(repo) != empty_digest
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo", None)
+    assert code_hash(repo, None) != empty_digest
 
 
 def test_parameters_hash_does_not_mutate_input():
@@ -457,3 +516,602 @@ def test_h8b_covered_config_does_not_mutate_input():
     }
     covered_config(config)
     assert config == before
+
+
+# ---------------------------------------------------------------------------
+# H6a's guard pin — arms D and E, captured in batch 1 BEFORE any code task
+# runs. Arms A, B and C are in `tests/test_cli.py`, arm F in
+# `tests/test_validate.py`, and arm N in `tests/test_diff.py`.
+#
+# These two arms bring the first `git init` into this module: `grep -c
+# "git init\|subprocess" tests/test_hashes.py` was 0 before them. Arm D needs
+# real repositories because the property it holds — tracked or not — is not
+# observable through `code_hash` today and becomes observable at task 5.
+
+# Fixture D's and Fixture E's shared digest, computed here by building both
+# trees and calling the shipped `code_hash`. The plan's `6ddb8634…` is NOT
+# reproducible from the design's own stated tree (§ Corrections 5: the `.pyd`'s
+# bytes are never stated and nine candidates were tried), so no task asserts
+# it; the bytes are fixed at `X` and this is what they produce.
+_H6A_TRACKED_PYD_DIGEST = "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+# The zero-file digest: `sha256` of the empty string.
+_H6A_EMPTY_DIGEST = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def _h6a_commit(root: Path, *paths: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+    subprocess.run(["git", "add", "-f", *paths], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "pin"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not(tmp_path: Path):
+    """Arm D. NO AUTHORIZED EDITOR — a passing arm IS the proof.
+
+    Two trees, one digest. Fixture D commits `src/pkg/loose.pyd` with
+    `git add -f`, so it is **tracked** while matching the scaffold's own
+    `*.py[cod]` pattern: git does not skip a tracked file, so neither does the
+    hash — the second of § How the three are computed's four cases. Fixture E
+    adds a **tracked** `src/pkg/__pycache__/keep.py` on top, which the fixed
+    skip set drops before git is asked anything — the first case, and the
+    positive control for § Templates' *"unconditionally"*.
+
+    **Why the arm is built on the AFTER value.** The design's own table has the
+    untracked-`.pyd` tree carrying the *same* digest in the *today* column,
+    because today's `code_hash` cannot tell tracked from untracked at all. An
+    assertion on the today column would therefore pass under a mutation that
+    drops tracked files too. `eec1541e…` is the after value; that it is also
+    the today value is what lets this arm be captured green now, and it is the
+    coincidence a fixture must not be built on.
+
+    There is no editor who could make this arm pass another way: after task 5
+    the same two trees must still produce the same one digest.
+
+    **Task 3's one mechanical touch here is the same as arm E's.** `include`
+    becoming required means this test's two `code_hash(...)` calls need the
+    literal `None` to keep importing at all — no `assert` line moves, and the
+    digest literal below is untouched.
+    """
+    d_tree = tmp_path / "fixture_d"
+    write(d_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(d_tree, "src/pkg/step.py", "a = 1\n")
+    write(d_tree, "templates/t.py", "b = 2\n")
+    write(d_tree, "src/pkg/loose.pyd", "X")
+    _h6a_commit(d_tree, ".gitignore", "src/pkg/step.py", "templates/t.py", "src/pkg/loose.pyd")
+    assert code_hash(d_tree, None) == _H6A_TRACKED_PYD_DIGEST
+
+    e_tree = tmp_path / "fixture_e"
+    write(e_tree, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(e_tree, "src/pkg/step.py", "a = 1\n")
+    write(e_tree, "templates/t.py", "b = 2\n")
+    write(e_tree, "src/pkg/loose.pyd", "X")
+    write(e_tree, "src/pkg/__pycache__/keep.py", "k = 1\n")
+    _h6a_commit(
+        e_tree,
+        ".gitignore",
+        "src/pkg/step.py",
+        "templates/t.py",
+        "src/pkg/loose.pyd",
+        "src/pkg/__pycache__/keep.py",
+    )
+    # Both files really are tracked — otherwise this arm would be two
+    # statements about untracked files, which today's hash treats identically
+    # and which would make the whole arm blind after task 5.
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=e_tree, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" in tracked
+    assert "src/pkg/__pycache__/keep.py" in tracked
+    assert code_hash(e_tree, None) == _H6A_TRACKED_PYD_DIGEST
+
+
+def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_digest(
+    tmp_path: Path,
+):
+    """Arm E. **TASK 3 IS THE SOLE AUTHORIZED EDITOR.**
+
+    `code_hash` of a directory that does not exist returns the `sha256` of the
+    empty string, and it must keep doing so: H6a's zero-file refusal is
+    `E-CODE-EMPTY` **at the caller** (`cli.command_run`), never here. Two
+    shipped tests in this module rest on that value as a **negative control** —
+    `test_code_hash_skip_list_matches_relative_path_not_absolute` and
+    `test_code_hash_handles_a_dot_git_intermediate_path_component`, both of
+    which compare a real tree's digest against `code_hash(tmp_path /
+    "nonexistent_empty_repo")`. Grepped for, not assumed: `grep -n
+    "nonexistent_empty_repo" tests/test_hashes.py` names those two and nothing
+    else, and neither states the digest as a literal, which is why this arm
+    states it as a standalone claim.
+
+    **Task 3's only edit here is adding the literal `None` argument** where the
+    call is made, in this test and at the 13 `code_hash(` call sites the
+    six named tests in `test_code_hash_covers_src_and_templates_only` through
+    `test_code_hash_handles_a_dot_git_intermediate_path_component` already had
+    when task 3's brief was written. **No assertion in this arm changes**; a
+    task 3 diff that touches an `assert` line here is a finding.
+
+    **A stale count, corrected rather than trusted.** Batch 1 (task 2) added
+    this arm and arm D's test AFTER the brief's `grep -c "code_hash("` was
+    run, so the 13-plus-`cli.py` count of "no 15th site" no longer covers the
+    module: arm D's test and this one add four more calls
+    (`test_h6a_arm_d_a_tracked_excluded_file_is_hashed_and_a_pycache_one_is_not`
+    and this test), all of which needed the same mechanical `None` for the
+    module to import at all — not just typecheck. None of the four is a 15th
+    *production* call site.
+    """
+    assert code_hash(tmp_path / "nonexistent_empty_repo", None) == _H6A_EMPTY_DIGEST
+    # Not implied by the line above: an existing directory holding nothing the
+    # two trees cover resolves to the same digest, which is the reachable half
+    # of the zero-file case and the reason the refusal cannot live here.
+    (tmp_path / "empty_repo" / "src").mkdir(parents=True)
+    assert code_hash(tmp_path / "empty_repo", None) == _H6A_EMPTY_DIGEST
+
+
+# ---------------------------------------------------------------------------
+# H6a task 5 — Fixtures C, D and D′, over the plan's base tree, through the
+# two-step form `cli.command_run` now uses: `hashed_files(root, include)` then
+# `code_hash_of`. The base tree is NOT runnable — `templates/t.py` is
+# discovered as a project-local template and `validate` refuses with
+# `E-TEMPLATE-LOAD`, which is the disagreement batch 1 recorded for arms A and
+# B — so the end-to-end half of these claims lives in `tests/test_cli.py`,
+# against a runnable project, and this half asserts the digests the plan
+# states. Every literal below was computed by building the tree and running,
+# never transcribed.
+
+# The base tree's digest, before and after: `code_hash` over `src/pkg/step.py`
+# and `templates/t.py`, both tracked. The same value `tests/test_provenance.py`
+# and guard-pin arm A hold, each computed independently over its own tree.
+_H6A_BASE_DIGEST = "sha256:71bf339cc9463f4c776c711f3d65ccf9b3bc1e18d383b78ae7d4e5170b526c2b"
+# Fixture C's tree under the PRE-SLICE definition — every file these trees
+# hold, excluded or not.
+_H6A_FIXTURE_C_PRE_SLICE_DIGEST = (
+    "sha256:1947d2a21da33a9c6e4b3a45448ae11ac89e0399797c53168569a297a3f46bcf"
+)
+
+
+def _h6a_base_repo(root: Path) -> Path:
+    """The plan's base tree, committed: the scaffold's four ignore patterns,
+    `src/pkg/step.py` = `a = 1\\n`, `templates/t.py` = `b = 2\\n`."""
+    write(root, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(root, "src/pkg/step.py", "a = 1\n")
+    write(root, "templates/t.py", "b = 2\n")
+    _h6a_commit(root, ".gitignore", "src/pkg/step.py", "templates/t.py")
+    return root
+
+
+def _h6a_commit_more(root: Path, *paths: str) -> None:
+    """`git add -f` plus a commit in an already-initialized repo — the second
+    half of `_h6a_commit`, which does the `git init` a second call cannot."""
+    import subprocess
+
+    subprocess.run(["git", "add", "-f", *paths], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "more"],
+        cwd=root,
+        check=True,
+    )
+
+
+def _h6a_include(root: Path):
+    """`command_run`'s own predicate, built the way `command_run` builds it."""
+    from publishable.provenance import unignored_under_hashed_trees
+
+    def include(candidates: list[str]) -> set[str]:
+        return unignored_under_hashed_trees(root, candidates)
+
+    return include
+
+
+def test_h6a_fixture_c_the_other_two_unhonoured_patterns_drop_out(tmp_path: Path):
+    """Fixture C. Three untracked files matching three different patterns of
+    the scaffold's own `.gitignore` — `src/pkg/.env`, `src/.venv/lib/site.py`
+    and `src/pkg/loose.pyd` — all moved `code_hash` before this slice and none
+    moves it now.
+
+    **Both branches are asserted, and that is what makes this a mutation
+    catcher rather than a restatement.** `include=None` is the pre-slice
+    definition and still computes `1947d2a2…`, unchanged by this slice;
+    the two-step form `command_run` uses computes `71bf339c…`, the base
+    tree's own. A mutation that computes the filter and ignores it collapses
+    the second onto the first, and the two literals are what tell them apart.
+
+    The helper's own answer is asserted as the exact set of three, so a
+    predicate that dropped a fourth file — or the wrong three — could not pass
+    by arriving at the right digest through a different subtraction.
+    """
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/.env", "OPENAI_API_KEY=sk-live-1\n")
+    write(repo, "src/.venv/lib/site.py", "s = 3\n")
+    (repo / "src" / "pkg" / "loose.pyd").write_text("X")
+
+    assert code_hash(repo, None) == _H6A_FIXTURE_C_PRE_SLICE_DIGEST
+
+    candidates = [rel for rel, _ in hashed_files(repo, None)]
+    kept = _h6a_include(repo)(candidates)
+    assert set(candidates) - kept == {
+        "src/pkg/.env",
+        "src/.venv/lib/site.py",
+        "src/pkg/loose.pyd",
+    }
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) == _H6A_BASE_DIGEST
+
+
+def test_h6a_fixture_d_a_tracked_file_matching_a_pattern_is_still_hashed(tmp_path: Path):
+    """Fixtures D and D′ — the same `src/pkg/loose.pyd` = `X`, tracked in one
+    tree and untracked in the other, through the wired two-step form.
+
+    **The bytes are `X` and the literal is `eec1541e…`** (§ Corrections 5): the
+    design's `6ddb8634…` is not reproducible from its own stated tree, because
+    the `.pyd`'s bytes were never stated, and nine candidates were tried
+    against it. This asserts the recomputed value.
+
+    D′ is the coincidence D must not rest on: untracked, the same tree hashed
+    to `eec1541e…` before this slice too, so an assertion on the *today*
+    column would pass under a mutation that dropped tracked files as well.
+    Here the two trees differ — `eec1541e…` against the base tree's
+    `71bf339c…` — which is the whole claim, and `git ls-files` is asserted so
+    the tracked arm cannot silently become a second untracked one.
+    """
+    tracked_pyd = "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+    d_tree = _h6a_base_repo(tmp_path / "fixture_d")
+    (d_tree / "src" / "pkg" / "loose.pyd").write_text("X")
+    _h6a_commit_more(d_tree, "src/pkg/loose.pyd")
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=d_tree, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" in tracked
+    assert code_hash_of(hashed_files(d_tree, _h6a_include(d_tree))) == tracked_pyd
+
+    d_prime = _h6a_base_repo(tmp_path / "fixture_d_prime")
+    (d_prime / "src" / "pkg" / "loose.pyd").write_text("X")
+    untracked = subprocess.run(
+        ["git", "ls-files"], cwd=d_prime, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" not in untracked
+    # The coincidence, stated: the two trees are byte-identical, and the
+    # pre-slice definition cannot tell them apart at all.
+    assert code_hash(d_prime, None) == tracked_pyd
+    assert code_hash_of(hashed_files(d_prime, _h6a_include(d_prime))) == _H6A_BASE_DIGEST
+
+
+# ---------------------------------------------------------------------------
+# H6a task 6 — Fixture J: the hash and the dirty gate agree.
+
+
+def test_h6a_fixture_j_the_gate_and_the_hash_agree_on_an_excluded_file(tmp_path: Path):
+    """Fixture J, one tree and two assertions, so neither half can move alone.
+
+    **They do not share a file list, and a docstring claiming they did would be
+    a false claim.** They share `HASHED_TREES` — one constant, one pathspec —
+    and ask git two different questions: `git status --porcelain -- src
+    templates` (has anything moved?) and `git check-ignore` (is this path
+    excluded?). `status` never lists a clean tracked file, so it cannot
+    produce the hash's file list. What is pinned here is behavioural
+    agreement.
+
+    The four states of a file under the two trees, and what each is now:
+
+      * untracked and not excluded — **dirty**, and **hashed**
+      * tracked and modified — **dirty**, and **hashed**
+      * tracked and clean — not dirty, and **hashed**
+      * present but excluded — **neither**
+
+    Before this slice the last one was *not dirty and hashed*: the gate
+    consulted git and the hash did not, so one mechanism said *nothing
+    changed* while the other said *the code moved*. That disagreement is what
+    this slice closed, and this is the tree it closed it on — Fixture B's,
+    the credentials case.
+    """
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/.env", "OPENAI_API_KEY=sk-live-1\n")
+    # `config_path` is the gate's second argument and answers a different
+    # question (`config_committed`); any tracked path in the repo serves, and
+    # this one is committed by `_h6a_base_repo`.
+    committed = repo / "src" / "pkg" / "step.py"
+
+    assert git_provenance(repo, committed).code_dirty is False
+    assert "src/pkg/.env" not in {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+    # The control: the gate CAN see this tree, and the hash CAN see a path
+    # under it. Without it both halves would pass over a repository where
+    # nothing was measured at all.
+    write(repo, "src/pkg/loose.py", "c = 3\n")
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/loose.py" in {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+
+
+# ---------------------------------------------------------------------------
+# H6a whole-branch fix round (2026-08-23), Major 1 and Ruling L — the pin for
+# the slice's central claim in the form that survived the gate's Major 3:
+# **a rule the machine holds and the tree does not narrows neither the digest
+# (Ruling F) nor the dirty gate (Ruling L)** — which is NOT the same as "only
+# rules that travel with the tree decide", since `check-ignore` reads the
+# working tree and an uncommitted `.gitignore` decides too (filed, owner H6b).
+#
+# Before this section `grep -rn "GIT_CONFIG_GLOBAL\|excludesFile" tests/`
+# returned nothing and removing BOTH halves of the neutralization left the
+# whole suite byte-identical: the claim was a probe and a sentence. The four
+# arms below are sized so that each half of the neutralization has a mutation
+# that fails, which took measuring which route each half actually closes:
+#
+#   route the rule takes                     | `excludesFile=` | `showUntrackedFiles=normal`
+#   -----------------------------------------|------------------|------------------------------
+#   global config `[core] excludesFile`      | yes              | no
+#   the XDG default `~/.config/git/ignore`   | yes              | no
+#   repo-local `.git/config` `excludesFile`  | yes              | no
+#   global `[status] showUntrackedFiles=no`  | no               | yes (gate only)
+#   repo-local `status.showUntrackedFiles=no`| no               | yes (gate only)
+#
+# CONTROLLER RULING M (2026-08-23, appended after this fix round) replaced
+# the environment-variable form (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=
+# /dev/null`) that originally closed the `status.showUntrackedFiles` route
+# with the second `-c` flag above: the two exclude-chain and
+# untracked-files questions are now both closed by command-line overrides,
+# and NOTHING is neutralized through the environment. The table's "killed
+# by env" column from the original fix round is gone because that mechanism
+# is gone — `-c status.showUntrackedFiles=normal` closes its route directly,
+# and additionally reaches a REPO-LOCAL `status.showUntrackedFiles`, which
+# the environment form never did. See `provenance.py`'s module-level comment
+# for why the environment form was replaced: it also discarded
+# `core.fileMode`/`core.autocrlf`, which are legitimately machine-local, and
+# doing so made an unedited file (a mode bit changed by nothing) read as
+# dirty.
+
+
+def _h6a_exclude_rule_file(root: Path, pattern: str) -> Path:
+    """An exclude file OUTSIDE the repository — nothing here travels with it."""
+    path = root / "machine_excludes"
+    path.write_text(f"{pattern}\n")
+    return path
+
+
+def _h6a_global_git_config(root: Path, body: str) -> Path:
+    path = root / "machine_gitconfig"
+    path.write_text(body)
+    return path
+
+
+def _h6a_kept(repo: Path) -> set[str]:
+    return {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+
+
+def test_h6a_ruling_f_a_global_excludesfile_cannot_narrow_the_hash(tmp_path: Path, monkeypatch):
+    """Ruling F, the global-config route, with a positive control.
+
+    `src/pkg/notes.log` is untracked and matches no rule the repository
+    carries. A **global** `core.excludesFile` excluding `notes.log` is what a
+    machine — not a tree — says about it, and the hash must not hear it: two
+    machines with identical trees and different global git config would
+    otherwise publish different `code_hash` values with nothing in the record
+    saying why.
+
+    **The positive control is the first assertion**, and without it the rest
+    is vacuous: an un-neutralized `git check-ignore`, run under exactly the
+    environment this test installs, must report the file excluded. That is
+    what proves the fixture built a real global exclude rather than a config
+    git never read.
+
+    The third arm is the other half of the rule: the identical pattern moved
+    into the repo's own **committed** `.gitignore` DOES narrow the hash. A
+    neutralization that simply switched excludes off would pass the first two
+    arms and fail this one.
+    """
+    import subprocess
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, f"[core]\n\texcludesFile = {excludes}\n")),
+    )
+
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/notes.log"], cwd=repo, capture_output=True
+    )
+    assert asked.returncode == 0, "the fixture's global exclude must be one git really reads"
+
+    with_global_rule = _h6a_kept(repo)
+    assert "src/pkg/notes.log" in with_global_rule
+    hashed_anyway = code_hash_of(hashed_files(repo, _h6a_include(repo)))
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) != hashed_anyway
+
+
+def test_h6a_ruling_f_a_repo_local_excludesfile_cannot_narrow_the_hash(tmp_path: Path):
+    """Ruling F, the repo-local route — the arm that pins `-c core.excludesFile=`.
+
+    A `core.excludesFile` in the repository's own `.git/config` is **not**
+    reached by `GIT_CONFIG_GLOBAL=/dev/null` (measured: still excluded), so
+    this is the arm that fails when the command-line override is dropped. It
+    is also the sharpest form of the ruling: the entry sits inside the
+    `.git` directory, which is as close to the tree as a rule can get and
+    still not travel with it — no clone carries it, and neither does an
+    archive.
+
+    Third arm as above: the same pattern committed to `.gitignore` narrows the
+    hash, so this is not a test that excludes were switched off wholesale.
+    """
+    import subprocess
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    subprocess.run(["git", "config", "core.excludesFile", str(excludes)], cwd=repo, check=True)
+
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/notes.log"], cwd=repo, capture_output=True
+    )
+    assert asked.returncode == 0, "the fixture's repo-local exclude must be one git really reads"
+
+    assert "src/pkg/notes.log" in _h6a_kept(repo)
+    hashed_anyway = code_hash_of(hashed_files(repo, _h6a_include(repo)))
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) != hashed_anyway
+
+
+def test_h6a_ruling_l_a_global_excludesfile_cannot_blind_the_dirty_gate(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling L (2026-08-23). The gate asks the same git the hash asks.
+
+    Without this, the hole runs the wrong way round from the one Ruling F
+    closed: a file a global exclude hides is **untracked, ignored by nothing
+    that travels with the tree**, so the gate reported the tree clean while
+    the hash folded the file in — a run whose recorded `code_hash` covers a
+    file no clone of that commit contains.
+
+    Both directions, because a gate that simply fired more often would pass
+    the first arm: the same pattern **committed** to `.gitignore` leaves the
+    gate clean, which is the convergence `reference.md`'s `E-CODE-DIRTY` row
+    claims.
+    """
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    committed = repo / "src" / "pkg" / "step.py"
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, f"[core]\n\texcludesFile = {excludes}\n")),
+    )
+
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/notes.log" in _h6a_kept(repo)
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert git_provenance(repo, committed).code_dirty is False
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+
+
+def test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling L, the second override — the arm that pins
+    `-c status.showUntrackedFiles=normal` (Ruling M, 2026-08-23: a `-c`
+    override, not the environment-variable form this arm originally pinned).
+
+    `status.showUntrackedFiles = no` in a machine's global config removes
+    every untracked file from `git status --porcelain`, and no `-c` about
+    excludes touches it. Under it the gate saw a clean tree while an
+    uncommitted `src/pkg/loose.py` was folded into `code_hash` — the same
+    hole as the arm above, reached through a setting that is not an exclude
+    rule at all, which is why this override is not redundant with the
+    exclude one.
+
+    **The positive control is the first assertion**: a bare `git status
+    --porcelain` under the same environment must print nothing, or the
+    fixture's global config is one git never read and the arm proves nothing.
+    """
+    import subprocess
+
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    committed = repo / "src" / "pkg" / "step.py"
+    write(repo, "src/pkg/loose.py", "c = 3\n")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, "[status]\n\tshowUntrackedFiles = no\n")),
+    )
+
+    blinded = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert blinded.stdout == "", "the fixture's global setting must be one git really reads"
+
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/loose.py" in _h6a_kept(repo)
+
+
+# ---------------------------------------------------------------------------
+# CONTROLLER RULING M (2026-08-23) — the surgical neutralization, and the
+# regression it exists to prevent. Ruling F's own ground is that a rule which
+# does not travel with the tree may not decide the tree's identity, and that
+# is a claim about EXCLUDE rules — not about every git setting. The prior
+# form (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) discarded a whole
+# `~/.gitconfig`, including settings that answer HOW git reads the
+# filesystem rather than WHICH files it considers: `core.fileMode`,
+# `core.autocrlf`, `core.symlinks`. This arm pins the regression that
+# neutralizing them caused and Ruling M closes: an UNEDITED tracked file,
+# whose only difference is a mode bit a machine has been told to ignore,
+# must not read as `code_dirty True`.
+
+
+def test_h6a_ruling_m_a_global_core_filemode_false_does_not_go_unedited_dirty(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling M. `core.fileMode`/`core.autocrlf` are deliberately NOT among
+    the settings `_NEUTRALIZED_CONFIG_ARGS` overrides.
+
+    Before Ruling M, `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null` threw
+    away the machine's entire `~/.gitconfig` to reach `status.showUntrackedFiles`,
+    and took `core.fileMode` down with it. A machine that sets
+    `core.fileMode = false` — because its filesystem does not reliably
+    preserve executable bits — would then see `git_provenance`'s gate answer
+    a question the machine had explicitly said not to ask, and a `chmod` on a
+    tracked file with no content change reads as `code_dirty True`: a run
+    refused on a tree nothing actually edited.
+
+    The repo's OWN `.git/config` would ordinarily win regardless of the
+    global setting (the mitigating fact the whole-branch review named), so
+    this fixture explicitly unsets any `core.filemode` `git init` wrote
+    locally to reach the case the global setting decides.
+
+    **The positive control is the first assertion**: an ordinary `git status
+    --porcelain` under the same `HOME` must already read the mode-only
+    change as clean, or the fixture's global config is one git never read
+    and the rest proves nothing.
+    """
+    import subprocess
+
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    tracked = repo / "src" / "pkg" / "step.py"
+    subprocess.run(["git", "config", "--unset", "core.filemode"], cwd=repo, check=False)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[core]\n\tfileMode = false\n")
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+
+    tracked.chmod(0o755)
+
+    control = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert control.stdout == "", (
+        "the fixture's global core.fileMode=false must be one git really reads"
+    )
+
+    assert git_provenance(repo, tracked).code_dirty is False
