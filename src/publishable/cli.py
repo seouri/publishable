@@ -4306,6 +4306,124 @@ def _dry_run_fixed_files(prepared: Prepared) -> list[str]:
     return sorted(files)
 
 
+def _dry_run_probe(prepared: Prepared) -> int | None:
+    """`dry-run`'s own apparatus round -- the exit code it must return, or
+    `None` to carry on printing.
+
+    **Decision 6: this is NOT phases 1-5.** The run-start round lives inside
+    `with RunLock(run_dir)`, after `allocate_run_dir`, so "phases 1-5 plus the
+    probe" is not a contiguous prefix and `dry-run` cannot obtain the probe by
+    re-entering phases 1-5. It gets a round of its own, assembled from the
+    shipped pure pieces -- `apparatus.observe_once` -> `apparatus.check_facts`
+    -> `Observations.record` -> `Observations.warn_unanswered` -- once per
+    resolved condition, each under **that condition's own cfg** from
+    `prepared.cfgs`, never the wide `cfgs[-1]`, which is `Observer.observe_round`'s
+    own rule for a `condition_index=None` round.
+
+    **No `Observer` is constructed, and that is a rejection rather than an
+    omission.** `Observer.__init__` requires `run_dir: Path` and
+    `_observe_one` calls `append_observation` unconditionally, before
+    recording and before the gate -- deliberately, so the moving observation
+    is on disk before anything can stop the run. `dry-run` creates no run
+    directory, so there is no ledger to append to. Defaulting `run_dir=None`
+    and skipping the append inside `_observe_one` was considered and rejected:
+    it is a fail-open shape on a class whose whole guarantee is that the
+    append happens first, and a later caller that forgot the argument would
+    lose the ledger silently. Calling the pieces directly changes
+    `apparatus.py` not at all.
+
+    **`check_changed` is not called, and the ground is read off the two
+    functions rather than argued from the absence of a run.**
+    `Observations.record` fills `_first_answered` from the facts it is handed;
+    `changed` compares the *next* facts against that entry. With one round --
+    one call per condition -- the value the gate would compare against **is
+    the value it was just given**, so `changed` can only return `None`. Not
+    "there is no baseline": there is one, and it is the observation itself.
+
+    **`warn_unanswered` IS kept** (Decision 6): `W-APPARATUS-UNANSWERED`
+    before a metered run is exactly the news § Before you spend it exists to
+    deliver, and it costs one in-memory `Observations`. A fresh `Collector`
+    rendered to stdout, never `prepared.c`, which phases 1-5 already rendered
+    and printed -- appending to it would re-print every earlier finding and
+    inflate the counts line. A warning never changes an exit code, on
+    `W-ENV-UNLOCKED`'s precedent.
+
+    **Decision 14: the containment travels with the calls.** Both `try`
+    blocks below are `command_run`'s own -- `except BaseException` (a probe
+    calling `sys.exit()` is covered; `except Exception` would end the command
+    with no diagnostic at all), `KeyboardInterrupt` re-raised **fresh and
+    argument-less** so a `KeyboardInterrupt("...secret...")` a probe body
+    constructed never reaches Python's own printer, and a **fresh
+    credential-bearing `Collector`** rendered to stderr, which is what
+    redacts. `main`'s `PublishableError` handler prints `{exc}` with no
+    collector in scope, so anything escaping here is un-redacted. This is
+    verbatim the fault `CLAUDE.md` names as *copying a recipe's calls without
+    its containment*: H8c's `report` lifted `freeze`'s credential wiring as
+    calls and left the `try` behind, and a declared credential reached stderr
+    in a case § Secrets promises to redact. The **return branches** are copied
+    with the `try`, not only its shape: a dispatch failure is `EXIT_WRONG`,
+    and at the call site `E-APPARATUS-RAISED` -- the apparatus itself
+    unreachable -- is the one code that earns `EXIT_EXTERNAL`, exactly as
+    `command_run`'s containment splits them.
+    """
+    declared_probe = getattr(prepared.run_template, "apparatus_probe", None)
+    # `validate._check_probe` is what refuses a non-`str` declaration, and
+    # `_prepare_run` has already run it -- this guard is the same shape the
+    # run-start round uses, so a template declaring nothing costs nothing.
+    if not (isinstance(declared_probe, str) and declared_probe):
+        return None
+    declared_facts = list(getattr(prepared.run_template, "apparatus_facts", None) or [])
+    try:
+        probe_fn = apparatus._probe_for(declared_probe)
+    except BaseException as exc:
+        # `_probe_for`'s middle step (`load_entry_point`) imports a plugin's
+        # top level -- user code -- so a load-time failure can carry a
+        # credential the plugin's own import-time body read.
+        # `validate._check_probe` answers only `E-PROBE-UNKNOWN` from package
+        # metadata and never loads anything, so this failure gets no verdict
+        # from phases 1-5 at all.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        dispatch_c = Collector()
+        dispatch_c.credentials = prepared.credentials
+        dispatch_code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
+        dispatch_c.error(dispatch_code, "experiment_type", str(exc))
+        print(dispatch_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    observations = apparatus.Observations()
+    try:
+        for condition in prepared.conditions:
+            returned = apparatus.observe_once(
+                probe_fn, prepared.cfgs[condition.index], probe_name=declared_probe
+            )
+            facts = apparatus.check_facts(
+                returned,
+                declared_facts,
+                probe_name=declared_probe,
+                credentials=prepared.credentials,
+            )
+            observations.record(apparatus.condition_key(condition.index, condition.label), facts)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        probe_c = Collector()
+        probe_c.credentials = prepared.credentials
+        code = exc.code if isinstance(exc, PublishableError) else "E-APPARATUS-RAISED"
+        probe_c.error(code, "experiment_type", str(exc))
+        print(probe_c.render(), file=sys.stderr)
+        if code == "E-APPARATUS-RAISED":
+            return EXIT_EXTERNAL
+        return EXIT_WRONG
+
+    warn_c = Collector()
+    warn_c.credentials = prepared.credentials
+    observations.warn_unanswered(warn_c, declared_facts)
+    if warn_c.findings:
+        print(warn_c.render())
+    return None
+
+
 def command_dry_run(config_path: Path) -> int:
     """`publishable dry-run` -- phases 1-5, printed, and nothing written.
 
@@ -4333,6 +4451,14 @@ def command_dry_run(config_path: Path) -> int:
     so no lock is taken either -- pointing this at a live run is as ordinary as
     reading the ledger.
 
+    **The apparatus is probed, and nothing is appended** (Decisions 6, 7 and
+    15): `_dry_run_probe` runs one round per resolved condition after the
+    manifest and before any printing, so the cost ordering is validate ->
+    manifest -> probe and a config that does not validate never reaches the
+    probe. `PHASE_DRY_RUN` keeps its constant and gains no call site: the
+    ledger lives inside a run directory this command never creates, so the
+    phase name is reserved rather than written.
+
     **No comparison list is printed** (Decision 16): `contrasts.resolve_contrasts`
     is reached only from phase 8, which this never enters, so the standing
     unhashable-side precondition on H9 is discharged by construction. The
@@ -4342,6 +4468,17 @@ def command_dry_run(config_path: Path) -> int:
     prepared = _prepare_run(config_path, allow_dirty=True)
     if not isinstance(prepared, Prepared):
         return prepared
+
+    # Decision 15's cost ordering, and the ordering IS the behaviour: validate
+    # -> manifest (both inside `_prepare_run`) -> probe, stopping at the first
+    # failure. A config that does not validate exits `1` with the probe never
+    # called, so a cheap fault is never paid for at apparatus prices; only a
+    # config that validates can reach `5`. That is what makes the two codes
+    # mean "failed cheaply" versus "failed expensively", and it is why the
+    # round is sited HERE rather than beside the printing below.
+    probe_exit = _dry_run_probe(prepared)
+    if probe_exit is not None:
+        return probe_exit
 
     lines: list[str] = []
     modes = ["baseline"] if any(c.is_baseline for c in prepared.conditions) else []

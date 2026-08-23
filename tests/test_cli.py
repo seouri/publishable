@@ -21760,3 +21760,472 @@ def test_h9a_dry_run_with_a_flag_is_an_invocation_error(capsys):
     the second name to join that arm."""
     assert main(["dry-run", "--json"]) == EXIT_INVOCATION
     assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+# ===========================================================================
+# H9a task 10 — Fixtures V, W and X: `dry-run` probes the apparatus.
+#
+# One shared project builder, deliberately NOT `run_a_project`: every fixture
+# here must reach `dry-run` WITHOUT a real run in front of it. Fixture V's
+# whole evidence is a call count, and a preceding `run` would have made its
+# own run-start and per-execution calls into the same counter; W's probe
+# raises; X's config does not validate. A builder that runs is unusable for
+# all three.
+#
+# The probe comes from an INSTALLED distribution and the template from
+# `templates/**`, which is Fixture U's own arrangement and is forced rather
+# than chosen: `apparatus._probe_for` resolves a name through
+# `scan_group(PROBE_GROUP)` — package metadata — so there is no such thing as
+# a project-local probe, while a project-local TEMPLATE is discovered by path.
+# ===========================================================================
+
+_H9A_PROBE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("{template_name}")
+class H9aProbeAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "{probe_name}"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {{
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }}
+"""
+
+_H9A_PROBE_CONFIG = """\
+schema_version: "1.0"
+experiment_type: TEMPLATE_NAME
+template_version: "1.0.0"
+plugin: null
+
+metadata:
+  name: probe-pilot
+  description: "H9a task 10 — `dry-run` reaches outward"
+  authors: ["Kyungjoon Lee"]
+  institution: ""
+
+entrypoint: "ENTRYPOINT"
+
+data:
+  input_dir: INPUT_DIR
+  output_dir: OUTPUT_DIR
+  input_manifest_policy: hash_all
+  units:
+    from: index.csv
+    key: patient_id
+    attributes: []
+    allocation: within
+    assign: {}
+    cluster_by: null
+    weight_by: null
+    measurements: null
+    holdout: null
+
+parameters:
+  instrument:
+    model: MODEL_VALUE
+
+sweep:
+  grid: {instrument.model: [m1, m2]}
+
+replication:
+  repeats:
+    - {kind: seed, n: 1}
+  order: as_declared
+  rationale: "one seed: these fixtures assert probe calls, not dispersion"
+
+statistics:
+  correction: holm
+
+limits:
+  max_executions: 500
+  max_failed_fraction: 0.2
+  max_ineligible_fraction: 0.5
+  min_units_per_cell: 10
+  min_clusters: 10
+  min_reported_n: 5
+
+hypotheses: []
+"""
+
+
+def _h9a_probe_project(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    package: str,
+    template_name: str,
+    probe_name: str,
+    model_value: str = "m1",
+) -> Path:
+    """A committed, never-run project whose template declares `probe_name`.
+
+    `sweep.grid` over `instrument.model` gives **two** resolved conditions,
+    and two is the load-bearing count: with one condition, "one call per
+    resolved condition" and "one call per command" are the same number, so a
+    build that probed once for the whole command would pass. The entrypoint
+    lives outside both hashed trees on `sys.path`, the route `_h6a_t5_project`
+    and `_h6a_t8_project` already take.
+    """
+    proj = tmp_path / "proj"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    outside = tmp_path / "outside"
+    for path in (proj, data, results, outside):
+        path.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"u{i:02d}\n" for i in range(1, 21))
+    (data / "index.csv").write_text("patient_id\n" + rows)
+    pkg_dir = outside / package
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "experiment.py").write_text(_H6A_T5_PLAIN_EXPERIMENT)
+    monkeypatch.syspath_prepend(str(outside))
+
+    (proj / ".gitignore").write_text(".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    (proj / "pyproject.toml").write_text('[project]\nname = "probe-project"\nversion = "0.1.0"\n')
+    (proj / "uv.lock").write_text('version = 1\nrequires-python = ">=3.11"\n')
+    (proj / "src" / "pkg").mkdir(parents=True)
+    (proj / "src" / "pkg" / "step.py").write_text("a = 1\n")
+    # `code_hash` covers `templates/**`, so this must exist before the commit
+    # or the dirty gate refuses the tree — `run_a_project`'s own reason for
+    # writing `_local_template` before `git add`.
+    (proj / "templates").mkdir()
+    (proj / "templates" / f"{template_name}.py").write_text(
+        _H9A_PROBE_TEMPLATE.format(template_name=template_name, probe_name=probe_name)
+    )
+    cfg = proj / "configs" / "probe-pilot" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        _H9A_PROBE_CONFIG.replace("TEMPLATE_NAME", template_name)
+        .replace("ENTRYPOINT", f"{package}.experiment:Experiment")
+        .replace("INPUT_DIR", str(data))
+        .replace("OUTPUT_DIR", str(results))
+        .replace("MODEL_VALUE", model_value)
+    )
+    subprocess.run(["git", "init", "-q", "."], cwd=proj, check=True)
+    subprocess.run(["git", "add", "."], cwd=proj, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "probe"],
+        cwd=proj,
+        check=True,
+    )
+    return cfg
+
+
+# The counter file lives OUTSIDE `output_dir`, from an environment variable —
+# so the call count is evidence AND task 11's *Creates nothing* arm stays
+# true. A probe writing its own tally under `output_dir` would make the two
+# fixtures contradict each other.
+_H9A_V_PROBE_MODULE = """\
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_probe")
+def probe(cfg):
+    entries = Path(os.environ["H9A_V_CALLS"])
+    with entries.open("a") as fh:
+        fh.write(f"{cfg.parameters.instrument.model}\\n")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+_H9A_V_NULL_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_null_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": None})
+"""
+
+_H9A_V_UNREACHABLE_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_v_unreachable_probe")
+def probe(cfg):
+    raise RuntimeError("the instrument did not answer")
+    return Apparatus(facts={})
+"""
+
+
+def test_h9a_fixture_v_the_probe_is_called_once_per_resolved_condition(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 1 of 3: `dry-run` reaches outward, once per resolved
+    condition, each under **that condition's own cfg**.
+
+    The evidence is the probe's own tally, written outside `output_dir` — not
+    a monkeypatched counter — and it is asserted as an ordered LIST of the
+    `instrument.model` value each call saw, `["m1", "m2"]`. That is what
+    distinguishes "one call per condition under the condition's cfg" from
+    every neighbouring reading a count alone would admit: two calls under the
+    wide cfg would tally `["m1", "m1"]` (`resolve_wide_cfg` leaves a swept
+    path at its declared value), and one call for the whole command would
+    tally one entry.
+    """
+    site = installed(
+        "dist-h9a-v", "1.0", {"publishable.probes": {"h9a_v_probe": "h9a_v_probe_mod:probe"}}
+    )
+    (site / "h9a_v_probe_mod.py").write_text(_H9A_V_PROBE_MODULE)
+    calls = tmp_path / "probe-calls.txt"
+    monkeypatch.setenv("H9A_V_CALLS", str(calls))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_v_pkg",
+        template_name="h9a_v_assay",
+        probe_name="h9a_v_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert calls.read_text().split() == ["m1", "m2"]
+    # The paired positive: the transcript really printed, so a pass here
+    # cannot be a command that probed and then died quietly.
+    assert "creates nothing" in out
+    # No ledger, and no run directory to hold one (Decision 7).
+    assert not list((tmp_path / "results").glob("*"))
+
+
+def test_h9a_fixture_v_a_declared_fact_that_came_back_null_warns(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 2 of 3: `W-APPARATUS-UNANSWERED` fires at `dry-run` for
+    a declared fact the probe did not answer.
+
+    This is the news § Before you spend it exists to deliver, and it is the
+    reason `warn_unanswered` is kept while `check_changed` is dropped. Both
+    conditions are named in the warning text, because `Observations` keys its
+    counts per (condition, fact) and this probe answers `null` for both — an
+    assertion on one condition alone would pass a build that warned once for
+    the whole command. The exit code is `0`: a warning never changes one, on
+    `W-ENV-UNLOCKED`'s precedent.
+    """
+    site = installed(
+        "dist-h9a-vn",
+        "1.0",
+        {"publishable.probes": {"h9a_v_null_probe": "h9a_v_null_mod:probe"}},
+    )
+    (site / "h9a_v_null_mod.py").write_text(_H9A_V_NULL_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_vn_pkg",
+        template_name="h9a_vn_assay",
+        probe_name="h9a_v_null_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert out.count("W-APPARATUS-UNANSWERED") == 2
+    assert (
+        "condition `00_model=m1`'s fact `model_revision` came back `null` on 1 of 1 probes"
+    ) in out
+    assert (
+        "condition `01_model=m2`'s fact `model_revision` came back `null` on 1 of 1 probes"
+    ) in out
+    assert "creates nothing" in out
+
+
+def test_h9a_fixture_v_an_unreachable_apparatus_exits_five(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture V, arm 3 of 3: a probe that raises is the apparatus being
+    unreachable, `E-APPARATUS-RAISED`, and `dry-run` exits **5**.
+
+    `EXIT_EXTERNAL` is the class you retry, and this arm is what makes the
+    cost ordering's two codes mean something: Fixture X exits `1` on a config
+    that never reached the probe, this exits `5` on one that did. Both halves
+    of the containment's split are therefore asserted rather than only its
+    `except` shape — a copy that returned `EXIT_WRONG` here would pass an
+    exit-code-agnostic assertion on the message alone.
+
+    The transcript must NOT have printed: the round is sited before any
+    printing, so a build that probed after printing would leave `creates
+    nothing` on stdout.
+    """
+    site = installed(
+        "dist-h9a-vu",
+        "1.0",
+        {"publishable.probes": {"h9a_v_unreachable_probe": "h9a_v_unreach_mod:probe"}},
+    )
+    (site / "h9a_v_unreach_mod.py").write_text(_H9A_V_UNREACHABLE_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_vu_pkg",
+        template_name="h9a_vu_assay",
+        probe_name="h9a_v_unreachable_probe",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_EXTERNAL
+    captured = capsys.readouterr()
+    assert "E-APPARATUS-RAISED" in captured.err
+    assert "the instrument did not answer" in captured.err
+    assert "creates nothing" not in captured.out
+    assert not list((tmp_path / "results").glob("*"))
+
+
+_H9A_W_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9a_w_assay")
+class H9aWAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9a_w_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9A_W_TOKEN"], "m2": ["H9A_W_TOKEN"]},
+        ),
+    }
+"""
+
+# The probe reads the declared variable and puts its VALUE in the message it
+# raises with — the shape a real plugin produces when a provider SDK echoes
+# the key it was handed back in an error string.
+_H9A_W_PROBE_MODULE = """\
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_w_probe")
+def probe(cfg):
+    token = os.environ["H9A_W_TOKEN"]
+    raise RuntimeError(f"instrument rejected token {token}")
+    return Apparatus(facts={})
+"""
+
+
+def test_h9a_fixture_w_a_credential_in_a_probes_raise_is_redacted(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture W — the credential positive control, and the whole reason
+    Decision 14 exists.
+
+    `dry-run` runs user code: the probe. The containment copied around it is
+    `command_run`'s own, **with its `try`** — H8c's `report` lifted `freeze`'s
+    credential calls and left the `try` behind, and a declared credential
+    reached stderr in a case § Secrets promises to redact.
+
+    **The redaction is not vacuous**, and that is what the declaration buys:
+    the variable is named through `Param(requires_env=)`, is total over the
+    parameter's `choices`, and is actually SET in the environment, so
+    `declared_credential_names` finds it and `credential_values` reads a real
+    value for `redact` to match against. An undeclared variable would leave
+    the value set empty and this test would pass whether the wrapper redacted
+    or not.
+
+    Both halves are asserted — the secret is absent AND the marker is present
+    — because either alone is weak: a command that printed nothing at all
+    would satisfy the absence.
+    """
+    monkeypatch.setenv("H9A_W_TOKEN", "sk-h9a-w-do-not-print")
+    site = installed(
+        "dist-h9a-w", "1.0", {"publishable.probes": {"h9a_w_probe": "h9a_w_probe_mod:probe"}}
+    )
+    (site / "h9a_w_probe_mod.py").write_text(_H9A_W_PROBE_MODULE)
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_w_pkg",
+        template_name="h9a_w_assay",
+        probe_name="h9a_w_probe",
+    )
+    # `_h9a_probe_project` writes its own template; this fixture needs the
+    # `requires_env`-bearing one, so the file is replaced and re-committed
+    # before anything runs — `templates/**` is hashed, so an uncommitted
+    # replacement would be a dirty tree under `run` (and `dry-run` passes the
+    # gate only because Decision 8 relaxes it, which is not what this arm is
+    # about).
+    (cfg.parents[2] / "templates" / "h9a_w_assay.py").write_text(_H9A_W_TEMPLATE)
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "w template"],
+    ):
+        subprocess.run(["git", *args], cwd=cfg.parents[2], check=True)
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_EXTERNAL
+    captured = capsys.readouterr()
+    whole = captured.out + captured.err
+    assert "sk-h9a-w-do-not-print" not in whole
+    assert "<redacted:" in captured.err
+    assert "E-APPARATUS-RAISED" in captured.err
+
+
+_H9A_X_PROBE_MODULE = """\
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9a_x_probe")
+def probe(cfg):
+    Path(os.environ["H9A_X_ENTERED"]).write_text("the probe was called\\n")
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_h9a_fixture_x_a_config_that_does_not_validate_never_reaches_the_probe(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture X — the cost ordering IS the behaviour (Decision 15): validate
+    -> manifest -> probe, stopping at the first failure.
+
+    The config declares `instrument.model: m9`, outside the template's own
+    `choices`, so phases 1-5 refuse it and `dry-run` exits `1`. **The
+    assertion is the absence of the probe's entry file**, written as the
+    probe's first statement — an exit-code-only assertion would pass with the
+    ordering reversed, since a probe returning normally does not change the
+    exit code a validation error produces.
+
+    This is the arm that gives `1` and `5` their meaning: failed cheaply
+    versus failed expensively. Fixture V's third arm is the other half.
+    """
+    site = installed(
+        "dist-h9a-x", "1.0", {"publishable.probes": {"h9a_x_probe": "h9a_x_probe_mod:probe"}}
+    )
+    (site / "h9a_x_probe_mod.py").write_text(_H9A_X_PROBE_MODULE)
+    entered = tmp_path / "probe-entered.txt"
+    monkeypatch.setenv("H9A_X_ENTERED", str(entered))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_x_pkg",
+        template_name="h9a_x_assay",
+        probe_name="h9a_x_probe",
+        model_value="m9",
+    )
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_WRONG
+    out = capsys.readouterr().out
+    assert "instrument.model" in out
+    assert not entered.exists(), "the probe ran before validation refused the config"
+    # The positive control for the entry file itself: the same probe DOES
+    # write it when the config validates, so its absence above is the
+    # ordering rather than a probe that could never write anything.
+    good = _h9a_probe_project(
+        tmp_path / "good",
+        monkeypatch,
+        package="h9a_x_pkg_ok",
+        template_name="h9a_x_assay",
+        probe_name="h9a_x_probe",
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(good)]) == EXIT_OK
+    assert entered.exists()
