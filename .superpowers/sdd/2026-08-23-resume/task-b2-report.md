@@ -215,6 +215,41 @@ this rather than rediscover it.
 
 ---
 
+## Two things measured after the five commits, at the reviewer's prompting
+
+**The `order: randomized` arm passes, and the reason matters more than the pass.**
+`_h9b_round_trip_project` declares `as_declared`, so arm A cannot see the shape where
+`_apply_execution_order` reorders the plan **inside** `_execute_prepared` while `command_resume` calls
+`_reconstitute(prepared.plan, …)` **before** that — reconstituted results in declared order, executed
+results in shuffled order. Built and run
+(`test_h9b_a_randomized_order_round_trip_also_equals_its_straight_through`, resumed versus
+straight-through of the same project, same normalization helper): **it passes.**
+
+**But it passes partly for a reason that is itself a finding: `_h9a_run_yaml_leaves` sorts
+`(dotted_path, value)` pairs, so MAPPING key order is invisible to it.** List order is visible (indices
+are path components); a mapping's is not. So arm A's own docstring hazard — *"a parquet round trip can
+move `run.yaml`'s column order with every value correct"* — is **not** detectable by arm A's comparison
+wherever that order lives in a mapping. Read, not inferred: the helper's walk emits dotted paths and
+its last line is `normalized.sort(key=lambda kv: kv[0])`. **Arm A's editor is NONE and I did not touch
+it**; the only assertion in this branch that actually pins row key order is task 8's direct
+`list(result.rows[0].keys()) == ["unit", "zeta", "alpha"]`, and mutation 8.2 is what proves it can fail.
+
+**Decision 13 is NOT implemented, and calling it "diagnostics" understated it.** It is a redaction rule:
+every refusal `resume` decides must print through one fresh credential-bearing `Collector` and **never
+be raised into `main`**, whose `PublishableError` handler prints `{exc}` with no collector in scope.
+`command_resume` **raises** `ContractError` for `E-RESUME-RUN-ENDED`, the three hash codes and
+`E-RESUME-INPUT-MOVED`, and lets `read_identity`, `config_path_for`, `read_execution_ledger` and
+`_reconstitute` raise through it. No live exposure — nothing dispatches `resume` — but **task 16 must
+build the containment rather than assume it**, and `command_resume`'s docstring now says so by decision
+number.
+
+`latest` is asserted too: a crashed run leaves no pointer (correction 10) and a completed resume writes
+one naming the resumed directory.
+
+Final gate after these two additions: **3079 passed, 1 skipped, 4 xfailed.**
+
+---
+
 ## Mutations — every count read off a FULL-suite run
 
 | # | Mutation | Full-suite result | Caught by |
@@ -319,6 +354,7 @@ they were run: `Estimate(` in `tests/test_cli.py` (10 hits, attributed), `record
 `tests/` (2 pre-existing hits, both attributed), `executions.jsonl` in `src/publishable/*.py` (8 before,
 15 after, every one attributed), `_READERS` in `src/publishable/*.py` (**0 hits** — the brief's name is
 wrong and the shipped table is `READERS`), and `run_status(` in `src/publishable/*.py` (one call site,
-`_execute_prepared`'s). **This is not a claim of zero disagreements**: this batch found six — arm C's
+`_execute_prepared`'s). **This is not a claim of zero disagreements**: this batch found seven — arm C's
 editor, arm A's `xfail` task, fixture C's `attempts: 2`, fixture D's unbuildability, mutation 9.1's
-stated catcher, and the brief's `_READERS`.
+stated catcher, the brief's `_READERS`, and arm A's
+sorted-leaf normalization being blind to the mapping key order its own docstring names.

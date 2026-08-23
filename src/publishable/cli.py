@@ -4569,7 +4569,19 @@ def command_resume(run_dir: Path) -> int:
     visible cost is that a hash mismatch prints `validate`'s findings first,
     which is the same order `run` prints them in.
 
-    **What is not here yet, each owned by a named later task rather than
+    **Decision 13 is NOT implemented here, and it is a redaction rule rather
+    than a formatting one.** It says every refusal `resume` decides is printed
+    through one fresh credential-bearing `Collector` and **never raised into
+    `main`** — because `main`'s own `PublishableError` handler prints `{exc}`
+    with no collector in scope, so anything reaching it is un-redacted. Every
+    refusal below RAISES `ContractError` today, and so do `read_identity`,
+    `config_path_for`, `read_execution_ledger` and `_reconstitute` through
+    this function. There is no live exposure — `resume` is not dispatched, so
+    nothing can reach `main` this way — but the containment does not exist
+    yet and must not be assumed by the task that adds the remaining
+    refusals. **Task 16 owns building it**, over all fourteen codes at once.
+
+    **What else is not here yet, each owned by a named later task rather than
     left to be discovered.** The lock takeover is task 14's — Ruling W's
     exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
     against this host's `gethostname()`, and the unlink — and until it lands

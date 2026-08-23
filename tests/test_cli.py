@@ -24025,6 +24025,14 @@ def test_h9b_a_resume_rewrites_no_run_start_artifact(tmp_path: Path):
     assert _h9b_resume(crashed) == EXIT_OK
     after = {name: (crashed / name).read_bytes() for name in before}
     assert after == before
+    # And the one pointer a resume DOES move: a crashed run leaves no
+    # `latest` (§ Corrections 10 — `point_latest` runs after `run.yaml`), and
+    # a completed resume writes one pointing here. Asserted rather than
+    # assumed, because nothing else in this batch reads it.
+    pointer = crashed.parent / "latest"
+    text = crashed.parent / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == crashed.name
 
 
 def test_h9b_run_status_is_handed_the_full_plans_length(tmp_path: Path, monkeypatch):
@@ -24083,3 +24091,47 @@ def test_h9b_the_run_path_is_untouched_by_the_resumed_parameter(tmp_path: Path):
     assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
     for name in ("config.yaml", "identity.json", "sweep.yaml", "executions.jsonl"):
         assert (doc["run_dir"] / name).exists(), name
+
+
+def test_h9b_a_randomized_order_round_trip_also_equals_its_straight_through(tmp_path: Path):
+    """The arm-A claim under `order: randomized`, which arm A's own fixture
+    cannot see — it declares `as_declared`.
+
+    Why this arm is not redundant. `_apply_execution_order` reorders the plan
+    **inside** `_execute_prepared`, while `command_resume` calls
+    `_reconstitute(prepared.plan, …)` **before** that — so the reconstituted
+    results arrive in DECLARED order while a straight-through run's arrive in
+    shuffled order. `_execution_block` builds its per-step mapping in list
+    order and `_gather_repeats` builds its column order from row iteration
+    order, so this is exactly the shape that can move `run.yaml` with every
+    value correct.
+
+    Both records are produced in this test rather than compared against a
+    committed golden, because the golden is `as_declared`'s. The
+    normalization is the same helper arm A uses, so nothing was chosen after
+    seeing a diff.
+    """
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "randomized",
+            "rationale": "four seeds, shuffled",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+    straight = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    resumed_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(resumed_doc, tmp_path) == _h9b_run_yaml_leaves(straight, tmp_path)
