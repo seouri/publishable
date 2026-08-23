@@ -625,3 +625,133 @@ def test_h6a_arm_e_code_hash_of_a_directory_that_does_not_exist_is_the_empty_dig
     # of the zero-file case and the reason the refusal cannot live here.
     (tmp_path / "empty_repo" / "src").mkdir(parents=True)
     assert code_hash(tmp_path / "empty_repo", None) == _H6A_EMPTY_DIGEST
+
+
+# ---------------------------------------------------------------------------
+# H6a task 5 — Fixtures C, D and D′, over the plan's base tree, through the
+# two-step form `cli.command_run` now uses: `hashed_files(root, include)` then
+# `code_hash_of`. The base tree is NOT runnable — `templates/t.py` is
+# discovered as a project-local template and `validate` refuses with
+# `E-TEMPLATE-LOAD`, which is the disagreement batch 1 recorded for arms A and
+# B — so the end-to-end half of these claims lives in `tests/test_cli.py`,
+# against a runnable project, and this half asserts the digests the plan
+# states. Every literal below was computed by building the tree and running,
+# never transcribed.
+
+# The base tree's digest, before and after: `code_hash` over `src/pkg/step.py`
+# and `templates/t.py`, both tracked. The same value `tests/test_provenance.py`
+# and guard-pin arm A hold, each computed independently over its own tree.
+_H6A_BASE_DIGEST = "sha256:71bf339cc9463f4c776c711f3d65ccf9b3bc1e18d383b78ae7d4e5170b526c2b"
+# Fixture C's tree under the PRE-SLICE definition — every file these trees
+# hold, excluded or not.
+_H6A_FIXTURE_C_PRE_SLICE_DIGEST = (
+    "sha256:1947d2a21da33a9c6e4b3a45448ae11ac89e0399797c53168569a297a3f46bcf"
+)
+
+
+def _h6a_base_repo(root: Path) -> Path:
+    """The plan's base tree, committed: the scaffold's four ignore patterns,
+    `src/pkg/step.py` = `a = 1\\n`, `templates/t.py` = `b = 2\\n`."""
+    write(root, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\n")
+    write(root, "src/pkg/step.py", "a = 1\n")
+    write(root, "templates/t.py", "b = 2\n")
+    _h6a_commit(root, ".gitignore", "src/pkg/step.py", "templates/t.py")
+    return root
+
+
+def _h6a_commit_more(root: Path, *paths: str) -> None:
+    """`git add -f` plus a commit in an already-initialized repo — the second
+    half of `_h6a_commit`, which does the `git init` a second call cannot."""
+    import subprocess
+
+    subprocess.run(["git", "add", "-f", *paths], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "more"],
+        cwd=root,
+        check=True,
+    )
+
+
+def _h6a_include(root: Path):
+    """`command_run`'s own predicate, built the way `command_run` builds it."""
+    from publishable.provenance import unignored_under_hashed_trees
+
+    def include(candidates: list[str]) -> set[str]:
+        return unignored_under_hashed_trees(root, candidates)
+
+    return include
+
+
+def test_h6a_fixture_c_the_other_two_unhonoured_patterns_drop_out(tmp_path: Path):
+    """Fixture C. Three untracked files matching three different patterns of
+    the scaffold's own `.gitignore` — `src/pkg/.env`, `src/.venv/lib/site.py`
+    and `src/pkg/loose.pyd` — all moved `code_hash` before this slice and none
+    moves it now.
+
+    **Both branches are asserted, and that is what makes this a mutation
+    catcher rather than a restatement.** `include=None` is the pre-slice
+    definition and still computes `1947d2a2…`, unchanged by this slice;
+    the two-step form `command_run` uses computes `71bf339c…`, the base
+    tree's own. A mutation that computes the filter and ignores it collapses
+    the second onto the first, and the two literals are what tell them apart.
+
+    The helper's own answer is asserted as the exact set of three, so a
+    predicate that dropped a fourth file — or the wrong three — could not pass
+    by arriving at the right digest through a different subtraction.
+    """
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/.env", "OPENAI_API_KEY=sk-live-1\n")
+    write(repo, "src/.venv/lib/site.py", "s = 3\n")
+    (repo / "src" / "pkg" / "loose.pyd").write_text("X")
+
+    assert code_hash(repo, None) == _H6A_FIXTURE_C_PRE_SLICE_DIGEST
+
+    candidates = [rel for rel, _ in hashed_files(repo, None)]
+    kept = _h6a_include(repo)(candidates)
+    assert set(candidates) - kept == {
+        "src/pkg/.env",
+        "src/.venv/lib/site.py",
+        "src/pkg/loose.pyd",
+    }
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) == _H6A_BASE_DIGEST
+
+
+def test_h6a_fixture_d_a_tracked_file_matching_a_pattern_is_still_hashed(tmp_path: Path):
+    """Fixtures D and D′ — the same `src/pkg/loose.pyd` = `X`, tracked in one
+    tree and untracked in the other, through the wired two-step form.
+
+    **The bytes are `X` and the literal is `eec1541e…`** (§ Corrections 5): the
+    design's `6ddb8634…` is not reproducible from its own stated tree, because
+    the `.pyd`'s bytes were never stated, and nine candidates were tried
+    against it. This asserts the recomputed value.
+
+    D′ is the coincidence D must not rest on: untracked, the same tree hashed
+    to `eec1541e…` before this slice too, so an assertion on the *today*
+    column would pass under a mutation that dropped tracked files as well.
+    Here the two trees differ — `eec1541e…` against the base tree's
+    `71bf339c…` — which is the whole claim, and `git ls-files` is asserted so
+    the tracked arm cannot silently become a second untracked one.
+    """
+    tracked_pyd = "sha256:eec1541edde45c11c395e788000f719a48965a8f6fd2b3772a56de92cca18dc2"
+
+    d_tree = _h6a_base_repo(tmp_path / "fixture_d")
+    (d_tree / "src" / "pkg" / "loose.pyd").write_text("X")
+    _h6a_commit_more(d_tree, "src/pkg/loose.pyd")
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=d_tree, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" in tracked
+    assert code_hash_of(hashed_files(d_tree, _h6a_include(d_tree))) == tracked_pyd
+
+    d_prime = _h6a_base_repo(tmp_path / "fixture_d_prime")
+    (d_prime / "src" / "pkg" / "loose.pyd").write_text("X")
+    untracked = subprocess.run(
+        ["git", "ls-files"], cwd=d_prime, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src/pkg/loose.pyd" not in untracked
+    # The coincidence, stated: the two trees are byte-identical, and the
+    # pre-slice definition cannot tell them apart at all.
+    assert code_hash(d_prime, None) == tracked_pyd
+    assert code_hash_of(hashed_files(d_prime, _h6a_include(d_prime))) == _H6A_BASE_DIGEST

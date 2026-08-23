@@ -42,13 +42,17 @@ from publishable.generators.experiment import generate_experiment
 from publishable.generators.report import generate_report
 from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
-from publishable.hashes import code_hash, design_digest, parameters_hash
+from publishable.hashes import code_hash_of, design_digest, hashed_files, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.lineage import UpstreamLedger, UpstreamResolver
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
-from publishable.provenance import find_repo_root, git_provenance
+from publishable.provenance import (
+    find_repo_root,
+    git_provenance,
+    unignored_under_hashed_trees,
+)
 from publishable.replication import (
     cross_levels,
     fold_members_for,
@@ -2340,11 +2344,21 @@ def command_run(config_path: Path) -> int:
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
-    # `None` here is a task 3 placeholder: it is the explicit "hash every file"
-    # claim `hashed_files`'/`code_hash`'s docstrings name for a caller with no
-    # predicate, and task 5 swaps it for the real git-backed `include` this
-    # command's repo makes available.
-    ch = code_hash(repo_root, None)
+    # Built HERE and called HERE, not at the dirty gate: `resolve_units` above
+    # runs a plugin resolver — user code that may create or remove files under
+    # `src/**` — so an exclude answer captured before it ran would answer
+    # "what did git see before user code ran", which is not the question this
+    # hash asks. State read at the wrong moment is a proxy (H7a's corollary).
+    # One call, folded once: `hashed_files` walks the two trees and asks git a
+    # single `check-ignore` question, and `code_hash_of` folds the list it
+    # returns, so neither the walk nor the subprocess happens twice. Which
+    # files that leaves is docs/reference.md § How the three are computed's
+    # four-case rule, stated there and not restated here.
+    def _include(candidates: list[str]) -> set[str]:
+        return unignored_under_hashed_trees(repo_root, candidates)
+
+    hashed = hashed_files(repo_root, _include)
+    ch = code_hash_of(hashed)
     ph = parameters_hash(doc)
     manifest = build_manifest(
         input_dir,

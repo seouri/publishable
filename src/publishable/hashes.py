@@ -75,9 +75,10 @@ def code_hash_of(pairs: list[tuple[str, Path]]) -> str:
 def code_hash(repo_root: Path, include: Callable[[list[str]], set[str]] | None) -> str:
     """sha256 over the sorted list of (relative path, sha256 of contents) pairs.
 
-    Read from the working tree, not from git, so `run` and `draft` compute the
-    same function over a clean and a dirty tree alike. `include` narrows which
-    files under the two trees are read — see `hashed_files`.
+    Contents are read from the working tree, so `run` and `draft` compute the
+    same function over a clean and a dirty tree alike. **Which** files are
+    read is `include`'s answer, and `command_run`'s asks git — see
+    `hashed_files` and docs/reference.md § How the three are computed.
     """
     return code_hash_of(hashed_files(repo_root, include))
 
