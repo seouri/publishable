@@ -19931,3 +19931,675 @@ def test_h6b_arm_t_the_git_layers_two_codes_at_the_cli(tmp_path, capsys, monkeyp
     err3 = capsys.readouterr().err
     assert "E-GIT-NO-COMMIT" in err3
     assert "E-CODE-DIRTY" not in err3
+
+
+# ===========================================================================
+# H9a task 1 — the guard pin (design Decision 4 / Ruling U;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 1; design § 7's
+# table). Batch 2 extracts phases 1-5 of the 1916-line `command_run` into
+# `_prepare_run`, and this pin is the only thing standing between that
+# extraction and a silent behaviour change (design § 5's disclosure).
+#
+# ARMS A-E BELOW HAVE NO AUTHORIZED EDITOR — design § 7's table states NONE
+# for every one of them, and the task 1 brief repeats it. An implementer who
+# finds one of these failing has found a finding to report, not an assertion
+# to edit; leaving the branch red is correct (Ruling U's own cost-if-wrong).
+#
+# Arms F and G are cited rather than captured here — see the task 1 report
+# for the citations and the six existing pins correction 5 names.
+# ===========================================================================
+
+_H9A_NORMALIZED_LEAF_KEYS = {
+    "at",
+    "started_at",
+    "wall_seconds",
+    "run_id",
+    "hostname",
+    # the three hashes, § 5's own list plus the task 1 brief's explicit
+    # addition — `code_hash`, `parameters_hash`, `input_manifest_hash`.
+    "code_hash",
+    "parameters_hash",
+    "input_manifest_hash",
+    # EXTENSION beyond the brief's list, reported as a finding (task 1
+    # report): `provenance.git.commit` is the SHA of a commit `run_a_project`
+    # makes fresh inside `tmp_path` for every test invocation, and `git
+    # commit`'s hash is sensitive to the committer/author timestamp — running
+    # this exact fixture twice, back to back, produced two different commit
+    # SHAs over byte-identical trees. It cannot be a stable literal, so it is
+    # normalized here rather than pinned; `provenance.units_hash` was checked
+    # the same way (twice, independently) and found STABLE — a pure content
+    # hash of the roster — so it is a hardcoded literal below, not in this
+    # set.
+    "commit",
+}
+
+
+def _h9a_run_yaml_leaves(doc: Any, tmp_path: Path) -> list[tuple[str, Any]]:
+    """`run.yaml`, walked into a `(dotted_path, value)` list and normalized
+    per the task 1 brief / design § 5, then sorted by dotted path (the SORT
+    is over the result, not over dict iteration order, so this is stable
+    regardless of `yaml.safe_load`'s own key order).
+
+    Normalizes exactly three things, plus one EXTENSION reported as a
+    finding (`commit`, see `_H9A_NORMALIZED_LEAF_KEYS`'s own comment): a
+    leaf whose OWN key is in `_H9A_NORMALIZED_LEAF_KEYS`; a string leaf that
+    is an absolute path under `tmp_path` (`git.repo_root`,
+    `data.input_dir`/`output_dir`); and the three hashes (folded into the
+    same key-name set above, since each is itself a leaf named for one of
+    them).
+    """
+    leaves: list[tuple[str, Any]] = []
+
+    def walk(obj: Any, path: tuple[str, ...]) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                walk(v, path + (str(k),))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, path + (str(i),))
+        else:
+            leaves.append((".".join(path), obj))
+
+    walk(doc, ())
+    tmp_str = str(tmp_path)
+    normalized = []
+    for path, value in leaves:
+        last = path.rsplit(".", 1)[-1]
+        if last in _H9A_NORMALIZED_LEAF_KEYS:
+            value = "<normalized>"
+        elif isinstance(value, str) and tmp_str in value:
+            value = "<normalized>"
+        normalized.append((path, value))
+    normalized.sort(key=lambda kv: kv[0])
+    return normalized
+
+
+def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
+    """H9a guard-pin ARM A. SOLE AUTHORIZED EDITOR: NONE (design § 7's
+    table; task 1 brief). A failure here is a finding to report, not an
+    assertion to edit.
+
+    Driven exactly as the brief specifies: a two-level `grid` sweep over
+    `analysis.method`, two `seed` repeats, and a real derived metric
+    (`aggregate_returns="mean_pred"`, the helper every end-to-end test in
+    this file uses) through `run_a_project`, which drives `main(["run",
+    ...])` — the installed console script's own entry point, not a direct
+    call. `units=20` clears `limits.min_reported_n` (10) so the golden
+    below carries no `W-STATS-COLUMN-THIN` side effect to keep in sync.
+
+    The literal list below was CAPTURED BY RUNNING this exact fixture
+    (via a throwaway driver script, discarded once the literal below was
+    copied in) — never transcribed from `run_record.py`. Mutation: change
+    `run_record.py`'s emission of `results.conditions[i].is_baseline` (flip
+    the boolean it writes) — production code, not the test — and this arm
+    must fail; it does (checked before this test was finalized).
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=20,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        aggregate_returns="mean_pred",
+    )
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    leaves = _h9a_run_yaml_leaves(run_doc, tmp_path)
+    assert leaves == [
+        ("code_hash", "<normalized>"),
+        ("config.data.input_dir", "<normalized>"),
+        ("config.data.input_manifest_policy", "hash_all"),
+        ("config.data.output_dir", "<normalized>"),
+        ("config.data.units.allocation", "within"),
+        ("config.data.units.cluster_by", None),
+        ("config.data.units.from", "index.csv"),
+        ("config.data.units.holdout", None),
+        ("config.data.units.key", "patient_id"),
+        ("config.data.units.measurements", None),
+        ("config.data.units.weight_by", None),
+        ("config.entrypoint", "cohort_pilot.experiment:CohortPilotExperiment"),
+        ("config.experiment_type", "generic"),
+        ("config.limits.max_executions", 500),
+        ("config.limits.max_failed_fraction", 0.2),
+        ("config.limits.max_ineligible_fraction", 0.5),
+        ("config.limits.min_clusters", 10),
+        ("config.limits.min_reported_n", 10),
+        ("config.limits.min_units_per_cell", 20),
+        ("config.metadata.authors.0", "Kyungjoon Lee"),
+        ("config.metadata.description", "an end-to-end helper run"),
+        ("config.metadata.institution", ""),
+        ("config.metadata.name", "cohort-pilot"),
+        ("config.parameters.analysis.confidence", 0.95),
+        ("config.parameters.analysis.drop_missing", True),
+        ("config.parameters.analysis.method", "pearson"),
+        ("config.parameters.analysis.min_samples", 30),
+        ("config.plugin", None),
+        ("config.replication.repeats.0.kind", "seed"),
+        ("config.replication.repeats.0.n", 2),
+        ("config.schema_version", "1.0"),
+        ("config.statistics.correction", "holm"),
+        ("config.sweep.grid.analysis.method.0", "pearson"),
+        ("config.sweep.grid.analysis.method.1", "spearman"),
+        ("config.template_version", "1.0.0"),
+        ("draft", False),
+        ("execution.conditions.0.index", 0),
+        ("execution.conditions.0.label", "method=pearson"),
+        ("execution.conditions.0.steps.step01_summarize_units.seed40.attempts", 1),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed40.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed40.status", "completed"),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed40.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed47.attempts", 1),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed47.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.0.steps.step01_summarize_units.seed47.status", "completed"),
+        (
+            "execution.conditions.0.steps.step01_summarize_units.seed47.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.index", 1),
+        ("execution.conditions.1.label", "method=spearman"),
+        ("execution.conditions.1.steps.step01_summarize_units.seed40.attempts", 1),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed40.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed40.status", "completed"),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed40.wall_seconds",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed47.attempts", 1),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed47.started_at",
+            "<normalized>",
+        ),
+        ("execution.conditions.1.steps.step01_summarize_units.seed47.status", "completed"),
+        (
+            "execution.conditions.1.steps.step01_summarize_units.seed47.wall_seconds",
+            "<normalized>",
+        ),
+        ("layout.conditions", True),
+        ("layout.repeats", True),
+        ("parameters_hash", "<normalized>"),
+        ("provenance.allocation", None),
+        ("provenance.allocation_hash", None),
+        ("provenance.apparatus", None),
+        ("provenance.environment.hardware.cpu_count", 8),
+        ("provenance.environment.hostname", "<normalized>"),
+        ("provenance.environment.manager", "uv"),
+        ("provenance.environment.os", "Darwin-25.5.0-arm64"),
+        ("provenance.environment.python_version", "3.13.7"),
+        ("provenance.environment.uv_lock", None),
+        ("provenance.environment.uv_lock_hash", None),
+        ("provenance.git.branch", "main"),
+        ("provenance.git.code_dirty", False),
+        ("provenance.git.commit", "<normalized>"),
+        ("provenance.git.config_committed", True),
+        ("provenance.git.remote", None),
+        ("provenance.git.repo_root", "<normalized>"),
+        ("provenance.input_manifest", "manifest/input.json"),
+        ("provenance.input_manifest_hash", "<normalized>"),
+        ("provenance.publishable_version", "0.1.0"),
+        ("provenance.units.key", "patient_id"),
+        ("provenance.units.n", 20),
+        (
+            "provenance.units_hash",
+            "sha256:3cb4a21c9fe2ee78b4edadc11e1e837fe0f2f8de9e643bb1223862a786c604c3",
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.basis", "units"),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.ci95.0", 6.85),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.ci95.1", 12.05),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.cohens_d", None),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.correction",
+            None,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.method",
+            "percentile_over_units",
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.completed",
+            20,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.failed", 0),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.ineligible",
+            0,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.n.resolved",
+            20,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.mean_pred.resample_draws",
+            2000,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.mean_pred.value", 9.5),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.basis", "units"),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.ci95.0",
+            6.731189431979746,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.ci95.1",
+            12.268810568020253,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.correction", None),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.method",
+            "t_over_units",
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.completed", 20),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.failed", 0),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.n.resolved", 20),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.kind",
+            "seed",
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.n",
+            2,
+        ),
+        (
+            "results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.std",
+            0.0,
+        ),
+        ("results.conditions.0.aggregated.step01_summarize_units.pred.value", 9.5),
+        ("results.conditions.0.index", 0),
+        ("results.conditions.0.is_baseline", False),
+        ("results.conditions.0.label", "method=pearson"),
+        (
+            "results.conditions.0.per_repeat.step01_summarize_units.seed40.n_units",
+            20,
+        ),
+        (
+            "results.conditions.0.per_repeat.step01_summarize_units.seed47.n_units",
+            20,
+        ),
+        ("results.conditions.0.values.analysis.method", "pearson"),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.basis", "units"),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.ci95.0", 6.85),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.ci95.1", 12.05),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.cohens_d", None),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.correction",
+            None,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.method",
+            "percentile_over_units",
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.completed",
+            20,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.failed", 0),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.ineligible",
+            0,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.n.resolved",
+            20,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.mean_pred.resample_draws",
+            2000,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.mean_pred.value", 9.5),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.basis", "units"),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.ci95.0",
+            6.731189431979746,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.ci95.1",
+            12.268810568020253,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.correction", None),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.method",
+            "t_over_units",
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.completed", 20),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.failed", 0),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.n.resolved", 20),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.kind",
+            "seed",
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.n",
+            2,
+        ),
+        (
+            "results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.std",
+            0.0,
+        ),
+        ("results.conditions.1.aggregated.step01_summarize_units.pred.value", 9.5),
+        ("results.conditions.1.index", 1),
+        ("results.conditions.1.is_baseline", False),
+        ("results.conditions.1.label", "method=spearman"),
+        (
+            "results.conditions.1.per_repeat.step01_summarize_units.seed40.n_units",
+            20,
+        ),
+        (
+            "results.conditions.1.per_repeat.step01_summarize_units.seed47.n_units",
+            20,
+        ),
+        ("results.conditions.1.values.analysis.method", "spearman"),
+        ("run_id", "<normalized>"),
+        ("schema_version", "1.0"),
+        ("status", "completed"),
+    ]
+
+
+def test_h9a_arm_b_runs_full_stdout_line_by_line(tmp_path: Path, capsys):
+    """H9a guard-pin ARM B. SOLE AUTHORIZED EDITOR: NONE. Same shape as arm
+    A ("that same completed run" — the design's own wording, honoured here
+    as the same fixture parameters, not the same process, since each test
+    in this file drives its own `main(["run", ...])`), asserting stdout
+    rather than the record.
+
+    Normalized the same way (design § 5 / brief): the run directory's own
+    path under `tmp_path` is replaced (`<tmp>`), and the run-directory NAME
+    itself — `run_<timestamp>_<code-hash-prefix>` — is replaced separately
+    (`<run_dir>`) because it embeds `run_id` and the hash prefix inline in
+    a path segment, not as a standalone leaf a key-name check could catch.
+    Neither `wall_seconds` nor `hostname` appears in a clean run's stdout at
+    all — captured, not assumed — so this fixture cannot exercise those two
+    normalizations; that absence is the finding, not a gap in the test.
+
+    Mutation: change the literal text `run.yaml → ` that `command_run`
+    prints before the run directory path — production code — and this arm
+    fails (checked before this test was finalized).
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=20,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        aggregate_returns="mean_pred",
+        capsys=capsys,
+    )
+    tmp_str = str(tmp_path)
+    normalized = doc["stdout"].replace(tmp_str, "<tmp>")
+    normalized = re.sub(
+        r"run_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_[0-9a-f]+", "<run_dir>", normalized
+    )
+    assert normalized.splitlines() == [
+        "  warning W-ENV-UNLOCKED       environment",
+        "          no uv.lock found at <tmp>/proj; the environment is not pinned, and "
+        "`reproduce` will not be able to restore it",
+        "1 problem (0 errors, 1 warning)",
+        "run.yaml → <tmp>/results/<run_dir>/run.yaml",
+    ]
+
+
+def test_h9a_arm_c_completed_status_and_exit(tmp_path: Path):
+    """H9a guard-pin ARM C, `completed` → 0. SOLE AUTHORIZED EDITOR: NONE.
+
+    `run_a_project` already asserts `main(["run", ...]) == EXIT_OK` (its
+    default `expect_exit`) as part of driving the run; `status` is asserted
+    here as its OWN, separate statement, so the two claims — the exit code
+    and the status byte — are both live in this one test rather than one of
+    them being merely implied by the other.
+
+    Mutation: in `cli.py`'s final `{"completed": EXIT_OK, "partial":
+    EXIT_PARTIAL}.get(status, EXIT_FAILED)` line, swap `EXIT_OK` for
+    `EXIT_PARTIAL` — production code — and this arm fails: `run_a_project`'s
+    internal `assert main(...) == expect_exit` raises before this test's own
+    body even reaches its `status` assertion (checked before this test was
+    finalized).
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+
+_H9A_ALWAYS_FAILS_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("h9a arm c: every execution of this step fails")
+"""
+
+
+def test_h9a_arm_c_failed_status_and_exit(tmp_path: Path, monkeypatch):
+    """H9a guard-pin ARM C, `failed` → 4. SOLE AUTHORIZED EDITOR: NONE.
+
+    The scaffold's ONE step always raises, so no execution ever completes —
+    `run_status`'s `if not any(... completed ...): return "failed"` path
+    (its precedent: `test_a_credential_value_reaches_no_artifact_and_the_
+    redaction_says_so`'s own docstring names this exact fixture shape: "a
+    step that fails on every repeat with no completing step anywhere leaves
+    the run failed, not partial").
+
+    Mutation: in the same `.get(status, EXIT_FAILED)` line, swap the
+    default `EXIT_FAILED` for `EXIT_PARTIAL` — production code — and this
+    arm fails on the exit-code assertion while `status` stays `"failed"`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H9A_ALWAYS_FAILS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_FAILED,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+
+_H9A_CONDITIONAL_FAIL_EXTRA_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("h9a arm c: this second step always fails")
+"""
+
+
+def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
+    """H9a guard-pin ARM C, `partial` → 3. SOLE AUTHORIZED EDITOR: NONE.
+
+    The scaffold's own starter step always completes; a second, generated
+    step always raises — so every repeat has one completed execution and
+    one failed one, which is `run_status`'s `partial` branch (`any(...
+    completed ...)` true and `all(... completed ...)` false).
+
+    Mutation: in the same `.get(status, EXIT_FAILED)` line, delete the
+    `"partial": EXIT_PARTIAL` entry entirely — production code — and this
+    arm fails on the exit-code assertion (falling through to the dict's
+    default, `EXIT_FAILED`) while `status` stays `"partial"`.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["always_fails"],
+        extra_step_source=_H9A_CONDITIONAL_FAIL_EXTRA_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "partial"
+
+
+# Arm C, `apparatus-unreachable` → 5: CITED rather than rebuilt. See the
+# task 1 report — `test_g_fixture_u_unreachable_mid_plan` above already
+# asserts `run["status"] == "partial"` as its own statement, separate from
+# `expect_exit=EXIT_EXTERNAL`, in its own test, through a real run's own
+# probe plugin — exactly this sub-arm's claim. Rebuilding it here with a
+# second probe-plugin fixture would be the "same list pinned twice" fault
+# this slice's own binding rulings name; the H8b arm C precedent (restating
+# a claim already pinned elsewhere, in this exact file, to keep an arm
+# self-contained) was considered and rejected here because that precedent
+# restates a cheap key-list assertion, not a whole apparatus-plugin
+# fixture — the cost/benefit is the opposite way round.
+
+
+def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
+    """H9a guard-pin ARM D. SOLE AUTHORIZED EDITOR: NONE. NEW COVERAGE
+    (design § 7's table; task 1 brief; § Corrections 10): the claim exists
+    in two docstrings in this file (grepped below) and in no assertion
+    before this task.
+
+    Greps run before writing this test, every hit attributed:
+
+    `grep -rn "wall_seconds" tests/` → 8 hits: `tests/test_stats.py` (3,
+    building `ExecutionResult`/similar fixtures directly), `tests/
+    test_runner.py` (2, a step's own returned mapping, unrelated to the
+    ledger line), `tests/test_run_record.py` (1, building an
+    `ExecutionResult` directly), and 2 in `tests/test_cli.py` itself — both
+    are the DOCSTRING PROSE this arm replaces (`test_technical_n_reaches_
+    run_yaml_beside_every_metrics_n`'s and the wiring test near it), stating
+    the key set in words with no assertion beside them. A ninth hit is this
+    very test's own docstring, added after the grep was run.
+
+    `grep -n "keys()) ==" tests/test_cli.py` → 1 hit before this task,
+    `test_h8c_arm_a_the_records_field_level_shape`'s `assert list(execution.
+    keys()) == ["shared", "conditions", "summary"]` — the EXECUTION block's
+    top-level key list, not a single `executions.jsonl` LINE's key set. No
+    existing assertion holds the ledger line's keys.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    lines = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert lines
+    for entry in lines:
+        assert set(entry.keys()) == {
+            "step",
+            "scope",
+            "condition",
+            "repeat",
+            "status",
+            "started_at",
+            "wall_seconds",
+            "error",
+        }
+
+
+def test_h9a_arm_e_a_config_that_fails_validation(tmp_path: Path, capsys):
+    """H9a guard-pin ARM E, sub-fixture 1 of 4: a config that fails
+    `validate`. SOLE AUTHORIZED EDITOR: NONE.
+
+    `parameters.analysis.method` is overridden to a value outside its
+    declared `choices` (`"pearson"`/`"spearman"`/`"kendall"`), which
+    `validate_config` reports as `E-PARAM-VALUE` — refused before
+    `command_run` creates anything.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+        parameters={
+            "analysis": {
+                "method": "not-a-real-method",
+                "min_samples": 30,
+                "confidence": 0.95,
+                "drop_missing": True,
+            }
+        },
+    )
+    assert doc["run_dir"] is None
+    captured = doc["stdout"] or ""
+    assert "E-PARAM-VALUE" in captured
+    assert not list(doc["results_dir"].glob("*"))
+
+
+def test_h9a_arm_e_a_dirty_tree(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 2 of 4: a dirty `src/**`. SOLE
+    AUTHORIZED EDITOR: NONE.
+
+    Built on `_h6a_t5_project` (already defined in this file, and
+    deliberately not the guard pin's own `_h6a_pin_project`, per that
+    helper's own docstring on why the two are kept separate) — a committed
+    project whose hashed trees hold exactly `src/pkg/step.py`. Editing that
+    file AFTER the commit, without staging or re-committing, is what
+    `git status --porcelain -- src templates` reports and `E-CODE-DIRTY`
+    refuses.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_arm_e_dirty")
+    root = cfg.parents[2]
+    (root / "src" / "pkg" / "step.py").write_text("a = 2\n")  # uncommitted edit
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_arm_e_a_roster_refusal(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 3 of 4: a roster refusal. SOLE
+    AUTHORIZED EDITOR: NONE.
+
+    `resolve_units` is monkeypatched to raise a `ContractError` carrying a
+    real § Errors code, the same technique
+    `test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole`
+    uses above — `command_run`'s `except BaseException` arm around the
+    `resolve_units` call redacts and reports it, returning `EXIT_WRONG`
+    with no run directory created.
+    """
+    import publishable.cli as cli_mod
+
+    def _boom(*_args, **_kwargs):
+        raise ContractError("roster resolution failed", code="E-UNITS-SOURCE-MISSING")
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    assert doc["run_dir"] is None
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-UNITS-SOURCE-MISSING" in captured
+    assert not list(doc["results_dir"].glob("*")), "a refusal must leave no run directory"
+
+
+def test_h9a_arm_e_the_zero_file_e_code_empty(tmp_path: Path, monkeypatch, capsys):
+    """H9a guard-pin ARM E, sub-fixture 4 of 4: the zero-hashed-file
+    refusal. SOLE AUTHORIZED EDITOR: NONE.
+
+    Built on `_h6a_t8_project` (already defined in this file, H6a task 8's
+    own builder) rather than a second project builder for the identical
+    shape — this arm exists so the guard pin's OWN section is
+    self-contained (the H8b arm C precedent), restating the claim through
+    the same helper rather than a new one. `write_step=False` is what
+    leaves `src/pkg/` committed but empty.
+    """
+    cfg = _h6a_t8_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_arm_e_empty",
+        gitignore=".env\n__pycache__/\n*.py[cod]\n.venv/\n",
+        write_step=False,
+    )
+    results_dir = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-EMPTY" in capsys.readouterr().out
+    assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
