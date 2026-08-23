@@ -21397,3 +21397,159 @@ def test_h9a_dry_run_inherits_e_code_empty_from_phases_1_to_5(tmp_path: Path, mo
     assert command_dry_run(cfg) == EXIT_WRONG
     assert "E-CODE-EMPTY" in capsys.readouterr().out
     assert not list(results.glob("*"))
+
+
+# ===========================================================================
+# H9a task 8 — `unit-executions`, and the agreement pin
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 8; design
+# Decision 11). `cli._handed_counts` RESTATES `runner.execute_plan`'s
+# four-way `execution.scope` dispatch and calls `runner._arm_keys` and
+# `runner._handed_keys` — it does not extract the narrowing, which would be
+# a second behaviour-preserving extraction on a shipped path, in phase 7,
+# outside the phases this slice is chartered to move.
+#
+# **What prevents the two from drifting is these two fixtures, not a shared
+# function.** Each runs the SAME config through `dry-run` and through a real
+# `run`, and the printed `unit-executions` must equal the summed
+# `len(io.units)` the run actually handed out. The expected value is
+# **summed from the run**, never computed as `roster / k × executions`:
+# that is arithmetic the code under test could be wrong about in exactly the
+# same way. The step appends its own count to a file **outside
+# `output_dir`**, so the evidence is not an artifact of the run being
+# measured.
+#
+# S and T give DIFFERENT answers (10 and 80), because two elements only ever
+# distinguish two readings — a fixture pair that coincided would be one
+# element wearing two names.
+# ===========================================================================
+
+_H9A_T8_COUNTING_STEP = """\
+from pathlib import Path
+
+from publishable import BaseStep, ContractError
+
+
+class Step(BaseStep):
+    scope = "SCOPE"
+
+    def run(self, cfg, io):
+        # `io.units` RAISES `E-STEP-UNITS-UNAVAILABLE` rather than returning
+        # `None` when this execution was handed no roster — a fold's `run`-
+        # and condition-scoped steps. Counting that as **zero** is the
+        # ground truth the printed line has to agree with, and writing it
+        # this way deliberately is what makes the None-contributes-zero
+        # mutation visible rather than blind.
+        try:
+            units = list(io.units)
+        except ContractError:
+            units = None
+        n = 0 if units is None else len(units)
+        with Path(r"COUNTER").open("a", encoding="utf-8") as fh:
+            fh.write(f"{{n}}\\n")
+        for unit in units or ():
+            io.record(unit.key, {{"present": True}})
+        return {{"n_units": n}}
+"""
+
+
+def _h9a_t8_counting_step(counter: Path, scope: str) -> str:
+    return _H9A_T8_COUNTING_STEP.replace("SCOPE", scope).replace("COUNTER", str(counter))
+
+
+def _h9a_t8_printed_unit_executions(cfg: Path, capsys) -> tuple[int, str]:
+    from publishable.cli import command_dry_run
+
+    capsys.readouterr()
+    assert command_dry_run(cfg) == EXIT_OK
+    out = capsys.readouterr().out
+    (line,) = [ln for ln in out.splitlines() if ln.startswith("scale:")]
+    return int(line.split()[1]), out
+
+
+def test_h9a_fixture_s_unit_executions_agrees_with_a_real_fold_run(tmp_path: Path, capsys):
+    """Fixture S — a **fold**, with a `run`-scoped step so the
+    None-contributes-zero branch is live.
+
+    `k: 5` over 10 units: the five `repeat`-scoped executions are handed two
+    units each, and the one `run`-scoped execution is handed **no roster at
+    all** — no fold exists yet at that scope. So the ground truth is
+    `0 + 5 × 2 = 10`, and a build that counted the whole roster at `run`
+    scope would print 20.
+
+    `k > 1` and a `run`-scoped step are both load-bearing: with `k: 1` the
+    fold partition is the whole roster and the two readings coincide, and
+    with no `run`-scoped step there is no execution handed `None` for the
+    branch to be wrong about.
+    """
+    counter = tmp_path / "handed_s.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        replication={
+            "repeats": [{"kind": "fold", "k": 5}],
+            "order": "as_declared",
+            "rationale": "five folds: each repeat sees a fifth of the roster",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+        extra_steps=["over_the_whole_run"],
+        extra_step_source=_h9a_t8_counting_step(counter, "run"),
+    )
+    handed = [int(x) for x in counter.read_text().split()]
+    # The fixture's own premise, asserted rather than assumed: one execution
+    # really was handed nothing, and the rest really were handed a proper
+    # subset — a fold whose partition happened to be the whole roster would
+    # make mutation (b) blind.
+    assert handed.count(0) == 1
+    assert sorted(handed) == [0, 2, 2, 2, 2, 2], handed
+    assert sum(handed) == 10
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    # The printed claim itself, not only the total: a reader adding the
+    # per-execution counts up by hand would be short by exactly the
+    # executions handed nothing, so the output has to name them.
+    assert "1 of those executions are handed no unit list at all" in out
+
+
+def test_h9a_fixture_t_unit_executions_agrees_with_a_real_group_axis_run(tmp_path: Path, capsys):
+    """Fixture T — a **group axis**, whose arms are proper subsets of the
+    roster.
+
+    40 units split `by: arm` into two arms of 20 (`min_units_per_cell` is
+    `20` in what `init` writes, which is why the roster is 40 rather than
+    20), two conditions, two seed repeats: 4 executions × 20 units = 80. A
+    build that dropped `_arm_keys` would hand each execution the whole
+    40-unit roster and print 160.
+    """
+    counter = tmp_path / "handed_t.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["arm"],
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["x", "y"]}]},
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds, so the repeat directory component does not collapse",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+    )
+    handed = [int(x) for x in counter.read_text().split()]
+    # The premise mutation (a) rests on: each arm is a PROPER subset, so
+    # dropping `_arm_keys` changes the answer.
+    assert handed == [20, 20, 20, 20], handed
+    # `80`, against Fixture S's `10`: the pair's own non-coincidence, pinned
+    # as each fixture's own literal rather than as a separate comparison
+    # test, which would assert only that two literals differ.
+    assert sum(handed) == 80
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    # The negative of Fixture S's own line: no execution here is handed
+    # nothing, so the sentence must be ABSENT — an absence paired with the
+    # equality above, which must report.
+    assert "handed no unit list at all" not in out
