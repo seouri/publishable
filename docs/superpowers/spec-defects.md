@@ -9618,9 +9618,11 @@ so it is not a documentation fix wearing a code fix's clothes.
 **Not H9a's, and not fixed in passing.** `CLAUDE.md` § The worked example pins the worked example's
 numbers — *"those intervals were checked numerically and must not be narrowed back"* — and the seed
 list belongs to that example, so moving either side is an edit to it. Measured: the three unreachable
-labels have three homes, all in `reference.md` (`:905`, `:923`, and § Before you spend it's transcript
-at `:3101`); `README.md`'s run-directory tree shows only `seed17` and `seed42`, both of which the
-shipped rule does produce, so nothing there moves either way. **Owner: unassigned, with the reason**: no
+labels have **two** homes, both in `reference.md` (`:905` and `:923`). § Before you spend it's
+transcript, added by H9a task 12, lists only `seed17` and `seed42` and elides the rest — the same
+elision it already uses for conditions `01` and `02` — precisely so this slice does not give the
+disagreement a third home; `README.md`'s run-directory tree shows only those same two, both of which
+the shipped rule does produce, so nothing there moves either way. **Owner: unassigned, with the reason**: no
 remaining slice (H9b `resume`, H9c `reproduce`, H9d `demo`/`docs`, H3c-3's remaining 14) has
 `replication.py`'s label rule or § `sweep.yaml` — the resolved plan's worked example as its surface. Related but
 distinct from the existing entry on `_seed_members` honouring a declared seed, which is about a
@@ -9679,3 +9681,52 @@ this entry rather than re-derive the count.
 
 **Reproduce:** `grep -rc "command_run" src/publishable/*.py tests/*.py | grep -v ':0$'` — 22 files;
 `grep -rn "command_run" src/ tests/ | wc -l` — 195.
+
+## OPEN — `dry-run`'s sweep header reads as an equation that does not hold: `3 conditions × 5 repeats = 20 executions` — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-23 by H9a task 12**, found by running the worked example's own shape rather than by
+reading the format string. `cli.command_dry_run` prints
+
+```
+sweep: {n_conditions} conditions ({modes}) × {n_repeats} repeats = {executions} executions
+```
+
+where `executions` is `len(prepared.plan)` — one entry per planned (step, condition, repeat) triple —
+while `n_conditions` and `n_repeats` describe the *sweep's shape*. **The two are equal only for a
+pipeline whose every step is `repeat`-scope.** For any pipeline with a `run`-, `condition`- or
+`summary`-scope step the line prints an arithmetic identity that is false on its face.
+
+**Reproduced 2026-08-23**, on a 4-step project with the worked example's four scopes (`run` →
+`condition` → `repeat` → `summary`), 3 conditions and 5 seed repeats, built and `dry-run` outside this
+repository:
+
+```
+sweep: 3 conditions (baseline + grid) × 5 repeats = 20 executions
+scale:  4800 unit-executions (20 executions × 240 units handed to each)
+```
+
+`3 × 5` is 15; the number printed is 20, and 20 is right — 1 (`run`) + 3 (`condition`) + 15 (`repeat`)
++ 1 (`summary`). **The count is correct and the presentation asserts a derivation it is not making.**
+
+**Not a wrong number, which is why it is filed rather than fixed.** Every figure on the line is what
+it should be, so this is a question about what the line should *say* — candidates include dropping the
+`=` (`sweep: 3 conditions (baseline + grid) × 5 repeats; 20 executions`), naming the quantity
+(`… = 20 planned executions over 4 steps`), or printing the per-scope breakdown the step-directory
+list already carries. Each changes a shipped command's output for every user, which is a presentation
+ruling rather than a defect fix, and § Exit codes and diagnostics' own rule — the identifier is the
+contract and the wording explicitly is not — is the precedent for treating it that way.
+
+**What was done instead.** § Before you spend it's transcript carried `= 15 executions` and
+`3,600 unit-executions`, both **false** against the shipped command for the pipeline that transcript
+describes; H9a task 12 corrected them to `20` and `4,800` and added the sentence that says why the
+`×` is a description rather than a derivation, with the `demo` walkthrough's genuinely-15 figure named
+as the contrast. So the document no longer disagrees with the code; the code's own line is what this
+entry is about. Two other homes of `15` were checked and are **correct**: `reference.md`'s
+`scope = "repeat"  # 15 executions` comment counts one step's own executions, and § What `demo` walks
+you through's stop-4 row describes a one-step pipeline.
+
+**Owner: unassigned, with the reason.** No remaining slice has `dry-run`'s output format as its
+surface — **H9b** is `resume`, **H9c** is `reproduce`, **H9d** is `demo`/`docs`/`list-templates`, and
+**H3c-3's remaining 14** is folds and holdouts inside cells. H9d is the nearest neighbour, since
+`demo`'s stop 4 prints this very line for a user's first `dry-run`, but printing a command's output is
+not the same surface as choosing its wording and taking it in passing is what this file rejects.

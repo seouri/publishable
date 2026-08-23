@@ -534,3 +534,90 @@ artifact files. `grep -c "where every artifact will land\|does not dispatch in t
    alternative implementation rather than a one-line edit. Reported as blind with the reason rather
    than reported as passed; the design's own precedent for that shape is its two mutations *"named
    blind in advance."*
+
+---
+
+## Addendum, appended 2026-08-23 after an advisory review of this report — four corrections, three of them findings the batch's own checks missed
+
+Appended rather than folded into the sections above, so what the first pass caught and what it did not
+stays legible.
+
+### 1. The transcript's two lines ABOVE the one I replaced were false, and my own harness had already printed the true values
+
+**I verified `20 step directories` against a real run and did not diff the rest of the fenced block.**
+The same run printed `sweep: 3 conditions (baseline + grid) × 5 repeats = 20 executions` and
+`scale: 4800 unit-executions (20 executions × 240 units handed to each)`, while § Before you spend it's
+transcript said `= 15 executions` and `3,600 unit-executions (15 executions × 240 units handed to
+each)`. Under the counting rule I had just written into the document — one step directory per planned
+(step, condition, repeat) triple — step directories **are** `len(prepared.plan)`, so the transcript was
+printing 15 and 20 for the same quantity, three lines apart. **The evidence was in my own terminal and
+I read one line of it.**
+
+**Re-run and the whole block diffed line by line.** Corrected to `20 executions` and `4,800
+unit-executions`. **Every other home of `15` was attributed before touching anything, and only these
+two were wrong**: `README.md:56` is the `demo`'s `correlation-pilot`, a **one-step** pipeline, where
+15 is right; `reference.md:1651`'s `scope = "repeat"  # 15 executions` counts that one step's own
+executions, right; § What `demo` walks you through's stop-4 row describes the same one-step pipeline,
+right. So this is a two-line correction inside the section task 12 owns, not a worked-example-wide
+renumbering, and it needs no ruling. `CLAUDE.md` § The worked example states *"3 conditions × 5 seed
+repeats"* and no execution count, so it is unaffected.
+
+**And the shipped line itself is filed.** `3 conditions × 5 repeats = 20 executions` reads as an
+equation that does not hold: the `×` describes the sweep's shape while the number after `=` is the
+plan's length, and the two coincide only when every step is `repeat`-scope. Every figure on the line is
+correct, so this is a presentation ruling rather than a defect fix — filed as *"`dry-run`'s sweep header
+reads as an equation that does not hold"*, **Owner: unassigned, with the reason**, with the reproduce
+command and three candidate wordings. The document now carries the sentence that says why 20 is not
+3 × 5, naming the `demo` walkthrough's genuinely-15 figure as the contrast.
+
+### 2. I added `freeze` to three § Errors rows without measuring it, and a fourth row describing the same dispatch omitted it
+
+**The measurement I should have run first:**
+`grep -n "_probe_for\|observe_once\|check_facts" src/publishable/freeze.py` → `freeze.py:503` calls
+`apparatus._probe_for`, and `freeze.py:477` reuses `apparatus.Observer` (so `observe_once` and
+`check_facts` run inside it). So the three rows are **right** — but `E-PROBE-UNKNOWN`'s dual-surface
+clause, which I had just rewritten to enumerate `run`, `draft` and `dry-run`, was **the odd one out**.
+Corrected, with the fact that **`freeze`'s omission predates H9a** stated in the row — it has dispatched
+through the same `_probe_for` since H8b. One of the four was wrong either way, and the per-code check in
+§ Task 12 above did not catch it because I enumerated the surfaces *this slice adds* rather than the
+surfaces the row's own claim covers.
+
+### 3. `E-CODE-DIRTY`'s row condition is now WIDER than its code, and that is this slice's doing too
+
+The row read *"carries uncommitted changes when a command that executes starts."* **`draft` executes
+and does not refuse** — that is the whole of what the name buys — and `dry-run` does not enforce the
+gate either. Corrected to name the enforcing commands (`run`, and `resume` when it is built), to say
+what `draft` and `dry-run` do instead and why, and to state that both pass `allow_dirty=True` to the
+one call site and **neither changes what the gate covers** (H6b Decision 12's declined widening stays
+declined). This is the mirror image of the fourteen narrowings in § Task 12 — a row wider than its
+code rather than narrower — and the first pass looked for one direction only.
+
+### 4. The seed-label filing contradicted itself, and the transcript did propagate the disagreement
+
+The filing's table listed § Before you spend it's transcript as a third home of the unreachable labels
+while its closing paragraph claimed the transcript *"uses the documents' own labels, so this entry is
+the only place the disagreement is recorded rather than propagated."* Both cannot hold. Fixed the way
+that makes both true: the transcript's `00_baseline` block now lists `seed17` and `seed42` and elides
+the rest — **the same elision it already used for conditions `01` and `02`** — so the count, the shape
+and the four-component derivation are unchanged and the three unreachable labels have **two** homes
+(`reference.md:905`, `:923`), both predating this slice. The filing's homes sentence is corrected to
+say so.
+
+### Gates after the addendum
+
+`uv run ruff check .` → *All checks passed!* · `uv run ruff format --check .` → *93 files already
+formatted* · `uv run mypy` → *Success: no issues found in 52 source files* · `uv run pytest` →
+**3019 passed, 1 skipped, 2 xfailed**. The mechanical checker over the same seven files → **0 problems
+over 7 files**. **No code moved in this addendum** — four `reference.md` edits and two
+`spec-defects.md` edits, one of them a new filing.
+
+### The shape worth carrying out of all four
+
+Three of the four are the same fault in different currencies: **I checked the thing I changed and not
+the thing next to it.** The transcript line above the one I replaced, the row whose sibling clause I
+had just rewritten, the direction of narrowness I was not looking for. The first pass's own § Task 12
+warned about *positional* locators and swept for the claim rather than the file — and then verified one
+line of a run whose output contained the contradiction, added `freeze` to three rows without the
+one-line grep that would have caught the fourth, and looked for narrow rows without asking whether any
+had gone wide. **When you edit one line of a block, diff the block; when you rewrite one row's surface
+clause, re-read every row describing the same dispatch.**
