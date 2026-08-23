@@ -93,3 +93,55 @@ clause stays in `reference.md`'s `dry-run` row false-until-task-10, because task
 same slice, same unmerged branch — is what makes it true, and narrowing it now would mean re-widening
 it again inside one slice. The whole-branch gate owns re-checking it; if task 10 doesn't land before
 merge, that promotes this to a Major at the gate.
+
+## Batches 3, 4 and 5 — tasks 3–9 — `draft`, `dry-run`, and their documents
+
+Commits `137d55e`, `d4af219`, `16518aa`; `5bb8009`, `41208be`, `b5a2293`, `985971a`, `a684f1b`,
+`6cc266f`, `6421e62`; review `574eba7` (**all seven PASS**, four Majors, five Minors); fix round
+`0525cc5` / `72ea0d2` / `d8f79ef`. Suite 2984 → **3012**.
+
+**`dry-run` creates nothing, and that was established by snapshotting rather than by reading.** A
+whole-tree `{path → sha256}` map before and after `main(["dry-run", cfg])` gave **ADDED [] REMOVED []
+CHANGED [] over 119 paths** — and it is pinned: a `mkdir` under `output_dir` fails both arms. *If a comment
+says nothing is created, make it create something* is the rule, and reading for absent `mkdir` calls is
+the proxy it forbids.
+
+**Batch 3 found the gap its own brief was written around.** `_execute_prepared` **accepted `draft` and never
+forwarded it** to `assemble_run_yaml` — an unread parameter, which is *an unbuilt reader of a shipped
+surface* in miniature. Wired and pinned by a mutation that removes the forwarding.
+
+**Major 1 is a live output defect that the worked example's own shape produces.** `dry-run`'s sweep header
+printed **`(baseline + baseline + grid)`**, because `modes` seeds with `"baseline"` and then adds every
+truthy `sweep` key — **and `baseline` is one of them.** The only assertion on that line used a **grid-only**
+config, so it was structurally blind: *a fixture that cannot distinguish the two readings is not a
+fixture*. Closed with a **baseline+grid** fixture, and the mutation reproducing the bug fails only the new
+test — which is the proof the old one was blind rather than merely quiet. **The first thing a reader of the
+docs would have run is exactly this shape.**
+
+**Major 4 is *"pinned by nothing"* being false, and the reason is the proxy this repo keeps paying for.**
+Both the plan and the design said the shared arity arm was unpinned; **two pre-existing tests fail when the
+count half is dropped.** Only the **flag** half was genuinely new. It was missed because **both greps were
+on message text** — *answering a question with a proxy*. Corrected by **appending** to the plan and the
+design rather than retro-editing either, and the narrower truth stated: count pinned, flag not.
+
+**Major 2 is a mandated sweep that would have found nothing.** Three unowned `reference.md` edits were
+**correct in content** and left `grep "every artifact path"` at **zero homes across six files** — so a
+later task told to sweep for it would have reported zero and called it clean. The plan's § Task 12 was
+**amended** to target strings that exist, re-measured at 4 and 3 homes. *A correction that is wrong is
+worse than no correction.*
+
+**Ruling R's narrowing held and its cost is stated rather than hidden.** § Operation commands promised
+*"every artifact path that would be written"*, which requires reading step bodies — something
+`reference.md` itself promises core never does. **A promise requiring a stated non-promise to be broken is
+the document being wrong**, so `dry-run` prints step directories, fixed files and the unit-execution
+count, **and the row names what it omits.** The same clause was found kept at one site while deleted at
+another and is now deleted at both.
+
+**One Minor is deliberately left OPEN inside the slice, with the reason.** The `dry-run` row's *probes the
+apparatus* clause is false until task 10 lands — **narrowing it now would mean re-widening it inside one
+slice**, so the whole-branch gate owns re-checking it, and **it promotes to a Major there if task 10 does
+not land before the merge.** That is the honest form of a scope boundary: an open finding with a named
+escalation, not a silence.
+
+**And the review could not fault a single mutation count** — five disjoint mutations reconciling to
+exactly 10, three to exactly 7 — **the first batch in four slices where that was true.**
