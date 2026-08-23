@@ -1,8 +1,10 @@
 import hashlib
 import importlib
 import json
+import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from collections import namedtuple
@@ -9585,6 +9587,12 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert statuses, column
         assert statuses <= {"built", "NOT BUILT"}, column
     assert ("dry-run", "built") in tables["Command"]
+    # H9b guard-pin arm E. SOLE AUTHORIZED EDITOR: H9b task 15 (the dispatch
+    # task). Post-edit state, written now: this line becomes
+    # `("resume", "built")` AND a line `assert ("reproduce", "NOT BUILT") in
+    # tables["Command"]` is added, so the table keeps a marked row-presence
+    # probe of its own. The `set(NOT_BUILT_COMMANDS)` equalities below are
+    # SELF-MAINTAINING and must not be edited.
     assert ("resume", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
@@ -16387,7 +16395,21 @@ def test_resolver_io_has_no_reuse_from_and_step_io_does(tmp_path: Path):
 
 def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     """Arm A — THE RUN DIRECTORY'S ROOT. ONE OF TWO ARMS AN AUTHORIZED TASK
-    MAY EDIT, and task 3 is that task.
+    MAY EDIT.
+
+    **RE-AUTHORIZED by H9b (guard-pin arm B).** SOLE AUTHORIZED EDITOR:
+    H9b's `identity.json` write-site task — plan task 3, whose own section
+    grants that authority and prescribes the diff
+    (`docs/superpowers/plans/2026-08-23-resume.md` § Task 3). The H9b design's
+    § The guard pin and the task 1 brief both spell that task's number "4";
+    plan task 4 is the batch's real-command review, whose brief says *must
+    not touch: anything*, so the NUMBER is stale and the DESCRIPTIVE half —
+    *the `identity.json` task* — governs. Two sibling parentheticals in the
+    same table (arm C's "plan task 6", arm E's "plan task 15") are correct
+    against the plan, which is what identifies this one as the slip. Reported
+    as a finding in `.superpowers/sdd/2026-08-23-resume/task-b1-report.md`.
+    The H8b-era clause this replaces read "task 3 is that task", meaning
+    H8b's own task 3, a closed slice's.
 
     Driven WITH a sweep so the list includes `conditions` (a run with no
     sweep has no such directory). No existing test in this file asserts the
@@ -16398,11 +16420,14 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     Decision 7's new artifacts move, and none of them is this assertion, so
     this is new coverage.
 
-    Task 3 appends `'config.yaml'` to this list, keeping it sorted, and
-    nothing else changes. The post-edit list is:
-    `['conditions', 'config.yaml', 'environment', 'executions.jsonl',
-    'manifest', 'run.yaml', 'sweep.yaml']`. Task 3's report must show the
-    diff is exactly one entry per arm with nothing reordered.
+    The authorized task appends `'identity.json'` to this list, keeping it
+    sorted, and nothing else changes. The post-edit list, copied verbatim
+    from the H9b design's § The guard pin: `['conditions', 'config.yaml',
+    'environment', 'executions.jsonl', 'identity.json', 'manifest',
+    'run.yaml', 'sweep.yaml']` — one entry appended, sorted, nothing
+    reordered, and that task's report must show the diff is exactly that.
+    (H8b's own already-applied instruction, which this paragraph replaces,
+    appended `'config.yaml'` for the same reason.)
 
     The `lock` assertion below is implied by the list equality above it —
     if `lock` existed, `iterdir()` would list it and the equality would fail
@@ -20527,7 +20552,17 @@ def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
 
 
 def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
-    """H9a guard-pin ARM D. SOLE AUTHORIZED EDITOR: NONE. NEW COVERAGE
+    """H9a guard-pin ARM D. **RE-AUTHORIZED as H9b guard-pin arm C: SOLE
+    AUTHORIZED EDITOR: H9b task 6, by controller ruling recorded in the H9b
+    design's Decision 5** (`docs/superpowers/specs/2026-08-23-resume-design.md`
+    § Decision 5 and § The guard pin, which says of this arm "SOLE AUTHORIZED
+    EDITOR: NONE at HEAD, and Decision 5 re-authorizes it"). The clause it
+    replaces read NONE; nothing else here moves, and this task changed no
+    assertion. Post-edit set, copied verbatim from that table: `{step, scope,
+    condition, repeat, status, started_at, wall_seconds, error, returned,
+    recorded_columns}` — two keys added, none removed.
+
+    NEW COVERAGE
     (design § 7's table; task 1 brief; § Corrections 10): the claim exists
     in two docstrings in this file (grepped below) and in no assertion
     before this task.
@@ -21666,6 +21701,17 @@ def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: P
     assert "statistics: basis units (n=10 resolved); correction holm;" in out
     assert "scale:  40 unit-executions (4 executions × 10 units handed to each)" in out
     assert "would create 4 step directories under " in out
+    # H9b guard-pin arm D. SOLE AUTHORIZED EDITOR: H9b's `identity.json`
+    # write-site task — plan task 3, whose section grants it (the H9b design
+    # and the task 1 brief spell that task's number "4", which is the
+    # real-command review that may touch nothing; see arm B's docstring for
+    # the same slip and its finding). Post-edit state, written now: `8`,
+    # because `_DRY_RUN_FIXED_FILES` gains `identity.json`. Nothing else in
+    # this line moves. The set-to-set comparison against a real run's tree
+    # (`_h9a_fixture_u`, which asserts `real_files - artifacts == fixed`) is
+    # SELF-MAINTAINING and MUST NOT be edited: it is the second, independent
+    # assertion that catches an entry added to the tuple but not written, or
+    # written but not listed.
     assert "and 7 fixed files in that directory:" in out
     # The pointer a run repoints OUTSIDE the run directory. It is not in the
     # brief's fixed-file list and not inside the parsed block, so nothing else
@@ -22357,3 +22403,605 @@ def test_h9a_fixture_y_dry_run_creates_nothing_while_the_probe_round_runs(
     assert len(calls.read_text().split()) == calls_before + 2
     # Positive 2: the transcript printed.
     assert "creates nothing" in out
+
+
+# ===========================================================================
+# H9b guard pin — captured in batch 1, before any code moves.
+#
+# `docs/superpowers/specs/2026-08-23-resume-design.md` § The guard pin is the
+# authority; its eight arms are A–H. Arms A and G are BUILT here (below);
+# arms B, C, D and E are shipped assertions whose editor clauses this task
+# RE-AUTHORIZES in place, changing no assertion; arms F and H are cited in
+# `.superpowers/sdd/2026-08-23-resume/task-b1-report.md` and deliberately
+# NOT re-captured — re-capturing a claim already pinned is H8a's *same list
+# pinned twice* fault.
+#
+# Arm F: `test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf` (a
+# completed `run`'s whole `run.yaml`, leaf by leaf) and
+# `test_h9a_arm_b_runs_full_stdout_line_by_line` (`run`'s full stdout). They
+# are what Decision 14's behaviour-preservation claim is measured against.
+#
+# Arm H: `test_h8b_arm_b_environments_contents` (`environment/`'s contents —
+# `identity.json` is not under it), `test_h8a_arm_a_a_clean_run_top_level_
+# shape_status_and_exit` and `test_h8a_arm_b_the_provenance_key_list_and_
+# upstream_empty` (`run.yaml`'s and `provenance`'s key lists),
+# `test_h8c_arm_a_the_records_field_level_shape` (the record's field-level
+# shape), `test_h8b_arm_e_sweep_yamls_recorded_plan_shape` (`sweep.yaml`'s
+# key list), and H9a's arms C and E (the four exit codes and the four early
+# exits).
+#
+# **Both arms built here are half live and half `xfail(strict=True)`**, per
+# the design's appended A3: the live halves are the fixtures' own measured
+# state, and the `xfail` halves are what tasks 9 and 14 make pass. A reviewer
+# must not read an `xfail` as coverage — which is also why the fixture-state
+# halves exist at all: `xfail(strict=True)` absorbs EVERY failure reason, so
+# a crash fixture that silently never crashed would still report `xfail`.
+# ===========================================================================
+
+# Arm A's project (design § Fixtures as claims, fixture B), with ONE
+# documented departure: fixture B prescribes "one recorded key deliberately
+# colliding with a declared attribute name", and that is **unreachable
+# through `io.record`** — `artifacts.py` raises `E-STEP-KEY-COLLISION` for a
+# recorded column shadowing a declared attribute, `docs/reference.md`
+# § Validation documents the refusal, and a first capture of this fixture
+# with a recorded `cohort` produced eight `failed` executions carrying that
+# code (measured; reported as a finding in the batch report). So the
+# collision half of fixture B is dropped here and the attribute is carried
+# undisturbed; the *structural* claim it existed to separate belongs to the
+# task whose reader subtracts attribute columns.
+#
+# What remains, and each half is load-bearing:
+#   * TWO repeat-scope steps, one recording (`units.parquet` exists,
+#     `recorded_columns` is non-empty) and one SCALAR-ONLY (a `completed`
+#     triple that legitimately writes no `units.parquet`) — the two readings
+#     "recorded nothing" and "file missing" cannot be told apart by a
+#     one-step fixture.
+#   * A declared attribute (`cohort`).
+#   * A crash driven by a COUNTER FILE outside `input_dir`, so the crash
+#     point is deterministic rather than timing-dependent, and `os._exit` so
+#     the `lock` is left behind — the state Decision 2 is about. The counter
+#     file is consulted only when it EXISTS, which is what makes the same
+#     committed step source produce a clean run and a crashed one.
+_H9B_RECORDING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+_TRIP = __TRIP__
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == _TRIP:
+        os._exit(9)
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _tick()
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * 2.0}})
+        return {{"n_units": len(units)}}
+"""
+
+_H9B_SCALAR_STEP = """\
+# src/steps/{step_name}.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"handed": len(io.units)}}
+"""
+
+_H9B_CRASH_TRIP = 3
+
+
+def _h9b_round_trip_project(tmp_path: Path, control: Path) -> dict[str, Any]:
+    """Arm A's project, scaffolded, committed, and run STRAIGHT THROUGH once.
+
+    `control` is the crash counter's path, baked into the committed step
+    source and **absent** for this run, so the same source is inert here and
+    crashes under `_h9b_crash_run` below. It is outside `input_dir` so that
+    writing it moves no input manifest.
+    """
+    return run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+
+
+def _h9b_crash_run(doc: dict[str, Any], control: Path) -> Path:
+    """A second `run` of the same project, crashed mid-plan, in a SUBPROCESS.
+
+    A subprocess and not `main(...)`: the crash is `os._exit(9)`, which in
+    process would take the test session with it — and `os._exit` is the whole
+    point, since a contained raise unwinds `RunLock.__exit__` and removes the
+    `lock` this fixture exists to leave behind.
+
+    The counter file is created here and removed before returning, so a
+    resume of the returned directory re-executes without crashing again.
+    """
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    assert control.read_text().strip() == str(_H9B_CRASH_TRIP), control.read_text()
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    return crashed
+
+
+def _h9b_run_yaml_leaves(run_doc: Any, tmp_path: Path) -> list[tuple[str, Any]]:
+    """`run.yaml`'s normalized leaves, per the task 1 brief's list.
+
+    Delegates to H9a arm A's `_h9a_run_yaml_leaves` — the same walk, the same
+    sort, the same normalization — and adds the ONE key this brief adds,
+    `attempts`, on top. Written as a delegation rather than a copy because
+    H9a's helper is not an arm and re-implementing its walk would be two
+    normalizers to keep in step.
+
+    Two entries of the inherited set are EXTENSIONS beyond this brief's list
+    and are reported as such: `commit` (a fresh commit's SHA is timestamp-
+    sensitive, measured twice by H9a) and `input_manifest_hash` (one of the
+    three hashes this brief names, so it is on the list by another route).
+    Nothing else is added, and nothing was added after seeing a diff.
+    """
+    return [
+        (path, "<normalized>" if path.rsplit(".", 1)[-1] == "attempts" else value)
+        for path, value in _h9a_run_yaml_leaves(run_doc, tmp_path)
+    ]
+
+
+_H9B_ARM_A_GOLDEN = [
+    ("code_hash", "<normalized>"),
+    ("config.data.input_dir", "<normalized>"),
+    ("config.data.input_manifest_policy", "hash_all"),
+    ("config.data.output_dir", "<normalized>"),
+    ("config.data.units.allocation", "within"),
+    ("config.data.units.attributes.0", "cohort"),
+    ("config.data.units.cluster_by", None),
+    ("config.data.units.from", "index.csv"),
+    ("config.data.units.holdout", None),
+    ("config.data.units.key", "patient_id"),
+    ("config.data.units.measurements", None),
+    ("config.data.units.weight_by", None),
+    ("config.entrypoint", "cohort_pilot.experiment:CohortPilotExperiment"),
+    ("config.experiment_type", "generic"),
+    ("config.limits.max_executions", 500),
+    ("config.limits.max_failed_fraction", 0.2),
+    ("config.limits.max_ineligible_fraction", 0.5),
+    ("config.limits.min_clusters", 10),
+    ("config.limits.min_reported_n", 10),
+    ("config.limits.min_units_per_cell", 20),
+    ("config.metadata.authors.0", "Kyungjoon Lee"),
+    ("config.metadata.description", "an end-to-end helper run"),
+    ("config.metadata.institution", ""),
+    ("config.metadata.name", "cohort-pilot"),
+    ("config.parameters.analysis.confidence", 0.95),
+    ("config.parameters.analysis.drop_missing", True),
+    ("config.parameters.analysis.method", "pearson"),
+    ("config.parameters.analysis.min_samples", 30),
+    ("config.plugin", None),
+    ("config.replication.order", "as_declared"),
+    ("config.replication.rationale", "four seeds"),
+    ("config.replication.repeats.0.kind", "seed"),
+    ("config.replication.repeats.0.n", 4),
+    ("config.schema_version", "1.0"),
+    ("config.statistics.correction", "holm"),
+    ("config.sweep.grid.analysis.method.0", "pearson"),
+    ("config.sweep.grid.analysis.method.1", "spearman"),
+    ("config.template_version", "1.0.0"),
+    ("draft", False),
+    ("execution.conditions.0.index", 0),
+    ("execution.conditions.0.label", "method=pearson"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.index", 1),
+    ("execution.conditions.1.label", "method=spearman"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.wall_seconds", "<normalized>"),
+    ("layout.conditions", True),
+    ("layout.repeats", True),
+    ("parameters_hash", "<normalized>"),
+    ("provenance.allocation", None),
+    ("provenance.allocation_hash", None),
+    ("provenance.apparatus", None),
+    ("provenance.environment.hardware.cpu_count", 8),
+    ("provenance.environment.hostname", "<normalized>"),
+    ("provenance.environment.manager", "uv"),
+    ("provenance.environment.os", "Darwin-25.5.0-arm64"),
+    ("provenance.environment.python_version", "3.13.7"),
+    ("provenance.environment.uv_lock", None),
+    ("provenance.environment.uv_lock_hash", None),
+    ("provenance.git.branch", "main"),
+    ("provenance.git.code_dirty", False),
+    ("provenance.git.commit", "<normalized>"),
+    ("provenance.git.config_committed", True),
+    ("provenance.git.remote", None),
+    ("provenance.git.repo_root", "<normalized>"),
+    ("provenance.input_manifest", "manifest/input.json"),
+    ("provenance.input_manifest_hash", "<normalized>"),
+    ("provenance.publishable_version", "0.1.0"),
+    ("provenance.units.key", "patient_id"),
+    ("provenance.units.n", 20),
+    (
+        "provenance.units_hash",
+        "sha256:7f1d7ab1a8929a672b645ee56727f6bbb5156c438cfb0a0b989acd90f34a7ca2",
+    ),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.0", 13.462378863959492),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.1", 24.537621136040507),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.correction", None),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.method", "t_over_units"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.completed", 20),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.resolved", 20),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.n", 4),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.value", 19.0),
+    ("results.conditions.0.index", 0),
+    ("results.conditions.0.is_baseline", False),
+    ("results.conditions.0.label", "method=pearson"),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed08.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed27.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed76.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed84.n_units", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed08.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed27.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed76.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed84.handed", 20),
+    ("results.conditions.0.values.analysis.method", "pearson"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.0", 13.462378863959492),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.1", 24.537621136040507),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.correction", None),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.method", "t_over_units"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.completed", 20),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.resolved", 20),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.n", 4),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.value", 19.0),
+    ("results.conditions.1.index", 1),
+    ("results.conditions.1.is_baseline", False),
+    ("results.conditions.1.label", "method=spearman"),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed08.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed27.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed76.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed84.n_units", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed08.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed27.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed76.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed84.handed", 20),
+    ("results.conditions.1.values.analysis.method", "spearman"),
+    ("run_id", "<normalized>"),
+    ("schema_version", "1.0"),
+    ("status", "completed"),
+]
+
+
+def test_h9b_arm_a_the_straight_through_golden(tmp_path: Path):
+    """H9b guard-pin ARM A, the LIVE half: the straight-through `run`'s whole
+    `run.yaml`, leaf by leaf. SOLE AUTHORIZED EDITOR: NONE (design § The
+    guard pin). A failure here is a finding to report, not an assertion to
+    edit.
+
+    The literal below was CAPTURED BY RUNNING this exact fixture through a
+    throwaway driver, discarded once the literal was copied in — never
+    transcribed from `run_record.py`. It is a module constant because the
+    `xfail`ed resume half asserts against the SAME golden: one capture, two
+    consumers, which is not the *same list pinned twice* (that fault is two
+    captures of one claim).
+
+    `units=20` clears `limits.min_reported_n` (10), so no
+    `W-STATS-COLUMN-THIN` side effect has to be kept in sync.
+
+    Mutation (production code, full suite): `run_record.py`'s `_execution_
+    block` writing `"attempts": 1` cannot be caught here — `attempts` is on
+    this brief's own normalization list — so the mutation run against this
+    arm was `stats.py`'s `repeat_spread` `std`, reported in the batch report
+    with its full-suite count.
+    """
+    doc = _h9b_round_trip_project(tmp_path, tmp_path / "crash_control")
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+def test_h9b_arm_a_the_crash_fixture_is_really_crashed(tmp_path: Path):
+    """H9b guard-pin ARM A, the fixture's OWN state — live, and the reason
+    the `xfail` half below means anything. SOLE AUTHORIZED EDITOR: NONE.
+
+    `xfail(strict=True)` absorbs every failure reason, so a fixture that
+    silently never crashed (a subprocess that could not import
+    `publishable`, a counter file at the wrong path, an `os._exit` never
+    reached) would still report `xfail` and be read as *correctly failing
+    until task 9*. These are the claims design § 0 measured, asserted here
+    instead of trusted.
+
+    What is NOT asserted here, deliberately: the crashed directory's FULL
+    sorted root list. That list is guard-pin arm B's
+    (`test_h8b_arm_a_the_run_directorys_root`), which an authorized task
+    moves when `identity.json` lands; a second copy here would be H8a's
+    *same list pinned twice* AND would need an unauthorized edit in the same
+    slice. Each path below is asserted individually, and the two absences —
+    `run.yaml` and a `latest` pointing at this run — are the two facts
+    `resume` is defined against.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+
+    for name in ("config.yaml", "executions.jsonl", "manifest", "environment", "sweep.yaml"):
+        assert (crashed / name).exists(), name
+    assert (crashed / "environment" / "repo_root.txt").exists()
+    assert (crashed / "manifest" / "input.json").exists()
+    # The `lock` is still held by a process that no longer exists — the state
+    # Decision 2's takeover is for, and the reason `os._exit` is the crash.
+    holder = json.loads((crashed / "lock").read_text())
+    assert holder["host"] == socket.gethostname()
+    with pytest.raises(ProcessLookupError):
+        os.kill(holder["pid"], 0)
+    # No `run.yaml`: the run did not end, which is what `resume` is for.
+    assert (crashed / "run.yaml").exists() is False
+    # And no `latest` pointing HERE (§ Corrections 10: `point_latest` runs
+    # after `run.yaml`). The pointer exists, from the straight-through run of
+    # the same project, and resolves to THAT directory — asserted rather than
+    # asserted-absent, because an absence would also pass for a fixture whose
+    # first run never happened.
+    pointer = doc["results_dir"] / "latest"
+    text = doc["results_dir"] / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == doc["run_dir"].name
+    assert named != crashed.name
+    # Exactly the executions that ran before the trip, all `completed`: the
+    # crash was mid-plan, not before it and not after it.
+    lines = [
+        json.loads(line)
+        for line in (crashed / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert [entry["status"] for entry in lines] == ["completed", "completed"]
+    assert {entry["step"] for entry in lines} == {"step01_summarize_units"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="H9b task 9 builds `resume`'s execution; until then `resume` prints the "
+    "unbuilt diagnostic and no record is written",
+)
+def test_h9b_arm_a_crash_and_resume_equals_straight_through(tmp_path: Path):
+    """H9b guard-pin ARM A, the `xfail` half: a crash-and-resume round trip
+    equals a straight-through run, LEAF BY LEAF, against the same golden the
+    live half captured. SOLE AUTHORIZED EDITOR: NONE — task 9 removes the
+    `xfail` marker and nothing else.
+
+    This is the arm design Decision 4 exists for, and no per-key assertion
+    substitutes for it: `_gather_repeats` builds its column order from row
+    iteration order and `summarize_step` derives a metric's column order from
+    that, so a parquet round trip can move `run.yaml`'s column order with
+    every value correct.
+
+    The normalization list is the brief's, fixed BEFORE this comparison was
+    ever run — a normalization decided after seeing a diff is a normalization
+    chosen to hide it. `attempts` is on it because a resumed triple's count
+    is 2 where a straight-through one's is 1, which is Decision 6's own
+    claim and is pinned by that task's fixture, not laundered here.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert main(["resume", str(crashed)]) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+def test_h9b_arm_g_the_dead_holder_fixture(tmp_path: Path):
+    """H9b guard-pin ARM G, the LIVE half: the race fixture's own state.
+    SOLE AUTHORIZED EDITOR: NONE.
+
+    Same reason as arm A's fixture-state half — an `xfail(strict=True)` race
+    that never raced would still report `xfail`. The holder pid is a REAL
+    reaped process (the crashed subprocess's own), never a fabricated
+    number: a fabricated pid makes the fixture agree with a liveness test
+    that always answers *dead*.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    holder = json.loads((crashed / "lock").read_text())
+    # A SUBSET, not an equality: `lock` holds two keys today (§ Corrections
+    # 9) and task 14 adds `started_at`, which § One execution at a time
+    # already documents. An equality here would fail on that addition, and
+    # this arm's editor is NONE — an arm that forces an unauthorized edit is
+    # the H6a fault this pin exists to avoid. What the arm needs is the two
+    # keys a liveness test reads.
+    assert {"host", "pid"} <= set(holder), holder
+    assert holder["host"] == socket.gethostname()
+    with pytest.raises(ProcessLookupError):
+        os.kill(holder["pid"], 0)
+    assert (crashed / "lock.takeover").exists() is False
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="H9b task 14 builds the takeover; until then `resume` prints the unbuilt "
+    "diagnostic and neither thread holds anything",
+)
+def test_h9b_arm_g_the_takeovers_mutual_exclusion(tmp_path: Path, monkeypatch, capsys):
+    """H9b guard-pin ARM G, the `xfail` half: two `resume`s racing one
+    dead-holder run directory reach exactly one holder and exactly one
+    `E-RUN-LOCKED`. SOLE AUTHORIZED EDITOR: NONE — task 14 removes the
+    `xfail` marker and nothing else.
+
+    **Deterministic on purpose.** The five-process probe of design § 0 (60
+    trials × 5 processes, zero violations; two winners by trial 22 with the
+    token deleted) is the DISCOVERY instrument and is cited in the batch
+    report — a probe proves the moment, a test proves tomorrow.
+
+    Driven through `main(["resume", ...])` rather than through the takeover
+    helper by name: this arm's editor is NONE, so a helper renamed in task 14
+    would force an unauthorized edit here.
+
+    **What the barrier does, stated exactly rather than generously.** It is
+    released inside the liveness syscall, between the verdict's evidence and
+    the lock's replacement. Under the SHIPPED protocol only one thread ever
+    reaches that syscall — the other refuses at the exclusive takeover token
+    — so the single arrival times out, the barrier breaks, and it is inert.
+    It bites under the mutation that deletes the token, where both threads
+    arrive and are released into the unlink-then-create window together.
+    So the barrier does not make the shipped path deterministic; it makes the
+    MUTATION's interleaving deterministic, which is what an arm is for.
+
+    The wrapper's own call count is asserted, because a monkeypatch aimed at
+    a name the code no longer calls is silently inert: a task 14 that tests
+    liveness without `run_identity`'s `os.kill` fails here, and that is a
+    finding about the arm's hook rather than about the protocol.
+    """
+    import threading
+
+    from publishable import run_identity
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    dead_pid = json.loads((crashed / "lock").read_text())["pid"]
+
+    barrier = threading.Barrier(2)
+    real_kill = run_identity.os.kill
+    hits: list[int] = []
+
+    def kill(pid: int, sig: int) -> None:
+        if pid != dead_pid:
+            return real_kill(pid, sig)
+        try:
+            real_kill(pid, sig)
+        except ProcessLookupError:
+            hits.append(pid)
+            try:
+                barrier.wait(timeout=5.0)
+            except threading.BrokenBarrierError:
+                pass
+            raise
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+    codes: list[int] = []
+    lock_seen = threading.Lock()
+
+    def resume() -> None:
+        code = main(["resume", str(crashed)])
+        with lock_seen:
+            codes.append(code)
+
+    threads = [threading.Thread(target=resume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert not any(thread.is_alive() for thread in threads)
+
+    out, err = capsys.readouterr()
+    assert hits, "the liveness hook never fired — the barrier was aimed at a dead name"
+    assert sorted(codes) == [EXIT_OK, EXIT_WRONG], codes
+    assert (out + err).count("E-RUN-LOCKED") == 1, (out, err)
+    assert (crashed / "run.yaml").exists()
+    assert (crashed / "lock").exists() is False
+    assert (crashed / "lock.takeover").exists() is False
