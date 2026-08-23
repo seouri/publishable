@@ -1,6 +1,7 @@
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import shutil
@@ -20563,6 +20564,18 @@ def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
     condition, repeat, status, started_at, wall_seconds, error, returned,
     recorded_columns}` — two keys added, none removed.
 
+    **EDITED to that post-edit set by plan task 5, not task 6, and the
+    discrepancy is stated rather than resolved silently** (the third option
+    the design's own § Correction, 2026-08-23, from batch 1 names). Task 5's
+    dispatched brief opens *"You are the SOLE AUTHORIZED EDITOR of guard-pin
+    arm C"* and task 5 is the task that adds the two keys, so it is the
+    "ledger task" the design's parenthetical describes; the parenthetical
+    names plan task 6, which computes `attempts` from this file and adds no
+    key to it. Tasks 5 and 6 are one batch, so no task edited this arm out of
+    turn either way — the edit made here is exactly the two-key addition the
+    clause above specified in advance, nothing reordered and nothing removed,
+    and the batch report carries the discrepancy as a finding.
+
     NEW COVERAGE
     (design § 7's table; task 1 brief; § Corrections 10): the claim exists
     in two docstrings in this file (grepped below) and in no assertion
@@ -20603,6 +20616,8 @@ def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
             "started_at",
             "wall_seconds",
             "error",
+            "returned",
+            "recorded_columns",
         }
 
 
@@ -23135,3 +23150,253 @@ def test_h9b_a_draft_run_records_draft_true(tmp_path: Path):
         drafted_identity["code_hash"]
         == json.loads((doc["run_dir"] / "identity.json").read_text())["code_hash"]
     )
+
+
+# ===========================================================================
+# H9b task 5 — `executions.jsonl` gains `recorded_columns` and `returned`
+# (design Decision 5). Guard-pin arm C holds the LINE'S KEY SET; these hold
+# what the two new values ARE, which no key-set assertion can see.
+# ===========================================================================
+
+# Two recorded keys whose SORTED order is the reverse of their insertion
+# order, on purpose: `recorded_columns` is documented as sorted, and a
+# reconstitution that narrowed a read-back row by iterating that sorted list
+# would reorder `run.yaml`'s columns with every value correct — the failure
+# guard-pin arm A's own docstring names and the one it cannot yet see (its
+# resume half is `xfail` until `resume` dispatches). `zeta` is recorded first.
+_H9B_TWO_COLUMN_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"zeta": float(i), "alpha": i}})
+        return {{"n_units": len(units)}}
+"""
+
+# A repeat step that records NOTHING and returns a scalar — `finalize` writes
+# `units.parquet` only `if self._rows`, so this execution completes and the
+# file is absent. It is the second half of what makes an empty
+# `recorded_columns` meaningful rather than ambiguous.
+_H9B_SCALAR_ONLY_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"n_seen": len(io.units)}}
+"""
+
+# A `summary` step returning an `Estimate` — the one value a step may return
+# that `json` cannot encode at all, and the whole reason `returned` is written
+# through `run_record.summary_values`.
+_H9B_ESTIMATE_SUMMARY_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
+                                      method="mixed model, REML"),
+                 "converged": True}}
+"""
+
+# A repeat step returning a non-finite float. Legal and reachable (design
+# appendix A1: `coerce_scalars` passes it through and `run.yaml` records it),
+# so the ledger must round-trip it rather than refuse it or null it.
+_H9B_NAN_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"r": float("nan")}}
+"""
+
+
+def _h9b_ledger(run_dir: Path) -> list[dict[str, Any]]:
+    """Every line of `executions.jsonl`, in the order execution wrote them.
+
+    Plain `json.loads`, deliberately: the ledger's lines are written with
+    `json.dumps`' shipped `allow_nan=True`, so `NaN` round-trips exactly
+    through the same module — which is the encoding rule design appendix A1
+    fixed, and which a strict reader would refuse.
+    """
+    return [
+        json.loads(line)
+        for line in (run_dir / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+
+
+def test_h9b_recorded_columns_is_the_recorded_union_not_the_files_columns(tmp_path: Path):
+    """`recorded_columns` names what the step RECORDED — not what
+    `units.parquet` holds, which also carries every declared attribute.
+
+    This is the assertion that makes `resume`'s narrowing structural: the two
+    readings differ by exactly the attribute column, so a build emitting the
+    file's column list instead publishes `cohort` as a recorded column and a
+    reconstituted row would carry an attribute value into the unit table
+    `stats` reads.
+
+    Both halves are asserted in one test on purpose. `recorded_columns ==
+    ["alpha", "zeta"]` alone passes for a build that never wrote the
+    attribute anywhere; the parquet assertion beside it is what proves
+    `cohort` is genuinely in the file and therefore genuinely excluded here
+    rather than absent from both.
+
+    The sorted order is the REVERSE of the insertion order (`zeta` is
+    recorded first), which is what a later narrowing-by-sorted-list defect
+    can be caught by; the parquet column order is asserted here for the same
+    reason — it is the order a reconstituted row must reproduce.
+
+    **This fixture is cited by task 8**, which needs exactly this shape (a
+    declared attribute beside recorded columns) and builds no second copy of
+    it. Fixture B of design § Fixtures as claims prescribes one recorded key
+    COLLIDING with the attribute's name; that state is unreachable through
+    `io.record` (`E-STEP-KEY-COLLISION`, measured by batch 1 as eight failed
+    executions), so the attribute is carried undisturbed, exactly as arm A's
+    own fixture does, and the report carries why.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_TWO_COLUMN_STARTER_STEP,
+    )
+    (entry,) = _h9b_ledger(doc["run_dir"])
+    assert entry["recorded_columns"] == ["alpha", "zeta"]
+    from publishable.artifacts import _decode_parquet
+
+    (parquet,) = sorted(doc["run_dir"].rglob("units.parquet"))
+    rows = _decode_parquet(parquet.read_bytes())
+    assert list(rows[0].keys()) == ["unit", "cohort", "zeta", "alpha"]
+
+
+def test_h9b_a_scalar_only_step_records_an_empty_column_list_and_no_table(tmp_path: Path):
+    """An EMPTY `recorded_columns` is a claim, and it is not the same claim as
+    a missing file.
+
+    `artifacts.finalize` writes `units.parquet` only `if self._rows`, so a
+    step that records nothing completes and writes none. Without this line a
+    reader would have to choose between refusing every such run and resuming
+    a run whose table was genuinely lost — which is why the list is written
+    even when it is empty rather than omitted.
+
+    The recording step's own non-empty list is asserted in the same test: an
+    empty-list assertion alone passes for a build that writes `[]`
+    unconditionally.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["tally"],
+        extra_step_source=_H9B_SCALAR_ONLY_STEP,
+    )
+    ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
+    assert ledger["step02_tally"]["status"] == "completed"
+    assert ledger["step02_tally"]["recorded_columns"] == []
+    assert ledger["step01_summarize_units"]["recorded_columns"] == ["present"]
+    # The distinction the empty list exists to carry, asserted rather than
+    # assumed: the completed step wrote no table at all.
+    step_dirs = {p.parent.name for p in doc["run_dir"].rglob("units.parquet")}
+    assert "step02_tally" not in step_dirs
+    assert "step01_summarize_units" in step_dirs
+
+
+def test_h9b_returned_is_written_through_summary_values(tmp_path: Path):
+    """A `summary` step's `Estimate` reaches the ledger as the SAME expansion
+    `run.yaml`'s summary block holds — one function, two records, so the two
+    cannot disagree.
+
+    Asserted as an equality against `run.yaml`'s own block rather than
+    against a hand-written literal: a literal here would be a second
+    spelling of the expansion, which is the thing this decision exists to
+    prevent. The `converged: True` sibling is carried because
+    `summary_values` expands only the values that carry an interval, and a
+    test with an `Estimate` alone could not see a build that expanded
+    everything.
+
+    Grep run before writing this, every hit attributed. `grep -n
+    "Estimate(" tests/test_cli.py` → 10 hits, of which those at
+    `_ESTIMATE_SUMMARY_STEP` and its five neighbours (the
+    `W-STEP-ESTIMATE-N` family) and `_H5A_*`/`_H8C_*`'s summary steps are
+    `summary`-scope steps returning an `Estimate` through a real run. **So
+    shipped fixtures DO reach this line already**, and the mutation that
+    drops `summary_values` is caught by them too — it raises `TypeError` out
+    of the ledger write, which sits OUTSIDE the per-execution `try`, so the
+    whole run dies rather than the execution failing. This test is the
+    positive form of that: it asserts what the value IS, which a crash
+    cannot.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_H9B_ESTIMATE_SUMMARY_STEP,
+    )
+    ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    recorded = run_doc["results"]["summary"]["step02_summarize"]
+    assert ledger["step02_summarize"]["returned"] == recorded
+    # And the shape, so a test asserting only the equality could not pass for
+    # two records that are identically wrong.
+    assert recorded["adjusted"] == {
+        "value": 0.031,
+        "reported": True,
+        "ci95": [0.008, 0.055],
+        "n": 612,
+        "method": "mixed model, REML",
+    }
+    assert recorded["converged"] is True
+    # A repeat step's plain mapping travels unexpanded, which is what
+    # `summary_values`' idempotence on an already-flat mapping means here.
+    assert ledger["step01_summarize_units"]["returned"] == {"n_units": 10}
+
+
+def test_h9b_a_non_finite_return_round_trips_through_the_ledger(tmp_path: Path):
+    """A step returning `float("nan")` is legal (design appendix A1:
+    `coerce_scalars` passes it through and `run.yaml` records it), so the
+    ledger keeps `json.dumps`' shipped `allow_nan=True` and the value comes
+    back as `nan` rather than as `None`.
+
+    `math.isnan` rather than an equality, because `nan != nan`. The
+    `is not None` assertion is stated separately because it is the failure a
+    non-finite-to-`null` encoding would produce, and a resumed `per_repeat`
+    differing from a straight-through one is what that would cost.
+
+    The raw text is asserted too: the defect could live in the SERIALIZATION,
+    and a reader that normalises it away would hide it — this is the
+    `yaml.safe_load`-resolves-aliases fault in its json form.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        _starter_step=_H9B_NAN_STARTER_STEP,
+    )
+    text = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert "NaN" in text
+    (entry,) = _h9b_ledger(doc["run_dir"])
+    value = entry["returned"]["r"]
+    assert value is not None
+    assert math.isnan(value)

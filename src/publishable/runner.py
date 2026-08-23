@@ -597,6 +597,16 @@ def execute_plan(
     assert holdout_train is None or arm_members is None, (
         "a holdout beside a group axis is refused as `E-DATA-HOLDOUT-CELLS`"
     )
+    # Imported HERE rather than at module level, and not as a convenience:
+    # `run_record` imports this module for `ExecutionResult`, so a top-level
+    # import would close the cycle `runner → run_record → runner` — the same
+    # cycle the `TYPE_CHECKING` note above keeps open from the other side.
+    # `summary_values` is the ONE expansion `run.yaml`'s summary block and
+    # `executions.jsonl`'s `returned` share (H9b Decision 5); a second
+    # spelling here would be a second answer to what an `Estimate` looks like
+    # on disk.
+    from publishable.run_record import summary_values
+
     collapse = len(repeats) <= 1
     seeds = {r.label: r.seed for r in repeats}
     ledger = run_dir / "executions.jsonl"
@@ -827,6 +837,48 @@ def execute_plan(
                         "started_at": result.started_at,
                         "wall_seconds": result.wall_seconds,
                         "error": error,
+                        # H9b Decision 5. The union of the names this execution
+                        # RECORDED, `"unit"` excluded, sorted — taken off the
+                        # rows `io` already holds rather than off
+                        # `units.parquet`, whose column list also carries every
+                        # declared attribute. That is what makes `resume`'s
+                        # narrowing of a read-back row structural: the recorded
+                        # columns are NAMED, so whatever else the file holds is
+                        # `unit` or an attribute, whatever it happens to be
+                        # called. Subtracting attribute names instead would be a
+                        # reserved name standing in for a structural fact.
+                        #
+                        # An EMPTY list is meaningful and is not the same claim
+                        # as a missing file: `artifacts.finalize` writes
+                        # `units.parquet` only `if self._rows`, so a scalar-only
+                        # step completes and writes none — and a reader that
+                        # could not tell "recorded nothing" from "the table is
+                        # gone" would have to choose between refusing a
+                        # legitimate run and resuming a corrupted one.
+                        "recorded_columns": sorted(
+                            {key for row in rows for key in row if key != "unit"}
+                        ),
+                        # The one thing `per_repeat` is built from and the one
+                        # thing no other artifact holds (H9b Decision 5).
+                        # Through `run_record.summary_values`, never through a
+                        # second expansion of the same shape: that function is
+                        # what `run.yaml`'s own summary block is built with, so
+                        # the two records cannot disagree about an `Estimate` —
+                        # which a `summary`-scope step may return and which
+                        # `json` cannot encode at all. It is idempotent on an
+                        # already-expanded mapping, which is what makes reading
+                        # this line back safe.
+                        #
+                        # `json.dumps`' shipped `allow_nan=True` is KEPT (design
+                        # appendix A1, measured): `coerce_scalars` passes a
+                        # non-finite float through, `run.yaml` records it, and
+                        # this module reads its own lines back — so
+                        # `NaN`/`Infinity` here round-trip exactly through
+                        # `json.loads`. `allow_nan=False` would fail a COMPLETED
+                        # execution over a value the run record accepts, and
+                        # encoding non-finite as `null` would make a resumed
+                        # `per_repeat` differ from a straight-through one.
+                        "returned": summary_values(returned),
                     }
                 )
                 + "\n"
