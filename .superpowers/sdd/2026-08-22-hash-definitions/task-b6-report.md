@@ -442,7 +442,7 @@ the correction recorded here.
 
 ---
 
-## Third correction to this report, same day — two additions at `<this commit>`, and one wrong sweep inside the first draft of one of them
+## Third correction to this report, same day — two additions at `2090b3f`, and one wrong sweep inside the first draft of one of them
 
 Two gaps a re-read found, both closed in the same commit as this append.
 
