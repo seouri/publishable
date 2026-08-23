@@ -146,7 +146,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "run", "freeze", "report"}
+OPERATION_COMMANDS = {"validate", "run", "draft", "freeze", "report"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -159,7 +159,6 @@ OPERATION_COMMANDS = {"validate", "run", "freeze", "report"}
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
     "docs": "Operation commands",
-    "draft": "Draft runs",
     "dry-run": "Operation commands",
     "list-templates": "Operation commands",
     "reproduce": "Reproducing on another device",
@@ -4200,6 +4199,7 @@ def _dispatch(command: str, rest: list[str]) -> int:
         handlers: dict[str, Callable[[Path], int]] = {
             "validate": command_validate,
             "run": command_run,
+            "draft": command_draft,
             "freeze": command_freeze,
             "report": command_report,
         }

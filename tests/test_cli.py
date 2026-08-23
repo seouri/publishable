@@ -20778,3 +20778,74 @@ def test_h9a_fixture_q_draft_pathspec_does_not_widen_to_the_repo_root(
     shutil.rmtree(run_dirs[0])
 
     assert main(["run", str(cfg)]) == EXIT_OK
+
+
+# ===========================================================================
+# H9a task 4 — wiring `draft` into `_dispatch` (design Decision 3 / Ruling T;
+# docs/superpowers/plans/2026-08-23-re-entry-seam.md task 4). `draft` joins
+# `OPERATION_COMMANDS`'s existing one-path arity arm rather than getting a
+# second enforcer, and `NOT_BUILT_COMMANDS` drops `"draft"`. Correction 16
+# (`_dispatch`'s branch order is load-bearing): before this task,
+# `publishable draft new` hit the two-token `NOT_BUILT_COMMANDS` key first
+# and printed the specified-but-unbuilt diagnostic; after it, `draft` is a
+# real `OPERATION_COMMANDS` member and the SAME two-token invocation reaches
+# the shared arity arm instead, because the built branches are still
+# evaluated before the `NOT_BUILT_COMMANDS` lookups. That is the one shipped
+# answer this task moves, and it is pinned below rather than merely
+# disclosed.
+#
+# Correction 11 / this task's own brief: the shared arity arm
+# (`` `{command}` takes exactly one path and no flags ``) was pinned by
+# NOTHING — `grep -rn "takes exactly one path" tests/` returned 0 hits, and
+# `grep -rn "no flags" tests/` returned exactly 1, `_DIFF_ARITY_MESSAGE`
+# (line 324 of this file), `diff`'s own and a DIFFERENT arity rule. The
+# tests below are the first pin of the shared arm, using `draft` as the
+# probe.
+# ===========================================================================
+
+
+def test_h9a_draft_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic(capsys):
+    """The one shipped answer this task moves (task 4 brief). Before: the
+    two-token key `"draft new"` hit `NOT_BUILT_COMMANDS` and
+    `_report_not_built` printed the specified-but-unbuilt diagnostic. After:
+    `"draft"` is in `OPERATION_COMMANDS`, the two-token lookup never
+    happens (that branch returns first), and `rest == ["new"]` is a single
+    path — so the call actually proceeds into `command_draft` rather than
+    being refused for arity. This is the arity arm on a real, if wrong,
+    path, so it must not print either the not-built diagnostic or the
+    unknown-command message; distinguishing this from the true arity
+    failures below is the point of naming it separately."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "draft" not in NOT_BUILT_COMMANDS
+    assert "draft new" not in NOT_BUILT_COMMANDS
+    code = main(["draft", "new"])
+    err = capsys.readouterr().err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    # `new` is not a readable config path, so `_prepare_run` reports a wrong
+    # (not invocation) failure rather than an arity one — this is what
+    # separates "reached real argument handling" from "still refused for
+    # shape", which the three tests below cover.
+    assert code != EXIT_INVOCATION
+
+
+_DRAFT_ARITY_MESSAGE = "`draft` takes exactly one path and no flags"
+
+
+def test_h9a_draft_with_no_path_is_an_invocation_error(capsys):
+    assert main(["draft"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_draft_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["draft", "a", "b"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_draft_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument,
+    so a mutation replacing the condition with a bare `len(rest) != 1` must
+    fail this test while passing the two above."""
+    assert main(["draft", "--json"]) == EXIT_INVOCATION
+    assert _DRAFT_ARITY_MESSAGE in capsys.readouterr().err
