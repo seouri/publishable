@@ -1064,6 +1064,22 @@ def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[st
     return names
 
 
+def _unset_defaulted_paths(doc: dict[str, Any], template: Any) -> list[str]:
+    """Every `parameter_spec` path this config leaves to the template's default.
+
+    Shared by `_check_versions` (named only inside `W-TEMPLATE-VERSION`, and
+    only under a version mismatch) and `_check_parameters` (named
+    unconditionally, as `W-PARAM-UNSET`) — one comprehension, so the two
+    readers cannot drift the way two independent copies would.
+    """
+    set_here = _flatten(doc.get("parameters"), "")
+    return [
+        path
+        for path, param in template.parameter_spec.items()
+        if path not in set_here and param.default is not MISSING
+    ]
+
+
 def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
     declared = _flatten(doc.get("parameters"), "")
     spec = template.parameter_spec
@@ -1086,17 +1102,28 @@ def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
     for path, param in spec.items():
         if path not in declared and param.default is MISSING:
             c.error("E-PARAM-MISSING", f"parameters.{path}", "is required and absent")
+    unset = _unset_defaulted_paths(doc, template)
+    if unset:
+        c.warn(
+            "W-PARAM-UNSET",
+            "parameters",
+            "carries a default and is left unset here; a step reading it as "
+            f"cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: {', '.join(unset)}",
+        )
 
 
 def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     """The moved version, and which parameters this config leaves to a default.
 
     § Validation's "Template version moved" row reports both halves in one
-    warning — the version, and `request.timeout` being unset. The second half is
-    computed from `parameter_spec` alone and named only inside this warning, so
-    it stays gated on the mismatch: a config whose `template_version` matches
-    draws nothing here, and an omitted parameter with no default is
-    `E-PARAM-MISSING`'s to report regardless of any version.
+    warning — the version, and `request.timeout` being unset. The second half
+    is computed through `_unset_defaulted_paths`, shared with `_check_parameters`'
+    unconditional `W-PARAM-UNSET`, but named here only under a version
+    mismatch: a config whose `template_version` matches draws nothing from
+    this function, and an omitted parameter with no default is
+    `E-PARAM-MISSING`'s to report regardless of any version. The duplication
+    with `W-PARAM-UNSET` on a version-mismatched config is deliberate, not an
+    oversight — both warnings render in one `Collector` output.
 
     The message states what is observable — a parameter the installed template
     defaults and this config does not set. Core cannot tell that apart from one
@@ -1117,12 +1144,7 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     declared = doc.get("template_version")
     if reported is None or not declared or declared == reported:
         return
-    set_here = _flatten(doc.get("parameters"), "")
-    unset = [
-        path
-        for path, param in template.parameter_spec.items()
-        if path not in set_here and param.default is not MISSING
-    ]
+    unset = _unset_defaulted_paths(doc, template)
     detail = f"; unset here and left to the template's default: {', '.join(unset)}" if unset else ""
     c.warn(
         "W-TEMPLATE-VERSION",

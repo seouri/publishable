@@ -7421,9 +7421,42 @@ def test_a_moved_template_version_names_a_parameter_the_config_leaves_unset(writ
 
 def test_an_unset_parameter_is_named_only_when_the_version_moved(write_config):
     """The naming is gated on the mismatch: a config matching the installed version
-    draws no warning at all, so a defaulted parameter it omits is not reported."""
+    draws no `W-TEMPLATE-VERSION` warning at all."""
     path = write_config({"parameters.analysis.confidence": _DELETE})
     assert "W-TEMPLATE-VERSION" not in codes(path)
+
+
+def test_h6a_fixture_k_an_unset_defaulted_parameter_draws_w_param_unset(write_config):
+    """Fixture K, first arm. Omitting two of `generic`'s four defaulted
+    parameters draws exactly one `W-PARAM-UNSET`, at path `parameters`,
+    naming both — one diagnostic enumerating every unset-and-defaulted path,
+    on `W-TEMPLATE-VERSION`'s own message shape, not one per parameter. No
+    version is declared as moved here: this fires unconditionally, which is
+    the whole point of the warning existing outside `_check_versions`. `exit
+    0` and `has_errors` False, because this is a warning and not an error."""
+    path = write_config(
+        {"parameters.analysis.confidence": _DELETE, "parameters.analysis.drop_missing": _DELETE}
+    )
+    c = Collector()
+    validate_config(path, c)
+    warnings = [f for f in c.findings if f.code == "W-PARAM-UNSET"]
+    assert len(warnings) == 1
+    assert warnings[0].path == "parameters"
+    assert "analysis.confidence" in warnings[0].message
+    assert "analysis.drop_missing" in warnings[0].message
+    assert c.exit_code() == 0
+    assert c.has_errors is False
+
+
+def test_h6a_fixture_k_control_arm_every_default_set_draws_no_w_param_unset(write_config):
+    """Fixture K's control arm — what makes the first arm non-vacuous. A
+    config setting all four of `generic`'s defaulted parameters (which is
+    exactly what `base_config` already does, and what a freshly `init`-ed
+    project would write) draws no `W-PARAM-UNSET` at all. Without this arm, a
+    mutation that fires the check unconditionally of what is actually unset
+    would still pass the first arm."""
+    path = write_config()
+    assert "W-PARAM-UNSET" not in codes(path)
 
 
 def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(write_config):
