@@ -21006,3 +21006,71 @@ def test_h9a_t5_diff_labels_a_real_draft_on_one_side_only(tmp_path: Path, capsys
     (side_b,) = [line for line in lines if line.split()[:1] == ["B"]]
     assert "draft" in side_a.split()
     assert "draft" not in side_b.split()
+
+
+# ===========================================================================
+# H9a task 6 — Fixture R and § Draft runs' corrected conjunction
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 6; design
+# Decision 9; § Corrections against the code, correction 12). § Draft runs
+# read *"Draft runs are recorded with `draft: true` and
+# `git.code_dirty: true`"*, and the second half is false of the code:
+# `code_dirty` is `provenance.git_provenance`'s MEASUREMENT of the tree, so
+# a draft of a CLEAN tree records `false`. The DOCUMENT was corrected;
+# forcing the flag would make a `provenance` figure lie about the one thing
+# `provenance` is for, and would break `diff`'s `git` comparison between a
+# clean draft and the `run` of the same commit.
+#
+# Stated as a difference, not as a count:
+# `test_h9a_fixture_q_a_draft_on_a_clean_tree_records_code_dirty_false`
+# (task 3, above) already asserts the same three facts. Fixture R adds the
+# two things that test does not have — it **verifies its own premise** by
+# running `git status --porcelain -- src templates` inside the project and
+# asserting it is empty BEFORE the command, so a passing `code_dirty is
+# False` cannot be a tree that was dirty in a way the gate could not see;
+# and it goes through `main(["draft", ...])` rather than a direct
+# `command_draft` call, which task 3 could not do because the name did not
+# dispatch until task 4.
+# ===========================================================================
+
+
+def test_h9a_fixture_r_a_draft_of_a_clean_tree_records_code_dirty_false(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture R: `draft` on a verified-clean tree, outside this repository.
+
+    The premise is measured with the gate's OWN pathspec — `git status
+    --porcelain -- src templates`, which is what `provenance.git_provenance`
+    asks — rather than with a whole-tree `git status`: a file outside the two
+    hashed trees is deliberately invisible here (H6b Decision 12 declined
+    widening that pathspec), so a whole-tree premise would be asserting
+    something the code does not read.
+
+    No notice is asserted on **stderr**, the stream the task-3 notice writes
+    to, and the absence is paired with something that must report — the
+    record `run` wrote and the `run.yaml →` line on stdout — so a test that
+    passed because nothing ran at all is ruled out.
+    """
+    cfg = _h6a_t5_project(tmp_path, monkeypatch, package="h9a_fixture_r")
+    root = cfg.parents[2]
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert porcelain.stdout == "", f"Fixture R's premise: {porcelain.stdout!r}"
+
+    capsys.readouterr()
+    assert main(["draft", str(cfg)]) == EXIT_OK
+    out, err = capsys.readouterr()
+
+    run_dirs = sorted((tmp_path / "results").glob("run_*"))
+    assert len(run_dirs) == 1
+    record = yaml.safe_load((run_dirs[0] / "run.yaml").read_text())
+    assert record["draft"] is True
+    assert record["provenance"]["git"]["code_dirty"] is False
+    # The paired positive: the run really happened, so the absence below is
+    # about the notice rather than about a command that did nothing.
+    assert "run.yaml →" in out
+    assert "notice" not in err

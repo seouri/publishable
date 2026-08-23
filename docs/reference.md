@@ -3738,7 +3738,9 @@ A local filesystem failure — an unwritable `output_dir`, a full disk, or a `di
 
 Iterating on code means running before committing, and that needs a name rather than a flag. An `--allow-dirty`-style flag would read as "suppress a warning," which invites reflexive use; `publishable draft` reads as what it is — a provisional run whose code state isn't reachable from any commit.
 
-Draft runs are recorded with `draft: true` and `git.code_dirty: true`, `report` refuses to render one as a final result, and `diff` labels it. Everything else behaves normally, so iteration stays fast — you just can't accidentally cite one.
+Draft runs are recorded with `draft: true`, `report` refuses to render one as a final result, and `diff` labels it. Everything else behaves normally, so iteration stays fast — you just can't accidentally cite one.
+
+**`draft: true` is the flag; `code_dirty` is a measurement.** `draft: true` is written unconditionally, and it is what all three readers key on. [`git.code_dirty`](#the-two-files) records what the tree actually was, so a `draft` of a clean tree records `false`: the command *permits* a dirty tree rather than asserting one. Forcing the flag would make a `provenance` figure lie about the tree — the one thing `provenance` is for — and would leave [`diff`](#cli-reference) unable to compare a clean draft against the `run` of the same commit.
 
 ### What `demo` walks you through
 
