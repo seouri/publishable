@@ -2093,3 +2093,18 @@ fixed files, and names what is omitted and why. Its neighbouring *"in which `dry
 but not built"* clause went with it. **The `W-PARAM-UNSET` question is not re-opened here** either:
 every entry since the H7b ones records it as unknowable with the reason — neither `growth_screen` nor
 `publishable-llm` is installable in any build — and nothing H9a built changes what could be measured.
+
+**Correction, appended here rather than retro-edited (whole-branch fix round, 2026-08-23), replacing
+item (3)'s last sentence above:** item (3) said *"`publishable draft new` now reaches that arity arm
+rather than the unbuilt diagnostic: same exit code, different line, and again no config is read."*
+Measured through the real console script at this commit, on both `draft new` and `dry-run new`: exit
+code **2 → 1**, not unchanged; the printed line is `` error   E-IO-FAILED          No such file or
+directory``, not the arity message; and a config path **is** read — `_prepare_run` fails trying to open
+`new`. `"new"` is a single token, so `rest == ["new"]` never trips `len(rest) != 1` and the call never
+reaches the shared arity arm at all; it dispatches straight into `command_draft`/`command_dry_run` and
+fails inside `_prepare_run` instead. Task 4's own test docstring at `tests/test_cli.py` (`the call
+actually proceeds into command_draft rather than being refused for arity … _prepare_run reports a wrong
+(not invocation) failure`) already said this correctly; item (3) did not. This does not change what row
+1–4 of the table above count — none of the four disclosed changes reads a `data` or `statistics` block,
+and this correction is to the description of change (3), not to its consequence — so **no figure in the
+table above moves and no fifth number is minted.**

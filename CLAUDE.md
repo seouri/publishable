@@ -227,14 +227,17 @@ blind on every shipped arm, and only building the arm showed it**: the design's 
 `generic` project, whose `apparatus_probe` is `None` — so the round returns at its first guard and
 there is no round to add to. Spliced in for real, the three shipped arms **pass** and only the new
 probe-declaring arm fails. *Naming a seam is not testing it*, one layer up: the mutation was named,
-checked for two differing branches, and still could not reach the code. **Fifteen § Errors / § Warnings
-rows were narrower than their code, every one narrowed by this slice itself** — `dry-run` is a new emit
+checked for two differing branches, and still could not reach the code. **Thirteen § Errors / § Warnings
+rows were narrower than their code, each narrowed by this slice itself** — `dry-run` is a new emit
 surface for six apparatus and plugin codes (`E-APPARATUS-RAISED`'s *three* outcomes became four,
 `W-APPARATUS-UNANSWERED`'s *second* surface a third), and the extraction plus two new commands made
 `run`, `draft` and `dry-run` all meet the six dual-surface roster rows that said *"`command_run` … at
 `run`"*. § Errors carries one row per code covering **every** emit site, and each table's own scope
 sentence limits no command — so a slice that adds a command owes that sweep whether or not it minted
-a code, and this one minted none. And **an amendment to a sweep is a claim like any other**: the fix
+a code, and this one minted none. **A fourteenth row moved in the same fix round and is a different
+fact, not a fourteenth narrowing**: `E-CODE-DIRTY`'s row had gone wide in an earlier batch and was
+corrected back narrower — a widening caught and closed, not a row this slice's own additions made too
+narrow — so it does not join the thirteen. And **an amendment to a sweep is a claim like any other**: the fix
 round that corrected task 12's sweep target — because the old target had zero homes — re-measured the
 new one at **three** homes for `would write` when it had **four**, and the missed hit was a line that
 same round's own report quoted. Caught by attributing every hit individually rather than reconciling

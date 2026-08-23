@@ -594,6 +594,17 @@ or reordered; `draft` sets a key that already exists with a default. No `provena
 No hash definition changes. No `E-` or `W-` code is minted or retired. `schema_version` is not bumped.
 `git_provenance` is byte-unchanged.
 
+**Correction (whole-branch fix round, 2026-08-23), replacing item 3's last two sentences above:**
+measured through the real console script at `c925416` on both `draft new` and `dry-run new`, item 3
+was wrong on all three counts. The exit code is **not** the same — 2 → 1. The printed line is **not**
+the arity message — it is `` error   E-IO-FAILED          No such file or directory``. And a config
+path **is** read: `"new"` is a single token, so `rest == ["new"]` never trips the arity arm's
+`len(rest) != 1` at all; the call dispatches straight into `command_draft` and fails inside
+`_prepare_run` trying to open `new` as a path. Task 4's own test docstring already said this correctly
+(*"the call actually proceeds into `command_draft` rather than being refused for arity … `_prepare_run`
+reports a wrong (not invocation) failure"*); this paragraph did not, and the wrong claim was carried
+into the plan's task 4 section and into a dated § Executability entry, both corrected the same way.
+
 ---
 
 ## 6. Does § Executability move?

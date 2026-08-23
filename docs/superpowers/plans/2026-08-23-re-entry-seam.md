@@ -368,6 +368,17 @@ substitute for the mutation above.
 authorized editor** — the `set(NOT_BUILT_COMMANDS)` equalities, which are self-maintaining, any other
 § CLI reference row, and `provenance.py`.
 
+**Correction (whole-branch fix round, 2026-08-23), replacing this section's "one shipped answer moves"
+sentence above:** measured through the real console script, `publishable draft new` does **not**
+"after this task reach the arity arm" and does **not** print the arity message with the same exit
+code. `rest == ["new"]` has length 1, so it never trips the arm's `len(rest) != 1` at all — it
+dispatches into `command_draft` and fails inside `_prepare_run`, unable to open `new` as a path: exit
+**1**, `` error   E-IO-FAILED          No such file or directory``. The built test's own docstring
+(`test_h9a_draft_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic`) already asserts this
+correctly — `code != EXIT_INVOCATION`, not the arity message — despite what its name and this
+paragraph both claimed. This was also wrong in the design's § 5 item 3 and in a dated
+§ Executability entry in the feasibility analysis; both are corrected the same way.
+
 ---
 
 ## Task 5

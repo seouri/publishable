@@ -4280,9 +4280,11 @@ def _dry_run_step_dirs(prepared: Prepared) -> list[str]:
     """
     root = Path(_DRY_RUN_PLACEHOLDER)
     collapse = len(prepared.repeats) <= 1
-    # `dict.fromkeys`, not a `set`: plan order is what makes the list readable,
-    # and the de-duplication is real rather than defensive -- under `collapse`
-    # two repeat executions of one step in one condition share a directory.
+    # `dict.fromkeys`, not a `set`: plan order is what makes the list readable.
+    # The de-duplication itself is defensive, not a case this plan can reach
+    # today: `collapse` is `len(prepared.repeats) <= 1`, so whenever it is
+    # true there is at most one repeat label per condition and no two
+    # `build_plan` entries for one step in one condition can share a path.
     return list(
         dict.fromkeys(
             str(step_dir_for(root, execution, collapse).relative_to(root))

@@ -9658,12 +9658,19 @@ config file's `null_test` clause now says `cli.py`, matching its four sibling cl
 grepping reader should land on.
 
 **The mitigation, and its limit, checked rather than assumed.** `command_run`'s own docstring carries
-a signpost naming which phases live in which helper. A reader who greps `command_run` in `cli.py`
-lands on it: it is inside the function every one of those 34 hits names. A reader who greps
-`reference.md` lands on the § Errors core raises sentence, which says the same thing. **A reader who
-greps `tests/` — 101 of the 195 hits, against `src/`'s 94 — lands on neither**, and that is the residue this entry is for:
-a test named `test_command_run_aggregate_resolves_a_project_local_template` still names the command
-correctly and the function misleadingly, and nothing points from there to the split.
+a signpost naming which phases live in which helper. **Naming is not sitting inside**: measured by
+`ast` span, only **2 of `cli.py`'s 34 `command_run` hits** fall inside the function the signpost is
+written on — the other 32 are docstrings and comments belonging to other functions
+(`_resolved_group_axes`, `_cond_beside_n`, `_make_null_fn`, `_resolved_resample`, and others) that
+merely *name* `command_run` in passing. A reader who greps `command_run` in `cli.py` lands on
+whichever of the 34 sites matched, which is the signpost only if that site happens to be one of the
+two inside it. A reader who greps `reference.md` lands on the § Errors core raises sentence, which
+says the same thing correctly. **A reader who greps `tests/` — 101 of the 195 hits, against `src/`'s
+94 — lands on neither**, and that is the residue this entry is for: a test named
+`test_command_run_aggregate_resolves_a_project_local_template` still names the command correctly and
+the function misleadingly, and nothing points from there to the split. So the honest count for the
+mitigation's own reach is **2 of 195**, not 34 of 195 — the routing below is unaffected by that
+correction.
 
 **Why a rewrite is not obviously right, which is why this is filed rather than done.** A rewrite of
 each site has to **decide which half it now names**, and *a rewrite invents; a deletion cannot*
