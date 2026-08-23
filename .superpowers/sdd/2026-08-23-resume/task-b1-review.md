@@ -284,8 +284,21 @@ pre-mutation copy **and** by re-running: the final unfiltered run is `3053 passe
 - *"`artifacts.py` raises that code at six sites"* — `grep -c` → **6**.
 - *"the two shipped `repo_root.txt` readers are `freeze` and `report._read_repo_root`"* — all three
   read, all three carry the same triple. Confirmed.
+- *arms F and H's eight cited test names* — the report offers them as already-holding coverage,
+  which is a claim about other tests and so needs a grep rather than a brief.
+  `grep -c` over the six H8/H9a definitions it names
+  (`test_h9a_arm_b_runs_full_stdout_line_by_line`, `test_h8b_arm_b_environments_contents`,
+  `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit`,
+  `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty`,
+  `test_h8c_arm_a_the_records_field_level_shape`,
+  `test_h8b_arm_e_sweep_yamls_recorded_plan_shape`) → **6**, and
+  `test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf` at `:20113` makes seven; H9a arms C
+  and E resolve to **seven** further definitions (`:20445`, `:20478`, `:20517`, `:20609`, `:20639`,
+  `:20660`, `:20690`). **Every cited name exists** — a name resolving to nothing is the *"a fixture
+  named that was absent"* shape, and it is not present here. H9a arm A I also confirmed by
+  behaviour: it appears in the `is_baseline` mutation's failure list.
 - **The report makes no zero-disagreements claim** and files two disagreements of its own. Both
-  verified above.
+  verified above — and one further claim of its own, Concern 3, does not survive (Minor 7).
 
 ## 11. Undisclosed drops — each brief diffed against what shipped
 
@@ -338,7 +351,15 @@ entirely gives **7 failed, 3046 passed** on the full suite, with
 not in the pin: the honest mutation for a moved list entry is *omit the artifact*, and it was never
 run. Fix by correcting the row to that mutation and its count.
 
-### Major 2 — the documents work is filed in a report and has not reached task 17's brief, and `reference.md` is wrong on the branch right now
+### Major 2 — three escalations live only in this report and reach no brief and no live list; and `reference.md` is wrong on the branch right now
+
+**One rule broken three times, so it is one finding with three parts.** CLAUDE.md: *"a ruling that
+overrules a brief has to reach the brief… the ledger reaches the controller and the reviewers; it
+reaches no implementer"*, and *"a ledger line saying 'filed' is not a filing."* The batch could not
+close any of these itself — every one needs a `*.md` its briefs forbade — so this is the controller's
+to act on, not a defect in the tasks.
+
+**(a) The documents list.**
 
 The report's Concern 4 is right and specific, and the plan was not amended. Plan § Task 17 names
 **§ The other files a run writes** and the *"exactly the two facts"* sentence. It does **not** name:
@@ -360,6 +381,37 @@ tree alone — which is exactly what Concern 4 predicts.
 Also for that task: `E-RESUME-NO-IDENTITY` and `E-RESUME-NO-CONFIG` now raise from shipped `src/`
 and have **no § Errors row** in `reference.md` (`grep -c` → 0). Task 17's § Resuming bullet names
 the first code; neither is named as an § Errors row.
+
+**(b) Fixture B's unreachable collision reaches no brief.**
+
+```
+sed -n '/^## Task 8/,/^## Task 9/p' docs/superpowers/plans/2026-08-23-resume.md \
+  | grep -in "collision\|E-STEP-KEY\|fixture B"
+```
+
+→ **no output.** I confirmed the disagreement itself (§ 6 above): design § Fixtures as claims'
+fixture B cannot be built, so task 8's by-name-versus-structural mutation has no fixture that
+separates the readings. The report's Concern 2 is the right escalation and the plan carries none of
+it. **Amend plan § Task 8** to say either what separates the two readings without a colliding
+recorded key, or that the mutation is blind and what replaces it — otherwise task 8's implementer
+reads the design's fixture B, builds it, gets eight `failed` executions, and re-discovers this from
+scratch.
+
+**(c) The third `repo_root.txt` reader is filed nowhere.**
+
+```
+grep -n "repo_root\|read_repo_root" docs/superpowers/spec-defects.md
+```
+
+→ 6 hits, every one attributed: `:308` (a `cwd`/`find_repo_root` mismatch), `:786` (a containment
+predicate already extracted to a shared helper), `:3989` (a struck `E-GIT-NO-REPO` entry),
+`:4146`–`:4176` (one OPEN entry about `validate_config`'s bare `except` around `find_repo_root`),
+`:8170` (`resolve_run`'s unchecked branch). **None is the three-copies-of-the-refusal-triple gap.**
+Task 17's `spec-defects.md` bullet enumerates five specific amendments and this is not among them,
+and the batch was forbidden every `*.md` — so the entry exists **only in the report's "Filed, not
+fixed" section**, which is the failure mode CLAUDE.md names by that exact phrase. **Add it to
+task 17's bullet**, with Minor 3's encoding divergence attached, so a future consolidation knows it
+is choosing a spelling rather than preserving one.
 
 ### Minor 1 — the design's arm-B row is wrong about HEAD in a second way, and the batch flagged only the first
 
@@ -425,6 +477,34 @@ this repo's rule for a published claim is *append the correction and say what it
 same commit's third change gets this right, adding a **FINDING** paragraph rather than editing the
 comment's history.
 
+### Minor 7 — the report's Concern 3 asks for a ruling plan § Task 9 has already made, by name
+
+*"**Task 9 must rule on whether `resume` re-writes `identity.json`.** … Named now rather than
+discovered at task 9; the honest options are *skip when the file exists* and *rewrite identical
+bytes*."* Plan § Task 9's second bullet already rules, and lists the file explicitly: *"skip the
+run-start artifact writes — `manifest/`, `environment/`, `config.yaml`,
+`environment/repo_root.txt`, **`identity.json`**, `sweep.yaml`, `allocation.json` — because they
+exist and § The other files a run writes says they are never touched again."* So this is a claim
+about the plan made without grepping the plan — the same substitution as Major 1, in a cheaper
+currency. It costs nothing here, because the plan's answer is the one the concern would have
+recommended; it is worth naming because the report's other three escalations **are** real gaps, and
+a fourth that is not makes the list harder to act on. The part of the concern that survives: the
+write's own comment repeats *"settled before the first execution and never touched again"*, and
+task 9 skipping the write is what keeps that comment true — so it is a claim task 9 must not
+falsify, not a question it must answer.
+
+### Minor 8 — the 5m24s window between the normalization list and the comparison, recorded because I looked at it
+
+`f70f63f` is committed at 16:16:38 and `61532a1` at 16:22:02. Five and a half minutes is tight for
+two `uv sync` installs, two scaffolds, four console-script invocations, the `cp -p` re-run and 356
+lines of report. **It is not a finding**: the brief required the list before the **comparison**, not
+before the harness, and building two worktrees and two venvs ahead of committing the list is
+legitimate and is what I did myself. Recorded because a reviewer's silence on an anomaly they
+noticed reads as not having looked — and because the stronger evidence is independent reproduction
+rather than timing forensics. I reproduced every conclusion in that table, and found **zero**
+differing `run.yaml` leaves where the report found one, explained entirely by my `cp -p` running
+before the runs rather than after.
+
 ---
 
 ## What was verified by behaviour versus by reading
@@ -444,7 +524,9 @@ and that exactly two moved in `c7bbd64`; the write site's position inside `with 
 `f2e545d` state of `_DRY_RUN_FIXED_FILES`' comment and tuple; both `io.record` collision guards;
 all three `repo_root.txt` readers; `manifest.py`'s digest inputs; `Prepared`'s field annotations;
 the two `<run_dir>/` trees and the four `reference.md` sentences; plan § Task 17's contents; the
-design's § The guard pin and § Fixtures as claims; every grep in § 7 and § 10.
+design's § The guard pin and § Fixtures as claims; plan § Task 8's and § Task 9's contents;
+`spec-defects.md`'s six `repo_root` hits; arms F and H's fourteen cited definitions; every grep in
+§ 7 and § 10.
 
 **Neither, and said so**: that arm C still fails under its own mutation — its assertion is
 byte-unchanged from H9a and nothing in this batch touches the ledger writer, so I relied on H9a's
