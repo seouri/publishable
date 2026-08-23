@@ -16549,6 +16549,72 @@ def test_h6b_arm_d_environment_key_order(tmp_path):
     ]
 
 
+def _the_two_files_environment_block() -> dict:
+    """§ The two files' `provenance.environment` mapping, read out of the document.
+
+    Named section, then the one `environment:` line inside it — asserted to be
+    the ONE, so a future edit that adds a second `environment:` mapping to the
+    section fails loudly here rather than silently pinning the wrong one.
+    Trailing `#` comments are stripped; no value in this block contains a `#`.
+
+    NOT via `_section_text`: that helper cuts at the first line matching
+    `^#{1,6} `, and this section's fenced block opens with the comment
+    `# <output_dir>/run_.../run.yaml` — so it would return a slice ending
+    above the mapping this reads. Fences are skipped in every mechanical
+    pass over these documents for exactly that reason. The heading is still
+    named rather than located by position, and the block is the first fenced
+    `yaml` block under it.
+    """
+    doc_lines = REFERENCE_MD.read_text().split("\n")
+    start = doc_lines.index("## The two files")
+    fence = next(i for i in range(start + 1, len(doc_lines)) if doc_lines[i] == "```yaml")
+    end = next(i for i in range(fence + 1, len(doc_lines)) if doc_lines[i] == "```")
+    lines = doc_lines[fence + 1 : end]
+    starts = [i for i, line in enumerate(lines) if line == "  environment:"]
+    assert len(starts) == 1, starts
+    body = []
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith("    "):
+            break
+        body.append(re.sub(r"\s+#.*$", "", line)[4:])
+    assert body, lines[starts[0] : starts[0] + 4]
+    return yaml.safe_load("\n".join(body))
+
+
+def test_h6b_fix_round_the_two_files_environment_block_is_what_run_writes(tmp_path):
+    """H6b whole-branch review, Major 2 — the pin Ruling O did not have.
+
+    Ruling O removed `gpu` from § The two files' `hardware` mapping, on the
+    ground that a GPU is an apparatus fact core cannot probe. Reinstating it
+    left the whole suite green: guard-pin arm R is a raw-text golden over the
+    worked example's NUMBERS and carries no substring of these lines, and
+    nothing else read this fenced block at all (the plan's own correction 19
+    recorded that absence and asked for nothing).
+
+    Both ends are read independently, the way Fixture G reads § Errors: the
+    DOCUMENT side is extracted from the named section by
+    `_the_two_files_environment_block`; the CODE side is the
+    `provenance.environment` mapping a real `run` actually writes. Neither is
+    derived from the other, so this cannot degenerate into the document
+    comparing itself with itself.
+
+    What it pins, in one assertion each: Ruling O (a `gpu` key returning to
+    either end fails), Decision 9's key ORDER at the document end (arm D pins
+    it at the code end), and any future key written but undocumented or
+    documented but unwritten — the six-unwritten-keys drift this slice closed
+    by hand and nothing was watching.
+    """
+    documented = _the_two_files_environment_block()
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    written = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["provenance"]["environment"]
+
+    assert list(documented) == list(written)
+    assert list(documented["hardware"]) == list(written["hardware"])
+    # The literal, so neither extraction can go vacuous and agree with itself:
+    # `hardware` carries `cpu_count` and nothing else at either end.
+    assert list(documented["hardware"]) == ["cpu_count"]
+
+
 def test_h8b_arm_e_sweep_yamls_recorded_plan_shape(tmp_path):
     """Arm E — `sweep.yaml`'s recorded plan, which `freeze` will cross-check.
     NEVER MOVES IN THIS SLICE.
