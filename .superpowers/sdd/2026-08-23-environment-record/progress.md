@@ -41,3 +41,40 @@ example**, and only sweeping for the *claim* rather than the *key* finds it.
 
 **Both Minors are miscounts** — a 26 that is 25, and a per-file diff stat off by two in a correct total —
 bringing this family to **eight**, none of which has ever changed a conclusion.
+
+## Batch 2 — task 3 alone — the write
+
+Commits `3b583f2` (the three keys), `354bb46` (**a controller ruling on guard-pin arm S**), review
+`fb41816` (**PASS**, no findings, one process note). Suite 2964 → **2969**.
+
+**Capturing the pin forward worked, and this batch is the direct counter-example to H6a's batch 2 Major.**
+Arm P was captured in batch 1 against the shape task 3 would produce, with its post-edit state written
+down before the task existed; the diff matches that spec **byte for byte** — three pops, three assertions,
+the `==` literal identical. H6a's arms were captured against a **superseded signature** and forced a later
+task to choose between a broken import and an unauthorized edit. **The difference is one batch of
+foresight, and it is cheap.**
+
+**The other half of that discipline also worked, and it is the more valuable half: the task left a test
+FAILING rather than self-authorizing an edit.** Its write made real records carry `hostname`, which
+falsified the premise **guard-pin arm S** rested on — *today's real records never carry `hostname` at
+all* — and arm S has **no authorized editor**. The task stopped, named three options, and reported. That
+is exactly the route H6a's batch 2 Major said to use and H6a's batch 3 first used; **it now has an
+instance where the alternative was to leave the branch red, and it still held.**
+
+**The ruling kept the property and changed only its source.** Arm S was always testing that redaction does
+not **invent** `hostname`; the record now has the key **deleted explicitly** rather than absent by
+accident, with the assertion byte-identical. The reviewer re-derived the equivalence — `dict.get` on a
+missing key and on an explicitly deleted one both return `None` — and **re-ran the mutation the arm exists
+to catch**: making the redaction unconditional fails that one test and nothing else, before and after the
+edit. *An arm whose premise its own slice falsified is not a weakened pin if the property survives and the
+mutation still bites.*
+
+**Two facts worth carrying about the write itself.** `socket.gethostname()` is called from two **sites**
+but they are one function, so it is **not** the two-sources fault H6a spent a Major establishing —
+checked rather than assumed. And **`cpu_count: null` is inert downstream**, because **no reader of
+`hardware` exists anywhere**: `diff.py` reads only `uv_lock_hash`, `study.py` only `hostname`. That is
+worth knowing before someone writes the first reader.
+
+**And a stale comment is already waiting.** `study.py` says `provenance.environment.hostname` *"is never
+written today (measured at …)"* — **task 3 falsified it**, it is task 7's by plan, and it is the fourth
+sentence in two slices to go false under its own slice's later change.
