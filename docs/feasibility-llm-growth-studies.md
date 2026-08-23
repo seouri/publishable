@@ -64,8 +64,8 @@ Nine runs, two pipelines, one plugin. How many git repositories that is has a me
 | Mechanism | What it does across these nine runs |
 |---|---|
 | `code_hash` spans `src/**` | Every commit to `growth_shortcut` changes the recorded code identity of screening runs that never imported it |
-| `run` refuses a dirty `src/**` | E4 (4.4 h) and C3 (12 h) cannot start while the other package has uncommitted edits — `run` enforces this today. [`draft`](reference.md#draft-runs) is specified to permit it and mark the run non-citable, which is no use for a confirmation run anyway, and it does not dispatch in this build ([§ Executability on this build](#executability-on-this-build)) |
-| `resume` refuses a moved `uv.lock` | One lockfile serves both, so a dependency added for the shortcut makes an in-flight twelve-hour screening run unresumable — as specified; `resume` prints the same *specified but not built* diagnostic — see [§ Executability on this build](#executability-on-this-build) |
+| `run` refuses a dirty `src/**` | E4 (4.4 h) and C3 (12 h) cannot start while the other package has uncommitted edits — `run` enforces this today. [`draft`](reference.md#draft-runs) is specified to permit it and mark the run non-citable, which is no use for a confirmation run anyway; whether it dispatches is a build fact and lives in the dated entries ([§ Executability on this build](#executability-on-this-build)) |
+| `resume` refuses a moved `uv.lock` | One lockfile serves both, so a dependency added for the shortcut makes an in-flight twelve-hour screening run unresumable — as specified; whether `resume` dispatches is a build fact and lives in the dated entries — see [§ Executability on this build](#executability-on-this-build) |
 
 **What that costs is the claim the screening sequence is built on.** E1 freezes the objective, E2 spends it, and E3, E4, and E6 all evaluate the same frozen program — a sequence spread over weeks whose reviewer-facing claim is [same code, different parameters](design-principles.md#same-code-different-parameters): identical `code_hash`, differing `parameters_hash`. Shortcut development inside that window destroys the first half of it. Sharpest is the pair of roster-variant runs [§ Cost and execution summary](#cost-and-execution-summary) sets aside, which exist *only* to be compared against E1 through E3 in a study — and [`report study.yaml`](reference.md#studies-what-a-paper-reports) cross-checks that runs claiming the same code really do share a `code_hash`.
 
@@ -1468,7 +1468,7 @@ Every run is far below `limits.max_executions: 500`, so the binding constraint i
 - **Condition-scoped compilation.** Moving compilation to repeat scope would multiply the five compilations by every repeat and add ≈ $1,900.
 - **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
 
-**As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and where every artifact will land, and it runs the apparatus probe — so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build, in which `dry-run` prints *specified but not built* rather than being unrecognized ([§ Executability on this build](#executability-on-this-build)); every figure in this table was therefore computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
+**As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and the **step directories** and **fixed files** a run would write — not the artifact files inside them, which are `io.write` arguments in step code and are declared nowhere in the config — and it runs the apparatus probe, so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build; what this build's `dry-run` actually does lives in the dated entries ([§ Executability on this build](#executability-on-this-build)). Every figure in this table was computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
 
 ### Correction, appended 2026-08-20 against commit `8d5c046` — "six with no remaining core-side blocker" answers no consistent question
 
@@ -1988,3 +1988,108 @@ build carries three more `provenance.environment` keys than one made before it, 
 ruling — it compares five figures and `uv_lock_hash` is the environment fingerprint among them — so two
 runs on different platforms still compare `identical` on all five rows, exactly as they did before.
 **That is a fact about what a record carries, not about executability, and it mints no row.**
+
+### Measured on 2026-08-23 against commit `c925416` — after H9a
+
+**H9a (the re-entry seam, `draft` and `dry-run`) splits a shipped command into two helpers, dispatches
+two names that printed an unbuilt diagnostic, and changes nothing about which of these nine configs can
+run.** **It is explicitly NOT additive** — its design enumerates four behaviour changes, two of them to
+a shipped invocation's exit code and output — so this entry does not lean on "a command addition cannot
+move a config's executability." It checks all four against these nine, one at a time, below.
+
+**The commit pinned above is this branch's tip at this task, and it is also the last commit on the
+branch to touch `src/` or `tests/`** — `git log -1 --format=%h -- src tests` → `c925416` — so the tree
+the figures were derived against is the tree the sha names, with no later commits to reconcile. Stated
+rather than left to a reader, on the H6a, H5b and H6b entries' precedent.
+
+**Row 1 counts configs validating with zero *errors*, and `validate`'s answer for these nine is
+byte-identical.** Measured three ways rather than argued. `git diff --name-only main...HEAD -- src`
+prints **two** files, `src/publishable/apparatus.py` and `src/publishable/cli.py` — `validate.py`,
+`units.py`, `sweep.py`, `stats.py` and `correction.py` are untouched, so nothing that reports a finding
+moved. `apparatus.py`'s whole diff is **three docstring paragraphs and zero statements** (the `PHASES`
+docstring, `append_observation`'s, `replay_ledger`'s), each corrected because it would have gone false
+under this slice's own change. And `cli.command_validate`'s source segment is **byte-identical between
+`main` and this tip** — 261 characters, compared by `ast.get_source_segment` on both sides rather than by
+reading the diff's hunk headers, which name it only as the enclosing context of an insertion below it.
+
+**Rows 2 and 3 name dependencies H9a does not touch, and one of them it structurally cannot reach.**
+`io.reuse_from`'s plugin-side call is a step-level call; `_prepare_run` carries the `UpstreamLedger`
+and `UpstreamResolver` it always did, in the same statement order, and this slice adds no reader of a
+run directory at all. The `report_by`-under-`resample` construction is chosen inside
+`stats.summarize_step`, reached from the aggregate phase — **phase 8, inside `_execute_prepared`, which
+`dry-run` never enters**, and which `draft` enters identically to `run` because `command_draft`
+delegates to it. `stats.py` is not in the two-file diff above.
+
+**Row 4 counts configs free of every core-side dependency this analysis can name, and neither new
+command adds or removes one.** `draft`'s precondition is a **dirty working tree** — a property of the
+operator's checkout, not of a config, and nothing a config can declare or omit. `dry-run`'s probe round
+is unexercised for all nine for a reason that is measured rather than assumed: every one validates
+against `generic`, and `GenericTemplate.apparatus_probe` **is `None`** (read at this commit, beside
+`apparatus_facts == []`), so `_dry_run_probe` returns at its first guard and no probe is dispatched, no
+fact is checked, and `W-APPARATUS-UNANSWERED` cannot fire. **Worth naming because it cuts the other
+way**: `draft` does give E4 and C3 a route past the dirty-tree obstacle § Three repositories, and what decides the seams records for
+them — but that obstacle was never one of the core-side dependencies row 4 counts, so the row does not
+move and neither does the count.
+
+**The four enumerated behaviour changes, checked against these nine one at a time.** **(1)**
+`publishable dry-run <path>` and `publishable draft <path>` exited `2` with an unbuilt diagnostic on
+stderr and now dispatch. That changes what those two commands answer; `run`'s answer for these nine is
+what row 1 rests on and it is byte-identical. **(2)** `NOT_BUILT_COMMANDS` loses two keys and
+`OPERATION_COMMANDS` gains two, so the shared arity arm answers for six names instead of four — a
+message about an *invocation*, printed without reading a config at all. **(3)** `publishable draft new`
+now reaches that arity arm rather than the unbuilt diagnostic: same exit code, different line, and again
+no config is read. **(4)** The extraction claims to move nothing and the claim was measured, not
+asserted — two console scripts from two editable installs, `run.yaml` equal over 147 leaves in order,
+the run tree equal over 26 paths, stdout equal over 4 lines, against a normalization list written
+before the work. **None of the four reads a `data` or `statistics` block**, which is what a row of this
+table is derived from.
+
+**H9a therefore unblocks ZERO configs**, and the reason is structural rather than incidental: both
+commands are *second entries into a sequence these configs already reach or do not*. A config that
+`validate` refuses is refused identically by `dry-run` (its phase 1 **is** `validate_config`, and the
+cost ordering means the refusal arrives before any metered call); a config that validates gains a
+cheaper way to *inspect* the plan and a way to run it from a dirty tree, and neither is a core-side
+dependency being retired.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The whole block above — header, separator and all four rows — is byte-identical to the H6b entry's,
+and no ordinal is asserted.** The block was produced by extracting the immediately preceding entry's
+table two independent ways — `sed -n '1946,1951p'` and a programmatic walk that finds the last
+`| Figure | Count | Visible to` header and reads forward while the line starts with `|` — and `diff`-ing
+the two: **empty**, six lines each. The text pasted here is that extraction, not a retyping, which is
+why each cell still carries prose naming **H8a** rather than this slice: that is what "character for
+character" means, and updating it is exactly how a repeated table stops being repeated. H9a's plan and
+design both reproduce the table in their own openings and **neither was read for it** — a second source
+of truth is how both of this analysis' wrong figures were made. **No fifth number is minted, and no
+single figure is quoted for this analysis' executability** — quote the table, or name the dependency:
+`io.reuse_from`'s plugin-side call for six, the `report_by`-under-`resample` gap for seven, and 8 of 8
+validating clean, which is the only figure `validate` can see.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** H9a mints no `E-` and no `W-` code
+and retires none. It does make `dry-run` a **new emit surface** for six codes that already existed
+(`E-APPARATUS-RAISED`, `-RETURN`, `-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`, `E-PROBE-UNKNOWN`,
+plus `E-PLUGIN-LOAD`/`-DECORATOR` on a probe's dispatch) and for `W-APPARATUS-UNANSWERED` — every one of
+which needs a declared `apparatus_probe` to reach, which none of these nine has. `run`, `draft` and
+`dry-run` also all now meet the six dual-surface roster refusals through the shared `cli._prepare_run`;
+that widens the § Errors rows (corrected in the same slice) and fires nothing new for a config `run`
+already accepted or refused.
+
+**Three claims elsewhere in this analysis went false with this slice and are corrected rather than left
+standing**, each in a section that is not a dated entry, and each corrected by **deleting the undated
+build claim** rather than by restating it — the pattern rule 10 of the procedure asks for. § Three
+repositories, and what decides the seams said `draft` *"does not dispatch in this build"* and that `resume` *"prints the same
+specified but not built diagnostic"*; both now say that whether the command dispatches is a build fact
+living in these dated entries. § Cost and execution summary said `dry-run` prints *"where every artifact
+will land"* — **Ruling R's third home, and a specification claim rather than a build one**, since
+`reference.md` no longer promises it: printing the artifact *files* needs the `io.write` names inside
+step bodies, which core is documented never to inspect. That paragraph now says step directories and
+fixed files, and names what is omitted and why. Its neighbouring *"in which `dry-run` prints specified
+but not built"* clause went with it. **The `W-PARAM-UNSET` question is not re-opened here** either:
+every entry since the H7b ones records it as unknowable with the reason — neither `growth_screen` nor
+`publishable-llm` is installable in any build — and nothing H9a built changes what could be measured.
