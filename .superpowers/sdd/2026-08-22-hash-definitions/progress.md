@@ -92,3 +92,49 @@ memoizing closure. And the three states that made `git ls-files` the wrong answe
 deleted from the working tree, a tracked file under `__pycache__`, **a submodule** — were each **built**
 against the shipped predicate and answered correctly. That is the difference between rejecting a proxy on
 an argument and rejecting it on a measurement.
+
+## Batch 3 — tasks 5, 6 — THE VALUE CHANGE
+
+Commits `9685ae0` (the predicate wired at `command_run`), `c98b24e` (Fixture J, the duplicated
+`__pycache__` pin replaced), `5974c93`, `d959b34`, review `eb8e347` (**both PASS — three Majors, six
+Minors, none behavioural**), fix round `cb5003d` / `8f2b26f` / `440a72d` / `bc14559`. Suite 2945 →
+**2951**, unmoved by the fix round.
+
+**The value change is correct end to end, and both sides were built.** Through the installed console
+script on a project outside the repo, a **byte-identical tree** records `09a843b1…` before this slice and
+`f6a935cf…` after; `run_id` and `results/latest` follow. Ruling F was confirmed by behaviour rather than
+by grep: a **machine-local global exclude left the file hashed** (`a34ed58…`), and moving the same rule
+into a **committed `.gitignore`** returned the digest to `f6a935c`. That pair is the ruling's whole
+content — *a rule that does not travel with the tree cannot define the tree's identity* — and nothing but
+running it twice could have shown it.
+
+**Three of the four moved digests land on the SAME after-value**, which the reviewer flagged rather than
+skipped: a coincidence of three trees reducing to the same file set weakens each fixture's ability to
+discriminate, and it is now named in a comment where the next reader meets it.
+
+**Two brief steps were unreachable as written, and the second is the more interesting.** The plan's base
+tree cannot be `run` at all (`E-TEMPLATE-LOAD`). And **a resolver writing into `src/**` on its FIRST call
+refuses with `E-CODE-DIRTY` — because `validate` dispatches resolvers too**, so the write happens before
+the gate rather than during the run. The fixture writes from the **second** call and asserts the counter.
+Both were verified by running.
+
+**The Majors were all claims, and the arm-E one is the device catching itself.** Guard-pin arm E's
+docstring asserted *"`code_hash` still has exactly one production call site in `src/`"* — **made false by
+this very batch**, sitting in an arm no task may edit. Batch 2's Major had just established the route:
+**an implementer may not self-authorize an arm edit, even a mechanical one**. This time the route was
+used — a controller ruling naming the post-edit state in advance (**that clause gone, the past-tense
+count kept, no assertion or literal moved**) — and the diff shows one line. **That is the difference
+between the two batches, and it is the whole value of writing the post-edit state before the edit.**
+
+**`hashes.code_hash` was measured before it was judged, and the measurement reversed the likely answer.**
+Zero production callers looked like dead code or a second definition of an identity function — *two
+sources of truth for one identity function is the same fault as a separate defaults file, and worse,
+because a suite pinned against the dead one keeps passing while the live one drifts.* Measured, its body
+**is** `code_hash_of(hashed_files(...))`, the same two functions `command_run` calls, **pinned equal to
+that composition by an existing test.** One implementation, not a duplicate. `reference.md`'s two mentions
+say *"report never calls it"*, which is true and claims nothing more.
+
+**And a mutation was dropped under a heading reading *"every one"*.** The reviewer re-ran it, Fixture M
+catches it, **so the silence was the finding rather than a hole** — corrected by appending, never by
+editing the heading. That is the fifth instance in two slices of *dropping a clause is legitimate;
+dropping it silently is not.*
