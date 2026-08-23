@@ -538,7 +538,7 @@ The scoping's § What H9 must not fold in is the starting list; every row was re
 ## 5. Is this additive? — the disclosure
 
 **No, and the honest form is an enumeration rather than a phrase** (H5b's and H6a's precedent).
-Three things move, and the third is the one a reader would under-read.
+Four things move, and the last is the one a reader would under-read.
 
 **1. Two shipped invocations change their exit code and their output.** `publishable dry-run <path>`
 and `publishable draft <path>` exit **2** today with `` `publishable dry-run` is specified but not
@@ -553,7 +553,14 @@ not assumed: the shared arity arm now answers for six commands instead of four, 
 unbuilt diagnostic. And the two-token arm (`f"{command} {rest[0]}"`) no longer matches these names,
 which is why the **order** of `_dispatch`'s branches is load-bearing and unchanged.
 
-**3. The extraction is claimed to move nothing, and the claim is measured rather than asserted.** The
+**3. One more shipped answer moves, and it is the item a reviewer would find by diffing behaviour
+rather than reading this list.** `NOT_BUILT_COMMANDS` shrinking changes what the **two-token** arm
+answers for: `publishable draft new` reaches `_report_not_built("draft", "Draft runs")` today, via the
+single-name lookup after the two-token key misses, and afterwards reaches the shared arity arm and
+prints `` `draft` takes exactly one path and no flags``. Same exit code, different line. The branch
+order that makes this the only such case is unchanged and load-bearing.
+
+**4. The extraction is claimed to move nothing, and the claim is measured rather than asserted.** The
 target: for one real config run on a `main` worktree and on the branch, `run.yaml` is equal **leaf by
 leaf**, the run-directory tree is equal **path by path**, stdout is equal **line by line**, and the
 exit code is equal, with a normalization list written **in advance** — timestamps (`at`, `started_at`,
