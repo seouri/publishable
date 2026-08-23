@@ -246,3 +246,54 @@ controller: the attribution edited, the misreading **appended** to the design ra
 **And the batch disclosed that its own mechanical checker produced eight false positives on first run.**
 That is the third time in two slices a sweep or checker could not be trusted until debugged — *prove
 every sweep can fail* is a rule about the checker as much as about the claim.
+
+## The whole-branch gate — HOLD on three Majors, and a ruling the fix round handed up
+
+Review `d920470` (**HOLD**), fix round `7d55c87` / `26b5b6e` / `f5df7ee` / `33311f3`, then **Ruling M**
+`7e30c4b` / `b69ef17` / `bb15a78`. Suite 2955 → **2963**, against `main`'s 2931.
+
+**Every moved digest is enumerated and pinned** — a `main`-versus-HEAD run over one byte-identical project
+outside the repo differs in `code_hash` alone (`09a843b1…` → `f6a935cf…`) plus timestamps, with `run_id`,
+the directory name and `latest` following it and covered by arms A, B and C. All seven arms were proven
+able to fail; the four with no authorized editor moved no assertion, literal or name; arm E moved only the
+clause Ruling J authorized.
+
+**And the gate earned itself on the slice's own central claim: Ruling F was pinned by NOTHING.**
+`grep -rn "GIT_CONFIG_GLOBAL\|excludesFile" tests/` returned zero, and **removing the entire neutralization
+left the suite byte-identical.** Batch 1 and batch 3 had each measured the property by hand — twice, on
+different days, both times correctly — and *a probe proves the moment; a test proves tomorrow.* That is the
+sixth time in four slices a correct fix shipped unpinned because a probe stood in for a pin.
+
+**Two claims of the form "the only machine-dependent input left" failed, and I wrote one of them.** The
+`E-CODE-DIRTY` row I added in batch 4's follow-up said *"the gate and the hash now consider the same set
+of files, which they did not before"* — **false, because the hash was neutralized and the gate was not.**
+The hole ran the wrong way and that is why it mattered: a globally-excluded file was **clean to the gate
+and folded into the hash**, giving a run whose recorded identity covered a file **no clone of that commit
+contains.** **Ruling L** closed it by neutralizing the gate too — *applying Ruling F's principle to the
+hash but not to the gate is what produced the false sentence.* And the fix round then found that **Ruling
+L alone still would not make the sentence true**: the hash drops its fixed skip set unconditionally, so a
+tracked modified `src/pkg/step.pyc` is dirty at the gate and read by no hash. The row now claims **one
+exclude chain**, not one file set — a smaller claim that is true. The **second** such failure was an
+**uncommitted root `.gitignore`**, which decides what is hashed while the gate, scoped to the two trees,
+cannot see it — the word *only* deleted rather than narrowed, and the residue filed against H6b.
+
+**Ruling M is the entry worth carrying furthest, because the fix round could have shipped its own fix.**
+Total neutralization — clearing `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `core.excludesFile` — closed
+the exclude question **and also killed `core.fileMode`, `core.autocrlf` and `core.symlinks`**, which are
+*legitimately* machine-local: they exist because filesystems differ. Reproduced: with a global
+`core.fileMode = false`, `chmod +x` on an **unedited** tracked file read `M`. **A run blocked on a correct
+tree is strictly worse than the fault being closed**, and it would land on exactly the users least able to
+diagnose it. The surgical form — `-c core.excludesFile=` plus `-c status.showUntrackedFiles=normal`, no
+environment variables — **answers the direct question**, and the measurement that decided it is that
+`-c core.excludesFile=` **alone closes all three exclude routes** (global config, the XDG default
+`~/.config/git/ignore`, and a repo-local `.git/config`), so the environment variables were never
+load-bearing for excludes at all. **Answering with a blunt instrument that happens to contain the answer
+is the proxy move this repo keeps paying for** — and this time the agent that built the blunt version
+**measured the alternative and handed the choice up rather than swapping it in**, which is the behaviour
+the arm-edit rule was written to produce.
+
+Two side effects of the surgical form, both measured: it reaches a **repo-local**
+`status.showUntrackedFiles = no` that the environment form never did, and it **closes the `safe.directory`
+fail-open** the fix round had just filed, since a legitimate global entry is no longer discarded. **Each
+`-c` flag has its own arm** — removing the excludes flag fails four tests, removing the untracked flag
+fails exactly one.
