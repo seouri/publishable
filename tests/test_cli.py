@@ -16460,13 +16460,93 @@ def test_h8b_arm_d_the_five_figures_diff_reads(tmp_path):
     provenance = run_doc["provenance"]
     environment = dict(provenance["environment"])
     python_version = environment.pop("python_version")
+    os_value = environment.pop("os")
+    hostname = environment.pop("hostname")
+    hardware = environment.pop("hardware")
     assert environment == {"manager": "uv", "uv_lock": None, "uv_lock_hash": None}
     assert isinstance(python_version, str) and python_version
+    assert isinstance(os_value, str) and os_value
+    assert isinstance(hostname, str) and hostname
+    assert isinstance(hardware, dict) and set(hardware) == {"cpu_count"}
     assert provenance["apparatus"] is None
     assert provenance["upstream"] == []
     assert run_doc["code_hash"].startswith("sha256:")
     assert run_doc["parameters_hash"].startswith("sha256:")
     assert provenance["input_manifest_hash"].startswith("sha256:")
+
+
+def test_h6b_arm_a_os_is_composed_from_installed_sentinels(tmp_path, monkeypatch):
+    """H6b Fixture A — `os` is the composed `system-release-machine` form.
+
+    Sentinels rather than recomputing the composition in the test: a test
+    that recomputes `f"{platform.system()}-…"` and compares is a mutation
+    whose two branches cannot differ, since it would pass against any
+    implementation using the same three calls in any order.
+    """
+    monkeypatch.setattr("platform.system", lambda: "Fixtureos")
+    monkeypatch.setattr("platform.release", lambda: "9.9.9")
+    monkeypatch.setattr("platform.machine", lambda: "fixarch")
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["os"] == "Fixtureos-9.9.9-fixarch"
+
+
+def test_h6b_arm_b_hostname_is_socket_gethostname(tmp_path, monkeypatch):
+    """H6b Fixture B — `hostname` comes from `socket.gethostname()`.
+
+    Discriminating against the plausible wrong source: `platform.uname().node`
+    is unaffected by this patch, so a wrong implementation reading from there
+    would fail this assertion rather than passing it by coincidence.
+    """
+    monkeypatch.setattr("socket.gethostname", lambda: "pinhost.example.invalid")
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["hostname"] == "pinhost.example.invalid"
+
+
+def test_h6b_arm_c_hardware_carries_cpu_count_arm_1(tmp_path, monkeypatch):
+    """H6b Fixture C, arm 1 — `hardware` carries a real `cpu_count`."""
+    monkeypatch.setattr("os.cpu_count", lambda: 77)
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["hardware"] == {"cpu_count": 77}
+
+
+def test_h6b_arm_c_hardware_carries_cpu_count_arm_2_none(tmp_path, monkeypatch):
+    """H6b Fixture C, arm 2 — `cpu_count: null` is written through, key present.
+
+    One arm cannot distinguish "writes the count" from "writes a constant".
+    This arm is what catches `os.cpu_count() or 1`: arm 1 alone would pass
+    against that mutation, and only this arm — asserting the key is present
+    with a `None` value rather than absent — catches it.
+    """
+    monkeypatch.setattr("os.cpu_count", lambda: None)
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    hardware = run_doc["provenance"]["environment"]["hardware"]
+    assert "cpu_count" in hardware
+    assert hardware["cpu_count"] is None
+
+
+def test_h6b_arm_d_environment_key_order(tmp_path):
+    """H6b Fixture D — the key order is § The two files' own.
+
+    Enumerate the literals the list should contain, rather than iterating
+    the thing under test — a vocabulary test that loops over the very
+    collection under test measures only that the set equals itself.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    raw = (doc["run_dir"] / "run.yaml").read_text()
+    record = yaml.safe_load(raw)
+    assert list(record["provenance"]["environment"]) == [
+        "manager",
+        "python_version",
+        "os",
+        "hostname",
+        "uv_lock",
+        "uv_lock_hash",
+        "hardware",
+    ]
 
 
 def test_h8b_arm_e_sweep_yamls_recorded_plan_shape(tmp_path):
