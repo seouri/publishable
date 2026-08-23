@@ -507,3 +507,152 @@ is a change to what Ruling L decided.
 than a finding. This round did not change it: the date names the records commit by the convention H5b and
 H8c set, and re-dating it would ripple through the entry's other dated claims. If the merge lands today
 it reads one day stale.
+
+---
+
+# Controller Ruling M, 2026-08-23 — the surgical neutralization
+
+Applying the controller's ruling that closed concern 1 above: replace the total environment
+neutralization (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) with two command-line overrides,
+`-c core.excludesFile=` and `-c status.showUntrackedFiles=normal`, no environment variables, at both
+call sites (`_git`'s `neutralized=True` branch and `unignored_under_hashed_trees`).
+
+## Measured before touching code
+
+In a throwaway repo, `-c core.excludesFile=` alone (no environment variables) against `src/pkg/notes.log`
+excluded by each route in turn:
+
+| Route the exclude rule takes | `check-ignore` without `-c` | `git -c core.excludesFile= check-ignore` |
+|---|---|---|
+| global config `[core] excludesFile` | rc 0 (excluded) | rc 1 (not excluded) |
+| the XDG default `~/.config/git/ignore` | rc 0 | rc 1 |
+| repo-local `.git/config` `core.excludesFile` | rc 0 | rc 1 |
+
+All three exclude routes are closed by `-c core.excludesFile=` alone — the environment variables were
+never load-bearing for excludes, confirming the fix round's own table.
+
+For the untracked-files question: `-c status.showUntrackedFiles=normal` closes a global **and** a
+repo-local `status.showUntrackedFiles = no` (measured both), where `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`
+only ever closed the global one — a repo-local `.git/config` entry is untouched by an environment
+variable naming a different file. So the `-c` form is strictly more complete for this route too.
+
+**The `core.fileMode` regression, reproduced and then closed.** With a repo's own `core.filemode`
+explicitly unset and a real `~/.gitconfig` (via `HOME`) setting `core.fileMode = false`: an unedited
+tracked file's `chmod +x` (mode changed, content untouched) read `git status --porcelain` as `M
+src/pkg/step.py` under the old mechanism (`GIT_CONFIG_GLOBAL=/dev/null` discarding the machine's
+`~/.gitconfig` entirely) and as clean under the surgical `-c`-only form (which never touches
+`core.fileMode`). `core.autocrlf` is the same class (Git for Windows writes it to the system config)
+and was not independently reproduced beyond the review's own measurement — this repo's runner is not
+Windows — but the mechanism (a system/global config entry, discarded wholesale by the environment
+form and untouched by the `-c` form) is identical.
+
+**The `safe.directory` fail-open, re-measured and found closed as a side effect.** With
+`GIT_TEST_ASSUME_DIFFERENT_OWNER=1` and a real global `safe.directory` allowlist entry for the repo:
+the old mechanism still produced `fatal: detected dubious ownership` (rc 128, which `_git`'s
+`check=False`/`strip()` convention reads as empty stdout, i.e. "clean") because the environment
+variables discarded the very allowlist entry that should have cleared the warning. The `-c`-only form
+touches neither global nor system configuration, so the allowlist entry is honoured and `git status`
+succeeds normally (rc 0). A repository with **no** `safe.directory` entry at all still hits the same
+`fatal:` and the same silent-clean reading under either mechanism — that residual case is `_git`'s own
+`check=False` convention swallowing a returncode at a call site never designed to refuse, predates
+Rulings F/L/M, and is not filed as part of this change.
+
+## Code change
+
+`src/publishable/provenance.py`: `_NEUTRALIZED_CONFIG_ARGS` is now
+`("-c", "core.excludesFile=", "-c", "status.showUntrackedFiles=normal")`; `_NEUTRALIZED_CONFIG_ENV`
+and `_neutralized_env()` are deleted; `_git` and `unignored_under_hashed_trees` no longer pass `env=`
+at all (both call sites now inherit the ambient environment unmodified). Comments at both the module
+level and the two call sites rewritten to state the new mechanism and its grounds.
+
+## Each `-c` flag has its own failing mutation, full unfiltered suite each time
+
+| Mutation | Result |
+|---|---|
+| `_NEUTRALIZED_CONFIG_ARGS` narrowed to drop `-c core.excludesFile=` | 4 failed, 2958 passed, 1 skipped, 2 xfailed — both Ruling F arms, the Ruling L global-excludesFile arm, and the end-to-end acceptance arm (`test_run_refuses_an_untracked_file_a_global_exclude_hides`) |
+| `_NEUTRALIZED_CONFIG_ARGS` narrowed to drop `-c status.showUntrackedFiles=normal` | 1 failed, 2961+ passed — `test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate` alone |
+| reverted to the old total environment form (`GIT_CONFIG_GLOBAL`/`SYSTEM=/dev/null`, targeted rerun) | fails the new `test_h6a_ruling_m_a_global_core_filemode_false_does_not_go_unedited_dirty` pin alone, confirmed on the targeted file before the full suite |
+
+Both halves fail independently and disjointly, on the exact mutations Ruling M's own text names. The
+first two were run through the full unfiltered suite; the third (reinstating the pre-Ruling-M code
+wholesale) was confirmed on `tests/test_hashes.py` directly, since it is a revert of the mechanism the
+new pin exists to catch rather than a narrowing of the current one.
+
+## New pin
+
+`tests/test_hashes.py::test_h6a_ruling_m_a_global_core_filemode_false_does_not_go_unedited_dirty` —
+appended at end of file, after the existing Ruling F/L arms (none of which it edits). Builds a repo
+with `core.filemode` explicitly unset, a `HOME`-pointed `~/.gitconfig` setting `core.fileMode = false`,
+chmods a tracked file executable with no content change, and asserts `git_provenance(...).code_dirty
+is False`. Positive control (first assertion): a bare `git status --porcelain` under the same `HOME`
+must already read the mode-only change as clean, or the fixture proves nothing.
+
+## Documents corrected
+
+- `docs/reference.md` § How the three are computed: the "narrowing removes" paragraph now names
+  `-c core.excludesFile=` rather than "the user's global and system git configuration neutralized";
+  the `E-CODE-DIRTY` row's convergence sentence names the same override; the "dirty gate moved with
+  the definition" paragraph names both `-c` overrides in place of "the same configuration
+  neutralized" and its `core.fileMode`/`core.autocrlf`/`safe.directory` paragraph is replaced with a
+  new paragraph crediting Ruling M, stating what is deliberately left alone and why, and correcting
+  the `safe.directory` consequence from "filed" to "closed as a side effect" with the re-measurement.
+- `CLAUDE.md`'s H6a entry: date corrected from "merged on 2026-08-22" to "merged on 2026-08-23"; the
+  exclude-chain sentence now names `-c core.excludesFile=` rather than "the global and system git
+  config neutralized"; the `safe.directory` fail-open reference is replaced with a new closing
+  sentence describing Ruling M and the closure. `E-CODE-EMPTY`, `E-CODE-FILE-LIST` and `W-PARAM-UNSET`
+  emit-site counts were re-grepped rather than carried (`cli.py:2380`, `provenance.py:143`,
+  `validate.py:1108` — one site each, unchanged) and the two moved-digest literals are untouched by
+  this round, so left as-is.
+- `docs/superpowers/spec-defects.md`: the struck Ruling-F entry gained an appended `AMENDED
+  2026-08-23, Ruling M` note (not a rewrite, per the struck-entry convention) stating the mechanism
+  named in the entry's body is superseded and that the entry's own claim — committed rules plus
+  `.git/info/exclude` decide — is unaffected. The `safe.directory` OPEN filing is struck as CLOSED,
+  with the re-measurement recorded and the residual (no-`safe.directory`-entry-at-all) case named as
+  out of scope for this filing.
+- `docs/superpowers/plans/2026-08-22-hash-definitions.md`: Ruling M appended to the rulings section in
+  the same form as A–I, with its own grounds, measurements and cost-if-wrong, so a later reader of
+  this mechanism finds the argument rather than re-deriving it.
+
+## Sweep, proven able to fail
+
+A newline-collapsed regex sweep over the four documents, `CLAUDE.md`, `spec-defects.md`,
+`src/publishable/*.py` and the two touched test files, filtering the **file list**, never the output,
+for `global and system git config(uration)? neutrali[sz]ed`, `the neutralization is total`, and `same
+two constants` — all three patterns now return zero hits outside historical/explanatory framing (past
+tense, "the fix round shipped X", "before Ruling M"). The sweep's ability to fail was checked with a
+known-present control string (`core.excludesFile`), found in every file searched. Remaining
+`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` occurrences were read individually (not just grepped) and are
+all past-tense/explanatory: what Ruling M replaced, in `provenance.py`'s comments, `CLAUDE.md`,
+`reference.md`, the struck `spec-defects.md` entries, and `test_hashes.py`'s docstrings and the
+fixtures that still legitimately construct that env var to prove the OLD route (a global
+`core.excludesFile` reached through `GIT_CONFIG_GLOBAL`) is a real setting git reads — those fixtures
+build the fixture, not the mechanism under test.
+
+## Gates
+
+`ruff check .` clean. `ruff format --check .` — 93 files already formatted. `mypy` — Success: no
+issues found in 52 source files. Full unfiltered suite, run directly and read: **2963 passed, 1
+skipped, 2 xfailed** (205.29s) — **+1** against the 2962 this round started from, which is exactly the
+one new test this round adds (`test_h6a_ruling_m_a_global_core_filemode_false_does_not_go_unedited_dirty`).
+No other count moved.
+
+## Guard-pin discipline
+
+Arms A, C, D, N (no authorized editor) were not touched — confirmed by re-reading each after the
+change: `git diff` over `tests/test_cli.py`, `tests/test_diff.py` shows no lines changed, and
+`tests/test_hashes.py`'s arms D and E (task 3's surface) are untouched by this round (the new test and
+the edited comments sit strictly after them). The only edits inside `test_hashes.py` besides the new
+test are: the module-level comment block above the Ruling F/L arms (rewritten to describe the current
+mechanism rather than the superseded one) and one docstring sentence in
+`test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate` (naming `-c
+status.showUntrackedFiles=normal` instead of the environment variables it originally pinned) — neither
+is a guard-pin arm with a named authorized editor; both are Ruling F/L's own fix-round tests, edited to
+keep their prose accurate about a mechanism this ruling replaced underneath them.
+
+## Concern carried forward
+
+None of substance. The one caveat from Ruling M's own text: a git setting nobody has enumerated could
+still turn out to change which paths `check-ignore` or `status` reports, and would be machine-local
+under this narrower mechanism just as it would have been under the old one — this is disclosed rather
+than claimed complete, consistent with the slice's two prior "only machine-dependent input left"
+claims both failing.
