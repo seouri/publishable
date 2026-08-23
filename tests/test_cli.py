@@ -12411,6 +12411,68 @@ def test_a_resolvers_keyboard_interrupt_at_run_propagates_with_no_message(
     assert str(excinfo.value) == ""
 
 
+def test_h9a_b2_a_parameter_declared_credential_survives_the_roster_raise(
+    tmp_path, monkeypatch, capsys
+):
+    """H9a task 2's owed replacement for a mutation the design named BLIND.
+
+    The mutation is *move the `credentials` assignment below the roster
+    resolution* inside `_prepare_run`. What that ordering buys is stated in the
+    comment above the assignment: a resolver's body is the first user code in
+    the command that can raise carrying a credential it read, so the value set
+    `redact` answers from has to exist before that call is reached. The design
+    named the mutation blind and made this fixture mandatory rather than
+    optional.
+
+    What is new here, and why this is not
+    `test_a_resolvers_raise_at_run_is_redacted_rather_than_printed_whole`
+    pinned twice: that test's credential reaches the set through the template's
+    own `required_env`. This one reaches it through the OTHER half of the union
+    `declared_credential_names` computes — a `Param(requires_env=)` resolved
+    against the level a swept/declared parameter actually holds — which is why
+    `credentials` needs `conditions` and `run_template` and so cannot be
+    computed at the top of the command. Grepped before writing: `requires_env`
+    appears at three places in this file (the `_LOCAL_CRED_TEMPLATE` literal, a
+    docstring above `test_a_project_local_template_s_credentials_are_redacted_too`
+    naming it, and `test_..._declared_credential_names_for_and_check_requires_env`),
+    and none of the three raises from the ROSTER — the first two leak from a
+    STEP's own error, which is `execute_plan`'s redaction and a different site.
+
+    Not an assertion over `_prepare_run`'s own AST, deliberately: statement
+    position answers *where does this sit*, not *does a credential leak*, and
+    answering with a position is the proxy substitution this repo has paid for
+    twice (`CLAUDE.md` § Answering a question with a proxy).
+    """
+    import publishable.cli as cli_mod
+
+    for name in ("PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_AZURE", "PUBLISHABLE_TEST_OPENAI"):
+        monkeypatch.delenv(name, raising=False)
+
+    def _boom(*_args, **_kwargs):
+        raise ContractError(
+            f"resolver could not reach the store: token={_SENTINEL}",
+            code="E-UNITS-SOURCE-MISSING",
+        )
+
+    monkeypatch.setattr(cli_mod, "resolve_units", _boom)
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="cred_assay",
+        parameters={"llm": {"provider": "azure_openai"}},
+        _local_template=_LOCAL_CRED_TEMPLATE,
+        _env_file=(f"PUBLISHABLE_TEST_TOKEN=irrelevant\nPUBLISHABLE_TEST_AZURE={_SENTINEL}\n"),
+        expect_exit=EXIT_WRONG,
+        capsys=capsys,
+    )
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    # The positive companion first: a sweep for an absent sentinel passes
+    # identically on a run that never raised at all.
+    assert "E-UNITS-SOURCE-MISSING" in captured, captured
+    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in captured, captured
+    assert _SENTINEL not in captured, captured
+
+
 def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, monkeypatch, capsys):
     """THE CONTROL for the pair above: the wrap must not turn a healthy run into a
     finding. Without it, a `try` that reported unconditionally would pass both."""

@@ -52,11 +52,14 @@ from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
 from publishable.provenance import (
+    GitInfo,
     find_repo_root,
     git_provenance,
     unignored_under_hashed_trees,
 )
 from publishable.replication import (
+    Repeat,
+    RepeatLevel,
     cross_levels,
     fold_members_for,
     order_seed_for,
@@ -2006,7 +2009,104 @@ def command_validate(config_path: Path) -> int:
     return c.exit_code()
 
 
-def command_run(config_path: Path) -> int:
+@dataclasses.dataclass(frozen=True)
+class Prepared:
+    """Everything phases 1-5 of `command_run` produce that phases 6-10 read.
+
+    Thirty-SIX values, and the count is the argument FOR the seam: nothing in
+    phases 6-10 can be re-entered without them, so a second entry either
+    receives them or recomputes them, and recomputing is what `resume` (H9b)
+    must not do.
+
+    Measured rather than chosen, and the measurement is stated because two of
+    the thirty-six are not like the others. An `ast` walk over `command_run`
+    found **38** names assigned before the `allocate_run_dir` call and loaded
+    after it; `u` and `r` are comprehension targets (comprehension-scoped, so
+    they never touch the outer binding) and `warn_c` is re-bound in phase 9
+    before its second read, which is the plan's § Corrections 13 and 17. That
+    leaves the **35** the plan's task 2 section lists, in that order.
+
+    `config_path` is the thirty-sixth, and the plan's list is short by exactly
+    it: a Store-walk **cannot see a parameter** -- `config_path` is an `arg`
+    node, never a `Name` in `Store` context -- and it is read after the seam at
+    the one site H8b Decision 7 added,
+    `(run_dir / "config.yaml").write_bytes(config_path.read_bytes())`. It was
+    found by `ruff`'s `F821`, not by the walk and not by `mypy`, which is the
+    plan's correction 20.
+
+    `c` is the run's live `Collector` -- a channel, not a value, and it is
+    named separately so a reader does not mistake it for state. It is carried
+    because a second entry into phases 1-5 needs the diagnostic channel those
+    phases rendered from. **No statement in phases 6-10 reads it at this
+    commit** -- every post-seam `c` is a comprehension target, and phase 9's
+    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`. It is
+    therefore the one field `_execute_prepared` does not unpack -- so of the
+    thirty-six, thirty-five are read in phases 6-10 and `c` is not.
+
+    Frozen on purpose: phases 6-10 must not write back into what phases 1-5
+    pinned. That is the property `resume` will rest on. `plan` is the one name
+    phases 6-10 re-bind (`_apply_execution_order` under `order: randomized`),
+    which is why `_execute_prepared` unpacks to locals rather than reading
+    attributes: a frozen field cannot be re-bound.
+    """
+
+    config_path: Path
+    c: Collector
+    doc: dict[str, Any]
+    repo_root: Path
+    git: GitInfo
+    digest: str
+    input_dir: Path
+    output_dir: Path
+    units_decl: dict[str, Any] | None
+    # Quoted: `Condition` is a `TYPE_CHECKING`-only import (line ~147) and a
+    # dataclass field annotation IS evaluated at runtime — this module has no
+    # `from __future__ import annotations`. Caught by importing, not by `ruff`
+    # or `mypy`, both of which passed clean with the bare name.
+    conditions: "list[Condition]"
+    run_template: BaseTemplate | None
+    credentials: dict[str, str]
+    roster: UnitList | None
+    beside_n: dict[str, Any]
+    weight_by: Any
+    weights: dict[str, Any] | None
+    weighted_beside: dict[str, Any]
+    cluster_by: Any
+    clusters: dict[str, str] | None
+    levels: list[RepeatLevel]
+    repeats: list[Repeat]
+    partitions: list[list[Unit]] | None
+    fold_members: dict[str, frozenset[str]] | None
+    group_axes: dict[str, ArmPlan]
+    holdout_plan: HoldoutPlan | None
+    eval_roster: UnitList | None
+    arm_members_map: dict[int, frozenset[str]] | None
+    plan: list[Execution]
+    cfgs: dict[int, Config]
+    ch: str
+    ph: str
+    manifest: dict[str, Any]
+    lock_path: Path | None
+    lock_hash: str | None
+    upstream_ledger: UpstreamLedger
+    upstream_resolver: UpstreamResolver
+
+
+def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
+    """Phases 1-5 of a run, for every command that is a second entry into them.
+
+    Returns `Prepared` or the exit code the run would have returned. **Every
+    caller checks the union with `isinstance`, never truthiness** -- `EXIT_OK`
+    is `0` and a truthiness test would mis-handle it. Phases 1-5 never return
+    `EXIT_OK` today, which is exactly why that mutation is blind and why the
+    rule is stated here rather than pinned: `mypy` is the enforcer, and task
+    1's arm E pins the four codes end to end instead.
+
+    `allow_dirty` is the one thing that varies between callers, and it varies
+    the GATE, never its PATHSPEC. `run` passes `False`, `draft` and `dry-run`
+    pass `True`. Widening what `E-CODE-DIRTY` covers is a separate, DECLINED
+    decision (H6b Decision 12) that lives one line from this one.
+    """
     c = Collector()
     experiment = _preloaded_experiment(config_path)
     # phases 1-2: resolve, walk up, load, validate
@@ -2025,7 +2125,7 @@ def command_run(config_path: Path) -> int:
     # call costs nothing. `reference.md` § Secrets & credentials.
     load_env(repo_root)
     git = git_provenance(config_path, config_path)  # phase 3: clean src/**+templates/**
-    if git.code_dirty:
+    if git.code_dirty and not allow_dirty:
         dirty_c = Collector()
         dirty_c.error(
             "E-CODE-DIRTY", "src/** or templates/**", "uncommitted changes; commit them first"
@@ -2426,6 +2526,101 @@ def command_run(config_path: Path) -> int:
     upstream_resolver = UpstreamResolver(
         output_dir=output_dir, repo_root=repo_root, ledger=upstream_ledger
     )
+
+    return Prepared(
+        config_path=config_path,
+        c=c,
+        doc=doc,
+        repo_root=repo_root,
+        git=git,
+        digest=digest,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        units_decl=units_decl,
+        conditions=conditions,
+        run_template=run_template,
+        credentials=credentials,
+        roster=roster,
+        beside_n=beside_n,
+        weight_by=weight_by,
+        weights=weights,
+        weighted_beside=weighted_beside,
+        cluster_by=cluster_by,
+        clusters=clusters,
+        levels=levels,
+        repeats=repeats,
+        partitions=partitions,
+        fold_members=fold_members,
+        group_axes=group_axes,
+        holdout_plan=holdout_plan,
+        eval_roster=eval_roster,
+        arm_members_map=arm_members_map,
+        plan=plan,
+        cfgs=cfgs,
+        ch=ch,
+        ph=ph,
+        manifest=manifest,
+        lock_path=lock_path,
+        lock_hash=lock_hash,
+        upstream_ledger=upstream_ledger,
+        upstream_resolver=upstream_resolver,
+    )
+
+
+def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
+    """Phases 6-10 of a run: allocate the run directory, execute, record.
+
+    Takes what `_prepare_run` pinned and nothing else, so that `run`, `draft`
+    and (H9b) `resume` are three entries into ONE execution path rather than
+    three copies of it.
+
+    The thirty-five names are read off `prepared` in one unpack block rather
+    than as attribute accesses scattered through the body, so that the body
+    itself is byte-identical to what `command_run` held -- which is the only
+    mechanical check a reviewer has on a 1495-line move. `c` is the one field
+    not unpacked: no statement below reads it (see `Prepared`), and a local
+    nothing reads is an `F841`.
+
+    `draft` is accepted here and reaches `assemble_run_yaml` in task 3, which
+    owns the `draft` command, its fixture Q and the mutation that catches the
+    wiring. It is threaded now rather than added later so that `command_draft`
+    is one call and not a second copy of this function.
+    """
+    config_path = prepared.config_path
+    doc = prepared.doc
+    repo_root = prepared.repo_root
+    git = prepared.git
+    digest = prepared.digest
+    input_dir = prepared.input_dir
+    output_dir = prepared.output_dir
+    units_decl = prepared.units_decl
+    conditions = prepared.conditions
+    run_template = prepared.run_template
+    credentials = prepared.credentials
+    roster = prepared.roster
+    beside_n = prepared.beside_n
+    weight_by = prepared.weight_by
+    weights = prepared.weights
+    weighted_beside = prepared.weighted_beside
+    cluster_by = prepared.cluster_by
+    clusters = prepared.clusters
+    levels = prepared.levels
+    repeats = prepared.repeats
+    partitions = prepared.partitions
+    fold_members = prepared.fold_members
+    group_axes = prepared.group_axes
+    holdout_plan = prepared.holdout_plan
+    eval_roster = prepared.eval_roster
+    arm_members_map = prepared.arm_members_map
+    plan = prepared.plan
+    cfgs = prepared.cfgs
+    ch = prepared.ch
+    ph = prepared.ph
+    manifest = prepared.manifest
+    lock_path = prepared.lock_path
+    lock_hash = prepared.lock_hash
+    upstream_ledger = prepared.upstream_ledger
+    upstream_resolver = prepared.upstream_resolver
 
     run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
     with RunLock(run_dir):
@@ -3922,6 +4117,34 @@ def command_run(config_path: Path) -> int:
     if stop.reason == "apparatus_unreachable":
         return EXIT_EXTERNAL
     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
+
+
+def command_run(config_path: Path) -> int:
+    """`publishable run` -- phases 1-5, then phases 6-10, with the gate enforced.
+
+    `allow_dirty=False` is `run`'s whole difference from `draft`: the pathspec
+    `E-CODE-DIRTY` covers is `git_provenance`'s and is not this call's business
+    (H6b Decision 12 declined widening it, and Ruling T keeps the two edits
+    apart). `isinstance`, not truthiness -- `EXIT_OK` is `0`.
+
+    **The signpost, and it is load-bearing for a reader.** Until H9a this
+    function held all ten phases, so roughly forty-five comments, docstrings
+    and `reference.md` rows across this repository attribute a behaviour to
+    "`cli.command_run`" and mean "the `run` command". Every one of them is
+    still reachable in one hop: **phases 1-5 are `_prepare_run`** (validate,
+    the dirty gate, `E-CODE-EMPTY`, the roster, the repeat plan, the hashes,
+    the manifest, the upstream ledger) and **phases 6-10 are
+    `_execute_prepared`** (the run directory, the apparatus rounds,
+    `execute_plan`, aggregation, the correction family, `run.yaml`, the exit
+    code). Stated here rather than by rewriting those forty-five sites: a
+    rewrite of each would have to decide which half it now names, and a
+    pointer invents nothing (`CLAUDE.md` § Habits, *prefer deleting a claim to
+    rewriting it*). H9a task 2's report files the sweep as correction 22.
+    """
+    prepared = _prepare_run(config_path, allow_dirty=False)
+    if not isinstance(prepared, Prepared):
+        return prepared
+    return _execute_prepared(prepared, draft=False)
 
 
 def _dispatch(command: str, rest: list[str]) -> int:
