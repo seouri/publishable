@@ -215,6 +215,20 @@ commit the file. Confirmed live on 2026-08-22: an untracked `src/pkg/local_note.
 from `sha256:19b9b39f…` to `sha256:7c39b295…`, and writing `local_note.py` into `.git/info/exclude`
 returns it to `sha256:19b9b39f…`.
 
+**AMENDED 2026-08-23, H6a's whole-branch fix round (Major 3): the words *committed* and *the one
+residue* in the paragraph above are both too narrow, and the entry is left standing with this note
+rather than rewritten.** `check-ignore` answers from the **working tree**, so an **uncommitted** root
+`.gitignore` decides what is hashed just as a committed one does, and the dirty gate cannot see it —
+the gate's pathspec is `src/**` and `templates/**`, and the rule usually sits at the repo root.
+Measured on 2026-08-23: `git status --porcelain` reports `M .gitignore` while
+`git status --porcelain -- src templates` reports nothing, and the run publishes a digest narrowed by
+a rule no clone of that commit carries. `docs/reference.md` § How the three are computed now states
+the **mechanism** — whatever exclude rule the working tree holds decides, committed or not, plus
+`.git/info/exclude` — rather than an enumeration that goes stale, and the gap is filed separately
+below (*"an uncommitted root `.gitignore` decides what `code_hash` covers"*, owner H6b). The dirty
+gate itself is now neutralized the same way the hash is (Ruling L), which closes the mirror-image hole
+— a globally excluded file was clean to the gate and hashed by the hash — and does not close this one.
+
 **The other branch this entry named — *"or relax the purity rule and say so"* — is answered in the
 spine design's appended correction rather than here.** No such rule exists in `design-principles.md`:
 grepped 2026-08-22 for `pur(e|ity)`, case-insensitive, over the four documents named individually, one
@@ -9208,3 +9222,61 @@ and none has `hashes.py` or `provenance.py` at all: H6b is the `provenance.envir
 raise-time `E-` registry's remaining rows, and the `validate` tree-state ruling; H9 is `reproduce` and
 the other second-entry commands; H3c-3's remaining 14 are folds and holdouts inside cells. Not
 *"whichever slice next touches the hash"*.
+
+## OPEN — an uncommitted root `.gitignore` decides what `code_hash` covers, and the dirty gate cannot see it — **Owner: H6b**
+
+**Filed 2026-08-23, H6a's whole-branch fix round, from the gate's Major 3.** `code_hash`'s exclude
+question is `git check-ignore`, which answers from the **working tree**. So a `.gitignore` that is
+edited-and-uncommitted, or never committed at all, narrows the published `code_hash` exactly as a
+committed one does — and the run's identity claim is then unreproducible from a clone of its own
+commit, which is the failure `docs/reference.md` § How the three are computed exists to argue against.
+
+**Measured on 2026-08-23**, on a repo whose `src/pkg/notes.log` is untracked and whose root
+`.gitignore` has an uncommitted `notes.log` line:
+
+```
+git status --porcelain                     →   M .gitignore
+git status --porcelain -- src templates    →  (nothing — the gate is clean)
+git_provenance(...).code_dirty             →  False
+hashed_files(root, the run's predicate)    →  ['src/pkg/step.py']   (notes.log dropped)
+```
+
+**The boundary that makes this narrow.** A `.gitignore` **inside** either hashed tree is caught by the
+dirty gate, because the gate's pathspec covers those two trees — verified by behaviour on 2026-08-23,
+an untracked `src/.gitignore` gives `?? src/.gitignore` and `code_dirty` `True` (the whole-branch
+review measured the same tree end to end, `E-CODE-DIRTY` at exit 1). The repo **root** is the only
+escape, and it is where the rule normally lives.
+
+**Not closed by H6a's Ruling L.** That ruling neutralized the dirty gate's own git configuration so
+the gate and the hash honour one exclude chain, which closes the mirror-image hole (a globally
+excluded file, clean to the gate and folded into the hash). It changes nothing here: the deciding file
+is outside the gate's **pathspec**, not outside its exclude chain.
+
+**Owner: H6b, and the reason it is not H6a's.** Closing this means the dirty gate covering a file
+**outside** the two hashed trees — a scope change to what `E-CODE-DIRTY` reads, which deserves its own
+decision and its own cost accounting (every uncommitted root file becomes a candidate the gate must
+rule on). H6b holds the `validate` tree-state ruling, which is the same question asked at the other
+surface. A successor should decide the two together rather than widening this one pathspec by hand.
+
+## OPEN — under neutralized git configuration the dirty gate answers *clean* on a repository git considers dubiously owned — **Owner: unassigned, with the reason**
+
+**Filed 2026-08-23, H6a's whole-branch fix round, as a disclosed consequence of Ruling L.**
+`safe.directory` is read from **global and system** configuration only, and both the hash's
+`check-ignore` and — since Ruling L — the gate's `git status` run with that configuration neutralized.
+On a repository the user has legitimately added to `safe.directory`, git therefore refuses both
+questions with `fatal: detected dubious ownership`, and `_git`'s `check=False`/`strip()` convention
+turns the gate's refusal into an empty string, which reads as **not dirty**.
+
+**Measured on 2026-08-23** with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1` and a global
+`safe.directory` entry for the repo: `git_provenance(...).code_dirty` is `False` on a tree with two
+untracked files, and `hashed_files(...)` then raises `ContractError` `E-CODE-FILE-LIST` from the same
+neutralized configuration two phases later. **No record is published** — the run stops at the hash —
+so what is filed is a gate that answers *no* to a question it could not ask, not a false record.
+
+**Owner: unassigned, with the reason.** Closing it means deciding what a run should do when git cannot
+answer the gate at all — today `_git` discards every returncode by design, and `git_provenance`'s
+`E-GIT-NO-COMMIT` block is the single call site that refuses instead. Widening that to the gate is a
+behaviour change to a shipped command and a controller ruling, not a fix-round edit; H6a's fix round
+was told to disclose it rather than build it. H6b holds `provenance.environment`'s keys and the
+`validate` tree-state ruling and is the nearest surface, but the question is about `_git`'s convention
+rather than about either, so no slice is named.

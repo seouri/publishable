@@ -223,11 +223,19 @@ copies an upstream run's `code_hash` verbatim, so a record written after this sl
 digest under the new rule beside a copied one under the old, **with nothing marking which is which** —
 the reader's route is the two runs' `uv_lock_hash`. **The exclude chain is narrowed rather than
 disclosed as machine-dependent**: every `check-ignore` runs with the global and system git config
-neutralized, so only rules that travel with the tree decide — *a rule that does not travel with the
-tree cannot define the tree's identity* — and the dirty gate's machine-dependence was rejected as a
-precedent, because a gate asks *may this run proceed here*, which is local by nature, while a hash asks
-*is this the same code*, which is not. `.git/info/exclude` is the one residue no flag can disable and
-is disclosed by name. **And an implementer may not self-authorize an edit to a guard-pin arm with no
+neutralized — *a rule that does not travel with the tree cannot define the tree's identity* — and
+**the whole-branch gate then extended that to the dirty gate (Ruling L, 2026-08-23)**, reversing the
+design's argument that a gate asking *may this run proceed here* is local by nature: a file a global
+`core.excludesFile` hides is **untracked and ignored by nothing a clone carries**, so leaving the gate
+alone meant it reported clean while the hash folded the file in, and *"the gate and the hash now
+consider the same set of files"* was shipped as a normative sentence that measured **false**. Both
+gates now ask one git, and a repo relying on a machine-level rule to keep a file out of `src/**`
+**fails `E-CODE-DIRTY` where it used to run** — disclosed in § How the three are computed. **What the
+narrowing does NOT buy is a tree-only answer**: `check-ignore` reads the **working tree**, so an
+uncommitted root `.gitignore` decides too and the gate cannot see it (its pathspec is the two hashed
+trees), which is why *"the only machine-dependent input left"* was struck rather than narrowed —
+filed, owner H6b, beside the `safe.directory` fail-open the neutralization introduces at the gate.
+`.git/info/exclude` remains the residue no flag can disable. **And an implementer may not self-authorize an edit to a guard-pin arm with no
 authorized editor, even a mechanical one that turns out clean** — batch 2 did, and that was its own
 batch's only Major; batch 3 met the same need, took the route instead, and the controller's ruling
 named the post-edit state in advance, which is the whole difference. **Three sentences went false
