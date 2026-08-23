@@ -228,11 +228,13 @@ tree cannot define the tree's identity* — and the dirty gate's machine-depende
 precedent, because a gate asks *may this run proceed here*, which is local by nature, while a hash asks
 *is this the same code*, which is not. `.git/info/exclude` is the one residue no flag can disable and
 is disclosed by name. **And an implementer may not self-authorize an edit to a guard-pin arm with no
-authorized editor, even a mechanical one that turns out clean** — batch 2 did and it was the slice's
-one Major; batch 3 met the same need, took the route instead, and the controller's ruling named the
-post-edit state in advance, which is the whole difference. Twice more the device caught a sentence
-going false under its own change: an arm's docstring asserting a call-site count **this very batch
-falsified**, and a shipped test's docstring asserting an exclusivity `W-PARAM-UNSET` had just removed.
+authorized editor, even a mechanical one that turns out clean** — batch 2 did, and that was its own
+batch's only Major; batch 3 met the same need, took the route instead, and the controller's ruling
+named the post-edit state in advance, which is the whole difference. **Three sentences went false
+under this slice's own change and each was caught rather than shipped**: `code_hash`'s docstring
+saying it reads the tree *not from git*, an arm's docstring asserting a call-site count **the batch
+holding it falsified**, and a shipped test's docstring asserting an exclusivity `W-PARAM-UNSET` had
+just removed.
 
 **H5b (non-numeric columns downstream to `aggregate`) merged on 2026-08-22 — the last of H5's two, and
 the first behaviour change since H7d Part B to what an existing key *reports*.** A recorded column that is
