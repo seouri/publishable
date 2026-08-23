@@ -878,3 +878,110 @@ def test_read_record_file_version_mismatch_on_a_bare_file_path(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         read_record_file(member)
     assert e.value.code == "E-UPSTREAM-RECORD-VERSION"
+
+
+# ===========================================================================
+# H9b task 6 — `read_execution_ledger` / `attempt_counts`: the FIRST reader of
+# `executions.jsonl` anywhere in `src/` (§ Corrections against the code,
+# correction 21, re-measured by this task and reported).
+# ===========================================================================
+
+
+def test_h9b_the_ledger_reader_reads_a_real_runs_lines(tmp_path: Path):
+    """Against a genuinely produced ledger, not a synthesized one: the reader's
+    job is to read what `execute_plan` writes, and a hand-written fixture would
+    make that agreement a coincidence.
+
+    The line count and the key set are asserted together — a reader returning
+    `[]` would satisfy any per-line assertion for free.
+    """
+    from publishable.lineage import read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    records = read_execution_ledger(doc["run_dir"])
+    raw = [
+        line
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(records) == len(raw)
+    assert records
+    for entry in records:
+        assert {"step", "scope", "condition", "repeat", "status"} <= set(entry)
+
+
+def test_h9b_an_absent_ledger_is_no_executions_not_a_fault(tmp_path: Path):
+    """A run directory can exist with no `executions.jsonl` at all — a
+    run-start probe raise leaves exactly that shape — and *no executions* is
+    not the same claim as *a broken ledger*."""
+    from publishable.lineage import read_execution_ledger
+
+    (tmp_path / "run_x").mkdir()
+    assert read_execution_ledger(tmp_path / "run_x") == []
+
+
+def test_h9b_attempt_counts_counts_records_per_triple(tmp_path: Path):
+    """`reference.md` § Resuming defines `attempts` as the number of records a
+    triple holds in `executions.jsonl`. The second record is appended BY HAND
+    here — a triple genuinely runs twice only under `resume`, which does not
+    dispatch yet, and the count is what is under test either way.
+
+    The neighbour's staying at `1` is what makes the `2` non-vacuous: a
+    counter keyed on the step alone, or one that counted the whole file,
+    would report `2` for both.
+    """
+    from publishable.lineage import attempt_counts, read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    ledger = doc["run_dir"] / "executions.jsonl"
+    lines = [line for line in ledger.read_text().splitlines() if line.strip()]
+    first, second = json.loads(lines[0]), json.loads(lines[1])
+    # A genuine second attempt at the same triple: the same three key fields,
+    # a later clock, and a `failed` status — so the count cannot be read off
+    # `status` either.
+    repeated = dict(first)
+    repeated["status"] = "failed"
+    repeated["started_at"] = "2026-08-23T23:59:59Z"
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(repeated) + "\n")
+
+    counts = attempt_counts(read_execution_ledger(doc["run_dir"]))
+    assert counts[(first["step"], first["condition"], first["repeat"])] == 2
+    assert counts[(second["step"], second["condition"], second["repeat"])] == 1
+    # Every other triple is 1, so no arm of this fixture is 2 by accident.
+    assert sorted(counts.values()) == [1] * (len(counts) - 1) + [2]
+
+
+def test_h9b_a_mangled_ledger_line_refuses_rather_than_reading_as_never_ran(tmp_path: Path):
+    """Three faults, one code (`E-RESUME-LEDGER-UNREADABLE`), each with its own
+    message: a line that is not JSON, a line that parses to something other
+    than an object, and a line missing one of the five keys every line has
+    always carried.
+
+    The alternative is what makes this a refusal rather than a skip: a reader
+    that dropped a mangled line would report the triple as *never ran*, and
+    `resume` would re-execute an execution already paid for — or worse,
+    reconstitute nothing for it and publish intervals over the remainder.
+
+    A control arm asserts the same directory reads clean before the edit, so
+    a refusal that fired for some unrelated reason is not counted as a pass.
+    """
+    from publishable.lineage import read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    ledger = doc["run_dir"] / "executions.jsonl"
+    good = ledger.read_text()
+    assert read_execution_ledger(doc["run_dir"])  # the control
+
+    for text, fragment in (
+        (good + "{not json\n", "not valid JSON"),
+        (good + '["step01", 1]\n', "parsed to list"),
+        (good + '{"step": "s", "scope": "repeat", "condition": 0}\n', "missing repeat, status"),
+    ):
+        ledger.write_text(text)
+        with pytest.raises(ContractError) as excinfo:
+            read_execution_ledger(doc["run_dir"])
+        assert excinfo.value.code == "E-RESUME-LEDGER-UNREADABLE"
+        assert fragment in str(excinfo.value)
+    ledger.write_text(good)
+    assert read_execution_ledger(doc["run_dir"])

@@ -12,6 +12,7 @@ refused as the reader's home on its own docstring's grounds — its own first li
 "Assemble run.yaml. Assembles only — computes nothing."
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -410,3 +411,102 @@ class UpstreamResolver:
         runner → artifacts` would close a cycle `TYPE_CHECKING` alone does
         not open back up)."""
         return resolve_step(record, run_dir, step)
+
+
+# `executions.jsonl`'s ledger key: (step, condition index, repeat label), the
+# triple `reference.md` § `executions.jsonl` calls one execution. `None` in
+# either of the last two positions is a real value, not a missing one — a
+# `run`- or `summary`-scoped execution has no condition and no repeat.
+LedgerKey = tuple[str, "int | None", "str | None"]
+
+_LEDGER_LINE_KEYS = ("step", "scope", "condition", "repeat", "status")
+
+
+def read_execution_ledger(run_dir: Path) -> list[dict[str, Any]]:
+    """Every line of `run_dir/executions.jsonl`, parsed, in the order the run
+    wrote them. An absent ledger is `[]` — a run directory can exist with no
+    ledger at all (a run-start probe raise leaves one), and that is *no
+    executions*, not a fault.
+
+    **The first reader of this file anywhere in `src/`** (H9b § Corrections
+    against the code, correction 21, re-measured by task 6 before this
+    function was written: `grep -rn "executions.jsonl" src/publishable/*.py`
+    printed EIGHT lines and no reader — `apparatus.py:483` and `:485`
+    (prose), `cli.py:2712` (a comment) and `cli.py:4257` (`_DRY_RUN_FIXED_
+    FILES`' entry), and `runner.py` at four, of which one is the writer's
+    path binding, one is task 5's own comment and two are prose. The two
+    ledger-reading functions that do exist — `apparatus.replay_ledger` and
+    `freeze._ledger_probe_names` — read `apparatus/probes.jsonl`, a different
+    file. It lives here, in the
+    module whose own docstring makes it the home of *"the reader over a
+    `run.yaml` this build wrote"*, and for the same reason: `run_record`'s
+    first line refuses the job ("Assembles only — computes nothing"), and
+    `runner` is imported BY `run_record`, so a reader placed there could not
+    be called from `run_record` at all. Two callers, one reader: `attempts`
+    (this file's `attempt_counts`) and `resume`'s reconstitution.
+
+    Read with plain `json.loads`, deliberately: `execute_plan` writes these
+    lines with `json.dumps`' shipped `allow_nan=True`, so a non-finite value a
+    step returned round-trips exactly through the same module (H9b design
+    appendix A1). A strict reader would refuse a completed execution over a
+    value `run.yaml` accepts.
+
+    A line that is not a JSON object, or that lacks one of the five keys every
+    line has carried since this file existed, is
+    `E-RESUME-LEDGER-UNREADABLE` — the fault is a hand-edited or truncated
+    ledger, and the alternative is a resumed run silently treating a mangled
+    line as *this triple never ran*. `returned` and `recorded_columns` are
+    **not** in that required set: they are H9b's own additions, so a ledger
+    written by an earlier build parses here and is refused, if at all, by the
+    reader that needs the missing key.
+    """
+    path = run_dir / "executions.jsonl"
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError as exc:
+            raise ContractError(
+                f"{path}: line {number} is not valid JSON ({exc})",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            ) from exc
+        if not isinstance(entry, dict):
+            raise ContractError(
+                f"{path}: line {number} parsed to {type(entry).__name__}, not an object",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            )
+        missing = [key for key in _LEDGER_LINE_KEYS if key not in entry]
+        if missing:
+            raise ContractError(
+                f"{path}: line {number} is missing {', '.join(missing)}",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            )
+        records.append(entry)
+    return records
+
+
+def ledger_key(entry: dict[str, Any]) -> LedgerKey:
+    """One ledger line's triple. The one place a line is turned into a key, so
+    a counter and a reconstitution cannot key the same file two ways."""
+    return (entry["step"], entry["condition"], entry["repeat"])
+
+
+def attempt_counts(records: list[dict[str, Any]]) -> dict[LedgerKey, int]:
+    """How many records each triple holds — `reference.md` § Resuming's own
+    definition of `attempts`, computed from the log rather than stored in it.
+
+    Every record counts, whatever its `status`: an attempt that failed is an
+    attempt, and a triple that ran twice is the case this figure exists to
+    report. Derived rather than written per line because a count stored in an
+    append-only log would be a second source of truth for something the log
+    already answers.
+    """
+    counts: dict[LedgerKey, int] = {}
+    for entry in records:
+        key = ledger_key(entry)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
