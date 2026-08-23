@@ -125,12 +125,13 @@ def _redact(record: Mapping[str, Any]) -> dict[str, Any]:
     observe already keeps a probe's facts non-identifying, so this table
     has no apparatus row to begin with.
 
-    `provenance.environment.hostname` is never written today (measured at
-    `ebf642a`: `provenance.environment` is `{manager, python_version,
-    uv_lock, uv_lock_hash}`) — it is H6's. So this branch is exercised only
-    over a record synthesized by hand carrying it, and needs no special
-    case: absent today is the "never captured" branch above, and it
-    becomes "redacted" the day H6 writes it, with no code change here.
+    `provenance.environment.hostname` was never written as of `ebf642a`
+    (`provenance.environment` then was `{manager, python_version, uv_lock,
+    uv_lock_hash}`) — superseded by H6b task 3, which added it. The day this
+    sentence describes has arrived, with no code change here: this branch,
+    already written for the field's eventual arrival, now runs over every
+    real record rather than only over one synthesized by hand, and Fixture E
+    is the pin.
     """
     out = copy.deepcopy(dict(record))
     config = out.get("config")

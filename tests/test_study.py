@@ -157,9 +157,7 @@ def _real_run(tmp_path: Path, subdir: str) -> dict:
 def _fixture_y_record() -> dict:
     """Fixture Y: a record synthesized by hand, not one a real `run`
     produced — its only job is to exercise the `hostname` row of
-    § What `study add` redacts, which nothing in this build writes
-    (measured at `ebf642a`: `provenance.environment` is `{manager,
-    python_version, uv_lock, uv_lock_hash}`). Every other field here is
+    § What `study add` redacts. Every other field here is
     copied from a real record's shape so `read_record_file`'s own checks
     (a real `run_id`, this build's `schema_version`) pass, but the VALUES
     are hand-picked to exercise every redacted field at once.
@@ -268,20 +266,83 @@ def test_study_add_redaction_is_not_secrets_redact_field_replacement_only():
 
 
 def test_study_add_redacts_hostname_when_present_on_a_synthesized_record():
-    """Fixture Y: the one row exercised only over a hand-built record,
-    because nothing in this build writes `provenance.environment.hostname`
-    today (it is H6's)."""
+    """Fixture Y: `study add` redacts `hostname` on a hand-built record.
+
+    Three claims this docstring used to open with went false inside this
+    slice — task 3 made a real `run` write the key, and task 4's Fixture E
+    (`test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end`,
+    in this file) exercises the same row over a real bundled record. They are
+    DELETED rather than rewritten, and they are enumerated in the fix-round
+    section of the slice's whole-branch review (Major 3) rather than quoted
+    back here: quoting a superseded claim inside a test docstring plants new
+    hits for the next sweep to triage, which is the exact fault that let one
+    of them survive two sweeps of this file.
+
+    H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
+    edits `_fixture_y_record`'s docstring only, which is not a body edit and
+    is not read as an arm edit."""
     record = _fixture_y_record()
     redacted = _redact(record)
     assert redacted["provenance"]["environment"]["hostname"] == REDACTED
 
 
 def test_study_add_leaves_hostname_untouched_when_absent_from_the_source(tmp_path: Path):
-    """The real-run counterpart of the fixture above: today's real records
-    never carry `hostname` at all, and redaction must not invent the key."""
+    """Redaction must not INVENT `hostname` when the source lacks it.
+
+    H6b guard-pin arm S: sole authorized editor NONE for this body. Task 7
+    edits `_fixture_y_record`'s docstring only, which is not a body edit and
+    is not read as an arm edit.
+
+    EDITED 2026-08-23 by controller ruling, post-edit state specified in
+    advance: the assertion is byte-identical and the property is unchanged;
+    only the SOURCE of an absent-`hostname` record became explicit. This arm
+    was captured when a real run wrote no `hostname` at all, and H6b task 3
+    made real runs write one -- so the arm rested on a premise its own slice
+    then falsified. Deleting the key here says outright what the fixture used
+    to obtain by accident, which is what the arm was always testing: an
+    absent key stays absent rather than becoming `<redacted by study add>`."""
     run = _real_run(tmp_path, "proj1")
-    redacted = _redact(run["record"])
+    record = run["record"]
+    del record["provenance"]["environment"]["hostname"]
+    redacted = _redact(record)
     assert "hostname" not in redacted["provenance"]["environment"]
+
+
+def test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end(tmp_path: Path):
+    """H6b task 4, Fixture E, Ruling Q: `os` and `hardware` are NOT
+    redacted; `hostname` is. Added BESIDE the hand-built Fixture Y
+    (`test_study_add_redacts_hostname_when_present_on_a_synthesized_record`),
+    never in place of it -- Fixture Y exercises every redacted field at
+    once on a hand-built record; this fixture exercises the wiring against
+    a key H6b task 3 made `run` actually write, end to end through a real
+    bundle. (The clause claiming that record is one "nothing in this build
+    yet writes" is DELETED: a real record now carries `hostname`,
+    `input_dir`, `output_dir` and `repo_root`, so it was true only of this
+    exact hand-built document -- H6b whole-branch fix round, Major 3.)
+
+    The bundle sits under `tmp_path`, outside any repository -- `study new`
+    and `study add` both refuse `E-STUDY-IN-REPO` otherwise. The SOURCE
+    `run.yaml` is the positive control: comparing the bundled `os` and
+    `hardware` against the value the same run actually produced means an
+    implementation that writes nothing, or an empty string, fails both the
+    equality and the truthiness/type assertions -- a bare `is not None`
+    would pass on an empty string, which is why both live in one test."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    source = run["record"]
+    study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    bundled = yaml.safe_load((bundle / "main.run.yaml").read_text())
+
+    assert bundled["provenance"]["environment"]["hostname"] == REDACTED
+    assert bundled["provenance"]["environment"]["os"] == source["provenance"]["environment"]["os"]
+    assert isinstance(bundled["provenance"]["environment"]["os"], str)
+    assert bundled["provenance"]["environment"]["os"]
+    assert (
+        bundled["provenance"]["environment"]["hardware"]
+        == source["provenance"]["environment"]["hardware"]
+    )
+    assert isinstance(bundled["provenance"]["environment"]["hardware"], dict)
 
 
 def test_study_add_leaves_null_fields_exactly_null_not_marked_redacted():

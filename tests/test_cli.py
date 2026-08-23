@@ -2,6 +2,7 @@ import hashlib
 import importlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections import namedtuple
@@ -16393,6 +16394,8 @@ def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
     this is the SAME claim, restated here so H8b's own pin is self-contained
     and does not depend on H8a's docstring surviving unedited. Not new
     coverage; carried forward deliberately.
+
+    H6b guard-pin arm Q: sole authorized editor NONE.
     """
     doc = run_a_project(
         tmp_path,
@@ -16443,6 +16446,8 @@ def test_h8b_arm_d_the_five_figures_diff_reads(tmp_path):
     is H8a's arm B), but this is the first place all five are pinned as one
     group, which is new coverage for the group even where an individual
     figure's value is not.
+
+    H6b guard-pin arm P: sole authorized editor task 3.
     """
     doc = run_a_project(
         tmp_path,
@@ -16455,13 +16460,159 @@ def test_h8b_arm_d_the_five_figures_diff_reads(tmp_path):
     provenance = run_doc["provenance"]
     environment = dict(provenance["environment"])
     python_version = environment.pop("python_version")
+    os_value = environment.pop("os")
+    hostname = environment.pop("hostname")
+    hardware = environment.pop("hardware")
     assert environment == {"manager": "uv", "uv_lock": None, "uv_lock_hash": None}
     assert isinstance(python_version, str) and python_version
+    assert isinstance(os_value, str) and os_value
+    assert isinstance(hostname, str) and hostname
+    assert isinstance(hardware, dict) and set(hardware) == {"cpu_count"}
     assert provenance["apparatus"] is None
     assert provenance["upstream"] == []
     assert run_doc["code_hash"].startswith("sha256:")
     assert run_doc["parameters_hash"].startswith("sha256:")
     assert provenance["input_manifest_hash"].startswith("sha256:")
+
+
+def test_h6b_arm_a_os_is_composed_from_installed_sentinels(tmp_path, monkeypatch):
+    """H6b Fixture A — `os` is the composed `system-release-machine` form.
+
+    Sentinels rather than recomputing the composition in the test: a test
+    that recomputes `f"{platform.system()}-…"` and compares is a mutation
+    whose two branches cannot differ, since it would pass against any
+    implementation using the same three calls in any order.
+    """
+    monkeypatch.setattr("platform.system", lambda: "Fixtureos")
+    monkeypatch.setattr("platform.release", lambda: "9.9.9")
+    monkeypatch.setattr("platform.machine", lambda: "fixarch")
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["os"] == "Fixtureos-9.9.9-fixarch"
+
+
+def test_h6b_arm_b_hostname_is_socket_gethostname(tmp_path, monkeypatch):
+    """H6b Fixture B — `hostname` comes from `socket.gethostname()`.
+
+    Discriminating against the plausible wrong source: `platform.uname().node`
+    is unaffected by this patch, so a wrong implementation reading from there
+    would fail this assertion rather than passing it by coincidence.
+    """
+    monkeypatch.setattr("socket.gethostname", lambda: "pinhost.example.invalid")
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["hostname"] == "pinhost.example.invalid"
+
+
+def test_h6b_arm_c_hardware_carries_cpu_count_arm_1(tmp_path, monkeypatch):
+    """H6b Fixture C, arm 1 — `hardware` carries a real `cpu_count`."""
+    monkeypatch.setattr("os.cpu_count", lambda: 77)
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["environment"]["hardware"] == {"cpu_count": 77}
+
+
+def test_h6b_arm_c_hardware_carries_cpu_count_arm_2_none(tmp_path, monkeypatch):
+    """H6b Fixture C, arm 2 — `cpu_count: null` is written through, key present.
+
+    One arm cannot distinguish "writes the count" from "writes a constant".
+    This arm is what catches `os.cpu_count() or 1`: arm 1 alone would pass
+    against that mutation, and only this arm — asserting the key is present
+    with a `None` value rather than absent — catches it.
+    """
+    monkeypatch.setattr("os.cpu_count", lambda: None)
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    hardware = run_doc["provenance"]["environment"]["hardware"]
+    assert "cpu_count" in hardware
+    assert hardware["cpu_count"] is None
+
+
+def test_h6b_arm_d_environment_key_order(tmp_path):
+    """H6b Fixture D — the key order is § The two files' own.
+
+    Enumerate the literals the list should contain, rather than iterating
+    the thing under test — a vocabulary test that loops over the very
+    collection under test measures only that the set equals itself.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    raw = (doc["run_dir"] / "run.yaml").read_text()
+    record = yaml.safe_load(raw)
+    assert list(record["provenance"]["environment"]) == [
+        "manager",
+        "python_version",
+        "os",
+        "hostname",
+        "uv_lock",
+        "uv_lock_hash",
+        "hardware",
+    ]
+
+
+def _the_two_files_environment_block() -> dict:
+    """§ The two files' `provenance.environment` mapping, read out of the document.
+
+    Named section, then the one `environment:` line inside it — asserted to be
+    the ONE, so a future edit that adds a second `environment:` mapping to the
+    section fails loudly here rather than silently pinning the wrong one.
+    Trailing `#` comments are stripped; no value in this block contains a `#`.
+
+    NOT via `_section_text`: that helper cuts at the first line matching
+    `^#{1,6} `, and this section's fenced block opens with the comment
+    `# <output_dir>/run_.../run.yaml` — so it would return a slice ending
+    above the mapping this reads. Fences are skipped in every mechanical
+    pass over these documents for exactly that reason. The heading is still
+    named rather than located by position, and the block is the first fenced
+    `yaml` block under it.
+    """
+    doc_lines = REFERENCE_MD.read_text().split("\n")
+    start = doc_lines.index("## The two files")
+    fence = next(i for i in range(start + 1, len(doc_lines)) if doc_lines[i] == "```yaml")
+    end = next(i for i in range(fence + 1, len(doc_lines)) if doc_lines[i] == "```")
+    lines = doc_lines[fence + 1 : end]
+    starts = [i for i, line in enumerate(lines) if line == "  environment:"]
+    assert len(starts) == 1, starts
+    body = []
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith("    "):
+            break
+        body.append(re.sub(r"\s+#.*$", "", line)[4:])
+    assert body, lines[starts[0] : starts[0] + 4]
+    return yaml.safe_load("\n".join(body))
+
+
+def test_h6b_fix_round_the_two_files_environment_block_is_what_run_writes(tmp_path):
+    """H6b whole-branch review, Major 2 — the pin Ruling O did not have.
+
+    Ruling O removed `gpu` from § The two files' `hardware` mapping, on the
+    ground that a GPU is an apparatus fact core cannot probe. Reinstating it
+    left the whole suite green: guard-pin arm R is a raw-text golden over the
+    worked example's NUMBERS and carries no substring of these lines, and
+    nothing else read this fenced block at all (the plan's own correction 19
+    recorded that absence and asked for nothing).
+
+    Both ends are read independently, the way Fixture G reads § Errors: the
+    DOCUMENT side is extracted from the named section by
+    `_the_two_files_environment_block`; the CODE side is the
+    `provenance.environment` mapping a real `run` actually writes. Neither is
+    derived from the other, so this cannot degenerate into the document
+    comparing itself with itself.
+
+    What it pins, in one assertion each: Ruling O (a `gpu` key returning to
+    either end fails), Decision 9's key ORDER at the document end (arm D pins
+    it at the code end), and any future key written but undocumented or
+    documented but unwritten — the six-unwritten-keys drift this slice closed
+    by hand and nothing was watching.
+    """
+    documented = _the_two_files_environment_block()
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4)
+    written = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["provenance"]["environment"]
+
+    assert list(documented) == list(written)
+    assert list(documented["hardware"]) == list(written["hardware"])
+    # The literal, so neither extraction can go vacuous and agree with itself:
+    # `hardware` carries `cpu_count` and nothing else at either end.
+    assert list(documented["hardware"]) == ["cpu_count"]
 
 
 def test_h8b_arm_e_sweep_yamls_recorded_plan_shape(tmp_path):
@@ -17270,6 +17421,8 @@ def test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text(doc_name: str):
     `ci95: [-0.213, -0.125]` to `[-0.113, -0.125]`: this test now fails
     for `REFERENCE` (see the report's Fix round 1 section for the full
     mutation record).
+
+    H6b guard-pin arm R: sole authorized editor NONE.
     """
     text = _H5A_ARM_D_PATHS[doc_name].read_text(encoding="utf-8")
     assert _h5a_arm_d_lines_carrying_the_worked_example(text) == _H5A_ARM_D_GOLDEN[doc_name]
@@ -19049,6 +19202,10 @@ def test_h6a_arm_b_an_excluded_env_file_moves_the_hash_today(tmp_path: Path, mon
     alone, so no list is pinned twice and task 5 — this arm's sole editor — has
     nothing of arm C's to reach. Two slices pinned one list twice and edited
     both; that is what this sentence exists to prevent.
+
+    H6b guard-pin arm U: sole authorized editor NONE. (H6a's task 5, named
+    above, is this test's editor within H6a's own slice; H6b adds no
+    top-level key this arm's individual-key assertions could see move.)
     """
     base = _h6a_base_tree(tmp_path / "base", with_env=True)
     assert code_hash(base, _h6a_live_include(base)) == _H6A_BASE_WITH_ENV_DIGEST
@@ -19106,6 +19263,11 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     — `test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit` and
     `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` in this file.
     Grepped for before writing this arm rather than assumed absent.
+
+    H6b guard-pin arm U: sole authorized editor NONE. It asserts individual
+    `environment` keys rather than the mapping as a whole, so H6b's three
+    insertions (`os`, `hostname`, `hardware`) are invisible to it — a passing
+    arm after task 3 is the proof that the additive claim held here too.
     """
     cfg = _h6a_pin_project(tmp_path, monkeypatch, with_env=True)
     assert main(["run", str(cfg)]) == EXIT_OK
@@ -19688,3 +19850,84 @@ def test_h6a_fixture_h_a_wholly_ignored_src_refuses_e_code_empty(
     assert main(["run", str(cfg)]) == EXIT_WRONG
     assert "E-CODE-EMPTY" in capsys.readouterr().out
     assert not list(results_dir.glob("*")), "a refusal must leave no run directory"
+
+
+def test_h6b_arm_t_the_git_layers_two_codes_at_the_cli(tmp_path, capsys, monkeypatch):
+    """H6b guard-pin arm T: SOLE AUTHORIZED EDITOR — NONE.
+
+    New coverage. Both codes are raised by `provenance.py` and neither is
+    asserted through `main([...])` anywhere in `tests/` at `2b18435`
+    (grepped newline-insensitively, flattening whitespace first: nine hits —
+    two direct calls in `tests/test_provenance.py`, five in
+    `tests/test_validate.py` (four monkeypatched raise sites plus one
+    comment), one docstring each in `tests/test_lineage.py` and
+    `tests/test_study.py` — none through `main`). H6b task 5 documents these
+    two codes and changes no behaviour, so this arm is what makes the two new
+    § Errors rows checkable against behaviour rather than against prose.
+
+    Measured at the installed console script before it was written:
+      * `run` on a project whose `.git` was removed  -> E-GIT-NO-REPO, exit 1
+      * `generate experiment` with cwd outside a repo -> E-GIT-NO-REPO, exit 1
+      * `run` in a `git init`-ed repo with no commit -> E-GIT-NO-COMMIT, exit 1,
+        and NOT E-CODE-DIRTY, even though both hashed trees are untracked
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    # Invocation 1: `run` on a project whose `.git` was removed.
+    root1 = tmp_path / "proj1"
+    assert main(["new", str(root1)]) == EXIT_OK
+    cfg1 = generate_experiment(
+        repo_root=root1,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results1"),
+    )
+    doc1 = yaml.safe_load(cfg1.read_text())
+    doc1["metadata"]["description"] = "arm T invocation 1"
+    doc1["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg1.write_text(yaml.safe_dump(doc1))
+    subprocess.run(["git", "add", "."], cwd=root1, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "experiment"],
+        cwd=root1,
+        check=True,
+    )
+    shutil.rmtree(root1 / ".git")
+    assert main(["run", str(cfg1)]) == EXIT_WRONG
+    err1 = capsys.readouterr().err
+    assert "E-GIT-NO-REPO" in err1
+
+    # Invocation 2: `generate experiment` with cwd outside any repository.
+    # `find_repo_root(Path.cwd())` is called before the option-completeness
+    # check, so no `--template`/`--input-dir`/`--output-dir` need be valid.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    assert main(["generate", "experiment"]) == EXIT_WRONG
+    err2 = capsys.readouterr().err
+    assert "E-GIT-NO-REPO" in err2
+    monkeypatch.undo()
+
+    # Invocation 3: `run` in a `git init`-ed repo with no commit at all.
+    root3 = tmp_path / "proj3"
+    assert main(["new", str(root3)]) == EXIT_OK
+    cfg3 = generate_experiment(
+        repo_root=root3,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results3"),
+    )
+    doc3 = yaml.safe_load(cfg3.read_text())
+    doc3["metadata"]["description"] = "arm T invocation 3"
+    doc3["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg3.write_text(yaml.safe_dump(doc3))
+    shutil.rmtree(root3 / ".git")
+    subprocess.run(["git", "init", "-q"], cwd=root3, check=True)
+    assert main(["run", str(cfg3)]) == EXIT_WRONG
+    err3 = capsys.readouterr().err
+    assert "E-GIT-NO-COMMIT" in err3
+    assert "E-CODE-DIRTY" not in err3

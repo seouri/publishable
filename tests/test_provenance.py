@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ from publishable import ContractError
 from publishable.hashes import code_hash_of, hashed_files
 from publishable.provenance import find_repo_root, git_provenance, unignored_under_hashed_trees
 from publishable.uv_support import uv_lock_info
+
+_SRC = Path(__file__).resolve().parents[1] / "src" / "publishable"
 
 
 def test_walk_up_starts_at_the_path_given_not_the_cwd(git_repo: Path):
@@ -243,3 +246,51 @@ def test_h6a_fixture_i_a_submodule_refuses_rather_than_reading_empty_stdout(tmp_
         unignored_under_hashed_trees(host, candidates)
     assert e.value.code == "E-CODE-FILE-LIST"
     assert "src/vendor" in str(e.value)
+
+
+def test_h6b_fixture_g_e_git_no_repo_and_e_git_no_commit_have_one_row_and_one_raise_each():
+    """H6b task 5, Fixture G. Both ends are read independently, so this
+    cannot degenerate into the table comparing itself with itself:
+
+    * the TABLE side comes from `tests.test_cli._section_text`, sliced from
+      the `### Errors core raises` heading to the next heading at or above
+      its depth, then the `Type · code` cells of that section's own rows —
+      the same section CLAUDE.md and the H6b brief both name as the one
+      whose scope admits a real raise (its preamble names only two rows as
+      NOT raises, and neither new code is one of those two);
+    * the CODE side comes from grepping every `.py` file under
+      `src/publishable/` for the literal `code="E-GIT-NO-REPO"` /
+      `code="E-GIT-NO-COMMIT"`, independent of anything this test reads out
+      of the document.
+
+    Each code must appear in exactly one table row and have exactly one
+    raise site — the shape named in `CLAUDE.md`'s misreadings list as the
+    whole-branch Major on two sub-slices: "one row per code covering every
+    emit site" is a claim about both ends, not about the table alone.
+    """
+    from tests.test_cli import REFERENCE_MD, _section_text  # noqa: PLC0415
+
+    section = _section_text("### Errors core raises")
+    lines = section.split("\n")
+    table_rows = [line for line in lines if line.startswith("|") and "Type · code" not in line]
+
+    for code in ("E-GIT-NO-REPO", "E-GIT-NO-COMMIT"):
+        rows_with_code = [row for row in table_rows if f"`{code}`" in row]
+        assert len(rows_with_code) == 1, (code, rows_with_code)
+
+        raise_sites = []
+        for path in sorted(_SRC.glob("*.py")):
+            text = path.read_text()
+            raise_sites += [
+                (path.name, m.start()) for m in re.finditer(re.escape(f'code="{code}"'), text)
+            ]
+        assert len(raise_sites) == 1, (code, raise_sites)
+
+    # And the document lives where the table is read from — the mechanical
+    # half of "check the table's own scope sentence": both codes actually
+    # appear inside this named section of the real file, not merely inside
+    # whatever `_section_text` happened to return.
+    doc = REFERENCE_MD.read_text()
+    for code in ("E-GIT-NO-REPO", "E-GIT-NO-COMMIT"):
+        assert f"`{code}`" in section
+        assert doc.count(f"`{code}`") >= 1

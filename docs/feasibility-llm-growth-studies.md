@@ -748,8 +748,7 @@ Three substantial pieces of both projects are not runs, and calling them runs wo
 | Calibration intercept and slope | Model fitting, beyond core aggregation | Template `aggregate` if derivable per condition from the unit table, else `summary` `Estimate` |
 | Gwet's AC1 with patient-bootstrap intervals | Not core aggregation | `summary` `Estimate` |
 | Latin-square counterbalancing of effort by block position | Core gives a randomized complete block; it has no per-unit condition sequence | Accept RCBD, or carry position into a `summary` step from the recorded order |
-| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by`. **`study new` and `study add` ship as of H8b/H8c** — see [§ Executability on this
-build](#executability-on-this-build) ([§ Executability on this build](#executability-on-this-build)) |
+| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by`. **`study new` and `study add` ship as of H8b/H8c** — see [§ Executability on this build](#executability-on-this-build) |
 | Disease-cap 200 versus 500 as a design axis | Same | Same |
 | Prevalence-adjusted PPV at 1% and 3% | Not a design axis at all | `report.prevalences` as a list `Param`, computed in `aggregate` |
 | Adaptive candidate selection inside one run | Refused | Two runs, selection recorded between them |
@@ -1902,3 +1901,90 @@ scaffolded `.gitignore`'s `.env` and `.venv/` being the two a real LLM project i
 `schema_version` is deliberately not bumped and no marker is written, so `uv.lock`'s `publishable`
 version is the only carrier of *why*. **That is a fact about comparisons across the boundary, not about
 executability, and it mints no row.**
+
+### Measured on 2026-08-23 against commit `9b7cc54` — after H6b
+
+**H6b (the environment record and the diagnostic debt) writes three `provenance` keys, documents two
+error codes, and changes nothing about which of these nine configs can run.** `provenance.environment`
+gains `os`, `hostname` and `hardware`; `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT` gain § Errors core raises
+rows; no code is minted and none is retired. **§ Executability does not move, and that was derived
+rather than repeated** — the derivation is below, ahead of the table, so a reader checks the reasoning
+rather than checking that the characters match.
+
+**The commit pinned above is this branch's tip at this task, and it names the same executable tree the
+figures below were derived against.** The last commit on this branch to touch `src/` or `tests/` is
+`6497284`; `git diff --name-only 6497284..HEAD -- src tests` is **empty**, so every commit after it —
+`9b7cc54` included — carries the same executable tree. Stated rather than left to a reader, on the H6a
+and H5b entries' precedent.
+
+**Row 1 counts configs validating with zero *errors*, and H6b emits nothing at `validate` at all.** It
+writes three keys inside `cli.command_run`'s `provenance` literal, gives two codes raised by
+`provenance.py` their rows, corrects three stale docstrings, and edits documents. **Documenting a code
+changes no behaviour**: both codes were undocumented, not unraised, so nothing that did not fire before
+fires now. Confirmed by sweep rather than by reading:
+`grep -c "E-GIT-NO-REPO\|E-GIT-NO-COMMIT" src/publishable/validate.py` → **1**, and that one hit is a
+**catch**, not an emit — `_check_data`'s `if exc.code == "E-GIT-NO-REPO": return`, the line that makes
+the in-repo check pass quietly on a config outside every repository. Control:
+`grep -c "E-PARAM-MISSING" src/publishable/validate.py` → **3**, so the sweep can find a code
+`validate` does report.
+
+**Rows 2 and 3 name dependencies H6b does not touch** — `io.reuse_from`'s plugin-side call, and the
+`report_by`-under-`resample` construction inside `summarize_step`. H6b is `cli.command_run`'s
+provenance assembly, `secrets.py`'s and `study.py`'s docstrings, and documents; none of those is either
+surface.
+
+**Row 4 counts configs free of every core-side dependency this analysis can name, and
+`provenance.environment` is written for every run regardless of config.** There is no declaration that
+opts into it and none that opts out, **so no config gains or loses a dependency** — which is a
+different claim from "the record grew", and it is the one row 4 rests on.
+
+**Neither documented code can fire for any of the nine.** Both are properties of a **repository** — no
+git repository walking up from the path given, or a repository with no commit at all — and neither
+reads any declaration. No config in this analysis names a repository, so no substitution of these
+configs' `data`/`statistics` blocks can reach either.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The whole block above — header, separator and all four rows — is byte-identical to the H6a entry's,
+and the ordinal is derived rather than incremented.** Each preceding entry's table was extracted with
+`sed -n '<first-line>,+5p'` and diffed against H6a's: the tables at the **H8a, H8b, H8c, H5a, H5b and
+H6a** entries are identical to one another, and the *"Correction to the correction"* entry before H8a's
+is where they diverge (its rows 2 and 3 read *"Need `io.reuse_from` (unbuilt) | 6"* and a one-clause
+`report_by` cell). **So H8a's entry is where this block was established, and this is the sixth entry to
+repeat it** — the same counting H6a's own *"fifth consecutive entry"* used, one further on. Row 4 is
+inside that count here because the diff covers it: H6a's sentence separated it (*"row 4's cell text is
+repeated unchanged too"*) and the measurement gives no reason to. The block includes each cell's own
+slice-specific prose, which still names **H8a** rather than this slice, because that is what "character
+for character" means and updating it is exactly how a repeated table stops being repeated. The whole block was extracted out of the immediately preceding entry with
+`sed -n '1862,1867p'` and `diff`-ed against an independent programmatic extraction of the same entry's
+table; **the diff is empty**. This slice's plan and design both reproduce the table in their own
+openings and **neither was used**: a second source of truth is how both of this analysis' wrong figures
+were made. **No fifth number is minted, and no single figure is quoted for this analysis'
+executability** — quote the table, or name the dependency: `io.reuse_from`'s plugin-side call for six,
+the `report_by`-under-`resample` gap for seven, and 8 of 8 validating clean, which is the only figure
+`validate` can see.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** Stated in prose and separately from
+the table, on the H5b correction's precedent, and derived rather than offered as reassurance. H6b mints
+no error and no warning — the two codes it documents were already raised, by `provenance.find_repo_root`
+and `provenance.git_provenance`, at every commit before this branch — and the sweep above is what stands
+behind that: `validate.py` contains one mention of either code and it is a catch. So there is no new
+`W-` for this section to reason about, and **the `W-PARAM-UNSET` question is not re-opened here**: the
+H6a entry above records it as **unknowable, with the reason**, since it fires on `parameter_spec` paths
+carrying a default that the config leaves unset and **neither `growth_screen` nor `publishable-llm` is
+installable in any build** — the same limit every entry in this section since the H7b ones has
+recorded. Nothing H6b built changes what could be measured there, so the honest form is to leave that
+answer standing rather than to guess at it from the `parameters` blocks shown above, which would measure
+the guess.
+
+**One thing changes for these configs and it is not a row.** A run of any of these nine made after this
+build carries three more `provenance.environment` keys than one made before it, and `study add` redacts
+`hostname` while letting `os` and `hardware` travel. `diff` gains **no** sixth row for either, by
+ruling — it compares five figures and `uv_lock_hash` is the environment fingerprint among them — so two
+runs on different platforms still compare `identical` on all five rows, exactly as they did before.
+**That is a fact about what a record carries, not about executability, and it mints no row.**

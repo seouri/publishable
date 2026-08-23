@@ -7,6 +7,9 @@ import dataclasses
 import importlib
 import importlib.metadata
 import json
+import os
+import platform
+import socket
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -3810,8 +3813,27 @@ def command_run(config_path: Path) -> int:
             "environment": {
                 "manager": "uv",
                 "python_version": ".".join(str(v) for v in sys.version_info[:3]),
+                # NOT `platform.platform()`: measured, it reports the marketing
+                # name and version (`macOS-26.5.2-arm64-arm-64bit-Mach-O`) rather
+                # than the kernel `uname` names (`Darwin`, `25.5.0`), and its
+                # component count differs per platform. The composed form yields
+                # exactly three components everywhere, which is the shape
+                # `reference.md` § The two files shows.
+                "os": f"{platform.system()}-{platform.release()}-{platform.machine()}",
+                # `socket.gethostname()` and not `platform.uname().node`, which
+                # returns the same fact: `run_identity` already answers "what
+                # machine is this" this way for the run lock, and two spellings of
+                # one fact is how the two drift. Redacted by `study add`.
+                "hostname": socket.gethostname(),
                 "uv_lock": "environment/uv.lock" if lock_path is not None else None,
                 "uv_lock_hash": lock_hash,
+                # `cpu_count` alone. A GPU is not universal and core cannot probe
+                # one without a dependency or a subprocess, so it is an apparatus
+                # fact — `reference.md` § The apparatus core can only observe.
+                # `None` is `os.cpu_count()`'s own documented answer for
+                # indeterminable and is written through rather than substituted:
+                # this format already spells never-captured as `null`.
+                "hardware": {"cpu_count": os.cpu_count()},
             },
             "apparatus": observer.block() if observer is not None else None,
             "input_manifest": "manifest/input.json",
