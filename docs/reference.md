@@ -365,7 +365,7 @@ Each of those raises a [`ContractError`](#errors-core-raises) carrying its own i
 
 The cost is real and worth naming: a hypothesis that names a metric no step returns is not caught until that step has run. What `validate` catches instead is everything about the hypothesis that *is* declared — its form, its contrast, its baseline, and whether any metric in this run could carry the interval it asks for. The alternative would be a step declaring its return keys up front, which is a second source of truth for something the `return` statement already states, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to it unchanged.
 
-`publishable dry-run` goes further: it validates, builds the input manifest, probes the apparatus, resolves the run directory, and prints every artifact path that *would* be written — without executing a step or creating anything. It's the command that pays for the expensive pre-flight, which is why the two are separate names rather than one command and a flag.
+`publishable dry-run` goes further: it validates, builds the input manifest, probes the apparatus, and prints the step directories and the fixed files a run would write — without executing a step or creating anything. The artifact *files* inside those directories it cannot list, and says so: their names are `io.write` arguments in step code, which core never inspects. It's the command that pays for the expensive pre-flight, which is why the two are separate names rather than one command and a flag.
 
 ### Warnings core reports
 
@@ -3670,7 +3670,7 @@ These take paths and nothing else.
 | Command | Status | Argument | Does |
 |---|---|---|---|
 | `publishable validate` | built | config path | Every check in [Validation](#validation). Reads your config and your input; creates nothing and reaches nothing off the machine |
-| `publishable dry-run` | NOT BUILT | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
+| `publishable dry-run` | built | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints the step directories and the fixed files a run would write, and the unit-execution count. **Does not** list the artifact files inside those directories: their names are `io.write` arguments in step code, which core never inspects — see [design-principles.md § Greenfield only](design-principles.md#greenfield-only). Creates nothing |
 | `publishable run` | built | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
 | `publishable draft` | built | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
 | `publishable resume` | NOT BUILT | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory) |
@@ -3753,7 +3753,7 @@ Six stops. Stops 3 through 5 each have the same beat: print the next command exa
 | 1 | *(`demo` itself)* | Writes 240 synthetic units to `~/publishable-demo-data/input/`, scaffolds `src/correlation_pilot/` and `configs/correlation-pilot/config.yaml`, then `git init` and a first commit. Explains why the data is [outside the repo](#why-not-in-the-repo) |
 | 2 | *(`demo` prints a file)* | Shows this config's `sweep` and `replication` blocks verbatim — the whole description of what is about to run |
 | 3 | `validate` | Reads the config and the input, creates nothing, reaches nothing off the machine |
-| 4 | `dry-run` | 3 conditions × 5 repeats = 15 executions, and every artifact path that *would* be written. Still creates nothing |
+| 4 | `dry-run` | 3 conditions × 5 repeats = 15 executions, the step directories and fixed files a run would write, and the unit-execution count. Still creates nothing |
 | 5 | `run` | The results table: estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline |
 | 6 | *(nothing — `demo` prints a command)* | Opens the `run.yaml` this all produced and shows the `reproduce` invocation a collaborator would run against it. Hands off to [`publishable new`](#scaffolding-publishable-new) |
 
@@ -3879,7 +3879,7 @@ class CohortPilotExperiment(BaseExperiment):
 
 **`entrypoint` names that class, and it is an ordinary Python import path** — `<module>:<attribute>`, resolved with the project's own environment on `sys.path`. Because [`new` scaffolds a src layout](#scaffolding-publishable-new), `src/` is not a package and does not appear in it: the experiment generated into `src/cohort_pilot/` is `cohort_pilot.experiment:CohortPilotExperiment`. `generate experiment` writes the line, and nothing but a hand-edit changes it.
 
-It resolves at `validate`, not at `run`, because the execution plan is a property of classes core has to have imported to see: how many executions each step gets, which artifact paths [`dry-run`](#before-you-spend-it) prints, and which scope each `io` will be built for. So an experiment package that fails to import fails `validate`, with the import error as the message. That is also the one thing `validate` executes: importing a module runs its top level, so a step module that opens a connection or reads a file at import time does so during a command documented as creating nothing. Keep step modules import-clean and put the work in `run`.
+It resolves at `validate`, not at `run`, because the execution plan is a property of classes core has to have imported to see: how many executions each step gets, which step directories [`dry-run`](#before-you-spend-it) prints, and which scope each `io` will be built for. So an experiment package that fails to import fails `validate`, with the import error as the message. That is also the one thing `validate` executes: importing a module runs its top level, so a step module that opens a connection or reads a file at import time does so during a command documented as creating nothing. Keep step modules import-clean and put the work in `run`.
 
 ### A report override renders one experiment's own figures
 

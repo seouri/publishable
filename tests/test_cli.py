@@ -9577,7 +9577,8 @@ def test_reference_cli_tables_are_parsed_at_all():
         statuses = {status for _, status in rows}
         assert statuses, column
         assert statuses <= {"built", "NOT BUILT"}, column
-    assert ("dry-run", "NOT BUILT") in tables["Command"]
+    assert ("dry-run", "built") in tables["Command"]
+    assert ("resume", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -21553,3 +21554,105 @@ def test_h9a_fixture_t_unit_executions_agrees_with_a_real_group_axis_run(tmp_pat
     # nothing, so the sentence must be ABSENT — an absence paired with the
     # equality above, which must report.
     assert "handed no unit list at all" not in out
+
+
+# ===========================================================================
+# H9a task 9 — wiring `dry-run` into `_dispatch`
+# (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 9; Rulings R and
+# U). `dry-run` joins `OPERATION_COMMANDS`'s existing one-path arity arm —
+# the same arm task 4 gave its first pin, not a second enforcer —
+# `NOT_BUILT_COMMANDS` drops `"dry-run"`, and § Operation commands' row
+# carries the narrowed promise in both halves at once (`Status` and `Does`
+# are one fact seen from two ends). `_dispatch`'s branch order is untouched
+# (§ Corrections against the code, correction 16): the built branches are
+# still evaluated before the `NOT_BUILT_COMMANDS` lookups, which is what
+# makes adding a name to `OPERATION_COMMANDS` safe at all.
+# ===========================================================================
+
+
+def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: Path, capsys):
+    """`main(["dry-run", cfg])` over a real project: exit `0`, and the whole
+    transcript on **stdout**.
+
+    Every section of the printed output is asserted, because a build that
+    dropped one line would still exit `0`: the sweep header, a condition
+    line, the repeat plan, the seeds, the comparison mode read from
+    `data.units.allocation` (Decision 16 — a declaration, never a resolved
+    comparison list), the step list, the statistics basis, the
+    unit-execution count, both path lists' headers, **Ruling R's omission
+    sentence**, and `creates nothing`.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds",
+        },
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(doc["cfg"])]) == EXIT_OK
+    out, err = capsys.readouterr()
+    assert "sweep: 2 conditions (grid) × 2 repeats = 4 executions" in out
+    assert "  00_method=pearson  analysis.method=pearson" in out
+    assert "repeats: seed(n=2)" in out
+    assert "  seeds: [" in out
+    assert "  comparisons: paired (allocation: within)" in out
+    assert "steps: step01_summarize_units (repeat)" in out
+    assert "statistics: basis units (n=10 resolved); correction holm;" in out
+    assert "scale:  40 unit-executions (4 executions × 10 units handed to each)" in out
+    assert "would create 4 step directories under " in out
+    assert "and 7 fixed files in that directory:" in out
+    assert "artifact files inside a step directory are NOT listed" in out
+    assert "creates nothing" in out
+    # The transcript is stdout, not a combined stream: `run`'s own stdout is
+    # pinned (guard-pin arm B) and a diagnostic on stderr must not be read as
+    # part of this output.
+    assert "creates nothing" not in err
+
+
+def test_h9a_dry_run_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic(capsys):
+    """The one shipped answer this task moves, pinned rather than merely
+    disclosed — task 4's own shape for `draft`. Before: the two-token key
+    `"dry-run new"` was not in `NOT_BUILT_COMMANDS`, but the single-name
+    `"dry-run"` was, so `_report_not_built` printed the
+    specified-but-unbuilt diagnostic. After: `"dry-run"` is an
+    `OPERATION_COMMANDS` member, that lookup is never reached, and
+    `rest == ["new"]` is a single path — so the call proceeds into
+    `command_dry_run` and fails for an unrelated reason (`new` is not a
+    readable config), which is what `code != EXIT_INVOCATION` separates from
+    the three true arity failures below."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "dry-run" not in NOT_BUILT_COMMANDS
+    assert "dry-run new" not in NOT_BUILT_COMMANDS
+    code = main(["dry-run", "new"])
+    err = capsys.readouterr().err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    assert code != EXIT_INVOCATION
+
+
+_DRY_RUN_ARITY_MESSAGE = "`dry-run` takes exactly one path and no flags"
+
+
+def test_h9a_dry_run_with_no_path_is_an_invocation_error(capsys):
+    assert main(["dry-run"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_dry_run_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["dry-run", "a", "b"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9a_dry_run_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument,
+    so a build whose condition were a bare `len(rest) != 1` would pass the
+    two tests above and fail this one — task 4's own mutation, restated for
+    the second name to join that arm."""
+    assert main(["dry-run", "--json"]) == EXIT_INVOCATION
+    assert _DRY_RUN_ARITY_MESSAGE in capsys.readouterr().err
