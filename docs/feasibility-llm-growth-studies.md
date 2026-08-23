@@ -1823,6 +1823,13 @@ claim; a run with no file to hash refuses instead of publishing the digest of no
 than assumed** — the derivation is below, ahead of the table, so a reader can check it rather than
 check that the characters match.
 
+**The commit pinned above is this branch's tip at the records task, and it names the same executable
+tree the figures below were derived against.** The last commit on this branch to touch `src/` or
+`tests/` is `c4dea36` (task 11); `git diff --name-only c4dea36..HEAD -- src tests` is **empty**, so
+every commit after it — `f70499f` included — carries the same executable tree, and the measurements
+below, run before `f70499f` existed, describe it. Stated rather than left to a reader, on the H5b
+entry's own precedent.
+
 **Row 1 counts configs validating with zero *errors*, and `W-PARAM-UNSET` is a warning.** Read at
 `validate.py`'s single emit site: it is `c.warn("W-PARAM-UNSET", …)`, not `c.error`. Confirmed by
 running rather than by reading — a scaffolded `generic` project with `parameters.analysis.confidence`

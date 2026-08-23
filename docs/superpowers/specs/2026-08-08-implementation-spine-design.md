@@ -193,6 +193,8 @@ and H6a's own design says *"Twelve tasks"*, while
 `grep -c '^## Task ' docs/superpowers/plans/2026-08-22-hash-definitions.md` returns **13** — a count
 copied from the document being tested rather than from the plan that shipped, which is exactly what the
 two corrections above this one were already about, for H5a's 9-versus-13 and H5b's 10-versus-16.
+**The operative figure is 13**, in six batches, every batch reviewed; the scoping's 12 and the design's
+*"Twelve tasks"* are what it replaces. H6b's 8 is the scoping's and is untested by anything here.
 
 **One thing the row got right and this correction does not touch:** *"`code_hash`'s `.gitignore`
 awareness and its zero-file case"* is precisely what H6a built — a batch keep-predicate asking git, and

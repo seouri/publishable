@@ -439,3 +439,40 @@ claim any commit rests on; both are the kind of number this project re-derives r
 
 `CLAUDE.md` is a live document rather than a development record, so this one is corrected in place and
 the correction recorded here.
+
+---
+
+## Third correction to this report, same day — two additions at `<this commit>`, and one wrong sweep inside the first draft of one of them
+
+Two gaps a re-read found, both closed in the same commit as this append.
+
+1. **The § Executability pin did not say why `f70499f` names the tree the figures were measured
+   against.** The measurements were run before that commit existed. H5b's own entry states the
+   equivalent reasoning explicitly and this one did not, so a reader met a pin that looked
+   measured-at-a-commit it wasn't. Added: the last commit on this branch touching `src/` or `tests/`
+   is `c4dea36` (task 11), and `git diff --name-only c4dea36..HEAD -- src tests` is **empty**, so every
+   commit after it carries the same executable tree. **The first draft of that sentence cited
+   `git diff --stat main...HEAD` as naming only `.md` files, which is false** — that range covers the
+   whole branch and names four files under `src/` and five under `tests/`. Caught by running the
+   command instead of reasoning about it, before the commit; recorded because it is the same fault
+   class as the `_parameters_hash_for` one above, twice in one batch, both in a *claim about what a
+   command returns*.
+2. **The spine correction's item 4 named three sizes for H6a and no operative one.** The two
+   corrections above it in that section each name what they replace; mine listed 13, 12 and "Twelve
+   tasks" and left a reader to guess. Added one clause: **the operative figure is 13**, in six
+   batches, and the scoping's 12 and the design's twelve are what it replaces. H6b's 8 is the
+   scoping's and is untested by anything in this slice.
+
+**The eight-file mechanical pass was re-run at the current tip** — `README.md`,
+`docs/design-principles.md`, `docs/experimental-designs.md`, `docs/reference.md`,
+`docs/feasibility-llm-growth-studies.md`, `CLAUDE.md`, `docs/superpowers/spec-defects.md`,
+`docs/superpowers/specs/2026-08-08-implementation-spine-design.md` — **0 problems over 8 files**, so
+the pass is measured at the tree that ships rather than at `fe8ea47`.
+
+**One thing to concede rather than defend if the gate presses on it.** The append to the
+nine-undocumented-codes entry classifies the remaining seven codes by *document* presence — a row of
+their own, a mention inside another code's row, a § Exit codes sentence, or nothing. Each statement is
+measured and true as worded, but their **emit sites** were not re-greped, and the classification is
+work on codes outside H6a's surface. The defensible core of that append is the `E-CODE-DIRTY`
+correction with its commit and the `E-EXPERIMENT-UNKNOWN` fact with its commit; the taxonomy of the
+other six is the part to drop if a reviewer wants the entry kept narrow.
