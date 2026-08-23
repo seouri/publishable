@@ -801,3 +801,139 @@ claimed zero and all six were wrong.
 13. **The `demo` design document's stop 2 names a `conditions` block that does not exist in the
     schema**, where § What `demo` walks you through says `sweep` (§ 6.1). A spec is not
     retro-edited; H9 builds from `reference.md`.
+
+---
+
+## Correction, 2026-08-23, made before dispatch — H9b is 15, and the total is 49
+
+Appended rather than edited, so the dated measurements above stay as they were made. This replaces
+**H9b's count and its task list only**; § 13's other three parts, and every measurement in §§ 1–12,
+stand unchanged. Four things, all in `resume`, and three of them were invisible to the probe § 4.1
+was built from: **that project's template was `generic`, which declares no `apparatus_probe`**, so
+its crashed run directory has no `apparatus/` at all and none of the questions below could surface
+from it.
+
+### C1. `resume`'s apparatus baseline IS recoverable, and the reader's codes are named for `freeze`
+
+§ The apparatus core can only observe gates every pre-execution probe against the **first
+*answered*** observation, which `run.yaml` carries as `provenance.apparatus.facts` — and a
+resumable run has no `run.yaml`. Measured by **reading the two functions rather than by grepping a
+name**:
+
+- `apparatus.append_observation` writes each line **at the probe call**, and its own docstring gives
+  the reason in these terms: *"What after-the-execution WOULD lose is the observation for a run that
+  dies **inside** the execution itself, or between executions."* So `apparatus/probes.jsonl` is
+  durable across exactly the crash `resume` exists for.
+- `apparatus.replay_ledger` already reconstructs the baseline `Observations` from it, **filtered to
+  `PHASE_RUN_START`/`PHASE_PRE_EXECUTION`** — *"exactly the calls the run's own in-memory
+  `Observations` held while it executed"* — replayed through the shipped `Observations.record`, so
+  the first-answered rule, the per-condition scoping and the `null` transitions all come along.
+
+**So no third artifact is needed**, which is the good news, and it makes this the one durability
+question in H9b that answers *yes*. Two things follow that are H9b's:
+
+1. **The reader is general and its refusals are not.** `replay_ledger`'s sole caller is `freeze`,
+   and it raises `E-FREEZE-LEDGER-UNREADABLE`. A `resume` calling it would print a `FREEZE` code
+   from a command that is not `freeze`. Either the code is renamed — a change to a shipped
+   diagnostic with a § Errors row — or `resume` gets its own, and H9b decides which.
+2. **An absent or empty baseline means something different to `resume` than to `freeze`.**
+   `replay_ledger` returns an empty `Observations` for a missing file, deliberately, because *"there
+   is no baseline" is `freeze`'s own `E-FREEZE-LEDGER-MISSING` to report* — probing now would pin a
+   fact the run never adopted. For a `resume` that is the **legitimate** case: a run that crashed
+   before its first probe has no baseline and its next execution is entitled to set one, exactly as
+   the original run's first probe would have. `freeze`'s refusal must not be inherited by copy.
+
+**And this is the same filter H9a task 7 asks about.** `replay_ledger`'s docstring says a `dry_run`
+line is excluded *"for the same reason, and one more: nothing appends one yet (§ Refusals routes that
+gap to H9)"*. So H9a's `PHASE_DRY_RUN` ruling and H9b's baseline reader are two readings of one
+filter, and the H9a ruling must be written knowing `resume` will be its second caller.
+
+### C2. `run_status`'s bare assert is a tripwire on `resume`'s first invocation
+
+`run_record.run_status(results, *, planned, stop)` holds
+`assert len(results) >= planned` whenever `planned` is given and no stop reason is — and its own
+docstring calls a shorter list *"a core defect … nothing core ships truncates a plan silently."*
+**A resumed run's `results` list holds only the triples it re-executed**, so on the first `resume`
+of any partially-completed plan the assert fires. That is not a bug in `run_status`; it is the
+statement that a second entry must either reconstitute the prior attempt's results or change what
+`planned` means.
+
+It is also the **status** question, and it belongs with C1's and § 4.4–4.5's durability questions
+rather than beside them: § What status means defines `partial` as *"the plan reached its end with
+some executions failed"*, so a resumed run's status has to fold the **previous** attempt's `failed`
+ledger records — which the ledger does carry (`status`, and `error`, § 4.4) — while `per_repeat` and
+`n` for those same triples it does not (§§ 4.4–4.5). **One artifact, three different answers**, and
+that is why H9b needs one ruling task covering status, `n`, `returned` and the apparatus baseline
+together rather than four independent ones.
+
+### C3. `E-RUN-LOCKED`'s sites, enumerated by reading rather than counted by grep
+
+§ 4.7 reported *"raised in `run_identity.py`"* from `grep -rc`, which answers **where the string
+appears**. § Errors carries one row per code covering every site that **raises *or* reports** it —
+the `E-TEMPLATE-UNKNOWN` precedent — so the enumeration is:
+
+| Site | What it does |
+|---|---|
+| `run_identity.RunLock.__enter__` | **raises** `ContractError(code="E-RUN-LOCKED")` on `FileExistsError`, after reading the holder line |
+| `cli.main`'s `except PublishableError` | **reports** it: `print(f"  error   {exc.code:<20} {exc}", file=sys.stderr)` and returns `EXIT_WRONG` |
+
+So the code that a held lock produces today is **`1`**, which is the code § Exit codes already
+assigns to *"a `resume` whose hashes moved"* — the same class. **H9b task 8 is therefore a row and
+not also a code decision**, which is one fewer ruling than § 4.7 implied.
+
+Two things the reading adds that the grep could not. `main`'s handler uses **no `Collector`**, so
+this diagnostic is printed without the redaction pass every `Collector.render` applies — harmless
+for a lock message, and worth knowing before `resume` routes anything else through the same path.
+And `E-RUN-LOCKED` is **unreachable from `run` and `draft` for a structural reason**, not merely an
+unlikely one: `allocate_run_dir`'s `mkdir` *is* the claim — a directory that already exists sends it
+to the next suffix — so a lock file can never pre-exist a directory those two commands just created.
+That strengthens § 4.7's argument rather than qualifying it: `resume` is the **only** command from
+which the code is reachable at all.
+
+### C4. Two withdrawals and one connection
+
+- **§ 10's causal clause is withdrawn.** It read *"The pin is authorized-editor-only, so the
+  **document** is the side that moved."* Pin authorization says which arm an editor may touch; it
+  does not say which side drifted, and inferring one from the other is the proxy substitution
+  `CLAUDE.md` § Answering a question with a proxy names. **What stands is the observation**:
+  § The two files puts `publishable_version` and `plugin_versions` last, `tests/test_cli.py`'s H8a
+  arm B pins them before `units`, and a real run agrees with the pin. Which side moved is settled by
+  `git log -S` over § The two files and was not spent here. Still not H9's charter.
+- **`demo`'s `--into DIR` and `reproduce`'s refusal of `--into` are one question with two documented
+  answers**, and H9 builds both. § Reproducing on another device: *"No `--into`: the destination is
+  derived, so it can't collide with an existing checkout and doesn't need naming."* § Creation
+  commands gives `demo` `[--into DIR]`, and § What `demo` walks you through makes it load-bearing —
+  *"given one that already holds a `.demo-progress`, it resumes there."* **A ruling that legitimizes
+  `demo`'s flag has to say why `reproduce`'s refusal still holds**, and the available answer is that
+  `reproduce`'s destination is *derived from the record* while `demo` has no record to derive from.
+  That belongs in H9d task 3 beside the enumeration finding, not as a separate task.
+
+### H9b, recounted — 15 tasks
+
+| # | Task | Changed |
+|---:|---|---|
+| 1 | Ruling: what `resume` compares (§ 4.2) | unchanged |
+| 2 | Ruling: the stale lock (§ 4.3) | unchanged |
+| 3 | **Ruling: what a run must make durable, in one place** — the ledger's `attempt`/`n` (§ 4.4), `returned`/`per_repeat` (§ 4.5), the resumed run's **status** and `run_status`'s `planned` contract (C2). One artifact, four readings | **merges old 3 and 4, and gains status** |
+| 4 | **Ruling: the apparatus baseline** (C1) — `replay_ledger` as `resume`'s reader, whether `E-FREEZE-LEDGER-UNREADABLE` is renamed or a code minted, and why an empty baseline is legitimate for `resume` and a refusal for `freeze` | **new** |
+| 5 | `resume` itself: read `sweep.yaml`, skip `completed` triples, take the lock, refuse a directory holding a `run.yaml`, append into the same ledger and tree | unchanged |
+| 6 | **The apparatus wiring**: the replayed baseline threaded into the pre-execution gate, so a resumed execution is gated against the *original* run's first-answered facts and not against its own first probe | **new** |
+| 7 | `attempts` from the ledger; `io.units` never narrowed; `io.recorded_keys` non-empty only on a resume | old 6 |
+| 8 | `allocation.json` read rather than re-drawn (§ 4.6), over a **drawn** axis | old 7 |
+| 9 | `E-RUN-LOCKED` and `E-RUN-ID-EXHAUSTED` § Errors rows — **both sites each** (C3) — and the five-codes filing amended to three with the reason | old 8, narrowed by C3 |
+| 10 | The run-start `parameters_hash` question, closing the `freeze` filing or warranting an artifact | old 9 |
+| 11 | The bytecode-cache fix at all three call sites, closing two H9-owned filings (§ 8.1) | old 10 |
+| 12 | **The status fixture**: a real crash, a real `resume`, and a `run.yaml` whose `status` is `partial` because of a failure recorded by the **previous** attempt — the one shape no direct call can build | **new** |
+| 13 | **`run_status`'s `planned` contract**, implemented per task 3's ruling, with the bare assert either satisfied or replaced by a stated rule — and the H7d Part B `max_failed_fraction` pin left alone (§ 12) | **new** |
+| 14 | The guard pin for everything tasks 3, 6 and 13 move — `run.yaml` key-for-key on a resumed run, the ledger line's key set, the gate's baseline — captured before any of them, each arm with a named sole editor or **NONE** | **new; hoisted to first at dispatch** |
+| 15 | § Resuming, § `executions.jsonl`, § What status means, § CLI reference, § Exit codes, `spec-defects.md`, `CLAUDE.md`, and both consistency passes | old 11, widened |
+
+**So H9 is 12 + 15 + 11 + 11 = 49**, and the order is unchanged: H9a → H9b → H9c → H9d. Task 14
+executes first inside H9b despite its number, which is stated here rather than renumbered so this
+correction stays readable against the list it corrects.
+
+**One thing to say about 49 before anyone quotes it.** § 13 cites its own calibration — H5a 9→13,
+H5b 10→16, H6a 12→13 — and **every one of those moved up between the scoping and the plan that
+shipped.** 49 is the *scoping* figure, measured by naming and counting tasks, and the pattern this
+file documents predicts the approved plan will exceed it. Quote it as a scoping measurement with a
+date, not as H9's size.
