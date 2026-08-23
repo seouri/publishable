@@ -833,8 +833,11 @@ def test_h6a_fixture_j_the_gate_and_the_hash_agree_on_an_excluded_file(tmp_path:
 
 # ---------------------------------------------------------------------------
 # H6a whole-branch fix round (2026-08-23), Major 1 and Ruling L — the pin for
-# the slice's central claim: **only rules that travel with the tree decide**,
-# for the hash (Ruling F) and for the dirty gate (Ruling L).
+# the slice's central claim in the form that survived the gate's Major 3:
+# **a rule the machine holds and the tree does not narrows neither the digest
+# (Ruling F) nor the dirty gate (Ruling L)** — which is NOT the same as "only
+# rules that travel with the tree decide", since `check-ignore` reads the
+# working tree and an uncommitted `.gitignore` decides too (filed, owner H6b).
 #
 # Before this section `grep -rn "GIT_CONFIG_GLOBAL\|excludesFile" tests/`
 # returned nothing and removing BOTH halves of the neutralization left the

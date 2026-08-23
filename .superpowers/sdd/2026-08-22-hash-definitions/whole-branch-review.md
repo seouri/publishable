@@ -298,9 +298,10 @@ Everything below is the fix round's own record; nothing above it was edited. Eac
 **Suite: 2955 → 2962 passed, 1 skipped, 2 xfailed** — **+7**, which is exactly the seven tests this
 round adds (4 in `tests/test_hashes.py`, 1 in `tests/test_acceptance.py`, 2 in `tests/test_validate.py`).
 Predicted before the run and read from the unfiltered output. `ruff check` clean, `ruff format --check`
-93 files already formatted, `mypy` clean. **Zero deletions in `tests/`** (`git diff --numstat`), so no
-guard-pin arm was opened: arms A, C, D, N (no authorized editor) and B, E, F are byte-identical and the
-two test files this round touches are appended to only.
+93 files already formatted, `mypy` clean. **Zero deletions in `tests/`** (`git diff --numstat`), and both test
+files that carry arms are **appended to at end of file** — below arm F in `tests/test_validate.py`,
+below arms D and E in `tests/test_hashes.py` — so no insertion lands inside an arm body either. Arms A,
+C, D, N (no authorized editor) and B, E, F are byte-identical.
 
 ## Major 1 — Ruling F is pinned — **CLOSED**
 
@@ -468,9 +469,41 @@ Not a count of zero.
   `git diff --name-only`, so it is byte-identical and carries no fifth number.
 * **`.superpowers/sdd/.gitignore`** — checked before committing, content intact, not clobbered.
 
-## One concern carried to the merge
+* **`grep -rn "git_provenance\|code_dirty" src/`** — the scope of Ruling L's behaviour change, checked
+  rather than assumed. Both names reach exactly one command: `git_provenance` is called at
+  `cli.py:2024` and nowhere else in `src/` (`validate`, `freeze`, `diff`, `report`, `study` and
+  `lineage` do not call it), and `command_run` is the only definition-and-call pair. `GitInfo.code_dirty`
+  **is** written into `run.yaml` (`provenance.git.code_dirty`, `cli.py:3807`), but the phase-3 gate
+  refuses unconditionally when it is true, so a `run.yaml` `run` writes always records `false` and
+  **Ruling L cannot move a recorded figure** — it can only turn a run into a refusal. The disclosure's
+  scope word, `run`, is therefore right, and the ten-unmoved-figures claim is untouched.
+* **A global setting that decides *how* a file is compared, not which files are considered** — found by
+  asking what else the neutralization discards, not by grep, and it **reproduces**: with the repo's own
+  `core.filemode` unset and a global `core.fileMode = false`, a `chmod +x` on a tracked file is clean
+  under the machine's config and **dirty** under the neutralized question. `core.autocrlf` is the same
+  class and Git for Windows writes it to the *system* config. This is a false-dirty on a tree whose
+  content nobody touched — a worse class than the four routes the disclosure already named, all of which
+  are "you relied on a machine rule to hide a file" — so § How the three are computed now names it, with
+  the mitigating fact that `git init` writes `core.filemode` into the repo's own `.git/config`, which
+  outranks the global one.
 
-`CLAUDE.md`'s H6a entry still opens *"merged on 2026-08-22"*, which the review flagged as a bump rather
+## Two concerns carried to the merge
+
+**1. A surgical alternative to Ruling L's "the same way" exists, and it is a controller's call, not this
+round's.** Ruling L said to neutralize the gate *the same way* the hash is neutralized, and that is what
+shipped. But the ruling's own ground — a rule that does not travel with the tree may not decide — is
+about settings that choose **which files the gate considers**, and exactly two do:
+`-c core.excludesFile=` and `-c status.showUntrackedFiles=normal`, with the environment variables
+dropped **for the gate only**. Measured on 2026-08-23: that pair alone defeats a global config carrying
+both `showUntrackedFiles = no` and a `core.excludesFile`, printing both untracked files. It would leave
+content and mode comparison alone (retiring the `core.fileMode`/`core.autocrlf` class above) and leave
+`safe.directory` alone (retiring the fail-open filed under Major 2). What it costs: the environment half
+of the shared constants would no longer be pinned by the gate arm — the pin would move onto
+`-c status.showUntrackedFiles=normal` — and the hash and the gate would stop sharing one pair of
+constants, which is the property that keeps them from drifting. **Not implemented here**: swapping it in
+is a change to what Ruling L decided.
+
+**2.** `CLAUDE.md`'s H6a entry still opens *"merged on 2026-08-22"*, which the review flagged as a bump rather
 than a finding. This round did not change it: the date names the records commit by the convention H5b and
 H8c set, and re-dating it would ripple through the entry's other dated claims. If the merge lands today
 it reads one day stale.
