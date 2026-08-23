@@ -225,10 +225,15 @@ where reordering is silently wrong rather than loudly wrong.
 
 **Mutations.** (a) Return `Prepared` without the dirty check when `allow_dirty=False` → arm E's
 dirty-tree test must fail. (b) Move the `credentials` assignment below the roster resolution → **named
-blind in advance**, because no shipped fixture makes the two orders differ. **You owe a replacement**:
-build a resolver-raises fixture at `run` — a resolver whose body raises with a declared credential in
-the message — and assert `<redacted:…>`; if that cannot be built, pin the statement order with an
-assertion over `_prepare_run`'s own AST and say in the report which you did and why.
+blind in advance**, because no shipped fixture makes the two orders differ. **The replacement is
+mandatory and it is not a fork**: build a resolver-raises fixture at `run` — a resolver whose body
+raises with a **declared** credential in the message — and assert `<redacted:…>`. It is a variant of
+tests that already ship: H7b Part B pins resolver-raise redaction at both `validate` and `run`, and
+H6a batch 3 measured that a resolver's body runs at `validate` dispatch, so the shape exists. **Do not
+substitute an assertion over `_prepare_run`'s own AST** — statement position answers *where does this
+sit*, not *does a credential leak*, and answering with a position is the proxy substitution this repo
+has paid for twice. If the fixture genuinely cannot be built, that is a finding to report, not a
+second-choice pin.
 
 **Must not touch:** `provenance.py`, `runner.py`, `apparatus.py`, `run_record.py`, any `*.md`, any of
 task 1's arms, and the arm-plan resolution's position.
@@ -319,7 +324,11 @@ no gate.
    row only.** The `dry-run` row is task 9's.
 
 **Do not reorder `_dispatch`'s branches** (correction 16). The built branches precede the
-`NOT_BUILT_COMMANDS` lookups deliberately, and the two-token arm is evaluated first.
+`NOT_BUILT_COMMANDS` lookups deliberately, and the two-token arm is evaluated first. **One shipped
+answer moves and belongs in your report**: `publishable draft new` reaches `_report_not_built` today
+(the two-token key misses, the single-name lookup hits) and after this task reaches the arity arm,
+printing `` `draft` takes exactly one path and no flags``. Assert it, so the change is pinned rather
+than merely disclosed.
 
 **The new pin, and it is the point of this task.** The shared arity arm is pinned by **nothing**:
 `grep -rn "takes exactly one path" tests/` returns 0 and `grep -rn "no flags" tests/` returns 1, which
@@ -451,9 +460,14 @@ a structural fact is the proxy move this repo keeps paying for.
 **`unit-executions` is task 8's.** Print the line, wired to task 8's function, and leave the
 narrowing to that task if you are dispatched in parallel; otherwise build both.
 
-**Fixture U** — the step-directory list. Compare **set to set** against the tree a real `run` of the
-same config creates, not against a count. Not against a literal: a count literal that happens to
-match is the fixture-agrees-with-the-bug shape.
+**Fixture U** — the step-directory list **and the fixed-file list**, both compared **set to set**
+against the tree a real `run` of the same config creates, not against a count and not against a
+literal: a count literal that happens to match is the fixture-agrees-with-the-bug shape. **The
+fixed-file list has three conditional branches and each needs a config that exercises it** —
+`environment/uv.lock` (`lock_path is not None`), `allocation.json` (a drawn axis declared), and
+`apparatus/probes.jsonl` (a probe declared). Without them the command's whole output rests on three
+untested predicates, which is the *seam named in the brief and instantiated by no fixture* shape:
+naming a branch is not testing it.
 
 **Mutation:** drop the degenerate-level collapse by calling `step_dir_for(..., collapse_repeats=True)`
 unconditionally → Fixture U must fail. Choose the fixture's repeat count so `True` and `False` give
