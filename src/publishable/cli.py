@@ -2142,6 +2142,154 @@ class Resumed:
     recorded_manifest: dict[str, Any]
 
 
+def _reconstitute(
+    plan: list[Execution],
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    collapse: bool,
+) -> tuple["ExecutionResult", ...]:
+    """One FULL `ExecutionResult` per plan triple that already has a
+    `completed` record, in plan order (H9b Decision 4).
+
+    **Why a full result and not a skip.** The aggregate phase reads
+    `ExecutionResult.rows`, `.recorded`, `.skipped` and `.returned` off the
+    in-memory list and **no file at all** — `recording_steps` is
+    `{r.execution.step_name for r in results if … and r.rows}`,
+    `collapse_repeats`/`repeats_disagreeing` walk `r.rows`/`r.recorded`
+    through `_gather_repeats`, `attrition` walks `r.recorded`/`r.skipped`, and
+    `per_repeat` is built from `r.returned`. So a `resume` that merely skipped
+    a completed triple would publish every interval, every `n`, every delta
+    and every hypothesis verdict **over the re-executed triples only** —
+    plausible numbers, no diagnostic, `status: completed`. That is why this
+    function exists and why guard-pin arm A is a whole-record equality rather
+    than a set of per-key assertions.
+
+    Sited in `cli` rather than in a module of its own: `reference.md`
+    § Package layout has no `resume.py` (its "resume resolution" line names
+    `run_identity.py`, which owns the run-ID and lock surface and reads no
+    step artifact), and this function's only caller is `command_resume` two
+    definitions below. A new module would be a § Package layout change
+    carried by a code task rather than by the documents task.
+
+    **The narrowing is by `recorded_columns`, never by subtracting declared
+    attribute names.** `finalize` writes `unit`, then every declared
+    attribute, then every recorded key — so the file holds columns this
+    execution did not record, and they must not reach the unit table `stats`
+    reads. Subtracting attributes by name would be a name standing in for a
+    structural fact, and `finalize`'s own merge puts a RECORDED value under
+    the shared column when the two names collide.
+
+    **Row key order is the FILE's, not `recorded_columns`'.** That list is
+    sorted; `io.rows()` preserves `{"unit": key, **values}` insertion order,
+    and `units.parquet`'s columns preserve it too (`_finalize_columns` is
+    first-seen order). `_gather_repeats` builds its column order from row
+    iteration order and `summarize_step` derives a metric's column order from
+    that, so narrowing by iterating the sorted list would move `run.yaml`'s
+    column order with every value correct — the exact failure arm A names.
+    Filtering the row's own items keeps the order the run had.
+
+    Four refusals, each a distinguishable fault with its own remedy:
+
+    - a completed line with no `returned`/`recorded_columns` key —
+      `E-RESUME-LEDGER-UNREADABLE`: a ledger written by a build older than
+      these two keys cannot be resumed, because the alternative is a
+      `per_repeat` hole and a unit table narrowed to `unit` alone, which is
+      the silent-wrong-numbers shape this whole decision is about;
+    - a non-empty `recorded_columns` and no `units.parquet` —
+      `E-RESUME-ROWS-MISSING`;
+    - a `units.parquet` that will not decode, or whose columns do not cover
+      that line's `recorded_columns` — `E-RESUME-ROWS-UNREADABLE`;
+    - and an EMPTY `recorded_columns` with no `units.parquet` is **not** a
+      refusal at all: `finalize` writes the table only `if self._rows`, so a
+      scalar-only step legitimately writes none.
+    """
+    from publishable.artifacts import READERS
+    from publishable.lineage import ledger_key
+    from publishable.runner import ExecutionResult, step_dir_for
+
+    completed: dict[tuple[str, int | None, str | None], dict[str, Any]] = {}
+    for entry in records:
+        if entry.get("status") == "completed":
+            # Last completed record wins, which is the same answer as "the
+            # only one": once a triple completes, `resume` filters it out of
+            # every later plan, so a second completed record for one triple
+            # is not reachable through this build.
+            completed[ledger_key(entry)] = entry
+
+    results: list[ExecutionResult] = []
+    for execution in plan:
+        key = (execution.step_name, execution.condition_index, execution.repeat_label)
+        found = completed.get(key)
+        if found is None:
+            continue
+        entry = found
+        for name in ("returned", "recorded_columns"):
+            if name not in entry:
+                raise ContractError(
+                    f"{run_dir / 'executions.jsonl'}: the completed record for "
+                    f"{execution.step_name!r} (condition {execution.condition_index!r}, "
+                    f"repeat {execution.repeat_label!r}) has no {name!r}; a run recorded "
+                    "by a build older than this one cannot be resumed",
+                    code="E-RESUME-LEDGER-UNREADABLE",
+                )
+        # `step_dir_for`, never a second path construction: it already owns
+        # the degenerate-level collapse, and two constructions would be two
+        # answers to which directory a triple wrote into.
+        step_dir = step_dir_for(run_dir, execution, collapse)
+        columns = list(entry["recorded_columns"])
+        table = step_dir / "units.parquet"
+        rows: tuple[dict[str, Any], ...] = ()
+        if table.exists():
+            try:
+                decoded = READERS[".parquet"](table.read_bytes())
+            except Exception as exc:
+                raise ContractError(
+                    f"{table} will not decode ({type(exc).__name__}: {exc})",
+                    code="E-RESUME-ROWS-UNREADABLE",
+                ) from exc
+            present = set(decoded[0]) if decoded else set()
+            uncovered = [name for name in columns if name not in present]
+            if uncovered:
+                raise ContractError(
+                    f"{table} holds no column {', '.join(uncovered)}, which its "
+                    "`executions.jsonl` record names as recorded",
+                    code="E-RESUME-ROWS-UNREADABLE",
+                )
+            keep = {"unit", *columns}
+            rows = tuple({k: v for k, v in row.items() if k in keep} for row in decoded)
+        elif columns:
+            raise ContractError(
+                f"{table} is absent, and this execution's record names "
+                f"{', '.join(columns)} as recorded",
+                code="E-RESUME-ROWS-MISSING",
+            )
+        skipped: set[str] = set()
+        ineligible = step_dir / "ineligible.jsonl"
+        if ineligible.exists():
+            # Through the same reader `io.write` dispatches to, so a line this
+            # build wrote is read back by the code that wrote it.
+            for line in READERS[".jsonl"](ineligible.read_bytes()):
+                skipped.add(line["unit"])
+        results.append(
+            ExecutionResult(
+                execution=execution,
+                status=entry["status"],
+                started_at=entry["started_at"],
+                wall_seconds=entry["wall_seconds"],
+                returned=entry["returned"],
+                error=entry.get("error"),
+                recorded=frozenset(row["unit"] for row in rows),
+                skipped=frozenset(skipped),
+                rows=rows,
+            )
+        )
+    # A tuple, matching `Resumed.prior_results`: a list here would type-check
+    # nowhere and behave identically at runtime, so `mypy` is the enforcer and
+    # this assertion is the one thing a test can see.
+    return tuple(results)
+
+
 def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     """Phases 1-5 of a run, for every command that is a second entry into them.
 

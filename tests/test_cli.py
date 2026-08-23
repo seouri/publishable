@@ -23462,3 +23462,278 @@ def test_h9b_execute_prepared_accepts_resumed_and_defaults_it_to_none():
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
     assert parameter.annotation == (Resumed | None)
     assert Resumed.__dataclass_params__.frozen is True
+
+
+# ===========================================================================
+# H9b task 8 — `_reconstitute`: a FULL `ExecutionResult` per skipped triple
+# (design Decision 4). Guard-pin arm A is the arbiter for the whole-record
+# equality, and its resume half runs `main(["resume", …])`, which does not
+# dispatch until task 15 — so these tests call the reconstitution DIRECTLY
+# and compare against the run's own record. `xfail(strict=True)` absorbs
+# every failure reason, so a green suite with arm A still `xfail`ing is no
+# evidence at all about this function.
+# ===========================================================================
+
+# A step that skips two units and records the rest, so `ineligible.jsonl`
+# exists and `recorded`/`skipped` are two different non-empty sets — a
+# fixture where every unit records makes a reconstitution that dropped
+# `skipped` entirely indistinguishable from a correct one.
+_H9B_SKIPPING_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            if i < 2:
+                io.skip(unit.key, "ineligible by design")
+            else:
+                io.record(unit.key, {{"zeta": float(i), "alpha": i}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def _h9b_reconstituted(doc: dict[str, Any]) -> tuple[Any, Any]:
+    """`(prepared, results)` for a run that already happened: the plan is
+    rebuilt by the shipped `_prepare_run` — which is what `resume` itself
+    does (Decision 7) — and the results are reconstituted from the run
+    directory's own artifacts."""
+    from publishable.cli import _prepare_run, _reconstitute
+    from publishable.lineage import read_execution_ledger
+
+    prepared = _prepare_run(doc["cfg"], allow_dirty=False)
+    assert not isinstance(prepared, int), prepared
+    results = _reconstitute(
+        prepared.plan,
+        run_dir=doc["run_dir"],
+        records=read_execution_ledger(doc["run_dir"]),
+        collapse=len(prepared.repeats) <= 1,
+    )
+    return prepared, results
+
+
+def test_h9b_reconstitution_rebuilds_every_completed_triple(tmp_path: Path):
+    """A completed run reconstitutes to one result per plan triple, in plan
+    order, with the rows narrowed to what the step RECORDED.
+
+    Three claims no key-set assertion could carry:
+
+    * the declared attribute `cohort` is IN `units.parquet` and OUT of the
+      reconstituted row — the narrowing, asserted against a file that
+      genuinely holds the column;
+    * the row's key ORDER is the file's (`unit`, `zeta`, `alpha`), not
+      `recorded_columns`' sorted order (`alpha`, `zeta`). `_gather_repeats`
+      builds its column order from row iteration order and `summarize_step`
+      derives a metric's from that, so a narrowing that iterated the sorted
+      list would move `run.yaml`'s column order with every value correct;
+    * `recorded` and `skipped` are the two different sets the step produced,
+      so a reconstitution that dropped either is visible here.
+
+    The values are computed from the fixture's own arithmetic (`i` over the
+    roster in order), never transcribed from a run.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_SKIPPING_STARTER_STEP,
+    )
+    prepared, results = _h9b_reconstituted(doc)
+    assert isinstance(results, tuple)
+    assert [r.execution for r in results] == list(prepared.plan)
+    assert all(r.status == "completed" for r in results)
+
+    result = results[0]
+    assert list(result.rows[0].keys()) == ["unit", "zeta", "alpha"]
+    assert result.rows[0] == {"unit": "p3", "zeta": 2.0, "alpha": 2}
+    assert result.recorded == frozenset(f"p{i + 1}" for i in range(2, 10))
+    assert result.skipped == frozenset({"p1", "p2"})
+    assert result.returned == {"n_units": 10}
+    # And the column the narrowing removed is genuinely in the file, so the
+    # exclusion above is a real subtraction rather than an absence.
+    from publishable.artifacts import _decode_parquet
+
+    parquet = next(doc["run_dir"].rglob("units.parquet"))
+    assert "cohort" in _decode_parquet(parquet.read_bytes())[0]
+
+
+def test_h9b_reconstituted_results_reassemble_the_runs_own_record(tmp_path: Path):
+    """The claim arm A makes, in the half of it that can run today: the
+    reconstituted results, put back through the SAME assembler the run used,
+    reproduce the run's own `execution` and `layout` blocks leaf for leaf.
+
+    This is a whole-block equality rather than per-key assertions, for
+    Decision 4's own reason — and it is the only available arbiter while arm
+    A's resume half is `xfail`, since that half drives `main(["resume", …])`
+    and `resume` does not dispatch until task 15.
+
+    `attempts` comes from `lineage.attempt_counts` over the real ledger, so
+    the equality also states that a straight-through run's counts are all
+    `1` — the measurement Decision 6 rests its additivity claim on, made
+    here rather than argued.
+    """
+    from publishable.lineage import attempt_counts, read_execution_ledger
+    from publishable.run_record import assemble_run_yaml
+
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_SKIPPING_STARTER_STEP,
+    )
+    prepared, results = _h9b_reconstituted(doc)
+    recorded_run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    counts = attempt_counts(read_execution_ledger(doc["run_dir"]))
+    assert set(counts.values()) == {1}
+    rebuilt = assemble_run_yaml(
+        run_id=recorded_run["run_id"],
+        status=recorded_run["status"],
+        config=recorded_run["config"],
+        code_hash=recorded_run["code_hash"],
+        parameters_hash=recorded_run["parameters_hash"],
+        provenance=recorded_run["provenance"],
+        results=list(results),
+        repeats=prepared.repeats,
+        attempts=counts,
+    )
+    assert rebuilt["execution"] == recorded_run["execution"]
+    assert rebuilt["layout"] == recorded_run["layout"]
+
+
+def test_h9b_a_scalar_only_triples_missing_table_is_not_a_refusal(tmp_path: Path):
+    """`finalize` writes `units.parquet` only `if self._rows`, so a completed
+    scalar-only step legitimately has none — and an unconditional
+    `E-RESUME-ROWS-MISSING` would refuse a directory the correct reading
+    resumes.
+
+    The recording step's own rows are asserted in the same test: a build that
+    returned empty rows for everything would satisfy the scalar-only claim
+    for free.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["tally"],
+        extra_step_source=_H9B_SCALAR_ONLY_STEP,
+    )
+    _, results = _h9b_reconstituted(doc)
+    by_step = {r.execution.step_name: r for r in results}
+    assert by_step["step02_tally"].rows == ()
+    assert by_step["step02_tally"].recorded == frozenset()
+    assert by_step["step02_tally"].returned == {"n_seen": 10}
+    assert len(by_step["step01_summarize_units"].rows) == 10
+
+
+def test_h9b_reconstitution_refuses_a_lost_or_mangled_unit_table(tmp_path: Path):
+    """Three refusals, three faults, three remedies — and a control arm that
+    reads clean first, so a refusal firing for an unrelated reason is not
+    counted as a pass.
+
+    Each arm perturbs exactly one thing from a directory that resumed clean:
+    the table deleted (`E-RESUME-ROWS-MISSING`), the table's bytes truncated
+    and its record naming a column the file lacks (`E-RESUME-ROWS-
+    UNREADABLE`), and the record's `returned` key removed
+    (`E-RESUME-LEDGER-UNREADABLE` — a ledger older than H9b's two keys cannot
+    be resumed, because the alternative is a `per_repeat` hole and a unit
+    table narrowed to `unit` alone).
+    """
+    from publishable.errors import ContractError
+
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        _starter_step=_H9B_TWO_COLUMN_STARTER_STEP,
+    )
+    _, results = _h9b_reconstituted(doc)  # the control
+    assert results and results[0].rows
+
+    table = next(doc["run_dir"].rglob("units.parquet"))
+    ledger = doc["run_dir"] / "executions.jsonl"
+    good_table, good_ledger = table.read_bytes(), ledger.read_text()
+
+    table.unlink()
+    with pytest.raises(ContractError) as missing:
+        _h9b_reconstituted(doc)
+    assert missing.value.code == "E-RESUME-ROWS-MISSING"
+
+    table.write_bytes(good_table[: len(good_table) // 2])
+    with pytest.raises(ContractError) as unreadable:
+        _h9b_reconstituted(doc)
+    assert unreadable.value.code == "E-RESUME-ROWS-UNREADABLE"
+
+    # A table that decodes cleanly but does not hold what the record claims —
+    # the second fault under that code, distinguishable by message.
+    table.write_bytes(good_table)
+    entry = json.loads(good_ledger.splitlines()[0])
+    entry["recorded_columns"] = ["zeta", "omega"]
+    ledger.write_text(json.dumps(entry) + "\n")
+    with pytest.raises(ContractError) as uncovered:
+        _h9b_reconstituted(doc)
+    assert uncovered.value.code == "E-RESUME-ROWS-UNREADABLE"
+    assert "omega" in str(uncovered.value)
+
+    entry = json.loads(good_ledger.splitlines()[0])
+    del entry["returned"]
+    ledger.write_text(json.dumps(entry) + "\n")
+    with pytest.raises(ContractError) as stale:
+        _h9b_reconstituted(doc)
+    assert stale.value.code == "E-RESUME-LEDGER-UNREADABLE"
+
+    ledger.write_text(good_ledger)
+    _, restored = _h9b_reconstituted(doc)
+    assert restored[0].rows
+
+
+def test_h9b_a_ragged_recording_step_round_trips_rectangular(tmp_path: Path):
+    """**A measured residual, asserted rather than left to be discovered.**
+
+    `finalize` writes one column per recorded key across ALL rows, filling
+    `None` where a row recorded nothing — so a step whose units record
+    different key sets produces a RECTANGULAR table, and a reconstituted row
+    carries `None` for a key the original in-memory row did not hold at all.
+    The raggedness is not recoverable and must not be guessed at:
+    `io.record(u, {"note": None})` is legal, so a reader dropping
+    `None`-valued keys would lose a genuinely recorded value.
+
+    What this test pins is that the round trip is rectangular and that no
+    value is invented: every reconstituted row holds both keys, the recorded
+    ones hold the recorded values, and the unrecorded one is `None`. Filed
+    for arm A rather than resolved here, since only a leaf-by-leaf
+    resume-versus-straight-through comparison can say whether it moves a
+    published number.
+    """
+    ragged = """\\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i % 2:
+                io.record(unit.key, {{"a": float(i), "b": float(i)}})
+            else:
+                io.record(unit.key, {{"a": float(i)}})
+        return {{"n_units": len(list(io.units))}}
+"""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=4,
+        _starter_step=ragged,
+    )
+    _, results = _h9b_reconstituted(doc)
+    rows = {row["unit"]: row for row in results[0].rows}
+    assert list(rows["p1"].keys()) == ["unit", "a", "b"]
+    assert rows["p1"] == {"unit": "p1", "a": 0.0, "b": None}
+    assert rows["p2"] == {"unit": "p2", "a": 1.0, "b": 1.0}
