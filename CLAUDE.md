@@ -25,19 +25,23 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H6b, H9, then H3c-3's remaining
-14 — the H4, H5, H7 and H8 families are all complete, H5a and H5b both having merged on 2026-08-22.**
+**Order of the slices that remain: H9, then H3c-3's remaining
+14 — the H4, H5, H6, H7 and H8 families are all complete, H6a and H6b both having merged on
+2026-08-23.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
 H5a's change was additive to what `io.write` accepts.** **H6 was chartered as independent** in the spine
 design and was omitted from this sentence for several slices while it was narrowed around the families
 being worked; `spec-defects.md` carried live entries owned by it, which is how the omission was caught —
-and **H6a's appended correction to that charter narrows the verdict in one direction, H6 before H9**,
-since `reproduce` re-derives an identity claim and so must be built against the hash definitions rather
-than before them. **The spine design's own nine-row charter table was never amended for either
-H8's three-way split or H5's two-way one** — it read as nine slices while the work had become fourteen,
-and an appended amendment dated 2026-08-22 now records both. Amended twice on 2026-08-14
+and **H6a's appended correction to that charter narrowed the verdict in one direction, H6 before H9**,
+since `reproduce` re-derives an identity claim and so had to be built against the hash definitions
+rather than before them. That ordering is settled now that H6 is complete and H9 is next. **The spine
+design's own nine-row charter table was never amended for either H8's three-way split or H5's two-way
+one** — it read as nine slices while the work had become fourteen, and an appended amendment dated
+2026-08-22 now records both; **a second correction the same day records H6's two-way split too**, so
+the omission ran to three splits, and *fourteen* is the spine's own figure written before H6's split
+reached that table — quote it rather than re-deriving it. Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -192,6 +196,84 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H6b (the environment record and the diagnostic debt) merged on 2026-08-23 — the last of H6's two,
+and ADDITIVE throughout.** `provenance.environment` gains the three keys § The two files has always
+shown and nothing wrote: `os` (`platform.system()`-`release()`-`machine()`, three components on every
+platform — **not** `platform.platform()`, which measures the marketing name, `macOS-26.5.2-arm64-arm-64bit-Mach-O`
+against `Darwin`/`25.5.0`/`arm64`), `hostname` (`socket.gethostname()`, the spelling `run_identity`
+already uses for the run lock, because two spellings of one fact is how the two drift), and `hardware`
+(`{cpu_count: …}`, a mapping, with `os.cpu_count()`'s own `None` written through rather than
+substituted). **The additive claim is measured rather than framed**: no hash reads the record —
+`grep -n "hash(provenance\|hash(run_doc\|hash(record" src/publishable/*.py` returns nothing, and the
+`provenance` mapping is built after every hash has run — and only two readers of
+`provenance.environment` exist, neither of which iterates it (`diff._figure` reads `uv_lock_hash`,
+`study._redact` reads `hostname`). **It retires no refusal and unblocks ZERO configs.** § Executability
+in [the feasibility analysis](docs/feasibility-llm-growth-studies.md) does not move, and the derivation
+is written ahead of the table there rather than asserted: nothing in this slice emits at `validate`, and
+`provenance.environment` is written for every run regardless of config, so no config gains or loses a
+dependency. **Quote no single number for it** — name the dependency instead: `io.reuse_from`'s
+plugin-side call for six, the `report_by`-under-`resample` gap for seven, and 8 of 8 validating clean,
+which is the only figure `validate` can see.
+
+**CONTROLLER RULING O's trade is the one to carry: `hardware` carries `cpu_count` and NOT `gpu`, and
+the shared worked example lost a line for it.** Core cannot probe a GPU without a dependency or a
+subprocess, and a GPU is not universal, so it is an **apparatus** fact — § The apparatus core can only
+observe. The cost is real and is not hidden: **a bundle reader can no longer tell what hardware produced
+a number unless the producing project declared a probe**, and `cohort-pilot` declares none by
+construction (its example records `apparatus: null`). The rejected alternative would have sourced `gpu`
+from the apparatus *inside* that example, which would have given the worked example a probe and
+contradicted § The apparatus core can only observe — **a ruling that fixes one document's example can
+contradict another document's claim about the same example**, and only sweeping for the *claim* rather
+than for the key `gpu` finds it. **RULING Q**: `os` and `hardware` are **not** redacted from a bundle
+and `hostname` is, because redaction is for identity and credentials while a bundle reader needs the
+platform that produced a number — and **the pin is the point**, since H8c wrote `hostname`'s redaction
+against a key nobody wrote, so until this slice there was nothing to pin. A real bundle built outside
+the suite carries `hostname` redacted and `os`/`hardware` verbatim, and extending the redaction to cover
+`os` fails the new fixture. **RULING N** gives `E-GIT-NO-REPO` and `E-GIT-NO-COMMIT` their own § Errors
+core raises rows — taken because both are raised by `provenance.py`, the file H6a rewrote, which is a
+fact about the emit site rather than an argument from the word *provenance* — and each row covers **every
+reach path, not the raise**: `E-GIT-NO-REPO` has one raise and six reaches, three of them deliberate
+swallows, which is why a config outside every repository prints `✓ config valid` and refuses only at
+`run`. **The undocumented-codes filing's heading goes from nine to five, derived rather than carried**:
+nine, minus `E-CODE-DIRTY` (H6a batch 4), minus `E-EXPERIMENT-UNKNOWN` (H8c task 16), minus H6b's two —
+and `E-STEP-EXISTS` was **never one of the nine**, which is what filled the sixth slot in both the
+design's and the plan's first drafts. The five that stay filed are `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
+`E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS` and `E-EXPERIMENT-EXISTS`, **unassigned with the reason**: no
+remaining chartered slice has `run_identity.py`, the manifest path or `generators/` as its surface.
+**RULING P: no seat** — § Templates' *"goes dirty at `validate`"* sentence measures **true** and gains
+no `W-` code, because a `W-` is a registry seat and `E-CODE-DIRTY` already catches the condition at
+`run`. **And DECISION 12 DECLINES** the root-`.gitignore` filing H6a's gate left with H6b's name on it,
+re-owned unassigned with the reason: widening the dirty gate's pathspec to the repository root is a
+behaviour change to a shipped command — every uncommitted root file becomes a candidate the gate must
+rule on, and a false positive there stops a run carrying no identity defect — and **a slice chartered
+additive cannot widen a shipped gate's pathspec.** Answering it *widen* while Ruling P answers the
+neighbouring question *add nothing* would decide one shape of question in opposite directions in a
+single slice, on no argument.
+
+Four things worth carrying. **The charter was stale in the same direction again, and one of its gaps
+could not have been in it**: three of `H6-SCOPING.md`'s eight rows were wrong (`E-CODE-DIRTY` already
+documented, task 18 a confirmation rather than a change, and three key-writing tasks that are one task
+because they write one dict literal and each would edit the same shipped pin), and **a fourth item was
+filed by H6a's own whole-branch gate after the scoping was written** — 8 rows became 11 tasks. **A pin
+that must move can be moved once, by a named editor, with its post-edit state written before anything
+moves** — the direct answer to H6a's batch-2 Major, where arms captured against a superseded signature
+forced a later task to choose between a broken import and an unauthorized edit. Arm P was captured in
+batch 1 against the shape task 3 would produce, specified as
+`isinstance(hardware, dict) and set(hardware) == {"cpu_count"}` rather than as "a type assertion", and
+the diff matched byte for byte. **The other half held too, and it is the more valuable half**: task 3's
+write falsified the premise arm S rested on — *today's real records never carry `hostname`* — and with
+no authorized editor for arm S the task **left the branch red and reported** rather than
+self-authorizing; the ruling then kept the property and changed only its source, and the reviewer
+re-ran the mutation the arm exists to catch. **A fixture that recomputes the implementation cannot
+fail**, which is why `os` is pinned with installed sentinels rather than with the composition itself.
+**And a false enumeration was DELETED rather than rewritten**: `secrets.py`'s docstring enumerated
+`provenance.environment`'s keys inside a structural claim, was already false before this slice and
+more false after, and the structural claim (*nothing here imports `provenance`*) stands alone —
+while `study.py`'s *"never written today (measured at `ebf642a`)"* was **corrected rather than
+deleted**, because the measurement was true on its date and **deleting a true claim is not licensed by
+prefer-deletion**. The distinction cost a follow-up commit when a third site substituted new prose
+where a deletion was specified.
 
 **H6a (the two hash definitions) merged on 2026-08-23 — the first of H6's two, and a VALUE CHANGE.**
 `code_hash` no longer folds a file the repo's own committed exclude rules skip, so **one published
