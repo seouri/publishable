@@ -209,6 +209,22 @@ there, checked against what the caller expected to find.
 **Owner: H6 Hashes and provenance**, which is where the empty-tree return value is decided, with
 the diagnostic itself landing through **H1 Validation**'s registry once H6 says what it should say.
 
+**RE-OWNED 2026-08-22 (H6a task 9): the H1 Validation routing above is stale — H1 shipped
+2026-08-11 and never touched this.** H6a's own Ruling D decided both halves the entry above left
+open, and neither routes through `validate`'s registry the way the line just above still says.
+The empty-tree return value is unchanged — `hashes.code_hash` still returns
+`sha256:e3b0c442...` for zero files, confirmed live: the two negative controls in
+`tests/test_hashes.py` (`test_code_hash_skip_list_matches_relative_path_not_absolute`,
+`test_code_hash_handles_a_dot_git_intermediate_path_component`) still call
+`code_hash(tmp_path / "nonexistent_empty_repo", None)` for exactly that value. The diagnostic is
+built at `command_run` itself, over the file list `hashed_files` already returned, through a fresh
+`Collector` — the same mechanism `E-CODE-DIRTY` uses two phases earlier, not `validate`'s finding
+registry: `validate` does not check this at all, and whether it ever gains a seat for it is H6b
+task 18's ruling (Decision 15 in `docs/superpowers/specs/2026-08-22-hash-definitions-design.md`),
+undecided as of this correction. **Owner: H6a task 8**, which built the guard, the
+`E-CODE-EMPTY` § Errors row, and the tests pinning it (`docs/superpowers/plans/2026-08-22-hash-definitions.md`
+Task 8; `docs/reference.md` § Errors core raises' `E-CODE-EMPTY` row).
+
 ## An unwritable or missing `output_dir` surfaced as a bare traceback — now fixed at the CLI
 
 `run_identity.allocate_run_dir` creates `output_dir` with `mkdir(parents=True,
