@@ -390,7 +390,27 @@ not used**, which is what both of this analysis' wrong figures were made from.
 
 **Each cell's slice-specific prose is preserved unchanged, including the two cells that say `H8a`** — the
 instinct to update that to `H6b` is exactly how a repeated table stops being repeated, and the entry says
-so in prose instead. **No fifth number**, and no single figure quoted: the entry names the dependency —
+so in prose instead.
+
+**The ordinal in that prose was DERIVED after a first draft asserted it.** The first draft wrote *"for
+the sixth consecutive entry"* by incrementing H6a's *"fifth"* — a carried number inside the very entry
+warning against carried numbers, and it slipped past the *no fifth number* guard because that guard was
+watching the executability counts. Measured instead: every preceding entry's table extracted with
+`sed -n '<first-line>,+5p'` and diffed against H6a's —
+
+```
+for L in 1538 1566 1616 1657 1686 1774 1862; do
+  sed -n "${L},$((L+5))p" docs/feasibility-llm-growth-studies.md > /tmp/tt_$L.txt; done
+for L in 1538 1566 1616 1657 1686 1774; do
+  diff -q /tmp/tt_1862.txt /tmp/tt_$L.txt >/dev/null && echo "$L IDENTICAL" || echo "$L DIFFERS"; done
+```
+
+→ `1538 DIFFERS`, then `1566 1616 1657 1686 1774` all **IDENTICAL** (H8a, H8b, H8c, H5a, H5b). So the
+block was **established at H8a's entry**, the divergence is the *"Correction to the correction"* entry
+before it (rows 2 and 3 read *"Need `io.reuse_from` (unbuilt) | 6"* there), and *sixth* is right on
+H6a's own counting — but the entry now **shows the derivation and the diverging entry** rather than
+asserting the ordinal. **Row 4 is inside the count here because the diff covers it**; H6a's sentence
+separated it and the measurement gives no reason to. **No fifth number**, and no single figure quoted: the entry names the dependency —
 `io.reuse_from`'s plugin-side call for six, the `report_by`-under-`resample` gap for seven, and 8 of 8
 validating clean, the only figure `validate` can see.
 
@@ -441,8 +461,21 @@ batch, restored, and re-checked before this commit.
 2. **Design Decision 16 says the guard pin has "Four … no authorized editor"; the ledger, the dispatch
    and batch 1's review all say five.** Six arms, one editor, so five is right. The design is a spec and
    was **not** retro-edited.
-3. **§ Executability's later entries are structurally nested under `## Cost and execution summary`.**
+3. **Four post-hoc confirmations, all clean, run after the tasks were committed.** (a) *H6a's merge
+   date*: the order line's *"H6a and H6b both having merged on 2026-08-23"* was checked rather than
+   propagated — `git log --format='%ad %h %s' --date=short main | head` puts H6a's merge commit
+   `2b18435` on **2026-08-23**. The spine design's *"H6a merged 2026-08-22"* and the H6a
+   § Executability entry's 08-22 both date the *branch work*, not the landing, so the order line is
+   right and the two are not in conflict. (b) *the H6 sweep re-run without the trailing-space
+   spelling*: `grep -nE '\bH6[a-z]?\b'` over the same six-file list, which reaches `H6,` `H6.` `H6's`
+   and end-of-line `H6` — **no additional slice-counting or H6-naming sentence** near the order line,
+   control `H6, and H6.` matched. (c) *inbound anchor links to the two `spec-defects.md` headings this
+   batch renamed*: `grep -rc "spec-defects.md#" docs .superpowers CLAUDE.md README.md` → **zero
+   anywhere in the repo**, with the plain `spec-defects.md` control matching three lines in
+   `CLAUDE.md`, so no link was broken. (d) the table re-diffed after the ordinal edit → still
+   byte-identical.
+4. **§ Executability's later entries are structurally nested under `## Cost and execution summary`.**
    Pre-existing, and repairing it would move the heading six links point at.
-4. **The brief's two false claims about the six-unwritten-keys entry** — `environment` being the only
+5. **The brief's two false claims about the six-unwritten-keys entry** — `environment` being the only
    matching sub-block, and the `allocation` row having been struck — are corrected in the entry itself
    and listed under task 8's disagreements. Both were caught by measuring rather than by reading.

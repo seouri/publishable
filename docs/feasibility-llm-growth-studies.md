@@ -1950,10 +1950,17 @@ configs' `data`/`statistics` blocks can reach either.
 | Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
 | Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
 
-**Rows 1, 2, 3 and 4 above are the H6a entry's, character for character, for the sixth consecutive
-entry** — including each cell's own slice-specific prose, which names **H8a** rather than this slice
-because that is what "character for character" means and updating it is exactly how a repeated table
-stops being repeated. The whole block was extracted out of the immediately preceding entry with
+**The whole block above — header, separator and all four rows — is byte-identical to the H6a entry's,
+and the ordinal is derived rather than incremented.** Each preceding entry's table was extracted with
+`sed -n '<first-line>,+5p'` and diffed against H6a's: the tables at the **H8a, H8b, H8c, H5a, H5b and
+H6a** entries are identical to one another, and the *"Correction to the correction"* entry before H8a's
+is where they diverge (its rows 2 and 3 read *"Need `io.reuse_from` (unbuilt) | 6"* and a one-clause
+`report_by` cell). **So H8a's entry is where this block was established, and this is the sixth entry to
+repeat it** — the same counting H6a's own *"fifth consecutive entry"* used, one further on. Row 4 is
+inside that count here because the diff covers it: H6a's sentence separated it (*"row 4's cell text is
+repeated unchanged too"*) and the measurement gives no reason to. The block includes each cell's own
+slice-specific prose, which still names **H8a** rather than this slice, because that is what "character
+for character" means and updating it is exactly how a repeated table stops being repeated. The whole block was extracted out of the immediately preceding entry with
 `sed -n '1862,1867p'` and `diff`-ed against an independent programmatic extraction of the same entry's
 table; **the diff is empty**. This slice's plan and design both reproduce the table in their own
 openings and **neither was used**: a second source of truth is how both of this analysis' wrong figures
