@@ -213,7 +213,16 @@ assertion Ruling R would be unpinned, since a build that silently printed less s
    `prepared.output_dir / "run_..."`.
 2. **A run also repoints `<output_dir>/latest`**, outside the run directory. It is not in the brief's
    fixed-file list and is not in the parsed list here — it gets its own line, so the output is not
-   silently incomplete about it.
+   silently incomplete about it. **That line is pinned**, in the task-9 end-to-end test, on
+   `"/latest pointer is repointed too"`: it was the one sentence in output this batch added that
+   nothing held, which is the same fault Ruling R's omission sentence exists to prevent. **Mutation —
+   delete the line** (added AFTER the batch's other mutations, so it is reported separately): full
+   suite **1 failed, 3009 passed**, exactly
+   `test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript`. Fixture U is unaffected because
+   its fixed-file loop terminates on the first non-indented line either way — which is itself worth
+   naming: the parser could not have caught this. **A property-preserving arm**: changing
+   `prepared.output_dir / 'latest'` to `f"{prepared.output_dir}/latest"` — the same rendered text,
+   green. Reverted by editing back; `diff` byte-identical; full suite re-run at 3010.
 
 ### The filesystem before/after comparison — *creates nothing*
 
@@ -454,7 +463,27 @@ demonstrated by one prose invocation and nothing else); the arity mutation above
    `:3756` (§ `demo`'s stop 4) and `:3882` (entrypoint resolution). Each carried the exact promise
    Ruling R narrows, and leaving them would have made the document contradict its own `dry-run` row.
    Named here so the controller can rule; if task 12 was meant to have them, this is a collision to
-   resolve, not a silent overlap.
+   resolve, not a silent overlap. The diffs, so the ruling does not need reconstructing:
+
+   - **`:368`**, old → *"it validates, builds the input manifest, probes the apparatus, **resolves the
+     run directory**, and prints **every artifact path that would be written** — without executing a
+     step or creating anything."* New → *"it validates, builds the input manifest, probes the
+     apparatus, and prints **the step directories and the fixed files a run would write** — without
+     executing a step or creating anything. The artifact *files* inside those directories it cannot
+     list, and says so: their names are `io.write` arguments in step code, which core never
+     inspects."*
+   - **`:3882`**, old → *"how many executions each step gets, **which artifact paths** `dry-run`
+     prints, and which scope each `io` will be built for."* New → *"…**which step directories**
+     `dry-run` prints…"*
+   - **`:3756`** (§ `demo` stop 4), old → *"15 executions, and every artifact path that would be
+     written. Still creates nothing"*. New → *"15 executions, the step directories and fixed files a
+     run would write, and the unit-execution count. Still creates nothing"*.
+
+   **A disclosed asymmetry inside this concern:** `:368` is the one place a *clause* was **deleted**
+   rather than narrowed — *"resolves the run directory"*, which this build does not do (a run id needs
+   the directory claimed). The same word is **kept** at `:872` (§ One execution at a time), for the
+   reason in Concern 3. Two treatments of one word in one file, deliberate and stated here rather than
+   left to be found.
 2. **The row's `probes the apparatus` clause is not true of this branch yet.** Task 10 owns the probe
    round, and the `Status` column is per **command**, not per clause — but at task 9's commit the
    `Does` cell (mandated content, per Ruling R) makes a build claim `dry-run` does not yet honour.

@@ -21606,6 +21606,11 @@ def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: P
     assert "scale:  40 unit-executions (4 executions × 10 units handed to each)" in out
     assert "would create 4 step directories under " in out
     assert "and 7 fixed files in that directory:" in out
+    # The pointer a run repoints OUTSIDE the run directory. It is not in the
+    # brief's fixed-file list and not inside the parsed block, so nothing else
+    # in these tests holds it — and an unheld sentence in this output is the
+    # same fault Ruling R's omission sentence exists to prevent.
+    assert "/latest pointer is repointed too" in out
     assert "artifact files inside a step directory are NOT listed" in out
     assert "creates nothing" in out
     # The transcript is stdout, not a combined stream: `run`'s own stdout is
