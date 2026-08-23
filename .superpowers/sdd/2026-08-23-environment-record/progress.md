@@ -111,3 +111,40 @@ reader does not re-litigate it.
 into the repo's working tree**, caught before the gates were taken as final. A probe that runs a creation
 command inside the repo dirties the tree the dirty gate reads — **which this slice's sibling made
 load-bearing** — so a probe belongs outside the repo, the same rule the bundle fixtures already follow.
+
+## Batch 4 — tasks 6, 7 — Ruling P confirmed, three stale claims, and NO implementer report
+
+Commits `596985a` (Ruling P confirmed, Decision 12 declined and re-owned), `1bd9483` (three stale
+claims), `2a9c05b` (a follow-up deletion), review `4f891c0` (**both PASS**, one Major on process, one
+Minor). Suite unmoved at **2971**.
+
+**The implementing agent stalled — it built a monitor and waited on it, which this repo forbids in every
+dispatch — and it wrote NO report at all.** Task 7's work was sitting uncommitted in the worktree; the
+controller ran the gates, read the diff, and committed it. So **this batch has a review and no report**,
+and the reviewer re-derived every claim in both commit messages from scratch. **That is the cost of the
+stall and it is worth stating: a commit message is not a report.** What an implementer intended and did
+not write is invisible, and the only way to find an unfinished clause is to diff the brief against the
+diff — which is what was done here.
+
+**§ Templates' sentence is TRUE when measured, so Ruling P stands and task 6 correctly changed nothing.**
+Reproduced live outside the repo: a clean tree, `validate` exits 0, `templates/__pycache__/` and
+`src/**/__pycache__/` appear untracked, and `run` then refuses with `E-CODE-DIRTY`. **A confirmation that
+cannot fail is not a confirmation**, so the arm of this that mattered was building the repo whose
+`.gitignore` omits that line rather than reading the sentence again. One clause **expected** to be false
+— Ruling F's target — turned out **already fixed by H6a's own task 1**, so the no-op is correct rather
+than a missed step.
+
+**Two of the three stale claims were deleted and one was superseded with its date, and the distinction is
+the rule.** `secrets.py` enumerated `provenance.environment`'s keys *inside* a structural claim — the
+enumeration was incidental, went stale the moment task 3 wrote three more keys, and was **deleted**, since
+the structural claim (*nothing here imports `provenance`*) stands alone and is what the paragraph is for.
+`study.py`'s *"never written today (measured at `ebf642a`)"* was **corrected rather than deleted**: the
+measurement was **true on its date**, and *deleting a true claim is not licensed by prefer-deletion* —
+H6a's design ruled exactly that about `W-TEMPLATE-VERSION`. **The fourth home the reviewer swept for did
+not exist**, checked newline-insensitively across `src/`, `tests/`, the four documents and `CLAUDE.md`
+with a can-fail control.
+
+**And the Minor is the rule failing in the small.** Fixture Y's docstring was told to **delete** its stale
+parenthetical and instead **substituted new prose** — true, but redundant with the next sentence. Closed
+by making the deletion. *A rewrite invents; a deletion cannot* is not a preference to be traded against
+a marginally nicer sentence.
