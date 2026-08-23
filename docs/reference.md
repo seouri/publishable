@@ -687,7 +687,7 @@ provenance:
     hostname: "hms-gpu-node-04"
     uv_lock: "environment/uv.lock"             # byte-for-byte copy, in this run directory
     uv_lock_hash: sha256:6b1f...
-    hardware: {gpu: "1x A100 80GB", cpu_count: 32}
+    hardware: {cpu_count: 32}
   apparatus: null                              # no probe declared; see "The apparatus core
                                                # can only observe"
   input_manifest: "manifest/input.json"
@@ -778,6 +778,14 @@ every refusal along the way.
 run's own record of which distribution and version it resolved through, never the machine's whole
 installed set. `cohort-pilot` uses a table source, so its `plugin_versions` stays `{}`, which is the
 honest record for a run that used no plugin artifact.
+
+`environment.hardware` carries only what core can read on any machine — the CPU count
+`os.cpu_count()` answers, `None` included when the platform can't. A GPU, an instrument revision, or
+a hosted model deployment is not: core cannot name one without a dependency or a subprocess, so it is
+an **apparatus fact** rather than a provenance key — declare an `apparatus_probe` and it travels
+through [the apparatus core can only observe](#the-apparatus-core-can-only-observe) instead. The cost
+of that split: a reader of a bundle cannot tell what hardware produced a number unless the producer
+declared a probe.
 
 A run with no repeat level still writes `per_repeat`, keyed by the empty string — the one repeat
 has no label because there is no repeat axis to render one from — as soon as some repeat-scoped step
