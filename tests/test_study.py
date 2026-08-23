@@ -302,6 +302,40 @@ def test_study_add_leaves_hostname_untouched_when_absent_from_the_source(tmp_pat
     assert "hostname" not in redacted["provenance"]["environment"]
 
 
+def test_study_add_redacts_hostname_but_leaves_os_and_hardware_end_to_end(tmp_path: Path):
+    """H6b task 4, Fixture E, Ruling Q: `os` and `hardware` are NOT
+    redacted; `hostname` is. Added BESIDE the hand-built Fixture Y
+    (`test_study_add_redacts_hostname_when_present_on_a_synthesized_record`),
+    never in place of it -- Fixture Y exercises every redacted field at
+    once on a record nothing in this build yet writes; this fixture
+    exercises the wiring against a key H6b task 3 made `run` actually
+    write, end to end through a real bundle.
+
+    The bundle sits under `tmp_path`, outside any repository -- `study new`
+    and `study add` both refuse `E-STUDY-IN-REPO` otherwise. The SOURCE
+    `run.yaml` is the positive control: comparing the bundled `os` and
+    `hardware` against the value the same run actually produced means an
+    implementation that writes nothing, or an empty string, fails both the
+    equality and the truthiness/type assertions -- a bare `is not None`
+    would pass on an empty string, which is why both live in one test."""
+    bundle = tmp_path / "study"
+    study_new(bundle, "Title")
+    run = _real_run(tmp_path, "proj1")
+    source = run["record"]
+    study_add(bundle, run["run_dir"] / "run.yaml", "main")
+    bundled = yaml.safe_load((bundle / "main.run.yaml").read_text())
+
+    assert bundled["provenance"]["environment"]["hostname"] == REDACTED
+    assert bundled["provenance"]["environment"]["os"] == source["provenance"]["environment"]["os"]
+    assert isinstance(bundled["provenance"]["environment"]["os"], str)
+    assert bundled["provenance"]["environment"]["os"]
+    assert (
+        bundled["provenance"]["environment"]["hardware"]
+        == source["provenance"]["environment"]["hardware"]
+    )
+    assert isinstance(bundled["provenance"]["environment"]["hardware"], dict)
+
+
 def test_study_add_leaves_null_fields_exactly_null_not_marked_redacted():
     record = _fixture_y_record()
     record["config"]["data"]["output_dir"] = None
