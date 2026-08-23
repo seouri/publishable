@@ -22229,3 +22229,131 @@ def test_h9a_fixture_x_a_config_that_does_not_validate_never_reaches_the_probe(
     capsys.readouterr()
     assert main(["dry-run", str(good)]) == EXIT_OK
     assert entered.exists()
+
+
+# ===========================================================================
+# H9a task 11 — Fixture Y: *Creates nothing*, with the probe round running.
+#
+# **Why this arm exists rather than a fourth restatement of byte identity.**
+# The three arms above (`..._creates_nothing_under_output_dir_...`,
+# `..._leaves_an_existing_output_dir_byte_identical`, `..._against_a_live_lock_
+# ...`) all drive `_h6a_t5_project`, whose `experiment_type: generic` resolves
+# to `GenericTemplate.apparatus_probe = None` — so `_dry_run_probe` returns at
+# its first guard and the round never runs at all. The design's prescribed
+# mutation for Fixture Y is *"add `append_observation` to `dry-run`'s round"*,
+# and against a skipped block that mutation cannot append anything: **it is
+# blind on every one of those three arms.** The claim *creates nothing* is
+# only worth pinning where something outward-reaching actually happened, so
+# this arm is Y over a project whose template declares a probe, paired with
+# the probe's own tally as the positive that the round ran.
+# ===========================================================================
+
+
+def _h9a_snapshot(root: Path) -> dict[str, tuple[int, str] | None]:
+    """A recursive `{relative_path: (size, sha256)}` map of `root`, with
+    `None` for a directory.
+
+    Size AND digest, not either alone: a digest alone cannot see an
+    equal-content rename that changed nothing, and a size alone cannot see an
+    in-place edit that preserved length. Directories are entries in their own
+    right so a created-but-empty directory is a difference.
+    """
+    out: dict[str, tuple[int, str] | None] = {}
+    for path in sorted(root.rglob("*")):
+        key = str(path.relative_to(root))
+        if path.is_dir():
+            out[key] = None
+        else:
+            data = path.read_bytes()
+            out[key] = (len(data), hashlib.sha256(data).hexdigest())
+    return out
+
+
+def test_h9a_the_snapshot_helper_can_fail(tmp_path: Path):
+    """*Prove every sweep can fail* applies to a checker as much as to a
+    claim: a comparison helper that returned a constant would make every arm
+    built on it pass. Three differences it must see — a new file, an edit
+    that preserves length, and an empty directory — each asserted separately,
+    because a helper that saw only one of them would still pass a test that
+    asserted their disjunction.
+    """
+    root = tmp_path / "root"
+    (root / "d").mkdir(parents=True)
+    (root / "d" / "f.txt").write_text("abc")
+    base = _h9a_snapshot(root)
+    assert base == {"d": None, "d/f.txt": (3, hashlib.sha256(b"abc").hexdigest())}
+
+    (root / "d" / "g.txt").write_text("x")
+    assert _h9a_snapshot(root) != base
+    (root / "d" / "g.txt").unlink()
+    assert _h9a_snapshot(root) == base
+
+    (root / "d" / "f.txt").write_text("abd")  # same length, different bytes
+    assert _h9a_snapshot(root) != base
+    (root / "d" / "f.txt").write_text("abc")
+    assert _h9a_snapshot(root) == base
+
+    (root / "empty").mkdir()
+    assert _h9a_snapshot(root) != base
+
+
+def test_h9a_fixture_y_dry_run_creates_nothing_while_the_probe_round_runs(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """Fixture Y, the arm the other three cannot be: *Creates nothing* while
+    `_dry_run_probe` genuinely reaches outward.
+
+    `output_dir` already holds a completed run of the same config, so every
+    existing path and every existing byte is in the comparison — the empty
+    directory case passes for a command that merely failed to allocate, and
+    this one does not. Then `dry-run`, then the same snapshot.
+
+    **Paired with two positives**, so a pass cannot be a command that did
+    nothing: the probe's own tally (written outside `output_dir`, which is why
+    Fixture V's counter lives where it does) gains exactly one entry per
+    resolved condition, and the transcript printed.
+
+    **The scope is `output_dir`, and that is what the promise means rather
+    than a weakening of it** (Decision 12). A repo-wide assertion would fail:
+    `dry-run` imports the entrypoint and runs `discover_local`, which writes
+    `src/**/__pycache__/` and `templates/__pycache__/` exactly as `validate`
+    already does — § Templates' *"goes dirty at `validate`"* is the shipped
+    sentence about it, measured live by H6b batch 4. `creates nothing` is a
+    promise about the **artifacts of a run**, and a bytecode cache is not one;
+    an arm asserting repo-wide identity would fail and invite whoever met it
+    to weaken the assertion, which is the worst of the three outcomes.
+    """
+    site = installed(
+        "dist-h9a-y", "1.0", {"publishable.probes": {"h9a_v_probe": "h9a_y_probe_mod:probe"}}
+    )
+    (site / "h9a_y_probe_mod.py").write_text(_H9A_V_PROBE_MODULE)
+    calls = tmp_path / "probe-calls.txt"
+    monkeypatch.setenv("H9A_V_CALLS", str(calls))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9a_y_pkg",
+        template_name="h9a_y_assay",
+        probe_name="h9a_v_probe",
+    )
+    results = tmp_path / "results"
+    assert main(["run", str(cfg)]) == EXIT_OK
+    (run_dir,) = sorted(results.glob("run_*"))
+    # The run wrote the ledger `dry-run` must not touch, so `apparatus/` is
+    # inside the snapshot as an existing path rather than as an absence.
+    assert (run_dir / "apparatus" / "probes.jsonl").exists()
+    before = _h9a_snapshot(results)
+    assert before, "the snapshot must not be empty, or this arm asserts nothing"
+    calls_before = len(calls.read_text().split())
+    assert calls_before, "the run's own probe rounds must have tallied, or the probe is inert"
+
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert _h9a_snapshot(results) == before
+    assert sorted(results.glob("run_*")) == [run_dir]
+    # Positive 1: the round ran, once per resolved condition (two, from the
+    # `sweep.grid` over `instrument.model`).
+    assert len(calls.read_text().split()) == calls_before + 2
+    # Positive 2: the transcript printed.
+    assert "creates nothing" in out
