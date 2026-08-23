@@ -19162,6 +19162,11 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
 # exactly `src/pkg/step.py` — the experiment package lives outside both trees
 # on `sys.path`, the same route arm A's project uses — and whose digest was
 # computed by building it, not carried from the plan.
+# This value also appears above as guard-pin arm A's `_H6A_RUN_DIGEST`, and
+# the two are independent: both trees happen to hash exactly `src/pkg/step.py`
+# = `a = 1\n`, so the digests coincide by construction. **Arm A's constant has
+# no authorized editor** — an editor who greps this string and finds two must
+# move this one and leave that one alone.
 _H6A_T5_RUN_DIGEST = "sha256:f6a935cfc29196b2a5f5a7f873096c4ab3ee077ff3152afedafeb34fb919078a"
 
 _H6A_T5_PLAIN_EXPERIMENT = """\

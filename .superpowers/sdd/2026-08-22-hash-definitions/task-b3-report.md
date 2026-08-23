@@ -210,8 +210,16 @@ zero failures, so every other pin — arms A, C, D, E, F, N included — holds u
 * *"arm D calls `code_hash(..., None)`, so git is never asked there"* —
   `grep -n "code_hash(e_tree, None)\|code_hash(d_tree, None)" tests/test_hashes.py` → both hits.
 * *"`_build_fixture_f_upstream` reads its step name back out of its own `run.yaml`"* — read.
-* *"`code_hash` has one production call site"* — `grep -rn "code_hash(" src/publishable/*.py`
-  → the definition in `hashes.py` and nothing in `cli.py` any more.
+* *"no other command computes a `code_hash`"* — **re-measured in this session**, because
+  § Corrections' own grep was taken at `f8450f9`, before batch 2 added `code_hash_of`:
+  `grep -rn "code_hash\b\|code_hash_of\|hashed_files" src/publishable/*.py` → the two
+  computing sites are `hashes.py`'s own definitions and `cli.command_run`; `diff.py`,
+  `report.py`, `study.py` and `lineage.py` every one **read a recorded string**, and
+  `freeze.py` does not mention a code hash at all. So no shipped command computes one
+  definition while `run` records the other, which was the live defect this batch could have
+  created. **A consequence worth a reviewer's eye: `hashes.code_hash` now has zero production
+  callers** — `command_run` calls the two-step form — and is held by tests and by task 3's
+  identity test alone. Not filed here, because it is neither task 5's nor task 6's surface.
 * *"no live reference to the removed test"* — the grep above, over `tests/`, `src/`, the four
   documents and `CLAUDE.md`.
 * *"`E-CODE-FILE-LIST` has one emit site"* — `grep -rn "E-CODE-FILE-LIST" src/ tests/ docs/*.md`
