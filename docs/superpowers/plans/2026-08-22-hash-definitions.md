@@ -1655,3 +1655,56 @@ the disclosure that `schema_version` deliberately does not carry. **That is prec
 slice will want to soften**, because it reads like a defect and is a consequence. An arm with no
 authorized editor is this repo's answer to five slices weakening a pin quietly: **a passing arm is the
 proof.** As task 7's own test it would be editable by whoever next touches task 7's surface.
+
+### Ruling M — the surgical neutralization: `-c core.excludesFile=` plus `-c status.showUntrackedFiles=normal`, no environment variables (2026-08-23, appended after the whole-branch fix round)
+
+**The whole-branch fix round closed Major 1 (Ruling F was unpinned) with a total environment
+neutralization** — `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null` — applied to both the hash's
+`check-ignore` call and, per Ruling L, the dirty gate's `git status` call. That closed the pin and
+carried two concerns to the merge, the first of which this ruling answers.
+
+**The goal is exclude determinism, not config determinism.** Ruling F's own ground is a statement
+about *exclude* rules — "a rule that does not travel with the tree cannot define the tree's identity"
+— not about every git setting a machine might carry. Total neutralization answered a broader question
+than the one asked.
+
+**Measured, in a throwaway repo:** `-c core.excludesFile=` alone (no environment variables) closed
+every exclude route tried — a global `core.excludesFile` entry, the XDG default
+`~/.config/git/ignore` that no config entry names, and a repo-local `.git/config` entry — so the
+environment variables were never load-bearing for excludes; they only ever closed
+`status.showUntrackedFiles`, which `-c status.showUntrackedFiles=normal` closes directly and, unlike
+the environment form, also reaches a **repo-local** `status.showUntrackedFiles` setting.
+
+**Total neutralization also discarded settings about *how* git reads the filesystem, not *which*
+files it considers** — `core.fileMode`, `core.autocrlf`, `core.symlinks` — and those are legitimately
+machine-local: they exist because filesystems differ. Measured: with the repo's own `core.filemode`
+unset and a global `core.fileMode = false`, a `chmod +x` on a tracked file (content unchanged) read
+`code_dirty True` under the old mechanism and `code_dirty False` — correctly, because nothing was
+edited — under the surgical one. **Blocking a run on a correct tree is a worse failure than the one
+being closed**, and it lands on the users least able to diagnose it: a Windows checkout with
+`autocrlf`, a network mount without executable bits.
+
+**Answering with a blunt instrument that happens to include the answer is the proxy move this repo
+keeps paying for** (see CLAUDE.md § Answering a question with a proxy). The surgical form answers the
+direct question — which two settings decide which files the gate and the hash consider — rather than
+discarding everything nearby that might also matter.
+
+**A side effect, not the ruling's target:** the fix round's filed defect — a legitimate global
+`safe.directory` allowlist entry silently discarded by the environment wipe, producing a false
+`code_dirty False` on a repository git considers dubiously owned — is closed by this change, because
+the `-c` overrides touch neither global nor system configuration at all. A repository with **no**
+`safe.directory` entry still hits `_git`'s pre-existing `check=False` convention the same way under
+either mechanism; that residual case predates Ruling F/L/M and is not this ruling's to close.
+
+**Cost if wrong:** a git setting nobody has enumerated turns out to change which paths
+`check-ignore` or `status` reports, and it is machine-local. That risk is disclosed rather than
+claimed away — the slice has already had two "the only machine-dependent input left" claims fail, one
+at the gate itself.
+
+**Pin discipline:** the two `-c` flags are one shared tuple (`_NEUTRALIZED_CONFIG_ARGS`) rather than
+two, for the same reason Ruling L gave — the hash and the gate must ask one git, not two — and each
+half has its own mutation that fails it, independently, on the full unfiltered suite: removing
+`core.excludesFile=` alone fails the exclude-route arms; removing `status.showUntrackedFiles=normal`
+alone fails the untracked-files arm. A new arm pins the `core.fileMode` regression this ruling exists
+to prevent: a global `core.fileMode = false` with an unedited tracked file's mode bit changed must
+leave `code_dirty` `False`.

@@ -193,7 +193,7 @@ declaration order. And **six fixtures across this slice failed their own constra
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
 
-**H6a (the two hash definitions) merged on 2026-08-22 — the first of H6's two, and a VALUE CHANGE.**
+**H6a (the two hash definitions) merged on 2026-08-23 — the first of H6's two, and a VALUE CHANGE.**
 `code_hash` no longer folds a file the repo's own committed exclude rules skip, so **one published
 identity claim moves for an unchanged tree at an unchanged commit**. Measured end to end through the
 installed console script on a byte-identical project: `09a843b1…` before, `f6a935cf…` after, with
@@ -222,20 +222,28 @@ sharpest cost is that one record can carry two hash definitions at once**: `prov
 copies an upstream run's `code_hash` verbatim, so a record written after this slice can hold its own
 digest under the new rule beside a copied one under the old, **with nothing marking which is which** —
 the reader's route is the two runs' `uv_lock_hash`. **The exclude chain is narrowed rather than
-disclosed as machine-dependent**: every `check-ignore` runs with the global and system git config
-neutralized — *a rule that does not travel with the tree cannot define the tree's identity* — and
-**the whole-branch gate then extended that to the dirty gate (Ruling L, 2026-08-23)**, reversing the
-design's argument that a gate asking *may this run proceed here* is local by nature: a file a global
-`core.excludesFile` hides is **untracked and ignored by nothing a clone carries**, so leaving the gate
-alone meant it reported clean while the hash folded the file in, and *"the gate and the hash now
-consider the same set of files"* was shipped as a normative sentence that measured **false**. Both
-gates now ask one git, and a repo relying on a machine-level rule to keep a file out of `src/**`
-**fails `E-CODE-DIRTY` where it used to run** — disclosed in § How the three are computed. **What the
-narrowing does NOT buy is a tree-only answer**: `check-ignore` reads the **working tree**, so an
-uncommitted root `.gitignore` decides too and the gate cannot see it (its pathspec is the two hashed
-trees), which is why *"the only machine-dependent input left"* was struck rather than narrowed —
-filed, owner H6b, beside the `safe.directory` fail-open the neutralization introduces at the gate.
-`.git/info/exclude` remains the residue no flag can disable. **And an implementer may not self-authorize an edit to a guard-pin arm with no
+disclosed as machine-dependent**: every `check-ignore` runs with `-c core.excludesFile=` — *a rule
+that does not travel with the tree cannot define the tree's identity* — and **the whole-branch gate
+then extended that to the dirty gate (Ruling L, 2026-08-23)**, reversing the design's argument that a
+gate asking *may this run proceed here* is local by nature: a file a global `core.excludesFile` hides
+is **untracked and ignored by nothing a clone carries**, so leaving the gate alone meant it reported
+clean while the hash folded the file in, and *"the gate and the hash now consider the same set of
+files"* was shipped as a normative sentence that measured **false**. Both gates now ask one git, and a
+repo relying on a machine-level rule to keep a file out of `src/**` **fails `E-CODE-DIRTY` where it
+used to run** — disclosed in § How the three are computed. **What the narrowing does NOT buy is a
+tree-only answer**: `check-ignore` reads the **working tree**, so an uncommitted root `.gitignore`
+decides too and the gate cannot see it (its pathspec is the two hashed trees), which is why *"the only
+machine-dependent input left"* was struck rather than narrowed — filed, owner H6b. `.git/info/exclude`
+remains the residue no flag can disable. **CONTROLLER RULING M (2026-08-23) then replaced the
+mechanism itself**: the fix round's total environment neutralization
+(`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) discarded far more than exclude rules — a global
+`core.fileMode = false` or `core.autocrlf` made an **unedited** tracked file read `code_dirty True`,
+measured — so it is replaced by exactly two `-c` overrides, `core.excludesFile=` and (for the gate)
+`status.showUntrackedFiles=normal`, and nothing else. That closes the `safe.directory` fail-open the
+fix round had filed as a consequence of the neutralization: a legitimate global `safe.directory`
+allowlist entry is no longer discarded, so the check it exists to pass now succeeds, re-measured with
+the identical fixture — struck rather than left open in `spec-defects.md`, because it was that
+mechanism's own defect rather than a gap in the rule. **And an implementer may not self-authorize an edit to a guard-pin arm with no
 authorized editor, even a mechanical one that turns out clean** — batch 2 did, and that was its own
 batch's only Major; batch 3 met the same need, took the route instead, and the controller's ruling
 named the post-edit state in advance, which is the whole difference. **Three sentences went false

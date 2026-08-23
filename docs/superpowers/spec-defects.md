@@ -229,6 +229,18 @@ below (*"an uncommitted root `.gitignore` decides what `code_hash` covers"*, own
 gate itself is now neutralized the same way the hash is (Ruling L), which closes the mirror-image hole
 — a globally excluded file was clean to the gate and hashed by the hash — and does not close this one.
 
+**AMENDED 2026-08-23, Ruling M: the mechanism named two paragraphs above
+(`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) is no longer what runs, and the entry is left
+standing with this note rather than rewritten.** Ruling M replaced the environment-variable
+neutralization with two command-line overrides, `-c core.excludesFile=` and (at the gate only)
+`-c status.showUntrackedFiles=normal`, because the environment form discarded machine-local settings
+Ruling F's own ground never named — `core.fileMode`, `core.autocrlf` — and made an unedited tracked
+file read as dirty. **The claim this entry makes — that the repo's own committed rules plus
+`.git/info/exclude` decide, and nothing else — is unaffected**: `-c core.excludesFile=` closes the
+same three exclude routes the environment form closed (global config, the XDG default, a repo-local
+`.git/config` entry), measured directly rather than carried forward. `docs/reference.md` § How the
+three are computed states the current mechanism.
+
 **The other branch this entry named — *"or relax the purity rule and say so"* — is answered in the
 spine design's appended correction rather than here.** No such rule exists in `design-principles.md`:
 grepped 2026-08-22 for `pur(e|ity)`, case-insensitive, over the four documents named individually, one
@@ -9258,7 +9270,7 @@ decision and its own cost accounting (every uncommitted root file becomes a cand
 rule on). H6b holds the `validate` tree-state ruling, which is the same question asked at the other
 surface. A successor should decide the two together rather than widening this one pathspec by hand.
 
-## OPEN — under neutralized git configuration the dirty gate answers *clean* on a repository git considers dubiously owned — **Owner: unassigned, with the reason**
+## ~~under neutralized git configuration the dirty gate answers *clean* on a repository git considers dubiously owned~~ — STRUCK 2026-08-23 (H6a Ruling M): CLOSED, not by design
 
 **Filed 2026-08-23, H6a's whole-branch fix round, as a disclosed consequence of Ruling L.**
 `safe.directory` is read from **global and system** configuration only, and both the hash's
@@ -9273,10 +9285,16 @@ untracked files, and `hashed_files(...)` then raises `ContractError` `E-CODE-FIL
 neutralized configuration two phases later. **No record is published** — the run stops at the hash —
 so what is filed is a gate that answers *no* to a question it could not ask, not a false record.
 
-**Owner: unassigned, with the reason.** Closing it means deciding what a run should do when git cannot
-answer the gate at all — today `_git` discards every returncode by design, and `git_provenance`'s
-`E-GIT-NO-COMMIT` block is the single call site that refuses instead. Widening that to the gate is a
-behaviour change to a shipped command and a controller ruling, not a fix-round edit; H6a's fix round
-was told to disclose it rather than build it. H6b holds `provenance.environment`'s keys and the
-`validate` tree-state ruling and is the nearest surface, but the question is about `_git`'s convention
-rather than about either, so no slice is named.
+**STRUCK 2026-08-23 (H6a Ruling M): CLOSED, but not as a decision about `_git`'s convention — as a
+side effect of replacing the mechanism this filing was a consequence of.** Ruling M replaced the total
+environment neutralization (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`) with two `-c` overrides
+(`core.excludesFile=`, `status.showUntrackedFiles=normal`) that touch nothing else, so a legitimate
+global `safe.directory` entry is no longer discarded and the check it exists to pass now succeeds.
+**Re-measured 2026-08-23**: the identical fixture (`GIT_TEST_ASSUME_DIFFERENT_OWNER=1` plus a real
+global `safe.directory` entry for the repo) now gives `git status --porcelain` exit `0` under
+`-c core.excludesFile= -c status.showUntrackedFiles=normal`, where it gave `fatal: detected dubious
+ownership` (rc 128) under the old mechanism. **A repository with no `safe.directory` entry at all
+still hits the same `fatal:` and the same silent-clean reading, under either mechanism** — that
+residual case is `_git`'s own `check=False` convention swallowing a returncode at a call site never
+designed to refuse, exists independently of Ruling F, L or M, predates all three, and is **not filed
+here**: it is not a consequence of this mechanism, so it is not this entry's to carry.
