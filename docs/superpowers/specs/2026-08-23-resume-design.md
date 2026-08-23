@@ -952,3 +952,40 @@ tasks to hit a number is the failure mode that prediction is about.
 **Batches 2 and 4 each change a shipped code path or a shipped artifact, and each is reviewed against
 a real command rather than against the suite.** That is the split this project has taken twice (H8b
 Decision 7, H7d Part B) and the one H9a's batch 2 established the method for.
+
+---
+
+## Appendix — corrections appended 2026-08-23, before dispatch
+
+Appended rather than edited, so the dated measurements above stay as they were made. Three items; the
+first replaces a **ground**, not a decision.
+
+**A1. Decision 5's *"serializable by invariant"* is wrong as written, and the encoding rule is now
+named.** Measured: `json.dumps({'r': float('nan')})` emits `{"r": NaN}`, and `inf`/`-inf` emit
+`Infinity`/`-Infinity` — none of them valid RFC 8259 — while `coerce_scalars({'r': float('nan')},
+'step', scope='repeat')` passes the value through unchanged, so a step returning a non-finite float is
+reachable and legal and `run.yaml` (YAML) already records it. **This is the second exception to the
+flat-mapping-of-scalars invariant, and `Estimate` was the first** — which Decision 5 caught only
+because it read `summary_values` rather than trusting the invariant.
+
+**The rule: the ledger keeps `json.dumps`' shipped default (`allow_nan=True`) and the document says
+so.** `executions.jsonl` is written and read back by the same `json` module — measured:
+`json.loads('{"r": NaN}')` returns `nan` — so the round trip is **exact**, which is what guard-pin arm
+A's leaf equality requires. The two alternatives were weighed and rejected: `allow_nan=False` would
+**fail a completed execution** over a value `run.yaml` accepts, which is the wrong direction; encoding
+non-finite as `null` would make a resumed `per_repeat` differ from a straight-through one, breaking
+arm A and losing the distinction between `nan` and a genuinely-null value. **The non-promise is
+stated rather than left silent**: task 17 records in § `executions.jsonl` that its lines are
+Python-`json`-compatible rather than strict JSON, and why.
+
+**A2. The disclosure has a seventh item.** `apparatus.replay_ledger` gains a code parameter
+(Decision 11, plan correction 18). It is additive and defaulted, so `freeze` is byte-identical — and
+that is a claim about a shipped function's signature, so it belongs in the enumeration rather than
+under a threshold. **Measured by task 13, not asserted here.** § Is this additive? is an enumeration
+and an incomplete one is the same class of fault as a wrong one.
+
+**A3. Guard-pin arm A is half live from batch 1 and half `xfail` until task 9, and a reviewer must not
+read the whole arm as coverage.** The `run` half — the straight-through golden — is live from batch 1
+and is what **batches 2 and 3 are held to**, alongside task 4's real-command review. The resume half
+is `xfail(strict=True)` naming task 9. Arm G is `xfail(strict=True)` in full until task 14, and task
+4's real-command review is the actual guard over that window.
