@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import importlib
 import json
@@ -23400,3 +23401,64 @@ def test_h9b_a_non_finite_return_round_trips_through_the_ledger(tmp_path: Path):
     value = entry["returned"]["r"]
     assert value is not None
     assert math.isnan(value)
+
+
+# ===========================================================================
+# H9b task 7 — `Resumed`, the value object a second entry into phases 6-10
+# pins (design Decision 14). This task changes no behaviour, so what is
+# pinned is the shape and the signature.
+# ===========================================================================
+
+
+def test_h9b_resumed_is_frozen_and_replace_works():
+    """Frozen for the reason `Prepared` is: phases 6-10 must not write back
+    into what a second entry decided, since every field was read off the
+    previous attempt's artifacts.
+
+    Two branches, checked in advance: a MUTABLE dataclass permits the
+    assignment, so this test distinguishes the readings rather than asserting
+    a property both would satisfy. `dataclasses.replace` is asserted beside
+    it because that — not mutation — is how Decision 10's overrides travel,
+    and a build that made this class mutable to allow them would pass a
+    frozen-only test's converse.
+    """
+    from publishable.cli import Resumed
+
+    resumed = Resumed(
+        run_dir=Path("/nowhere/run_x"),
+        prior_results=(),
+        attempts={("step01", 0, "seed1"): 2},
+        baseline=None,
+        recorded_manifest={"files": []},
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        resumed.run_dir = Path("/elsewhere")  # type: ignore[misc]
+    moved = dataclasses.replace(resumed, run_dir=Path("/elsewhere/run_y"))
+    assert moved.run_dir == Path("/elsewhere/run_y")
+    assert resumed.run_dir == Path("/nowhere/run_x")
+    # A tuple rather than a list, one level down: a frozen dataclass holding a
+    # list still hands out something the aggregate phase could append to.
+    assert isinstance(resumed.prior_results, tuple)
+    with pytest.raises(AttributeError):
+        resumed.prior_results.append(None)  # type: ignore[attr-defined]
+
+
+def test_h9b_execute_prepared_accepts_resumed_and_defaults_it_to_none():
+    """The parameter exists, is keyword-only, and defaults to `None` — which
+    is what makes `run` and `draft` unchanged by its addition.
+
+    Asserted on the SIGNATURE rather than by passing a `Resumed` through:
+    task 7 wires nothing, so a behavioural assertion here would be a claim
+    task 9 has to delete, and deleting an assertion looks exactly like
+    weakening a pin. The unpack block is asserted untouched by the diff, not
+    by a test.
+    """
+    import inspect
+
+    from publishable.cli import Resumed, _execute_prepared
+
+    parameter = inspect.signature(_execute_prepared).parameters["resumed"]
+    assert parameter.default is None
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.annotation == (Resumed | None)
+    assert Resumed.__dataclass_params__.frozen is True

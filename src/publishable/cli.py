@@ -2098,6 +2098,50 @@ class Prepared:
     upstream_resolver: UpstreamResolver
 
 
+@dataclasses.dataclass(frozen=True)
+class Resumed:
+    """What a SECOND entry into phases 6-10 pins, beside `Prepared` (H9b
+    Decision 14). `None` at `_execute_prepared` means `run` or `draft`, and
+    every line there behaves as it does today.
+
+    **Frozen for the reason `Prepared` is**, and it is the same reason stated
+    once more rather than a convention followed: phases 6-10 must not write
+    back into what the second entry decided, because everything here was read
+    off the previous attempt's own artifacts and a phase that mutated one
+    would be publishing a figure the previous run never recorded.
+    `prior_results` is a TUPLE rather than a list for the same reason at one
+    level down — a frozen dataclass holding a list still hands out a list
+    anything can `append` to, and the aggregate phase iterates it.
+
+    - `run_dir` — the existing run directory. Phase 6 uses it instead of
+      calling `allocate_run_dir`, which is why no second run directory is
+      created and why `E-RUN-ID-EXHAUSTED` is unreachable from `resume`.
+    - `prior_results` — one `ExecutionResult` per triple with a `completed`
+      record, reconstituted from the artifacts (Decision 4). The aggregate
+      phase reads `rows`, `recorded`, `skipped` and `returned` off these and
+      no file at all, so a `resume` that skipped a triple without
+      reconstituting it would publish every interval over the re-executed
+      triples only.
+    - `attempts` — per-triple record counts off `executions.jsonl`
+      (`lineage.attempt_counts`), straight into `assemble_run_yaml`.
+    - `baseline` — the apparatus observations replayed from
+      `apparatus/probes.jsonl`, so a fact that moved during the crash is
+      gated against the ORIGINAL run's first-answered value rather than
+      against this attempt's first probe. `None` when the run declared no
+      probe, which is not an error (Decision 11).
+    - `recorded_manifest` — the manifest the first attempt wrote, so phase
+      8's `verify_manifest` asks whether the inputs moved during THIS
+      attempt and `run.yaml`'s `input_manifest_hash` stays the original
+      figure (Decision 8).
+    """
+
+    run_dir: Path
+    prior_results: tuple["ExecutionResult", ...]
+    attempts: dict[tuple[str, int | None, str | None], int]
+    baseline: "apparatus.Observations | None"
+    recorded_manifest: dict[str, Any]
+
+
 def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     """Phases 1-5 of a run, for every command that is a second entry into them.
 
@@ -2596,7 +2640,7 @@ def _recorded_config_path(config_path: Path, repo_root: Path) -> str:
         return resolved.as_posix()
 
 
-def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
+def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | None = None) -> int:
     """Phases 6-10 of a run: allocate the run directory, execute, record.
 
     Takes what `_prepare_run` pinned and nothing else, so that `run`, `draft`
@@ -2614,6 +2658,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
     owns the `draft` command, its fixture Q and the mutation that catches the
     wiring. It is threaded now rather than added later so that `command_draft`
     is one call and not a second copy of this function.
+
+    `resumed` is `None` for `run` and `draft`, and every line below behaves as
+    it did before it existed (H9b Decision 14: one execution path, not a
+    third copy of it). It is accepted at THIS signature and deliberately not
+    threaded through the unpack block above — `Prepared`'s thirty-six names
+    are read into locals in one block precisely so that this 1,495-line body
+    stays byte-identical to what `command_run` held, which is the only
+    mechanical check a reviewer has on the move (plan § Corrections against
+    the code, correction 19). What reads it is the handful of phase-6 sites
+    and the `execute_plan` call, and nothing else.
     """
     config_path = prepared.config_path
     doc = prepared.doc
