@@ -593,3 +593,57 @@ with a 4-hit control; `provenance.environment.hostname`'s single pre-fix occurre
 `tests/test_study.py` at `6497284^`; `_section_text`'s cut rule read out of its own body after the
 extraction failed. **Not a count of zero disagreements: two disagreements with the review are named
 above** — the wrong function name in the row it convicted, and the sixth home it did not reach.
+
+## Addendum, same day — Major 1's FOURTH reach path was false too, and two corrections to the section above
+
+Commit `9d59033`, gates re-run after it: `ruff check` clean, `ruff format --check` 93 unchanged,
+`mypy` 52 files clean, full suite **2973 passed, 1 skipped, 2 xfailed** in 207 s.
+
+**The clause I carried verbatim while rewriting the sentence around it.** The row's fourth reach path
+read *"`cli._preloaded_experiment`, under `except Exception`, returns `None` for `validate_config` to
+report as `E-ENTRYPOINT-IMPORT` instead."* That consequence is false for this code, and it contradicts
+**two** neighbours: the very next sentence (`✓ config valid`, which `command_run`/`validate` cannot
+print if a finding was reported — `command_run` returns `EXIT_WRONG` at its `c.has_errors` check,
+above the uncaught walk-up), and **`E-ENTRYPOINT-IMPORT`'s own § Errors row**, which already says the
+import is *"skipped without a report when no repository root exists at all, since there is then no
+`src/` to import from."* Found by asking what the row claims rather than by re-reading the clause I
+had just edited around — the same fault as Major 1 itself, re-endorsed by the commit that closed it.
+
+**Settled by behaviour, not by that reasoning.** One probe on arm T's own fixture shape (scaffold,
+generate, commit, `rm -rf .git`), built and run **outside this repository** under `/tmp`, both streams
+captured:
+
+```
+validate → rc 0   stdout: '  ✓ config valid · …/configs/cohort-pilot/config.yaml'   stderr: ''
+                  E-ENTRYPOINT-IMPORT on either stream: False
+run      → rc 1   stderr: '  error   E-GIT-NO-REPO  no git repository found from … upwards'
+                  E-ENTRYPOINT-IMPORT on either stream: False
+```
+
+Deleted, not rewritten. The `spec-defects.md` replacement text never carried the consequence, so this
+was a single-site fix; `grep -n "E-ENTRYPOINT-IMPORT"` over the four documents and `CLAUDE.md` returns
+three hits, all in `docs/reference.md`, all correct (its own row, and two `E-REPORT-OVERRIDE-*` rows
+distinguishing themselves from it) — control `grep -c "E-PARAM-MISSING" docs/reference.md` → 1.
+
+**Correction 1 to the section above: the file list was written from intent and is superseded.**
+`git diff --stat daa7df5..HEAD`, now run:
+
+```
+.../whole-branch-review.md   183 +++    docs/reference.md               2 +-
+docs/superpowers/spec-defects.md  7 +-  src/publishable/secrets.py     12 +-
+tests/test_cli.py             66 ++++   tests/test_secrets.py          42 ++++
+tests/test_study.py           23 ++-
+```
+
+**Seven files**, this review file included — the section above omitted it. The substantive claim it
+was making holds: the only `src/` change is `secrets.py`'s docstring, no document outside
+`docs/reference.md` and `spec-defects.md` moved, and the feasibility analysis was never opened. But
+the sentence asserted a command's output without running it, in the section headed *"claims I grepped
+rather than asserted"*, and that is the one claim in it that was not.
+
+**Correction 2: arm S's rewritten docstring no longer quotes the three superseded claims back.** The
+first version of the fix enumerated them verbatim, which plants three fresh hits for the next
+claim-sweep to triage **inside the file where one such claim already survived two sweeps** — the fault
+diagnosed under Major 3, reproduced eight lines from where it was diagnosed. The docstring now points
+at this section for the enumeration and states why it does not repeat it. Arm S's body is still
+byte-identical.
