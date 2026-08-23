@@ -4345,7 +4345,13 @@ def command_dry_run(config_path: Path) -> int:
 
     lines: list[str] = []
     modes = ["baseline"] if any(c.is_baseline for c in prepared.conditions) else []
-    modes += [k for k, v in (prepared.doc.get("sweep") or {}).items() if v]
+    # `"baseline"` is itself a truthy key of `sweep` whenever the seed above
+    # fires (`sweep.expand` only sets `is_baseline=True` from its own
+    # `if baseline:` loop), so counting it again here double-prints it —
+    # `(baseline + baseline + grid)`, invisible to the only prior assertion
+    # on this line because that fixture was grid-only. Excluded rather than
+    # re-deduplicated after the fact: the seed already carries it.
+    modes += [k for k, v in (prepared.doc.get("sweep") or {}).items() if v and k != "baseline"]
     n_conditions = len(prepared.conditions)
     n_repeats = len(prepared.repeats)
     executions = len(prepared.plan)

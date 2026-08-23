@@ -312,7 +312,14 @@ def test_run_on_a_path_with_no_repo_is_wrong_not_invalid(tmp_path: Path):
 
 
 def test_operation_commands_take_no_flags(capsys):
+    """H9a batch 3-5 fix round, Minor 1: the two-argument call below reaches
+    `len(rest) != 1` first and short-circuits before the flag half its name
+    claims is ever evaluated — proved by mutation (dropping the flag check
+    entirely leaves this exact call green). A single flag-shaped argument is
+    what isolates the flag half: `len(rest) == 1` is satisfied and only
+    `rest[0].startswith("-")` can produce EXIT_INVOCATION."""
     assert main(["run", "cfg.yaml", "--allow-dirty"]) == EXIT_INVOCATION
+    assert main(["run", "--allow-dirty"]) == EXIT_INVOCATION
 
 
 # H8b batch 6 review, Major 1: `diff`'s own CLI arm (arity exactly two, no
@@ -21343,6 +21350,17 @@ def test_h9a_dry_run_leaves_an_existing_output_dir_byte_identical(
     assert "creates nothing" in capsys.readouterr().out
     assert snapshot() == before
 
+    # Minor 4, batch 3-5 fix round: both arms above call `command_dry_run`
+    # directly, so *creates nothing through the DISPATCHED command* was
+    # pinned only by the end-to-end transcript test, which asserts output
+    # rather than the filesystem. This arm closes that gap — same
+    # byte-identity snapshot, driven through `main([...])`, the route a
+    # user actually takes.
+    capsys.readouterr()
+    assert main(["dry-run", str(cfg)]) == EXIT_OK
+    assert "creates nothing" in capsys.readouterr().out
+    assert snapshot() == before
+
 
 def test_h9a_dry_run_against_a_live_lock_completes_and_takes_none(
     tmp_path: Path, monkeypatch, capsys
@@ -21556,6 +21574,49 @@ def test_h9a_fixture_t_unit_executions_agrees_with_a_real_group_axis_run(tmp_pat
     assert "handed no unit list at all" not in out
 
 
+def test_h9a_fixture_v_unit_executions_agrees_with_a_real_holdout_run(tmp_path: Path, capsys):
+    """Fixture V — batch 3-5 fix round, Minor 3: the review found Decision 11's
+    third case (**holdout**) unfixtured, only reasoned about, and asked for
+    either a fixture or a stated reason none exists. This is the fixture.
+
+    `_handed_counts` has no `holdout` branch: `roster = prepared.eval_roster`
+    at the top is already the test partition (`_evaluation_roster` runs once,
+    inside phases 1-5, before `_handed_counts` is ever called), so the
+    fall-through `handed = scoped` is correct by construction. `prepared.roster`
+    (the FULL roster, pre-holdout) is what a build that re-derived the
+    narrowing wrongly, or lost it, would fall back to — so it is also the
+    mutation that must fail.
+
+    20 units, `frac: 0.2` at the pinned seed `4321` → a 4-unit test partition
+    (pinned already at `tests/test_cli.py::test_a_declared_holdout_now_validates_and_runs`,
+    `len(alloc["holdout"]["test"]) == 4`). Two seed repeats, no fold and no
+    group axis, so every execution is handed the same 4-unit partition:
+    `[4, 4]`, total 8 — never 20 or 40, which is what confusing `roster` for
+    `eval_roster` would print.
+    """
+    counter = tmp_path / "handed_v.jsonl"
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds, so the repeat directory component does not collapse",
+        },
+        _starter_step=_h9a_t8_counting_step(counter, "repeat"),
+    )
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert len(alloc["holdout"]["test"]) == 4
+    handed = [int(x) for x in counter.read_text().split()]
+    assert handed == [4, 4], handed
+    assert sum(handed) == 8
+    printed, out = _h9a_t8_printed_unit_executions(doc["cfg"], capsys)
+    assert printed == sum(handed)
+    assert "handed no unit list at all" not in out
+
+
 # ===========================================================================
 # H9a task 9 — wiring `dry-run` into `_dispatch`
 # (docs/superpowers/plans/2026-08-23-re-entry-seam.md task 9; Rulings R and
@@ -21617,6 +21678,44 @@ def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: P
     # pinned (guard-pin arm B) and a diagnostic on stderr must not be read as
     # part of this output.
     assert "creates nothing" not in err
+
+
+def test_h9a_dry_run_sweep_header_does_not_double_count_baseline(tmp_path: Path, capsys):
+    """Major 1 (batch 3-5 review): `modes` seeded `["baseline"]` from
+    `is_baseline` and then appended every truthy `sweep` key — and `baseline`
+    is itself one of those keys whenever any condition `is_baseline`
+    (`sweep.expand` only sets `is_baseline=True` from the `if baseline:`
+    loop, so the key is always present when the seed fires). The only prior
+    assertion on this line used a grid-only config, the one arrangement
+    where the duplicate cannot appear — the worked example (`cohort-pilot`)
+    is baseline + grid, exactly this shape, which is why the review called
+    it the first thing a reader of the docs would run.
+
+    A config with BOTH `baseline` and `grid` is what separates the two
+    readings: seeding plus a naive re-count prints `(baseline + baseline +
+    grid)`; the fix must print `(baseline + grid)` once each.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="r",
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds",
+        },
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+    )
+    capsys.readouterr()
+    assert main(["dry-run", str(doc["cfg"])]) == EXIT_OK
+    out = capsys.readouterr().out
+    (line,) = [ln for ln in out.splitlines() if ln.startswith("sweep:")]
+    assert "baseline + baseline" not in line
+    assert line.count("baseline") == 1
+    assert "(baseline + grid)" in line
 
 
 def test_h9a_dry_run_new_now_reaches_the_arity_arm_not_the_not_built_diagnostic(capsys):
