@@ -1107,8 +1107,15 @@ def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
         c.warn(
             "W-PARAM-UNSET",
             "parameters",
-            "carries a default and is left unset here; a step reading it as "
-            f"cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: {', '.join(unset)}",
+            # The subject of the sentence is the PATH, not the block: every
+            # diagnostic here renders as `<path> <message>`, and the path this
+            # one carries is `parameters`, which does not itself carry a
+            # default — the enumerated paths under it do. Fixed in H6a's
+            # whole-branch fix round (Minor 2) and pinned whole below the
+            # W-TEMPLATE-VERSION arm in tests/test_validate.py.
+            "holds paths that carry a default and are left unset here; a step "
+            "reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: "
+            f"{', '.join(unset)}",
         )
 
 

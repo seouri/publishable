@@ -145,6 +145,57 @@ def test_run_refuses_a_dirty_code_tree(tmp_path: Path, capsys):
     assert "E-CODE-DIRTY" in capsys.readouterr().out
 
 
+def test_run_refuses_an_untracked_file_a_global_exclude_hides(tmp_path: Path, capsys, monkeypatch):
+    """H6a whole-branch fix round, Ruling L, end to end through `run`.
+
+    The convergence `reference.md`'s `E-CODE-DIRTY` row claims lives in a run,
+    so it is asserted in one — the two `git_provenance` arms in
+    `tests/test_hashes.py` hold the same property at the seam.
+
+    **Both arms use the same file and the same pattern, and differ only in
+    where the rule lives**, which is what attributes the refusal to the rule
+    rather than to the file. Committed in the repo's own `.gitignore`, the
+    run proceeds; moved out of the tree into a machine's global
+    `core.excludesFile`, the same tree is refused — because that file is
+    untracked, ignored by nothing a clone would carry, and folded into
+    `code_hash` regardless (Ruling F). A gate that could not see it would let
+    a run publish an identity claim over a file no clone of the commit holds.
+    """
+    root, cfg, _ = build(tmp_path)
+    pkg_note = root / "src" / "cohort_pilot" / "notes.log"
+
+    gitignore = root / ".gitignore"
+    gitignore.write_text(gitignore.read_text() + "notes.log\n")
+    for args in (
+        ["add", ".gitignore"],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "ignore notes"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    pkg_note.write_text("machine chatter\n")
+    assert main(["run", str(cfg)]) == EXIT_OK
+    assert "E-CODE-DIRTY" not in capsys.readouterr().out
+
+    # The identical rule, moved off the tree and onto the machine.
+    gitignore.write_text(gitignore.read_text().replace("notes.log\n", ""))
+    for args in (
+        ["add", ".gitignore"],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "unignore notes"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    excludes = tmp_path / "machine_excludes"
+    excludes.write_text("notes.log\n")
+    machine_config = tmp_path / "machine_gitconfig"
+    machine_config.write_text(f"[core]\n\texcludesFile = {excludes}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(machine_config))
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/cohort_pilot/notes.log"], cwd=root, capture_output=True
+    )
+    assert asked.returncode == 0, "the fixture's global exclude must be one git really reads"
+
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+
+
 def test_run_refuses_data_inside_the_repo(tmp_path: Path, capsys):
     root, cfg, _ = build(tmp_path)
     doc = yaml.safe_load(cfg.read_text())

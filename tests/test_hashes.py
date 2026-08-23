@@ -829,3 +829,205 @@ def test_h6a_fixture_j_the_gate_and_the_hash_agree_on_an_excluded_file(tmp_path:
     write(repo, "src/pkg/loose.py", "c = 3\n")
     assert git_provenance(repo, committed).code_dirty is True
     assert "src/pkg/loose.py" in {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+
+
+# ---------------------------------------------------------------------------
+# H6a whole-branch fix round (2026-08-23), Major 1 and Ruling L — the pin for
+# the slice's central claim: **only rules that travel with the tree decide**,
+# for the hash (Ruling F) and for the dirty gate (Ruling L).
+#
+# Before this section `grep -rn "GIT_CONFIG_GLOBAL\|excludesFile" tests/`
+# returned nothing and removing BOTH halves of the neutralization left the
+# whole suite byte-identical: the claim was a probe and a sentence. The four
+# arms below are sized so that each half of the neutralization has a mutation
+# that fails, which took measuring which route each half actually closes:
+#
+#   route the rule takes                     | killed by `-c` | killed by env
+#   -----------------------------------------|----------------|--------------
+#   global config `[core] excludesFile`      | yes            | yes
+#   the XDG default `~/.config/git/ignore`   | yes            | NO
+#   repo-local `.git/config` `excludesFile`  | yes            | NO
+#   global `[status] showUntrackedFiles=no`  | NO             | yes (gate only)
+#
+# So no exclude route pins the environment half — `-c core.excludesFile=`
+# closes every one of them on its own — and the environment half is pinned on
+# the gate instead, where a global `status.showUntrackedFiles` reaches and no
+# `-c` about excludes does. That is why the two constants are shared between
+# the two call sites rather than written twice.
+
+
+def _h6a_exclude_rule_file(root: Path, pattern: str) -> Path:
+    """An exclude file OUTSIDE the repository — nothing here travels with it."""
+    path = root / "machine_excludes"
+    path.write_text(f"{pattern}\n")
+    return path
+
+
+def _h6a_global_git_config(root: Path, body: str) -> Path:
+    path = root / "machine_gitconfig"
+    path.write_text(body)
+    return path
+
+
+def _h6a_kept(repo: Path) -> set[str]:
+    return {rel for rel, _ in hashed_files(repo, _h6a_include(repo))}
+
+
+def test_h6a_ruling_f_a_global_excludesfile_cannot_narrow_the_hash(tmp_path: Path, monkeypatch):
+    """Ruling F, the global-config route, with a positive control.
+
+    `src/pkg/notes.log` is untracked and matches no rule the repository
+    carries. A **global** `core.excludesFile` excluding `notes.log` is what a
+    machine — not a tree — says about it, and the hash must not hear it: two
+    machines with identical trees and different global git config would
+    otherwise publish different `code_hash` values with nothing in the record
+    saying why.
+
+    **The positive control is the first assertion**, and without it the rest
+    is vacuous: an un-neutralized `git check-ignore`, run under exactly the
+    environment this test installs, must report the file excluded. That is
+    what proves the fixture built a real global exclude rather than a config
+    git never read.
+
+    The third arm is the other half of the rule: the identical pattern moved
+    into the repo's own **committed** `.gitignore` DOES narrow the hash. A
+    neutralization that simply switched excludes off would pass the first two
+    arms and fail this one.
+    """
+    import subprocess
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, f"[core]\n\texcludesFile = {excludes}\n")),
+    )
+
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/notes.log"], cwd=repo, capture_output=True
+    )
+    assert asked.returncode == 0, "the fixture's global exclude must be one git really reads"
+
+    with_global_rule = _h6a_kept(repo)
+    assert "src/pkg/notes.log" in with_global_rule
+    hashed_anyway = code_hash_of(hashed_files(repo, _h6a_include(repo)))
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) != hashed_anyway
+
+
+def test_h6a_ruling_f_a_repo_local_excludesfile_cannot_narrow_the_hash(tmp_path: Path):
+    """Ruling F, the repo-local route — the arm that pins `-c core.excludesFile=`.
+
+    A `core.excludesFile` in the repository's own `.git/config` is **not**
+    reached by `GIT_CONFIG_GLOBAL=/dev/null` (measured: still excluded), so
+    this is the arm that fails when the command-line override is dropped. It
+    is also the sharpest form of the ruling: the entry sits inside the
+    `.git` directory, which is as close to the tree as a rule can get and
+    still not travel with it — no clone carries it, and neither does an
+    archive.
+
+    Third arm as above: the same pattern committed to `.gitignore` narrows the
+    hash, so this is not a test that excludes were switched off wholesale.
+    """
+    import subprocess
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    subprocess.run(["git", "config", "core.excludesFile", str(excludes)], cwd=repo, check=True)
+
+    asked = subprocess.run(
+        ["git", "check-ignore", "src/pkg/notes.log"], cwd=repo, capture_output=True
+    )
+    assert asked.returncode == 0, "the fixture's repo-local exclude must be one git really reads"
+
+    assert "src/pkg/notes.log" in _h6a_kept(repo)
+    hashed_anyway = code_hash_of(hashed_files(repo, _h6a_include(repo)))
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+    assert code_hash_of(hashed_files(repo, _h6a_include(repo))) != hashed_anyway
+
+
+def test_h6a_ruling_l_a_global_excludesfile_cannot_blind_the_dirty_gate(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling L (2026-08-23). The gate asks the same git the hash asks.
+
+    Without this, the hole runs the wrong way round from the one Ruling F
+    closed: a file a global exclude hides is **untracked, ignored by nothing
+    that travels with the tree**, so the gate reported the tree clean while
+    the hash folded the file in — a run whose recorded `code_hash` covers a
+    file no clone of that commit contains.
+
+    Both directions, because a gate that simply fired more often would pass
+    the first arm: the same pattern **committed** to `.gitignore` leaves the
+    gate clean, which is the convergence `reference.md`'s `E-CODE-DIRTY` row
+    claims.
+    """
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    committed = repo / "src" / "pkg" / "step.py"
+    write(repo, "src/pkg/notes.log", "machine chatter\n")
+    excludes = _h6a_exclude_rule_file(tmp_path, "notes.log")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, f"[core]\n\texcludesFile = {excludes}\n")),
+    )
+
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/notes.log" in _h6a_kept(repo)
+
+    write(repo, ".gitignore", ".env\n__pycache__/\n*.py[cod]\n.venv/\nnotes.log\n")
+    _h6a_commit_more(repo, ".gitignore")
+    assert git_provenance(repo, committed).code_dirty is False
+    assert "src/pkg/notes.log" not in _h6a_kept(repo)
+
+
+def test_h6a_ruling_l_a_global_show_untracked_files_no_cannot_blind_the_gate(
+    tmp_path: Path, monkeypatch
+):
+    """Ruling L, the environment half — the arm that pins
+    `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM=/dev/null`.
+
+    `status.showUntrackedFiles = no` in a machine's global config removes
+    every untracked file from `git status --porcelain`, and no `-c` about
+    excludes touches it. Under it the gate saw a clean tree while an
+    uncommitted `src/pkg/loose.py` was folded into `code_hash` — the same
+    hole as the arm above, reached through a setting that is not an exclude
+    rule at all, which is why the environment neutralization is not
+    redundant with the command-line one.
+
+    **The positive control is the first assertion**: a bare `git status
+    --porcelain` under the same environment must print nothing, or the
+    fixture's global config is one git never read and the arm proves nothing.
+    """
+    import subprocess
+
+    from publishable.provenance import git_provenance
+
+    repo = _h6a_base_repo(tmp_path / "repo")
+    committed = repo / "src" / "pkg" / "step.py"
+    write(repo, "src/pkg/loose.py", "c = 3\n")
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL",
+        str(_h6a_global_git_config(tmp_path, "[status]\n\tshowUntrackedFiles = no\n")),
+    )
+
+    blinded = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src", "templates"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert blinded.stdout == "", "the fixture's global setting must be one git really reads"
+
+    assert git_provenance(repo, committed).code_dirty is True
+    assert "src/pkg/loose.py" in _h6a_kept(repo)

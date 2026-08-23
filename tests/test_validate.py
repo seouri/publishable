@@ -14549,3 +14549,60 @@ def test_h6a_arm_f_the_template_version_warning_message_is_pinned_whole(write_co
         "is 0.9.0 but the template reports 1.0.0; unset here and left to the "
         "template's default: analysis.confidence"
     )
+
+
+# ---------------------------------------------------------------------------
+# H6a whole-branch fix round (2026-08-23) — the two Minors the gate raised
+# against `validate`. Both sit BELOW guard-pin arm F and neither touches it:
+# arm F pins `W-TEMPLATE-VERSION`'s message whole, and one of these asserts
+# that `W-PARAM-UNSET` renders beside it in the same output.
+
+
+def test_h6a_both_warnings_render_in_one_collector_output(write_config):
+    """Minor 1. `_check_versions`' docstring says the duplication with
+    `W-PARAM-UNSET` on a version-mismatched config is deliberate — *both
+    warnings render in one `Collector` output* — and nothing asserted it.
+
+    Arm F's own config is exactly the one that produces both, and arm F
+    filters to `W-TEMPLATE-VERSION`, so the co-occurrence was a seam named in
+    prose and instantiated by no fixture. This is that fixture, and it is
+    deliberately a separate test rather than a widening of arm F, which has a
+    single authorized editor and is not it.
+
+    The total count is asserted too: *two* warnings, not merely both codes
+    present, so a third diagnostic appearing under this config is visible
+    here rather than absorbed. Exit 0, because a warning is not an error.
+    """
+    path = write_config({"template_version": "0.9.0", "parameters.analysis.confidence": _DELETE})
+    c = Collector()
+    validate_config(path, c)
+    warnings = [f for f in c.findings if f.level == "warning"]
+    # In emission order: `_check_parameters` runs before `_check_versions`.
+    assert [f.code for f in warnings] == ["W-PARAM-UNSET", "W-TEMPLATE-VERSION"]
+    assert {f.path for f in warnings} == {"template_version", "parameters"}
+    assert c.has_errors is False
+    assert c.exit_code() == 0
+
+
+def test_h6a_w_param_unset_message_agrees_with_the_path_it_carries(write_config):
+    """Minor 2, pinned whole, on arm F's own shape.
+
+    Every diagnostic in this project renders as `<path> <message>`, and this
+    one's path is `parameters`. The message read *"carries a default and is
+    left unset here"*, which says the block carries the default; the block
+    carries the paths, and the paths carry the defaults. Asserted as one
+    string rather than by substring, because a reword is exactly what a
+    substring test cannot see — Fixture K above asserts the enumerated paths
+    are named and could not have caught this.
+    """
+    path = write_config({"parameters.analysis.confidence": _DELETE})
+    c = Collector()
+    validate_config(path, c)
+    warnings = [f for f in c.findings if f.code == "W-PARAM-UNSET"]
+    assert len(warnings) == 1
+    assert warnings[0].path == "parameters"
+    assert warnings[0].message == (
+        "holds paths that carry a default and are left unset here; a step "
+        "reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: "
+        "analysis.confidence"
+    )
