@@ -19168,6 +19168,12 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
 # no authorized editor** — an editor who greps this string and finds two must
 # move this one and leave that one alone.
 _H6A_T5_RUN_DIGEST = "sha256:f6a935cfc29196b2a5f5a7f873096c4ab3ee077ff3152afedafeb34fb919078a"
+# Batch 3 fix round, Minor 3: the pre-slice digest of this exact tree — the
+# probe project plus its three excluded files — recomputed from the algorithm
+# (`code_hash(root, None)` over the tree `_h6a_t5_project` plus the three
+# writes below build), so the end-to-end half pins a literal rather than only
+# an inequality.
+_H6A_T5_PRE_SLICE_DIGEST = "sha256:09a843b15e23fe355b389aec9ae6a1566f4a6211bf249781884f2e4c82f842cc"
 
 _H6A_T5_PLAIN_EXPERIMENT = """\
 from publishable import BaseExperiment, BaseStep
@@ -19327,7 +19333,10 @@ def test_h6a_fixture_c_a_run_records_the_narrowed_digest(tmp_path: Path, monkeyp
     (root / "src" / "pkg" / "loose.pyd").write_text("X")
     # The three really are candidates: the pre-slice definition reads them, so
     # this fixture is not asserting that a filter dropped files a walk never
-    # found.
+    # found. Batch 3 fix round, Minor 3: pinned as the literal the plan's step
+    # 4 wanted, not only as an inequality — this is the digest the real
+    # command actually produced for this exact tree before this slice.
+    assert code_hash(root, None) == _H6A_T5_PRE_SLICE_DIGEST
     assert code_hash(root, None) != _H6A_T5_RUN_DIGEST
 
     assert main(["run", str(cfg)]) == EXIT_OK
