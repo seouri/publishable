@@ -206,3 +206,55 @@ nothing is worse than no SHA, because a reader spends the lookup before learning
 `git log`.** That is the same fault as every carried summary phrase this project has recorded: **a value
 that was cheap to derive was asserted instead**, and nothing downstream needed it, so nothing caught it
 until a reviewer tried to follow one.
+
+## The whole-branch gate — HOLD on three Majors, and the sweep lesson of this slice family
+
+Review `daa7df5` (**HOLD**), fix round `5c2ed66` / `0775af4` / `94b4512` / `f14b68b` / `6fcc6bc` /
+`99495a2` / `4da4f03`. Suite 2971 → **2973**, against `main`'s 2963.
+
+**The additive charter is TRUE and it was measured leaf by leaf rather than assumed** — which matters
+because it is the whole ground on which this slice shipped without a value-change disclosure. One real
+config run on a `main` worktree and on HEAD, `run.yaml` diffed leaf by leaf: **exactly three new keys,
+zero removed, every changed value an artefact of two probes being different directories and different git
+repos**, with `code_hash`/`parameters_hash` byte-equal and the shipped keys' relative order preserved. The
+**backward** half holds too: `study add`, `report` and `diff` all run at exit 0 over a `main`-produced
+record, and `diff` gains no sixth row.
+
+**Major 2 is the shape to carry: proving an arm CANNOT move is not the same as pinning the line.** Ruling
+O's change to the shared worked example — `gpu` leaving `hardware` — was **pinned by nothing**;
+reinstating `hardware: {gpu: "1x A100 80GB", cpu_count: 32}` left **626 doc-reading tests green**, and arm
+R had been offered as the proof the edit was safe **precisely because it was measured unable to see that
+line.** Those are opposite facts wearing one sentence. The pin now compares § The two files' fenced block
+against what a real `run` writes, at both ends, and its own can-fail proof was run in full: with `gpu`
+reinstated **and all three assertions neutered**, the suite is green — **so nothing else catches the
+drift**, which is what makes the new pin load-bearing rather than decorative.
+
+**Major 1 was a row contradicting a filing written in the same commit**, and re-deriving it turned up two
+more defects the gate had not seen: the row named **`cli._load_experiment_for`, a function that exists
+nowhere** — and the review **repeated the wrong name because it read it out of the row** — and a clause
+claiming that path *"returns `None` for `validate_config` to report as `E-ENTRYPOINT-IMPORT` instead"*,
+false against a probe and contradicting both the sentence beside it and `E-ENTRYPOINT-IMPORT`'s own row.
+**Deleted at both homes rather than rewritten.** The distinction that survived: **two** sites catch by
+code, **two** by type testing no code, and the word *swallow* is deliberately withheld from the by-type
+pair so `CLAUDE.md`'s *"six reaches, three of them deliberate swallows"* stays true.
+
+**Major 3 is the fifth home of one claim in one slice — and the fix round found the SIXTH.** The reason
+two sweeps of that exact file missed a clause **eight lines** from one they found is the finding, and it is
+new: **the sweep found it and the triage discarded it.** The hits were reconciled against a design
+decision's table of *three known homes* instead of being **attributed one by one** — so a fourth hit in a
+file already accounted for read as noise. *Every hit must be attributed before it is counted* was written
+in this repo about refusals that fire; it applies identically to grep hits. And the mechanism that hid
+home 3 from the obvious pattern is the older one: it spells its claim with a commit SHA and **contains the
+dotted path nowhere.**
+
+**Minor 2 split, which is the right shape for a compound safety claim.** `secrets.py` asserted *nothing in
+this module imports `publishable.provenance` **or writes into the document it builds***. The import half is
+now **pinned by an AST test**; the writes-into half was **deleted rather than rewritten**, because an
+import check answers it only by proxy — and *a safety argument in a comment is a claim needing a
+mutation*, not a claim needing a nearby test that happens to pass.
+
+**Two things left open with reasons.** § The two files' other `provenance` sub-blocks (`git`, `units`,
+`upstream`, `allocation`) are pinned at the code end only, against no document — the same gap Major 2
+closed for `environment`, unfixed elsewhere. And **`_section_text` truncates at a fenced `# ` comment
+line**, a latent trap for any future doc-reading test, which is why the new pin asserts exactly one
+`environment:` line rather than trusting the extraction.
