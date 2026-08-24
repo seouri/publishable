@@ -33,6 +33,8 @@ from publishable.cli import declared_credential_names
 from publishable.config import Config
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
 from publishable.errors import ContractError, PublishableError
+from publishable.hashes import parameters_hash
+from publishable.run_identity import IDENTITY_FILE
 from publishable.runner import resolve_condition_cfg
 from publishable.secrets import credential_values, load_env, missing_env
 from publishable.sweep import Condition, expand
@@ -105,6 +107,7 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
     (a) run.yaml present                        -> E-FREEZE-RUN-ENDED       exit 1
     (b) config.yaml absent / not a mapping       -> E-FREEZE-NO-CONFIG      exit 1
     (c) environment/repo_root.txt absent/empty   -> E-FREEZE-NO-CONFIG      exit 1
+    (c2) config.yaml edited since run start      -> E-FREEZE-CONFIG-EDITED  exit 1
     (d) load_env(repo_root)                      not a gate — answers (k)
     (e) template resolution                      -> four REUSED codes      exit 1
     (f) template declares no apparatus_probe     -> E-FREEZE-NO-APPARATUS  exit 1
@@ -205,6 +208,45 @@ def _precheck(run_dir: Path) -> "_Refused | _Ready":
             str(repo_root_path),
             f"environment/repo_root.txt names `{repo_root_text}`, which is not "
             "a directory — the directory was edited; it cannot be frozen",
+            EXIT_WRONG,
+        )
+
+    # (c2) — the `parameters` block this run STARTED under, compared against
+    # the copy `freeze` is about to probe under (H9b Decision 15, closing the
+    # standing `spec-defects.md` filing whose owner line was H9). `resume`'s
+    # own comparison does not close this one: `resume` re-reads the PROJECT's
+    # config (Decision 7) and never touches this copy, while the filing's gap
+    # is an edit to the copy — a probe measuring under parameters the run
+    # never adopted.
+    #
+    # **An absent `identity.json` is not this fault**, and neither is one that
+    # will not parse or holds no `parameters_hash`: a run directory started by
+    # a build that predates the artifact has nothing to compare, and `freeze`
+    # then behaves exactly as it does today. Stating that here and in the
+    # § Errors row is what stops the next reader filing the silence as a
+    # defect. The recorded figure is read directly rather than through
+    # `read_identity`, whose four faults are all one `E-RESUME-NO-IDENTITY` —
+    # a resume's remedy (run again into a fresh directory) is not `freeze`'s
+    # question at all.
+    recorded_parameters: object = None
+    identity_path = run_dir / IDENTITY_FILE
+    if identity_path.is_file():
+        try:
+            document = json.loads(identity_path.read_text(encoding="utf-8"))
+        except ValueError:
+            document = None
+        if isinstance(document, Mapping):
+            recorded_parameters = document.get("parameters_hash")
+    if isinstance(recorded_parameters, str) and parameters_hash(doc) != recorded_parameters:
+        return _refuse(
+            Collector(),
+            "E-FREEZE-CONFIG-EDITED",
+            str(config_path),
+            f"this run started under parameters_hash {recorded_parameters}; the "
+            f"config.yaml in this run directory now hashes to {parameters_hash(doc)}. "
+            "The copy was edited after the run started, so a probe now would "
+            "measure under parameters the run never adopted. Restore the copy, or "
+            "read the record of a run that ended.",
             EXIT_WRONG,
         )
 

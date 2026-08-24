@@ -12,6 +12,9 @@ refused as the reader's home on its own docstring's grounds — its own first li
 "Assemble run.yaml. Assembles only — computes nothing."
 """
 
+import dataclasses
+import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -410,3 +413,370 @@ class UpstreamResolver:
         runner → artifacts` would close a cycle `TYPE_CHECKING` alone does
         not open back up)."""
         return resolve_step(record, run_dir, step)
+
+
+# `executions.jsonl`'s ledger key: (step, condition index, repeat label), the
+# triple `reference.md` § `executions.jsonl` calls one execution. `None` in
+# either of the last two positions is a real value, not a missing one — a
+# `run`- or `summary`-scoped execution has no condition and no repeat.
+LedgerKey = tuple[str, "int | None", "str | None"]
+
+_LEDGER_LINE_KEYS = ("step", "scope", "condition", "repeat", "status")
+
+
+def read_execution_ledger(run_dir: Path) -> list[dict[str, Any]]:
+    """Every line of `run_dir/executions.jsonl`, parsed, in the order the run
+    wrote them. An absent ledger is `[]` — a run directory can exist with no
+    ledger at all (a run-start probe raise leaves one), and that is *no
+    executions*, not a fault.
+
+    **The first reader of this file anywhere in `src/`** (H9b § Corrections
+    against the code, correction 21, re-measured by task 6 before this
+    function was written: `grep -rn "executions.jsonl" src/publishable/*.py`
+    printed EIGHT lines and no reader — `apparatus.py:483` and `:485`
+    (prose), `cli.py:2712` (a comment) and `cli.py:4257` (`_DRY_RUN_FIXED_
+    FILES`' entry), and `runner.py` at four, of which one is the writer's
+    path binding, one is task 5's own comment and two are prose. The two
+    ledger-reading functions that do exist — `apparatus.replay_ledger` and
+    `freeze._ledger_probe_names` — read `apparatus/probes.jsonl`, a different
+    file. It lives here, in the
+    module whose own docstring makes it the home of *"the reader over a
+    `run.yaml` this build wrote"*, and for the same reason: `run_record`'s
+    first line refuses the job ("Assembles only — computes nothing"), and
+    `runner` is imported BY `run_record`, so a reader placed there could not
+    be called from `run_record` at all. Two callers, one reader: `attempts`
+    (this file's `attempt_counts`) and `resume`'s reconstitution.
+
+    Read with plain `json.loads`, deliberately: `execute_plan` writes these
+    lines with `json.dumps`' shipped `allow_nan=True`, so a non-finite value a
+    step returned round-trips exactly through the same module (H9b design
+    appendix A1). A strict reader would refuse a completed execution over a
+    value `run.yaml` accepts.
+
+    A line that is not a JSON object, or that lacks one of the five keys every
+    line has carried since this file existed, is
+    `E-RESUME-LEDGER-UNREADABLE` — the fault is a hand-edited or truncated
+    ledger, and the alternative is a resumed run silently treating a mangled
+    line as *this triple never ran*. `returned` and `recorded_columns` are
+    **not** in that required set: they are H9b's own additions, so a ledger
+    written by an earlier build parses here and is refused, if at all, by the
+    reader that needs the missing key.
+    """
+    path = run_dir / "executions.jsonl"
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError as exc:
+            raise ContractError(
+                f"{path}: line {number} is not valid JSON ({exc})",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            ) from exc
+        if not isinstance(entry, dict):
+            raise ContractError(
+                f"{path}: line {number} parsed to {type(entry).__name__}, not an object",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            )
+        missing = [key for key in _LEDGER_LINE_KEYS if key not in entry]
+        if missing:
+            raise ContractError(
+                f"{path}: line {number} is missing {', '.join(missing)}",
+                code="E-RESUME-LEDGER-UNREADABLE",
+            )
+        records.append(entry)
+    return records
+
+
+def ledger_key(entry: dict[str, Any]) -> LedgerKey:
+    """One ledger line's triple. The one place a line is turned into a key, so
+    a counter and a reconstitution cannot key the same file two ways."""
+    return (entry["step"], entry["condition"], entry["repeat"])
+
+
+def attempt_counts(records: list[dict[str, Any]]) -> dict[LedgerKey, int]:
+    """How many records each triple holds — `reference.md` § Resuming's own
+    definition of `attempts`, computed from the log rather than stored in it.
+
+    Every record counts, whatever its `status`: an attempt that failed is an
+    attempt, and a triple that ran twice is the case this figure exists to
+    report. Derived rather than written per line because a count stored in an
+    append-only log would be a second source of truth for something the log
+    already answers.
+    """
+    counts: dict[LedgerKey, int] = {}
+    for entry in records:
+        key = ledger_key(entry)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+@dataclasses.dataclass(frozen=True)
+class RecordedPlan:
+    """`sweep.yaml`'s two plan facts, as `resume` needs them (H9b Decision 9).
+
+    Frozen, and holding tuples rather than lists, for `Resumed`'s own reason:
+    everything here was read off the previous attempt's artifact, and a caller
+    that could append to it would be publishing an order that run never
+    recorded.
+
+    - `conditions` — the recorded `conditions` list, entry for entry, in
+      **recorded order**, each entry exactly as the file holds it, whatever
+      its type. Not narrowed to the four checked fields, and not coerced
+      either: the cross-check below is what names the fields *and* what
+      refuses a non-mapping entry, and a reader that dropped the rest — or
+      substituted an empty mapping for an entry it did not like — would make
+      a future check over a fifth field invisible and hide a hand-edited
+      file behind a field-level message.
+    - `order` — the recorded `order` scalar (`as_declared` | `randomized`),
+      which is the **mode the first attempt actually ran under**.
+    - `execution_order` — the realized `(condition index, repeat label)`
+      sequence, in file order.
+    """
+
+    conditions: tuple[Any, ...]
+    order: str
+    execution_order: tuple[tuple[int, str], ...]
+
+
+def read_sweep_plan(run_dir: Path) -> RecordedPlan:
+    """`<run_dir>/sweep.yaml`'s recorded plan — the file `resume` reads
+    **rather than re-deriving** (H9b Decision 9, `reference.md` § Resuming:
+    "It takes the execution order from `sweep.yaml` rather than re-deriving
+    it").
+
+    **`freeze`'s reader was measured first and does not fit**, which is why
+    this exists rather than a call into it. `grep -rn 'sweep.yaml'
+    src/publishable/*.py` finds the only other reading site inside
+    `freeze.command_freeze` itself (`freeze.py`, its step (g)): it is inline
+    in a 300-line command, it reports through `_refuse`/`Collector` and
+    **returns an exit code** rather than raising, its codes are
+    `E-FREEZE-PLAN-MISSING`/`-MISMATCH`, and it reads `conditions` **only** —
+    it never touches `order` or `execution_order`, which are the two fields
+    `resume` needs most. Reusing it would mean either printing a `FREEZE` code
+    from `resume` (the same lie about which command found the fault that
+    Decision 11 refuses for `E-FREEZE-LEDGER-UNREADABLE`) or threading a code
+    and a raise-versus-return switch through a shipped command's body. The
+    *shape* is copied — the four-tuple, in recorded order — and named as
+    copied at the cross-check below.
+
+    Here rather than in `cli.py` for `read_execution_ledger`'s reason: this
+    module is where a reader over a run directory this build wrote lives.
+
+    **One refusal, `E-RESUME-PLAN-MISSING`, for one remedy.** Absent,
+    unparseable, not a mapping, or holding no `conditions` list — plus the
+    two shape faults a hand-edited file can carry in the fields this reader
+    projects (`order` not a string, an `execution_order` entry that is not a
+    mapping of a condition index and a repeat label). All of them are *this
+    file cannot be read as a plan*, whose remedy is that the run died before
+    its plan was written or the directory was edited. `E-RESUME-PLAN-MISMATCH`
+    is deliberately **not** used for any of them: that code means the recorded
+    plan and the re-expanded config describe different conditions, whose
+    remedy is the config, and merging the two would give one code two
+    remedies.
+    """
+    path = run_dir / "sweep.yaml"
+    if not path.is_file():
+        raise ContractError(
+            f"{path} is absent — the run died before its plan was written, or the "
+            "directory was edited",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    try:
+        recorded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ContractError(
+            f"{path} does not parse: {exc}",
+            code="E-RESUME-PLAN-MISSING",
+        ) from exc
+    if not isinstance(recorded, dict) or not isinstance(recorded.get("conditions"), list):
+        raise ContractError(
+            f"{path} holds no `conditions` list — the run died before its plan was "
+            "written, or the directory was edited",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    order = recorded.get("order")
+    if not isinstance(order, str):
+        raise ContractError(
+            f"{path}'s `order` is {type(order).__name__}, not the recorded mode string",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    pairs: list[tuple[int, str]] = []
+    for position, entry in enumerate(recorded.get("execution_order") or [], start=1):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("condition"), int)
+            or not isinstance(entry.get("repeat"), str)
+        ):
+            raise ContractError(
+                f"{path}'s execution_order entry {position} is not a recorded "
+                "(condition, repeat) pair",
+                code="E-RESUME-PLAN-MISSING",
+            )
+        pairs.append((entry["condition"], entry["repeat"]))
+    return RecordedPlan(
+        conditions=tuple(recorded["conditions"]),
+        order=order,
+        execution_order=tuple(pairs),
+    )
+
+
+def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]") -> None:
+    """Cross-check the recorded conditions against the re-expanded ones over
+    the **full four-tuple** `index`/`label`/`values`/`is_baseline`, in
+    recorded order — `E-RESUME-PLAN-MISMATCH` on any disagreement (H9b
+    Decision 9).
+
+    **The four-tuple is `freeze`'s measured shape, not a choice.** `values` is
+    what determines the cfg an execution runs under, and under `ablate` or a
+    declared `baseline` a label can hold still while `values` moves — so a
+    two-field check would let a resume execute the remainder of a plan under
+    different parameters than the completed part ran under, with every
+    recorded label agreeing. `is_baseline` decides which condition every
+    `vs_baseline` contrast is computed against, which the reconstituted
+    results are then compared through.
+
+    Length first, so the per-entry message can name a condition that exists
+    on both sides. Compared in **recorded order** rather than by index lookup:
+    the order is itself a fact of the recorded plan, and matching on `index`
+    would silently accept a file whose conditions were reordered.
+
+    `conditions` is duck-typed (`Sequence[Any]`) rather than annotated
+    `list[Condition]`: `sweep.Condition` lives in a module this one does not
+    import, and the four attributes read here are the whole contract.
+    """
+    if len(recorded.conditions) != len(conditions):
+        raise ContractError(
+            f"sweep.yaml records {len(recorded.conditions)} condition(s), but the "
+            f"config re-expands to {len(conditions)} — the run directory or the "
+            "config was edited; the run cannot be continued",
+            code="E-RESUME-PLAN-MISMATCH",
+        )
+    for condition, entry in zip(conditions, recorded.conditions, strict=True):
+        # Shape, not just fields, and `freeze`'s own precedent for the code: a
+        # non-mapping entry is `E-FREEZE-PLAN-MISMATCH` there, so it is
+        # `E-RESUME-PLAN-MISMATCH` here. Without this the reader either
+        # substitutes an empty mapping — reporting a field-level
+        # disagreement for a file that holds no fields at all — or `.get`
+        # raises `AttributeError` out of `main`. The `values` arm is the same
+        # fault one level down and was MEASURED: a recorded
+        # `values: [1, 2]` reached `dict(...)` and raised a bare `TypeError`,
+        # and `values: "abc"` a bare `ValueError`, both un-coded and both out
+        # of `main` — the identical *presence checked, shape not* Major this
+        # slice's batch 4 review found in `apparatus.replay_ledger`.
+        if not isinstance(entry, Mapping):
+            raise ContractError(
+                f"condition {condition.index}'s recorded entry is a "
+                f"{type(entry).__name__}, not a mapping — the run directory or the "
+                "config was edited; the run cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
+        recorded_values = entry.get("values")
+        if recorded_values is not None and not isinstance(recorded_values, Mapping):
+            raise ContractError(
+                f"condition {condition.index}'s recorded `values` is a "
+                f"{type(recorded_values).__name__}, not a mapping — the run directory "
+                "or the config was edited; the run cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
+        mismatch: str | None = None
+        if entry.get("index") != condition.index:
+            mismatch = "index"
+        elif entry.get("label") != condition.label:
+            mismatch = "label"
+        elif dict(entry.get("values") or {}) != dict(condition.values):
+            mismatch = "values"
+        elif bool(entry.get("is_baseline")) != condition.is_baseline:
+            mismatch = "is_baseline"
+        if mismatch is not None:
+            raise ContractError(
+                f"condition {condition.index}'s `{mismatch}` disagrees with sweep.yaml's "
+                "recorded plan — the run directory or the config was edited; the run "
+                "cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
+
+
+def check_recorded_order(recorded: RecordedPlan, plan: "Sequence[Any]") -> None:
+    """Cross-check the recorded `execution_order` against the plan it will be
+    applied to — `E-RESUME-PLAN-MISMATCH` when they disagree.
+
+    **This exists because `E-RUN-ORDER-MISMATCH` became reachable from a
+    FILE.** `_apply_execution_order` raises that code when a repeat-scope
+    execution has no home among the order's pairs, and its own docstring calls
+    the state unreachable — correctly, for `run` and `draft`, where the pairs
+    and the plan are built from the same `conditions`/`repeats` in one
+    function. On a resume the order is READ from `sweep.yaml` (Decision 9), so
+    a hand-edited file reaches it: the raise then happens INSIDE
+    `_execute_prepared`, after the lock is taken, and escapes to `main`'s
+    un-redacted printer under a code documented as *core's resolved state
+    disagreeing with itself*, which is not what a reader of an edited file
+    should be told.
+
+    So the same disagreement is decided here instead — before the lock, before
+    the takeover, and under the code `resume` already has for *the recorded
+    plan and this config disagree*. No code is minted, and the § Errors row
+    for `E-RESUME-PLAN-MISMATCH` covers this site beside the four-tuple one.
+
+    Set equality over the pairs, not containment: a pair the plan does not
+    hold means the record describes a different plan just as surely as a
+    missing one does, and a duplicate entry would silently execute a pair
+    twice, which is why the count is checked too. `plan` is duck-typed for
+    `check_recorded_conditions`' reason — `sweep.Execution` lives in a module
+    this one does not import.
+    """
+    planned = {(e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"}
+    recorded_pairs = list(recorded.execution_order)
+    if len(set(recorded_pairs)) != len(recorded_pairs) or set(recorded_pairs) != planned:
+        raise ContractError(
+            f"sweep.yaml records an execution_order of {len(recorded_pairs)} "
+            f"(condition, repeat) pair(s) which does not match the "
+            f"{len(planned)} pair(s) this config plans — the run directory or the "
+            "config was edited; the run cannot be continued",
+            code="E-RESUME-PLAN-MISMATCH",
+        )
+
+
+def read_allocation(run_dir: Path) -> dict[str, Any] | None:
+    """`<run_dir>/allocation.json`'s recorded partitions — the file `resume`
+    reads **rather than re-drawing** (H9b Decision 10, `reference.md`
+    § Allocation and § Resuming). `None` when the file is absent, which is the
+    ordinary case: § The other files a run writes makes it "present when
+    either is declared", so a design with no arm axis and no holdout writes
+    none and there is nothing to read.
+
+    **This is the reader those two sections say does not exist.**
+    `build_allocation_document`'s own docstring states the contract this
+    honours — read the existing file rather than calling that function a
+    second time — because a drawn axis has no column to re-read, and
+    `assign.<axis>.seed` makes a second draw *likely* to agree where the
+    record of which unit was in which arm needs better than likely.
+
+    One refusal, `E-RESUME-ALLOCATION-STALE`, shared with the application
+    below for one remedy: this file cannot be applied to what this tree
+    resolves, so the run cannot be continued. A file that will not parse is
+    that fault, not a missing one — an absent file says *nothing was
+    partitioned*, an unparseable one says *the record is unusable*, and
+    conflating them would let a mangled allocation resume as an undeclared
+    one and re-draw the whole thing.
+    """
+    path = run_dir / "allocation.json"
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ContractError(
+            f"{path} will not parse ({type(exc).__name__}: {exc}), so which unit was "
+            "in which arm cannot be read back",
+            code="E-RESUME-ALLOCATION-STALE",
+        ) from exc
+    if not isinstance(document, dict):
+        raise ContractError(
+            f"{path} holds {type(document).__name__}, not an allocation document",
+            code="E-RESUME-ALLOCATION-STALE",
+        )
+    return document

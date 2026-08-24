@@ -62,20 +62,45 @@ def run_status(
     return "failed"
 
 
-def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
+def _execution_block(
+    results: list[ExecutionResult],
+    attempts: dict[tuple[str, int | None, str | None], int] | None = None,
+) -> dict[str, Any]:
+    """`attempts`, when given, is how many records each triple holds in
+    `executions.jsonl` — `reference.md` § Resuming's own definition of the
+    figure, counted by `lineage.attempt_counts` and handed in rather than
+    recomputed here (this module assembles; it computes nothing).
+
+    `None` — every caller but `resume` — writes `1`, byte-identically to what
+    this function wrote before the mapping existed. For a plain `run` the two
+    are the same answer and that is measured rather than argued: every triple
+    has exactly one record.
+
+    A triple the mapping does not hold falls back to `1` rather than raising.
+    The state is unreachable through `resume` (a result is either reconstituted
+    FROM a record or produced by an execution that wrote one), and the failure
+    mode of the alternative is the one this repository has already paid for: a
+    raise sited after the plan ran loses every execution's record to an
+    exception, which is a far worse answer than reporting the count a
+    single-attempt run would have.
+    """
     shared: dict[str, Any] = {}
     summary: dict[str, Any] = {}
     conditions: dict[int, dict[str, Any]] = {}
     for r in results:
+        e = r.execution
         entry = {
             "status": r.status,
             "started_at": r.started_at,
             "wall_seconds": r.wall_seconds,
-            "attempts": 1,
+            "attempts": (
+                1
+                if attempts is None
+                else attempts.get((e.step_name, e.condition_index, e.repeat_label), 1)
+            ),
         }
         if r.error:
             entry["error"] = r.error
-        e = r.execution
         if e.scope == "run":
             shared[e.step_name] = entry
         elif e.scope == "summary":
@@ -270,7 +295,13 @@ def assemble_run_yaml(
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
     contrasts: list[dict[str, Any]] | None = None,
     hypotheses: list[dict[str, Any]] | None = None,
+    attempts: dict[tuple[str, int | None, str | None], int] | None = None,
 ) -> dict[str, Any]:
+    # `attempts` is `_execution_block`'s own parameter, threaded and not read
+    # here: `resume` hands the per-triple record counts it read off
+    # `executions.jsonl`, and every other caller omits it and gets the `1`
+    # this record has always carried. See `_execution_block`.
+    #
     # There is no `counts` parameter here: `summarize_step` already embeds the
     # per-unit counts as `n` inside each metric under `aggregated`, and the
     # condition entry's documented shape (`reference.md`'s worked example) has no
@@ -286,7 +317,7 @@ def assemble_run_yaml(
         "code_hash": code_hash,
         "provenance": provenance,
         "layout": _layout_block(results, repeats),
-        "execution": _execution_block(results),
+        "execution": _execution_block(results, attempts),
         "results": _results_block(
             results, aggregated, condition_meta, vs_baseline, contrasts, hypotheses
         ),

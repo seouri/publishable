@@ -542,7 +542,7 @@ def append_observation(
         fh.write(json.dumps(line) + "\n")
 
 
-def replay_ledger(run_dir: Path) -> Observations:
+def replay_ledger(run_dir: Path, *, code: str = "E-FREEZE-LEDGER-UNREADABLE") -> Observations:
     """Reconstruct a run's own baseline `Observations` from
     `<run_dir>/apparatus/probes.jsonl`, replayed through the SHIPPED
     `Observations.record` — never reimplemented, and no keyword added to it.
@@ -569,9 +569,16 @@ def replay_ledger(run_dir: Path) -> Observations:
     `value → null` transitions, and `_unchanged`'s `nan` reflexivity
     carve-out all come along unchanged — none of them is re-derived here.
 
-    **The one refusal.** A line that is not valid JSON, not a JSON object,
-    or missing `phase`, `condition` or `facts` is
-    `E-FREEZE-LEDGER-UNREADABLE`. An ABSENT ledger file is deliberately NOT
+    **The one refusal, under the CALLER's code.** A line that is not valid
+    JSON, not a JSON object, or missing `phase`, `condition` or `facts` is
+    `code`, which defaults to `freeze`'s own `E-FREEZE-LEDGER-UNREADABLE` so
+    that `freeze` — this function's first caller — is byte-identical
+    (H9b plan § Corrections, correction 18). `resume`, the second caller,
+    passes `E-RESUME-PROBES-UNREADABLE`: a `FREEZE` code printed by a command
+    that is not `freeze` is a lie about which command found the fault, and
+    § Exit codes' own rule is that the identifier is the contract — which is
+    also why the shipped code is not RENAMED, since a rename breaks a grep a
+    user may already have. An ABSENT ledger file is deliberately NOT
     this refusal — it returns an empty `Observations`, because "there is no
     baseline" is `freeze`'s own `E-FREEZE-LEDGER-MISSING` to report, and
     that one code has to cover both "no file at all" and "a file with no
@@ -579,6 +586,14 @@ def replay_ledger(run_dir: Path) -> Observations:
     share the one remedy: the run has not probed yet, and probing now would
     pin a fact the run never adopted. Do not mint a second code for the
     second case.
+
+    **And `freeze`'s missing-baseline refusal must not be inherited by
+    copy.** For `resume` an absent or empty baseline is the ordinary case,
+    not a fault: a run that crashed before its first probe is entitled to set
+    one, exactly as the original run's first probe would have. So `resume`
+    mints no missing-baseline refusal at all, and the empty `Observations`
+    this returns is exactly what an `Observer` would have built for itself
+    (H9b Decision 11).
     """
     path = run_dir / "apparatus" / "probes.jsonl"
     observations = Observations()
@@ -590,18 +605,18 @@ def replay_ledger(run_dir: Path) -> Observations:
         except json.JSONDecodeError as exc:
             raise ContractError(
                 f"apparatus/probes.jsonl line {line_no} is not valid JSON: {exc}",
-                code="E-FREEZE-LEDGER-UNREADABLE",
+                code=code,
             ) from exc
         if not isinstance(doc, Mapping):
             raise ContractError(
                 f"apparatus/probes.jsonl line {line_no} is not a JSON object",
-                code="E-FREEZE-LEDGER-UNREADABLE",
+                code=code,
             )
         missing = [key for key in ("phase", "condition", "facts") if key not in doc]
         if missing:
             raise ContractError(
                 f"apparatus/probes.jsonl line {line_no} is missing {', '.join(missing)}",
-                code="E-FREEZE-LEDGER-UNREADABLE",
+                code=code,
             )
         # Shape, not just presence (batch 4 review, Major 2 — carried from
         # batch 2's review and reported closed there when it was not: at
@@ -619,13 +634,13 @@ def replay_ledger(run_dir: Path) -> Observations:
             raise ContractError(
                 f"apparatus/probes.jsonl line {line_no}'s `facts` is a "
                 f"{type(doc['facts']).__name__}, not a JSON object",
-                code="E-FREEZE-LEDGER-UNREADABLE",
+                code=code,
             )
         if not isinstance(doc["condition"], str):
             raise ContractError(
                 f"apparatus/probes.jsonl line {line_no}'s `condition` is a "
                 f"{type(doc['condition']).__name__}, not a string",
-                code="E-FREEZE-LEDGER-UNREADABLE",
+                code=code,
             )
         if doc["phase"] not in (PHASE_RUN_START, PHASE_PRE_EXECUTION):
             continue
@@ -732,9 +747,14 @@ class Observer:
         # H8b task 6: `freeze` is the first caller that must NOT start from
         # an empty accumulator — it needs the run's own baseline
         # (`replay_ledger`'s result) so an incoming fact is compared against
-        # what the RUN first answered, never against itself. Every shipped
-        # caller (`command_run`'s run-start and per-execution rounds) omits
-        # this and gets a fresh `Observations`, exactly as before — this
+        # what the RUN first answered, never against itself. H9b task 13 is
+        # the second such caller: a `resume` passes the previous attempt's
+        # replayed baseline, so `cli.py`'s one `Observer(...)` call site now
+        # passes this keyword EXPLICITLY — `None` for `run` and `draft`,
+        # which is this default and the same fresh `Observations` as before,
+        # and the replay for a resume. (This comment used to say every
+        # shipped caller *omits* the keyword; that stopped being true at H9b
+        # task 13, and the behaviour it described did not change.) The
         # keyword adds one parameter and one `or Observations()`, on
         # `execute_plan`'s own defaulted-keyword precedent
         # (`observer=`/`stop=`), rather than assigning

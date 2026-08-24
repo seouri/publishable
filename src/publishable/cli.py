@@ -47,7 +47,16 @@ from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash_of, design_digest, hashed_files, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
-from publishable.lineage import UpstreamLedger, UpstreamResolver
+from publishable.lineage import (
+    UpstreamLedger,
+    UpstreamResolver,
+    attempt_counts,
+    check_recorded_conditions,
+    check_recorded_order,
+    read_allocation,
+    read_execution_ledger,
+    read_sweep_plan,
+)
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
 from publishable.plugins import versions_for
@@ -66,7 +75,17 @@ from publishable.replication import (
     realize_order,
     resolve_repeats,
 )
-from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+from publishable.run_identity import (
+    IDENTITY_FILE,
+    RunLock,
+    allocate_run_dir,
+    config_path_for,
+    identity_document,
+    point_latest,
+    read_identity,
+    read_repo_root,
+    take_over_dead_lock,
+)
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
     StopSignal,
@@ -148,7 +167,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "freeze", "report"}
+OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "resume", "freeze", "report"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -163,7 +182,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "docs": "Operation commands",
     "list-templates": "Operation commands",
     "reproduce": "Reproducing on another device",
-    "resume": "Resuming",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
@@ -2092,6 +2110,361 @@ class Prepared:
     upstream_resolver: UpstreamResolver
 
 
+@dataclasses.dataclass(frozen=True)
+class Resumed:
+    """What a SECOND entry into phases 6-10 pins, beside `Prepared` (H9b
+    Decision 14). `None` at `_execute_prepared` means `run` or `draft`, and
+    every line there behaves as it does today.
+
+    **Frozen for the reason `Prepared` is**, and it is the same reason stated
+    once more rather than a convention followed: phases 6-10 must not write
+    back into what the second entry decided, because everything here was read
+    off the previous attempt's own artifacts and a phase that mutated one
+    would be publishing a figure the previous run never recorded.
+    `prior_results` is a TUPLE rather than a list for the same reason at one
+    level down — a frozen dataclass holding a list still hands out a list
+    anything can `append` to, and the aggregate phase iterates it.
+
+    - `run_dir` — the existing run directory. Phase 6 uses it instead of
+      calling `allocate_run_dir`, which is why no second run directory is
+      created and why `E-RUN-ID-EXHAUSTED` is unreachable from `resume`.
+    - `prior_results` — one `ExecutionResult` per triple with a `completed`
+      record, reconstituted from the artifacts (Decision 4). The aggregate
+      phase reads `rows`, `recorded`, `skipped` and `returned` off these and
+      no file at all, so a `resume` that skipped a triple without
+      reconstituting it would publish every interval over the re-executed
+      triples only.
+    - `attempts` — per-triple record counts off `executions.jsonl`
+      (`lineage.attempt_counts`), straight into `assemble_run_yaml`.
+    - `baseline` — the apparatus observations replayed from
+      `apparatus/probes.jsonl`, so a fact that moved during the crash is
+      gated against the ORIGINAL run's first-answered value rather than
+      against this attempt's first probe. **EMPTY, not `None`, for a run
+      that never probed** — `replay_ledger` returns an empty `Observations`
+      for an absent ledger, which is exactly what an `Observer` builds for
+      itself, so an absent baseline mints no refusal (Decision 11) and this
+      path needs no branch for it. `None` stays legal at the type level for
+      a caller with no ledger to offer, and is what every `Observer` outside
+      a resume gets.
+    - `recorded_manifest` — the manifest the first attempt wrote, so phase
+      8's `verify_manifest` asks whether the inputs moved during THIS
+      attempt and `run.yaml`'s `input_manifest_hash` stays the original
+      figure (Decision 8).
+    - `execution_order` — `sweep.yaml`'s RECORDED `(condition, repeat)`
+      sequence, applied to the rebuilt plan instead of re-realizing the
+      shuffle (Decision 9), and `None` when the recorded `order` is
+      `as_declared`. `None` is the record's own answer rather than a missing
+      one: `_apply_execution_order` regroups repeat executions pair-major
+      where `build_plan` lays them out step-major, so applying it to a run
+      that declared no shuffle would execute in an order the first attempt
+      did NOT run in. Which of the two it is comes from the recorded `order`
+      scalar rather than from the re-read config, because the file is what
+      the first attempt actually did.
+    """
+
+    run_dir: Path
+    prior_results: tuple["ExecutionResult", ...]
+    attempts: dict[tuple[str, int | None, str | None], int]
+    baseline: "apparatus.Observations | None"
+    recorded_manifest: dict[str, Any]
+    execution_order: tuple[tuple[int, str], ...] | None
+
+
+def _reconstitute(
+    plan: list[Execution],
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    collapse: bool,
+) -> tuple["ExecutionResult", ...]:
+    """One FULL `ExecutionResult` per plan triple that already has a
+    `completed` record, in plan order (H9b Decision 4).
+
+    **Why a full result and not a skip.** The aggregate phase reads
+    `ExecutionResult.rows`, `.recorded`, `.skipped` and `.returned` off the
+    in-memory list and **no file at all** — `recording_steps` is
+    `{r.execution.step_name for r in results if … and r.rows}`,
+    `collapse_repeats`/`repeats_disagreeing` walk `r.rows`/`r.recorded`
+    through `_gather_repeats`, `attrition` walks `r.recorded`/`r.skipped`, and
+    `per_repeat` is built from `r.returned`. So a `resume` that merely skipped
+    a completed triple would publish every interval, every `n`, every delta
+    and every hypothesis verdict **over the re-executed triples only** —
+    plausible numbers, no diagnostic, `status: completed`. That is why this
+    function exists and why guard-pin arm A is a whole-record equality rather
+    than a set of per-key assertions.
+
+    Sited in `cli` rather than in a module of its own: `reference.md`
+    § Package layout has no `resume.py` (its "resume resolution" line names
+    `run_identity.py`, which owns the run-ID and lock surface and reads no
+    step artifact), and this function's only caller is `command_resume` two
+    definitions below. A new module would be a § Package layout change
+    carried by a code task rather than by the documents task.
+
+    **The narrowing is by `recorded_columns`, never by subtracting declared
+    attribute names.** `finalize` writes `unit`, then every declared
+    attribute, then every recorded key — so the file holds columns this
+    execution did not record, and they must not reach the unit table `stats`
+    reads. Subtracting attributes by name would be a name standing in for a
+    structural fact, and `finalize`'s own merge puts a RECORDED value under
+    the shared column when the two names collide.
+
+    **Row key order is the FILE's, not `recorded_columns`'.** That list is
+    sorted; `io.rows()` preserves `{"unit": key, **values}` insertion order,
+    and `units.parquet`'s columns preserve it too (`_finalize_columns` is
+    first-seen order). `_gather_repeats` builds its column order from row
+    iteration order and `summarize_step` derives a metric's column order from
+    that, so narrowing by iterating the sorted list would move `run.yaml`'s
+    column order with every value correct — the exact failure arm A names.
+    Filtering the row's own items keeps the order the run had.
+
+    Four refusals, each a distinguishable fault with its own remedy:
+
+    - a completed line with no `returned`/`recorded_columns` key —
+      `E-RESUME-LEDGER-UNREADABLE`: a ledger written by a build older than
+      these two keys cannot be resumed, because the alternative is a
+      `per_repeat` hole and a unit table narrowed to `unit` alone, which is
+      the silent-wrong-numbers shape this whole decision is about;
+    - a non-empty `recorded_columns` and no `units.parquet` —
+      `E-RESUME-ROWS-MISSING`;
+    - a `units.parquet` that will not decode, or whose columns do not cover
+      that line's `recorded_columns` — `E-RESUME-ROWS-UNREADABLE`;
+    - and an EMPTY `recorded_columns` with no `units.parquet` is **not** a
+      refusal at all: `finalize` writes the table only `if self._rows`, so a
+      scalar-only step legitimately writes none.
+    """
+    from publishable.artifacts import READERS
+    from publishable.lineage import ledger_key
+    from publishable.runner import ExecutionResult, step_dir_for
+
+    completed: dict[tuple[str, int | None, str | None], dict[str, Any]] = {}
+    for entry in records:
+        if entry.get("status") == "completed":
+            # Last completed record wins, which is the same answer as "the
+            # only one": once a triple completes, `resume` filters it out of
+            # every later plan, so a second completed record for one triple
+            # is not reachable through this build.
+            completed[ledger_key(entry)] = entry
+
+    results: list[ExecutionResult] = []
+    for execution in plan:
+        key = (execution.step_name, execution.condition_index, execution.repeat_label)
+        found = completed.get(key)
+        if found is None:
+            continue
+        entry = found
+        for name in ("returned", "recorded_columns"):
+            if name not in entry:
+                raise ContractError(
+                    f"{run_dir / 'executions.jsonl'}: the completed record for "
+                    f"{execution.step_name!r} (condition {execution.condition_index!r}, "
+                    f"repeat {execution.repeat_label!r}) has no {name!r}; a run recorded "
+                    "by a build older than this one cannot be resumed",
+                    code="E-RESUME-LEDGER-UNREADABLE",
+                )
+        # `step_dir_for`, never a second path construction: it already owns
+        # the degenerate-level collapse, and two constructions would be two
+        # answers to which directory a triple wrote into.
+        step_dir = step_dir_for(run_dir, execution, collapse)
+        columns = list(entry["recorded_columns"])
+        table = step_dir / "units.parquet"
+        rows: tuple[dict[str, Any], ...] = ()
+        if table.exists():
+            try:
+                decoded = READERS[".parquet"](table.read_bytes())
+            except Exception as exc:
+                raise ContractError(
+                    f"{table} will not decode ({type(exc).__name__}: {exc})",
+                    code="E-RESUME-ROWS-UNREADABLE",
+                ) from exc
+            present = set(decoded[0]) if decoded else set()
+            uncovered = [name for name in columns if name not in present]
+            if uncovered:
+                raise ContractError(
+                    f"{table} holds no column {', '.join(uncovered)}, which its "
+                    "`executions.jsonl` record names as recorded",
+                    code="E-RESUME-ROWS-UNREADABLE",
+                )
+            keep = {"unit", *columns}
+            rows = tuple({k: v for k, v in row.items() if k in keep} for row in decoded)
+        elif columns:
+            raise ContractError(
+                f"{table} is absent, and this execution's record names "
+                f"{', '.join(columns)} as recorded",
+                code="E-RESUME-ROWS-MISSING",
+            )
+        skipped: set[str] = set()
+        ineligible = step_dir / "ineligible.jsonl"
+        if ineligible.exists():
+            # Through the same reader `io.write` dispatches to, so a line this
+            # build wrote is read back by the code that wrote it.
+            for line in READERS[".jsonl"](ineligible.read_bytes()):
+                skipped.add(line["unit"])
+        results.append(
+            ExecutionResult(
+                execution=execution,
+                status=entry["status"],
+                started_at=entry["started_at"],
+                wall_seconds=entry["wall_seconds"],
+                returned=entry["returned"],
+                error=entry.get("error"),
+                recorded=frozenset(row["unit"] for row in rows),
+                skipped=frozenset(skipped),
+                rows=rows,
+            )
+        )
+    # A tuple, matching `Resumed.prior_results`: a list here would type-check
+    # nowhere and behave identically at runtime, so `mypy` is the enforcer and
+    # this assertion is the one thing a test can see.
+    return tuple(results)
+
+
+def _stale(detail: str) -> "ContractError":
+    """One refusal, `E-RESUME-ALLOCATION-STALE`, for one remedy: the recorded
+    allocation cannot be applied to what this tree resolves, so the run cannot
+    be continued and a new one must be started. Every arm of the application
+    below raises through here so the code and the remedy cannot drift
+    apart."""
+    return ContractError(
+        f"allocation.json {detail}; the recorded allocation cannot be applied to this "
+        "roster, so the run cannot be continued — start a new run",
+        code="E-RESUME-ALLOCATION-STALE",
+    )
+
+
+def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prepared":
+    """`allocation.json` **read rather than re-drawn** (H9b Decision 10): the
+    arm memberships and the holdout partition `_prepare_run` just resolved are
+    replaced by the ones the first attempt recorded, through
+    `dataclasses.replace` on the frozen `Prepared`.
+
+    **Ruling S is honoured by overriding results, never by moving calls.**
+    `_resolved_group_axes`, `units.arm_members` and `_resolved_holdout` stay
+    exactly where they are, in their current order inside `_prepare_run`;
+    H3c-3's remaining 14 owns the hoist, because folds and holdouts *inside
+    cells* need the axes realized before the cell decomposition. What happens
+    here is one step later and on the other side of the seam: the plans are
+    rebuilt from the record and `arm_members` is called **again**, on the
+    overridden axes, so that the per-condition mapping is a reduction of the
+    membership the run actually used rather than of a second draw. Calling it
+    again is what keeps `units.arm_members` the single authority for that
+    reduction — re-deriving the mapping here by hand would make this function
+    a second producer of arm membership, which is the fault its own docstring
+    exists to prevent a third instance of.
+
+    **Seed and strata come from the record too, not from the recomputed
+    plans**, and that is what makes `provenance.allocation_hash` cover the
+    file on disk: `_execute_prepared` computes it as
+    `allocation_hash(build_allocation_document(group_axes, holdout_plan))`,
+    and a resume never rewrites `allocation.json`, so anything here that
+    differed from the record would publish a hash of a document no file
+    holds. A pin asserts the round trip — the rebuilt document equals the
+    recorded one — rather than trusting this paragraph.
+
+    **What is checked, and every arm is `E-RESUME-ALLOCATION-STALE`.** The
+    axis set, each axis's level set, and the holdout's presence must agree
+    with what this tree resolved; and each recorded membership must be
+    exactly the roster's keys, in both directions. Set equality rather than
+    subset tolerance, `units.arms_of`'s own rule for the same reason
+    (§ Allocation: "each unit belongs to exactly one arm"): a roster that
+    *lost* a unit leaves the record naming a unit that no longer exists, and
+    a roster that *gained* one leaves that unit in no arm at all — with no
+    fourth part of `n` for it, and nothing in the record marking it.
+    **Bounded by the methods that are realized**: union-equals-roster holds
+    for `by_attribute` (`arms_of`'s set-equality rule) and for `random` (the
+    shipped draw partitions the whole roster), which are the two
+    `HOLDOUT_METHODS_REALIZED`-style pair this build has. A future method
+    that partitioned only part of a roster would make this guard refuse a
+    legitimate resume, and the fix would then be here rather than in the
+    method.
+
+    **Fold partitions are deliberately not touched here.** They are recorded
+    in `sweep.yaml`'s own `partitions` block rather than in this file, and
+    `partition_units` is a pure function of the roster and the design digest
+    — so correct and buggy readings coincide for every fixture this slice can
+    build, and a fold override would be an untested derivation. Named as
+    resolved narrowly rather than left silent.
+    """
+    from publishable.units import arm_members
+
+    roster_keys = {u.key for u in prepared.roster} if prepared.roster is not None else set()
+    recorded_arms = document.get("arms") or {}
+    recorded_seeds = document.get("seed") or {}
+    recorded_strata = document.get("strata") or {}
+    if not isinstance(recorded_arms, dict):
+        raise _stale("holds an `arms` block that is not a mapping of axis to arm")
+    if set(recorded_arms) != set(prepared.group_axes):
+        raise _stale(
+            f"records the axes {sorted(recorded_arms)} while this config resolves "
+            f"{sorted(prepared.group_axes)}"
+        )
+    axes: dict[str, ArmPlan] = {}
+    for axis, plan in prepared.group_axes.items():
+        members = recorded_arms[axis]
+        if not isinstance(members, dict):
+            raise _stale(f"records axis {axis!r} as {type(members).__name__}, not a mapping")
+        if set(members) != set(plan.members):
+            raise _stale(
+                f"records axis {axis!r} with the levels {sorted(members)} while this "
+                f"config resolves {sorted(plan.members)}"
+            )
+        recorded_keys = {key for keys in members.values() for key in keys}
+        if recorded_keys != roster_keys:
+            raise _stale(
+                f"records axis {axis!r} over {len(recorded_keys)} unit(s) that are not "
+                f"this roster's {len(roster_keys)}: "
+                f"{sorted(recorded_keys ^ roster_keys)[:5]} disagree"
+            )
+        axes[axis] = dataclasses.replace(
+            plan,
+            members={level: tuple(keys) for level, keys in members.items()},
+            seed=recorded_seeds.get(axis),
+            strata=tuple(recorded_strata.get(axis) or ()),
+        )
+
+    recorded_holdout = document.get("holdout")
+    holdout = prepared.holdout_plan
+    if (recorded_holdout is None) != (holdout is None):
+        raise _stale(
+            "records a holdout this config does not declare"
+            if holdout is None
+            else "records no holdout while this config declares one"
+        )
+    if recorded_holdout is not None and holdout is not None:
+        train = tuple(recorded_holdout.get("train") or ())
+        test = tuple(recorded_holdout.get("test") or ())
+        if set(train) | set(test) != roster_keys or len(train) + len(test) != len(roster_keys):
+            raise _stale(
+                f"records a holdout over {len(train)} + {len(test)} unit(s) that are not "
+                f"a partition of this roster's {len(roster_keys)}"
+            )
+        holdout = dataclasses.replace(
+            holdout,
+            train=train,
+            test=test,
+            seed=recorded_holdout.get("seed"),
+            strata=tuple(recorded_holdout.get("strata") or ()),
+        )
+
+    eval_roster = _evaluation_roster(prepared.roster, holdout)
+    # `_prepare_run`'s own invariant, restated on this path because this path
+    # has no counterpart of it: a narrowing that returned `None` for a real
+    # roster would hand `execute_plan` no units at all.
+    assert (eval_roster is None) == (prepared.roster is None)
+    return dataclasses.replace(
+        prepared,
+        group_axes=axes,
+        holdout_plan=holdout,
+        eval_roster=eval_roster,
+        # `None` stays `None`: whether a per-condition mapping exists at all
+        # is `_prepare_run`'s decision (it gates on `selector_paths`), and a
+        # resume overrides what that mapping HOLDS, never whether there is
+        # one.
+        arm_members_map=(
+            None if prepared.arm_members_map is None else arm_members(axes, prepared.conditions)
+        ),
+    )
+
+
 def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     """Phases 1-5 of a run, for every command that is a second entry into them.
 
@@ -2567,24 +2940,58 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     )
 
 
-def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
+def _recorded_config_path(config_path: Path, repo_root: Path) -> str:
+    """`config_path` relative to `repo_root`, POSIX-separated, for
+    `identity.json`.
+
+    Relative and not absolute because a run directory may be read on a
+    machine where the repository sits somewhere else, and POSIX-separated
+    because the recorded name is a name rather than a local path.
+
+    The fallback records the absolute path. It is a fallback and not a
+    promise: `repo_root` is `find_repo_root(config_path)`'s answer, a WALK-UP
+    from the config itself, so a config outside its own repo root is not a
+    state this function can be handed by `_prepare_run`. An absolute recorded
+    path is refused on read (`run_identity.config_path_for`), so a directory
+    that somehow carried one refuses with `E-RESUME-NO-CONFIG` rather than
+    resolving something unrelated.
+    """
+    resolved = config_path.resolve()
+    try:
+        return resolved.relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | None = None) -> int:
     """Phases 6-10 of a run: allocate the run directory, execute, record.
 
     Takes what `_prepare_run` pinned and nothing else, so that `run`, `draft`
     and (H9b) `resume` are three entries into ONE execution path rather than
     three copies of it.
 
-    The thirty-five names are read off `prepared` in one unpack block rather
-    than as attribute accesses scattered through the body, so that the body
-    itself is byte-identical to what `command_run` held -- which is the only
-    mechanical check a reviewer has on a 1495-line move. `c` is the one field
-    not unpacked: no statement below reads it (see `Prepared`), and a local
-    nothing reads is an `F841`.
+    The names are read off `prepared` in one unpack block rather than as
+    attribute accesses scattered through the body, which is what made the
+    original move of this 1,495-line body out of `command_run` mechanically
+    checkable. `c` is the one field not unpacked: no statement below reads it
+    (see `Prepared`), and a local nothing reads is an `F841`.
 
     `draft` is accepted here and reaches `assemble_run_yaml` in task 3, which
     owns the `draft` command, its fixture Q and the mutation that catches the
     wiring. It is threaded now rather than added later so that `command_draft`
     is one call and not a second copy of this function.
+
+    `resumed` is `None` for `run` and `draft`, and every line below behaves as
+    it did before it existed (H9b Decision 14: one execution path, not a
+    third copy of it). It is accepted at THIS signature and deliberately not
+    threaded through the unpack block above (plan § Corrections against the
+    code, correction 19): what reads it is the handful of phase-6 sites, the
+    `execute_plan` call, and the run-start containment that publishes a record
+    for a resume whose apparatus moved — and nothing else. The
+    byte-identical-to-`command_run` claim this paragraph used to make is
+    deleted rather than restated: it stopped being true when the `resumed`
+    branches landed, and a weaker version of it would be a sentence nobody can
+    check.
     """
     config_path = prepared.config_path
     doc = prepared.doc
@@ -2622,25 +3029,69 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
     upstream_ledger = prepared.upstream_ledger
     upstream_resolver = prepared.upstream_resolver
 
-    run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
+    # phase 6: the run directory. `resume` re-enters an EXISTING one, which is
+    # why `E-RUN-ID-EXHAUSTED` is unreachable from it — it allocates nothing.
+    if resumed is not None:
+        run_dir = resumed.run_dir
+        # `manifest` is the RECORDED manifest from here down (Decision 8), so
+        # phase 8's `verify_manifest` asks whether the inputs moved during
+        # THIS attempt rather than comparing now against now, and
+        # `run.yaml`'s `input_manifest_hash` is the first attempt's figure.
+        manifest = resumed.recorded_manifest
+    else:
+        run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))
+    # The lock is taken here for BOTH entries, unchanged. `resume`'s takeover
+    # of a dead holder's `lock` — Ruling W's exclusive token, the liveness
+    # test, and the unlink — is plan task 14's and happens before
+    # `_execute_prepared` is called at all; this acquisition is what task 14's
+    # step 4 ends with, and it stays the only claim in the system.
     with RunLock(run_dir):
-        (run_dir / "manifest").mkdir()
-        (run_dir / "manifest" / "input.json").write_text(json.dumps(manifest, indent=2))
-        (run_dir / "environment").mkdir()
-        # `pyproject.toml` always exists (uv is mandatory) so it is always captured;
-        # `uv.lock` is copied only when one was found.
-        (run_dir / "environment" / "pyproject.toml").write_bytes(
-            (repo_root / "pyproject.toml").read_bytes()
-        )
-        if lock_path is not None:
-            (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
+        # Every run-start artifact below is skipped on a resume: they were
+        # written before the first execution and `docs/reference.md` § The
+        # other files a run writes calls them "settled before the first
+        # execution and never touched again". Rewriting one would replace a
+        # record of what the first attempt did with a record of what this
+        # attempt recomputed — and `identity.json` in particular is what
+        # `resume` just compared itself against.
+        if resumed is None:
+            (run_dir / "manifest").mkdir()
+            (run_dir / "manifest" / "input.json").write_text(json.dumps(manifest, indent=2))
+            (run_dir / "environment").mkdir()
+            # `pyproject.toml` always exists (uv is mandatory) so it is always captured;
+            # `uv.lock` is copied only when one was found.
+            (run_dir / "environment" / "pyproject.toml").write_bytes(
+                (repo_root / "pyproject.toml").read_bytes()
+            )
+            if lock_path is not None:
+                (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
-        # `freeze` (H8b) needs the config as it was and the repo it came from — the
-        # two facts a mid-run command cannot otherwise obtain or compute, since
-        # `run.yaml` embeds the config only once, at the end. A byte copy, never a
-        # re-dump: a re-dump would silently drop every comment `init` wrote.
-        (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
-        (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+            # `freeze` (H8b) needs the config as it was and the repo it came from — the
+            # two facts a mid-run command cannot otherwise obtain or compute, since
+            # `run.yaml` embeds the config only once, at the end. A byte copy, never a
+            # re-dump: a re-dump would silently drop every comment `init` wrote.
+            (run_dir / "config.yaml").write_bytes(config_path.read_bytes())
+            (run_dir / "environment" / "repo_root.txt").write_text(f"{repo_root}\n")
+
+            # `identity.json` — the three identity figures, the config's own path,
+            # and whether this is a draft, made durable BEFORE anything executes,
+            # because `resume` compares against them and a crashed run directory
+            # holds no `run.yaml` to read them from (design Decision 1). Written
+            # here rather than later for the same reason `config.yaml` and
+            # `repo_root.txt` are: inside the lock, before `sweep.yaml`, settled
+            # before the first execution and never touched again. Every figure is
+            # `Prepared`'s own -- a second derivation would be a second answer.
+            (run_dir / IDENTITY_FILE).write_text(
+                json.dumps(
+                    identity_document(
+                        code_hash=ch,
+                        parameters_hash=ph,
+                        uv_lock_hash=lock_hash,
+                        config_path_rel=_recorded_config_path(config_path, repo_root),
+                        draft=draft,
+                    ),
+                    indent=2,
+                )
+            )
 
         # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
         # the first execution: `docs/reference.md` § The other files a run writes
@@ -2664,25 +3115,43 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
         # realized, because `execution_order` records `(condition, repeat)` pairs
         # and the plan must match the record; under `as_declared` there is no
         # record to match and the plan's own layout stands.
-        if mode == "randomized":
+        #
+        # On a RESUME the order comes from `sweep.yaml` and never from a
+        # second realization (Decision 9, task 10): `resumed.execution_order`
+        # is the recorded sequence when the recorded `order` was
+        # `randomized`, and `None` when it was `as_declared` — the same
+        # two-branch decision as above, taken from the record because the
+        # record is what the first attempt actually ran. Re-realizing instead
+        # agrees for an unedited file (`order_seed_for` is a pure function of
+        # the design digest) and disagrees for exactly the case the reader
+        # exists for: a recorded order this seed does not reproduce, which
+        # under a `batch` level would open batch 4 while batch 3 still had
+        # executions outstanding.
+        if resumed is not None:
+            if resumed.execution_order is not None:
+                plan = _apply_execution_order(plan, list(resumed.execution_order))
+        elif mode == "randomized":
             plan = _apply_execution_order(plan, execution_order)
 
-        (run_dir / "sweep.yaml").write_text(
-            yaml.safe_dump(
-                sweep_document(
-                    conditions,
-                    levels,
-                    repeats,
-                    digest,
-                    mode,
-                    execution_order,
-                    order_seed,
-                    partitions=partitions,
-                    sample_seed=sample_seed_for(doc),
-                ),
-                sort_keys=False,
+        # Written by the FIRST attempt only, and read back by the branch above
+        # rather than re-derived (Decision 9).
+        if resumed is None:
+            (run_dir / "sweep.yaml").write_text(
+                yaml.safe_dump(
+                    sweep_document(
+                        conditions,
+                        levels,
+                        repeats,
+                        digest,
+                        mode,
+                        execution_order,
+                        order_seed,
+                        partitions=partitions,
+                        sample_seed=sample_seed_for(doc),
+                    ),
+                    sort_keys=False,
+                )
             )
-        )
 
         # `allocation.json` — settled beside `sweep.yaml`, before the first
         # execution and never touched again, per § The other files a run
@@ -2706,7 +3175,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
         alloc_doc = build_allocation_document(group_axes, holdout_plan)
         alloc_hash: str | None = None
         if alloc_doc is not None:
-            (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+            # The WRITE is the first attempt's; the hash is computed either
+            # way, because `provenance.allocation_hash` is a figure this
+            # attempt's record carries. On a resume the memberships this
+            # document is rebuilt from were themselves READ from the file
+            # (`_resumed_allocation`, Decision 10), so the document rebuilt
+            # here equals the one on disk and the hash covers it — a
+            # re-derivation would agree for a by-attribute axis and be a
+            # second draw for a drawn one.
+            if resumed is None:
+                (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
             alloc_hash = allocation_hash(alloc_doc)
 
         # `apparatus_probe` declared on the resolved template — the ordinary
@@ -2748,8 +3226,26 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
                 cfgs=cfgs,
                 run_dir=run_dir,
                 credentials=credentials,
+                # On a resume, the ORIGINAL run's first-answered facts
+                # (Decision 11), replayed from `apparatus/probes.jsonl` by
+                # `command_resume`. Without this the resumed run's own first
+                # probe would become the baseline — retiring the apparatus
+                # gate for the whole remainder of the run, which is the one
+                # guard that stops a run being measured through two different
+                # apparatus states. `None` for `run` and `draft`, which is
+                # the keyword's shipped default and what `freeze` already
+                # uses one branch over.
+                observations=None if resumed is None else resumed.baseline,
             )
 
+        # Bound BEFORE the `try` below, not inside it: the run-start round can
+        # raise, and the branch that then writes a record (H9b task 16) reads
+        # both. Two assignments, neither of which can fail, moved for that
+        # reason alone — `full_plan` is still `plan` as it stands before the
+        # resumed filter narrows it, which is what `run_status`'s `planned=`
+        # means on both entries.
+        stop = StopSignal()
+        full_plan = plan
         try:
             # The run-start round: one probe call per resolved condition,
             # before the first execution (Decision 2). `sweep.yaml` and
@@ -2763,7 +3259,25 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             # `max_failed_fraction` guard. `run_status` below reads
             # `stop.reason` rather than re-deriving why the plan came up
             # short.
-            stop = StopSignal()
+            # The plan `run_status` is measured against is the WHOLE plan, on
+            # both entries: `full_plan` below is what `planned=` gets, and
+            # `plan` is what actually executes. On a resume the two differ by
+            # exactly the triples that already completed, and the difference
+            # is what `resumed.prior_results` puts back — so the bare
+            # `assert len(results) >= planned` in `run_status` is satisfied
+            # BY CONSTRUCTION rather than relaxed (Decision 6), and its
+            # docstring's claim that a short list with no recorded stop
+            # reason is a core defect stays true of `resume` too.
+            if resumed is not None:
+                already = {
+                    (r.execution.step_name, r.execution.condition_index, r.execution.repeat_label)
+                    for r in resumed.prior_results
+                }
+                plan = [
+                    e
+                    for e in plan
+                    if (e.step_name, e.condition_index, e.repeat_label) not in already
+                ]
             results = execute_plan(  # phase 7
                 plan=plan,
                 run_dir=run_dir,
@@ -2803,45 +3317,115 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             # `APPARATUS_CODES` itself (plan correction 4: that frozenset is
             # `_probe_for`'s dispatch-time filter, and admitting an unpinned
             # member there is the thing this project has already been burned
-            # by). `apparatus.STOP_CODES` is unioned in here too, but at HEAD
-            # no path reaches this `try` carrying either of its members: a
-            # mid-plan raise of either code now `break`s inside `execute_plan`
-            # (task 5/6) rather than escaping, and a run-start raise of
-            # `E-APPARATUS-CHANGED` is what Decision 11 rules out and task 13
-            # pins (one call per condition, no prior observation to disagree
-            # with) — `E-APPARATUS-RAISED` at run-start already reaches this
-            # branch through `APPARATUS_CODES` alone. Verified by running:
-            # narrowing this filter to `APPARATUS_CODES` leaves the full suite
-            # unchanged. Kept anyway as cheap insurance against a later stop
-            # routed back through this `try` — a branch nothing currently
-            # reaches is not the same claim as a branch that cannot ever be
-            # reached, and Decision 14's own fresh `Collector` on the stop
-            # path (task 7) is the mechanism, not this filter.
+            # by). `apparatus.STOP_CODES` is unioned in here too, and **H9b
+            # task 13 made one of its members reachable**: this comment used
+            # to say no path reaches this `try` carrying either, which was
+            # true only while every run-start round started from an EMPTY
+            # baseline. A RESUME starts from the previous attempt's replayed
+            # baseline (H9b Decision 11), so its run-start round HAS a prior
+            # observation to disagree with, and a fact that moved while the
+            # run was down raises `E-APPARATUS-CHANGED` here. Measured, and
+            # pinned by `test_h9b_a_resume_gates_against_the_original_runs_
+            # first_answered_fact`. A mid-plan raise of either code still
+            # `break`s inside `execute_plan` (H7d task 5/6) rather than
+            # escaping, and `E-APPARATUS-RAISED` at run-start reaches this
+            # branch through `APPARATUS_CODES` alone — so the union is now
+            # load-bearing rather than cheap insurance: narrowing this filter
+            # to `APPARATUS_CODES` fails that test (measured again at task 16,
+            # full suite), because the raise escapes this containment — and
+            # since task 16 that also loses the RECORD, not only the
+            # redaction: the branch below writes `run.yaml` for a resume whose
+            # apparatus moved, and it is inside this `except`.
+            # The shipped comment's own "narrowing this filter leaves the
+            # full suite unchanged" was true when it was written and is not
+            # true now.
             if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
-            probe_c = Collector()
-            # A FRESH collector: `c` was already rendered and printed above,
-            # so appending to it would re-print every earlier finding and
-            # inflate the counts line — the roster path's own shape.
-            # `credentials` reused, never recomputed: a second derivation is a
-            # second answer.
-            probe_c.credentials = credentials
-            probe_c.error(exc.code, "experiment_type", str(exc))
-            print(probe_c.render(), file=sys.stderr)
-            # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
-            # apparatus itself unreachable — is the one code in this
-            # containment's filter that earns exit 5. Everything else that
-            # actually reaches this branch is the four Decision 9 contract
-            # refusals from `APPARATUS_CODES` (`E-APPARATUS-FACT-TYPE`,
-            # `-FACT-MISSING`, `-FACT-CREDENTIAL`, `-RETURN`) — NOT
-            # `STOP_CODES`' members, which cannot reach here at all: a
-            # mid-plan stop `break`s inside `execute_plan` instead of
-            # raising, and a run-start `E-APPARATUS-CHANGED` is exactly what
-            # Decision 11 rules out (see the comment above this `try`).
-            # Those four keep `EXIT_WRONG`, unchanged by this slice.
-            if exc.code == "E-APPARATUS-RAISED":
-                return EXIT_EXTERNAL
-            return EXIT_WRONG
+            # **H9b task 16: a resume whose apparatus MOVED while the run was
+            # down publishes what the run already did.** Task 13 made this
+            # state reachable and measured the cost: the raise above returned
+            # an exit code with no `run.yaml`, and — because the fact stays
+            # moved — every later `resume` returned the same, so every
+            # completed execution stayed on disk, paid for and unpublishable.
+            # *Every execution paid for, the record lost* is the most
+            # expensive defect class in this repository's own habits list, and
+            # a stop that discards work already done is worse than the change
+            # it protects against.
+            #
+            # So this does not return: it records the stop on the shared
+            # `StopSignal` — the same three fields `execute_plan`'s own
+            # apparatus gate sets for a MID-PLAN move — and falls through with
+            # NO new results, into the one path that prints the stop, folds
+            # the reconstituted results back in, aggregates them and writes
+            # `run.yaml`. H7d Part B's precedent decides the shape: a changed
+            # fact fails the run **and the ledger keeps the moving observation
+            # so a stop is legible from the artifacts** (`_observe_one`
+            # appends before the gate, which is why the moved value is on disk
+            # even here). The record then names that ledger through
+            # `provenance.apparatus.ledger`, and `provenance.apparatus.facts`
+            # carries the ORIGINAL run's first-answered values, because those
+            # are the facts the results were measured through.
+            #
+            # **The exit code is 4, and it is neither of the two the brief
+            # named.** § Exit codes gives `1` to *"a changed apparatus fact
+            # caught before the first execution ran, which leaves nothing to
+            # mark `failed` at all"* — a qualifying clause that is exactly
+            # false here, since the prior attempt's executions are what there
+            # is to mark. `5` is the class you retry and belongs to an
+            # UNREACHABLE apparatus, not a moved fact. `4` is *"the run
+            # stopped: `status: failed`. There is a record of what happened"*,
+            # and its row already reads **`run`, `draft`, `resume` only**. The
+            # code is not chosen here at all: `run_status` maps
+            # `apparatus_changed` to `failed` and the final mapping maps
+            # `failed` to `EXIT_FAILED`, which is the same answer H7d Part B
+            # gives a mid-plan move that completed at least one execution.
+            #
+            # **The cost, stated rather than hidden**: `run.yaml` ends the
+            # run, so `E-RESUME-RUN-ENDED` refuses every later `resume` of
+            # this directory. That is correct for a MOVED fact and only for
+            # one — the apparatus cannot move back, so no later resume could
+            # ever pass the gate, and the choice is between a published
+            # partial record and none. An UNREACHABLE apparatus is the
+            # opposite case (bring it back and resume again), so it keeps
+            # today's behaviour and is filed in `spec-defects.md` with that
+            # terminality as the reason rather than folded in here.
+            if exc.code == "E-APPARATUS-CHANGED" and resumed is not None and resumed.prior_results:
+                stop.reason = "apparatus_changed"
+                stop.code = exc.code
+                stop.message = str(exc)
+                # Nothing executed this attempt. The stop block below prints
+                # the diagnostic — the same code and message, through the same
+                # fresh credential-bearing `Collector` — so printing here too
+                # would print it twice.
+                results = []
+            else:
+                probe_c = Collector()
+                # A FRESH collector: `c` was already rendered and printed above,
+                # so appending to it would re-print every earlier finding and
+                # inflate the counts line — the roster path's own shape.
+                # `credentials` reused, never recomputed: a second derivation is a
+                # second answer.
+                probe_c.credentials = credentials
+                probe_c.error(exc.code, "experiment_type", str(exc))
+                print(probe_c.render(), file=sys.stderr)
+                # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
+                # apparatus itself unreachable — is the one code in this
+                # containment's filter that earns exit 5. The four Decision 9
+                # contract refusals from `APPARATUS_CODES`
+                # (`E-APPARATUS-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`,
+                # `-RETURN`) keep `EXIT_WRONG`. **A resume's run-start
+                # `E-APPARATUS-CHANGED` no longer reaches this branch when the
+                # prior attempt completed anything** — that is the record-write
+                # branch above, at exit `4` — and it still reaches it when the
+                # prior attempt completed nothing, where `1` is § Exit codes'
+                # own answer: *a changed fact caught before the first execution
+                # ran, which leaves nothing to mark `failed` at all*. An
+                # UNREACHABLE apparatus on a resume also still returns here, at
+                # `5`, deliberately: `run.yaml` would end the run, and that
+                # fault is the one an operator can undo.
+                if exc.code == "E-APPARATUS-RAISED":
+                    return EXIT_EXTERNAL
+                return EXIT_WRONG
 
         # H7d Part B task 7 (Decision 4, Decision 14): a stop is printed
         # here, before the aggregate phase, so the reason a run stopped is
@@ -2857,9 +3441,11 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
         # `credentials` reused, never recomputed.
         if stop.reason in ("apparatus_unreachable", "apparatus_changed"):
             # `stop.code`/`stop.message` are set together with `stop.reason`
-            # at the one call site that sets either (`execute_plan`'s
-            # apparatus gate) — the assert states that contract rather than
-            # silently narrowing `str | None` to `str`.
+            # at every site that sets any of the three — `execute_plan`'s
+            # apparatus gate, and (H9b task 16) the run-start containment
+            # above, for a resume whose apparatus moved. The assert states
+            # that contract rather than silently narrowing `str | None` to
+            # `str`.
             assert stop.code is not None and stop.message is not None, (
                 "a stop reason of one of the two apparatus kinds always sets "
                 "`code` and `message` alongside it"
@@ -2870,7 +3456,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             print(stop_c.render(), file=sys.stderr)
             # Decision 4: with NO results, nothing was paid for, and the
             # command keeps Part A's shape — no `run.yaml`, `latest`
-            # untouched. This must be sited before `assemble_run_yaml` AND
+            # untouched. **"No results" now means neither this attempt's nor a
+            # prior attempt's** (H9b task 16): on a resume the ground the
+            # sentence rests on — nothing was paid for — is false whenever
+            # `resumed.prior_results` is non-empty, and returning here is what
+            # made a moved apparatus lose every completed execution's record.
+            # For `run` and `draft` the condition is unchanged, `resumed` being
+            # `None`. This must be sited before `assemble_run_yaml` AND
             # before `point_latest` (batch 4's Major 1): both, not one.
             # Decision 4's table gives zero-results TWO different exit
             # codes, not one: `moved` is `1` (the thing you asked about is
@@ -2880,12 +3472,42 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             # (Major 1): the run-start containment above and the final
             # mapping below are both off this path, since a zero-results
             # mid-plan stop returns right here.
-            if not results:
+            if not results and (resumed is None or not resumed.prior_results):
                 if stop.reason == "apparatus_unreachable":
                     return EXIT_EXTERNAL
                 return EXIT_WRONG
 
-        status = run_status(results, planned=len(plan), stop=stop.reason)
+        attempts: dict[tuple[str, int | None, str | None], int] | None = None
+        if resumed is not None:
+            # `attempts` is the number of records a triple holds in
+            # `executions.jsonl` (§ Resuming). `resumed.attempts` is that
+            # count as of RE-ENTRY, so every triple this attempt executed
+            # needs its own line added: `execute_plan` appends exactly one
+            # line per `ExecutionResult`, in the same loop iteration that
+            # builds it, unconditionally and whatever the status — including
+            # the iteration a `max_failed_fraction` `break` ends, whose write
+            # precedes the `break`. So this is one-for-one with what is on
+            # disk rather than an estimate of it, and it is computed BEFORE
+            # the prior results are prepended, since those triples wrote no
+            # line this time.
+            attempts = dict(resumed.attempts)
+            for executed in results:
+                # `attempt_key`, not `key`: this function's body binds `key`
+                # twice further down at `str`, and reusing the name here is
+                # what `mypy` caught rather than what a reader would.
+                attempt_key = (
+                    executed.execution.step_name,
+                    executed.execution.condition_index,
+                    executed.execution.repeat_label,
+                )
+                attempts[attempt_key] = attempts.get(attempt_key, 0) + 1
+            # Prepended, never appended: the aggregate phase and
+            # `_execution_block` both read this list in order, and the
+            # reconstituted triples ran FIRST. A list rather than a tuple
+            # because `results` is a `list` on every other path and this
+            # line must not change what phases 8-10 receive.
+            results = list(resumed.prior_results) + results
+        status = run_status(results, planned=len(full_plan), stop=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
         # that case, instead of every condition reporting a misleading empty
@@ -4087,6 +4709,9 @@ def _execute_prepared(prepared: Prepared, *, draft: bool) -> int:
             vs_baseline=vs_baseline,
             contrasts=contrasts_out,
             hypotheses=hypothesis_verdicts,
+            # `None` on every other entry, which is what makes
+            # `_execution_block` write the `1` it always wrote.
+            attempts=attempts,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
@@ -4178,6 +4803,250 @@ def command_draft(config_path: Path) -> int:
     return _execute_prepared(prepared, draft=True)
 
 
+def command_resume(run_dir: Path) -> int:
+    """`publishable resume <run_dir>` — a SECOND entry into phases 6-10 of a
+    run that stopped without writing `run.yaml`.
+
+    **This is the containment, and `_resume_prepared` below is the decision**
+    (Decision 13): every refusal `resume` itself decides is printed through
+    one FRESH credential-bearing `Collector` to stderr and returns
+    `EXIT_WRONG`, and nothing `resume` decides reaches `main`'s
+    `except PublishableError` handler, which prints `{exc}` with no collector
+    in scope and therefore no redaction.
+
+    **The shape is `_prepare_run`'s roster wrapper, copied WITH where it
+    sits** — `except BaseException`, `KeyboardInterrupt` re-raised fresh and
+    argument-less so a `KeyboardInterrupt("…secret…")` a resolver constructed
+    never reaches Python's own printer, and a fresh `Collector` whose
+    `credentials` is the set `_prepare_run` already resolved rather than a
+    second derivation of it. This repository has shipped a credential leak
+    twice by lifting such a recipe's CALLS and leaving its `try` behind
+    (`CLAUDE.md` § Answering a question with a proxy, the fifth instance), so
+    the sink below exists for one reason: the credential set is resolved
+    INSIDE the body being contained, and the handler needs it.
+
+    A non-`PublishableError` is re-raised unchanged: nothing this function
+    decides is in that class — user code is contained by `_prepare_run`'s own
+    wrapper, which returns an exit code rather than raising — so anything else
+    escaping here is a defect in core, and a traceback is the right report for
+    one.
+
+    **A path that is not a directory is `E-IO-FAILED` at exit 1**, the shipped
+    code § Exit codes already assigns to *"a `diff` operand path that doesn't
+    exist"* — the same question and the same answer, reported through a
+    `Collector` because that section says of this code *"it is not a
+    `ContractError`"*.
+
+    **Order, and it is the whole of what makes a refusal safe**: everything
+    below happens before `_execute_prepared` is reached, so a refusal costs
+    nothing and touches no artifact.
+
+    1. `identity.json` — `E-RESUME-NO-IDENTITY`.
+    2. a `run.yaml` present — `E-RESUME-RUN-ENDED`. That run ENDED, and its
+       record is never modified.
+    3. `environment/repo_root.txt` and the recorded `config_path`, contained
+       under that root — `E-RESUME-NO-CONFIG`.
+    4. `_prepare_run` on that config, with the dirty gate relaxed exactly
+       when the record says `draft` (Decision 12: a resumed draft stays a
+       draft, and `allow_dirty` and `draft` come from the SAME recorded flag
+       — a resumed draft recording `draft: false` would be citable).
+    5. the three hashes and the input manifest, recomputed by that call and
+       compared against the recorded figures.
+    6. the ledger, the reconstitution, the attempt counts.
+    7. `sweep.yaml`'s recorded plan — `E-RESUME-PLAN-MISSING` when the file
+       cannot be read as a plan, `E-RESUME-PLAN-MISMATCH` when its conditions
+       disagree with the re-expanded ones over the four-tuple, and the
+       recorded `execution_order` when the recorded mode was `randomized`
+       (Decision 9).
+    8. `allocation.json` — read rather than re-drawn, overriding the arm
+       memberships and the holdout partition through `dataclasses.replace`;
+       `E-RESUME-ALLOCATION-STALE` when the record cannot be applied to this
+       roster (Decision 10).
+    9. the apparatus baseline, replayed from `apparatus/probes.jsonl` under
+       `E-RESUME-PROBES-UNREADABLE`; an absent or empty one is legitimate
+       and mints no refusal (Decision 11).
+
+    **This deviates from the plan's stated order in one place, deliberately.**
+    The task section lists the hash comparison BEFORE `_prepare_run`. Doing it
+    there would mean computing `code_hash`, `parameters_hash` and the lockfile
+    digest here, a second derivation of three figures `Prepared` already holds
+    — the *second answer to one question* fault this repository names. Design
+    Decision 7's requirement is that the comparison refuse **before the lock
+    is taken and before anything executes**, and it does: `_prepare_run` is
+    phases 1-5, which allocate nothing, take no lock and execute no step. The
+    visible cost is that a hash mismatch prints `validate`'s findings first,
+    which is the same order `run` prints them in.
+
+    10. the lock takeover (Ruling W, task 14): `take_over_dead_lock`'s
+        exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
+        against this host's `gethostname()`, and the unlink — sited last, so
+        that only phase 6's entry separates it from
+        `_execute_prepared`'s `with RunLock(run_dir)`, which is its step 4.
+    """
+    if not run_dir.is_dir():
+        io_c = Collector()
+        io_c.error(
+            "E-IO-FAILED",
+            str(run_dir),
+            "is not a directory, so there is no run to continue — `resume` takes the "
+            "run directory a stopped run left behind",
+        )
+        print(io_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+    # The credential set `_prepare_run` resolves, handed back so the handler
+    # below can redact with it. A list rather than a return value because the
+    # body can raise BEFORE it has one — every refusal at steps 1-3 happens
+    # before any config is read, and an empty set is the honest answer there:
+    # nothing had been read that a message could carry.
+    credentials: list[dict[str, str]] = []
+    try:
+        return _resume_prepared(run_dir, credentials)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        if not isinstance(exc, PublishableError):
+            raise
+        resume_c = Collector()
+        resume_c.credentials = credentials[-1] if credentials else {}
+        resume_c.error(exc.code, str(run_dir), str(exc))
+        print(resume_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+
+def _resume_prepared(run_dir: Path, credentials: list[dict[str, str]]) -> int:
+    """Everything `resume` decides, raising as it decides it.
+
+    Split from `command_resume` so that the containment above is one `try`
+    around the whole decision rather than one per refusal — fourteen codes
+    are raised from five modules (`run_identity`, `lineage`, `sweep`,
+    `apparatus`, and here), and a `Collector` call at each raise site would be
+    fourteen places for the next one to be forgotten. `credentials` is the
+    sink the handler redacts with; nothing else is passed and nothing is
+    returned but an exit code.
+    """
+    identity = read_identity(run_dir)
+    if (run_dir / "run.yaml").exists():
+        raise ContractError(
+            f"{run_dir / 'run.yaml'} exists, so this run ended; a run record is never "
+            "modified. Start a new run instead.",
+            code="E-RESUME-RUN-ENDED",
+        )
+    repo_root = read_repo_root(run_dir)
+    config_path = config_path_for(run_dir, repo_root, identity)
+    draft = bool(identity["draft"])
+    prepared = _prepare_run(config_path, allow_dirty=draft)
+    if not isinstance(prepared, Prepared):
+        # `isinstance`, never truthiness: `EXIT_OK` is `0` (H9a's own rule,
+        # repeated rather than re-derived — the swap is blind because phases
+        # 1-5 never return `EXIT_OK`, and `mypy` is the enforcer).
+        return prepared
+    # Handed to the containment, never re-derived there: a second derivation
+    # of a credential set is a second answer to one question.
+    credentials.append(prepared.credentials)
+
+    for recorded_key, recomputed, code in (
+        ("code_hash", prepared.ch, "E-RESUME-CODE-MOVED"),
+        ("parameters_hash", prepared.ph, "E-RESUME-PARAMS-MOVED"),
+        ("uv_lock_hash", prepared.lock_hash, "E-RESUME-LOCKFILE-MOVED"),
+    ):
+        if identity[recorded_key] != recomputed:
+            raise ContractError(
+                f"{run_dir / IDENTITY_FILE} records {recorded_key} "
+                f"{identity[recorded_key]!r}; this tree computes {recomputed!r}. The "
+                "run cannot be continued under a different one — start a new run.",
+                code=code,
+            )
+
+    recorded_manifest_path = run_dir / "manifest" / "input.json"
+    try:
+        recorded_manifest = json.loads(recorded_manifest_path.read_text())
+    except (OSError, ValueError):
+        raise ContractError(
+            f"{recorded_manifest_path} is absent or unreadable, so what this run read "
+            "cannot be compared against what is there now",
+            code="E-RESUME-INPUT-MOVED",
+        ) from None
+    if manifest_hash(recorded_manifest) != manifest_hash(prepared.manifest):
+        raise ContractError(
+            f"the inputs under {prepared.input_dir} no longer hash to what "
+            f"{recorded_manifest_path} recorded",
+            code="E-RESUME-INPUT-MOVED",
+        )
+
+    # The recorded plan, cross-checked over the full four-tuple BEFORE
+    # anything executes (Decision 9). Read here rather than inside
+    # `_execute_prepared` for the reason every other comparison is here: a
+    # refusal at this point has taken no lock and touched no artifact.
+    recorded_plan = read_sweep_plan(run_dir)
+    check_recorded_conditions(recorded_plan, prepared.conditions)
+    if recorded_plan.order == "randomized":
+        # The recorded ORDER, checked here for the same reason the conditions
+        # are: it is applied to `prepared.plan` inside `_execute_prepared`,
+        # after the lock, where a disagreement raises `E-RUN-ORDER-MISMATCH` —
+        # a code documented as core's resolved state disagreeing with ITSELF,
+        # which on a resume it is not: the order comes from a file somebody can
+        # edit. Refused here, pre-lock, under `resume`'s own code (task 16).
+        check_recorded_order(recorded_plan, prepared.plan)
+
+    # `allocation.json` read rather than re-drawn (Decision 10). After the
+    # plan cross-check and still before the lock: the override rests on the
+    # roster and the conditions this tree resolved, and both have just been
+    # checked against the record.
+    recorded_allocation = read_allocation(run_dir)
+    if recorded_allocation is not None:
+        prepared = _resumed_allocation(prepared, recorded_allocation)
+
+    records = read_execution_ledger(run_dir)
+    resumed = Resumed(
+        run_dir=run_dir,
+        prior_results=_reconstitute(
+            prepared.plan,
+            run_dir=run_dir,
+            records=records,
+            collapse=len(prepared.repeats) <= 1,
+        ),
+        attempts=attempt_counts(records),
+        # The ORIGINAL run's baseline, replayed through the shipped
+        # `Observations.record` (Decision 11) under `resume`'s OWN code:
+        # `replay_ledger` defaults to `freeze`'s, which would be a lie
+        # about which command found the fault. An absent or empty ledger
+        # comes back as an empty `Observations` and mints NO refusal —
+        # `freeze`'s `E-FREEZE-LEDGER-MISSING` exists because probing
+        # then would pin a fact the run never adopted, while a run that
+        # crashed before its first probe is entitled to set one exactly
+        # as the original run's first probe would have.
+        baseline=apparatus.replay_ledger(run_dir, code="E-RESUME-PROBES-UNREADABLE"),
+        recorded_manifest=recorded_manifest,
+        # The RECORDED order, and `None` when the record says nothing was
+        # shuffled — read off `sweep.yaml`'s own `order` scalar rather
+        # than off the re-read config, because the file is what the first
+        # attempt did (Decision 9).
+        execution_order=(
+            recorded_plan.execution_order if recorded_plan.order == "randomized" else None
+        ),
+    )
+    # The takeover (Ruling W, Decision 2), sited LAST — after every
+    # comparison, after `_prepare_run`, and after `Resumed` is built, which
+    # is the last file this function reads. Steps 1-3 are
+    # `take_over_dead_lock`; **step 4 is `_execute_prepared`'s own
+    # `with RunLock(run_dir)`**, whose comment already says so, and that
+    # `O_CREAT | O_EXCL` stays the only claim in the system.
+    #
+    # **Siting it here is what makes the window small enough to describe.**
+    # The design's step order reads as though the takeover comes first, and
+    # taken literally it would put the whole of `_prepare_run` — a plugin
+    # import and a resolver, which is user code — between the unlink and the
+    # claim. Nothing between this call and that `with` reads a file, runs
+    # user code, or can block: one function call and phase 6's
+    # `run_dir = resumed.run_dir`. The cost is that a directory whose holder
+    # is ALIVE is refused after phases 1-5 rather than before them, which
+    # spends validation on a refusal — and phases 1-5 execute no step,
+    # allocate nothing and take no lock, so a refusal here still touches no
+    # artifact, which is the property Decision 7 asks for.
+    take_over_dead_lock(run_dir)
+    return _execute_prepared(prepared, draft=draft, resumed=resumed)
+
+
 # `run_.../` stands in for the run directory `dry-run` never allocates: every
 # printed step directory is relative to it, and `allocate_run_dir` is what
 # turns the placeholder into a name — a timestamp and a `code_hash` prefix
@@ -4185,8 +5054,13 @@ def command_draft(config_path: Path) -> int:
 # printed paths and the relativization cannot drift apart.
 _DRY_RUN_PLACEHOLDER = "run_..."
 
-# The seven a run always writes, in the order `_execute_prepared` writes them
-# in, plus three that each depend on a declaration. Every conditional is
+# The eight a run always writes, plus three that each depend on a
+# declaration. (This comment used to claim the entries were "in the order
+# `_execute_prepared` writes them in", which was already false of the
+# shipped tuple -- the code writes `manifest/input.json` first and
+# `sweep.yaml` sixth, where the tuple lists them third and second. The
+# clause is deleted rather than rewritten: `_dry_run_fixed_files` sorts what
+# it prints, so no order here is load-bearing.) Every conditional is
 # answered by the STRUCTURAL fact that decides it in `_execute_prepared` --
 # `lock_path is not None`, `build_allocation_document(...) is not None`, and
 # the same `isinstance(declared_probe, str) and declared_probe` guard the run
@@ -4198,6 +5072,7 @@ _DRY_RUN_FIXED_FILES = (
     "manifest/input.json",
     "environment/pyproject.toml",
     "environment/repo_root.txt",
+    "identity.json",
     "executions.jsonl",
     "run.yaml",
 )
@@ -4598,6 +5473,18 @@ def _dispatch(command: str, rest: list[str]) -> int:
             "dry-run": command_dry_run,
             "run": command_run,
             "draft": command_draft,
+            # `resume` joins the existing one-path arm rather than getting a
+            # second enforcer of the same rule, exactly as `draft`, `freeze`
+            # and `report` did. `publishable resume new` dispatches into
+            # `command_resume` with `new` as its path instead of printing the
+            # unbuilt diagnostic, which is item 5 of the design's disclosure
+            # and is pinned rather than merely disclosed. That outcome does
+            # NOT rest on this function's branch order: hoisting the
+            # `NOT_BUILT_COMMANDS` lookups above the built branches leaves the
+            # full suite green (measured, H9b whole-branch review Minor 4),
+            # and the order is filed as unpinned in
+            # `docs/superpowers/spec-defects.md`.
+            "resume": command_resume,
             "freeze": command_freeze,
             "report": command_report,
         }

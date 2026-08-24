@@ -989,3 +989,96 @@ read the whole arm as coverage.** The `run` half — the straight-through golden
 and is what **batches 2 and 3 are held to**, alongside task 4's real-command review. The resume half
 is `xfail(strict=True)` naming task 9. Arm G is `xfail(strict=True)` in full until task 14, and task
 4's real-command review is the actual guard over that window.
+
+---
+
+## Correction, 2026-08-23, from batch 1 — the guard pin's editor parenthetical named the wrong task
+
+**§ The guard pin gives arms B and D the editor parenthetical "H9b task 4". That is wrong and this
+replaces it: their editor is the task that WRITES `identity.json`, which is plan task 3.** Plan task 4 is
+the comparison that may touch nothing, and plan task 3's own text already grants the authority — so the
+design's parenthetical contradicts the plan while the two sibling parentheticals (arm C → task 6, arm E →
+task 15) are correct, which is what makes this one a slip rather than a scheme.
+
+**Recorded rather than edited because a wrong editor name is the failure mode the device exists to
+prevent.** An arm names its sole authorized editor *in advance* so that any other task touching it is
+visibly out of order; an arm naming a task that cannot legally edit it invites the next implementer either
+to stop on a false blocker or to self-authorize on the grounds that the name must be a typo. **Batch 1 did
+neither** — it wrote clauses naming the task descriptively **and** stating the discrepancy, which is the
+third option and the right one.
+
+## Correction, 2026-08-23, from batch 4 (task 18) — the disclosure checked item by item against the shipped code, and three items are corrected by appending
+
+**Appended rather than edited, because § Is this additive? is the enumeration a reviewer reads and a
+wrong one is worse than none.** Every item below was checked against the code at the batch's own
+commits, not against the plan.
+
+**Item 1's subject is wrong: `resume` does NOT write `identity.json`.** The item reads *"`run`, `draft`
+and `resume` write a new run-start artifact."* `run` and `draft` do; a resume **reads** it and writes
+nothing — the write sits inside `_execute_prepared`'s `if resumed is None:` block, with every other
+run-start artifact, precisely because *"settled before the first execution and never touched again"*
+would be false of a file a second attempt rewrote, and because `identity.json` is the file the resume
+just compared itself against. The item should read **`run` and `draft`**. Items 2, 3, 4, 6 and the
+appended A2 were each re-checked and stand as written.
+
+**Item 5's last row is right about the exit code and now names a different identifier.** All four
+invocation shapes were measured through the real console script after the dispatch landed, and every
+one matched: `resume`, `resume a b` and `resume --json` print `` `resume` takes exactly one path and no
+flags`` at exit 2, and `resume new` is exit **2 → 1** with `resume`'s own refusal for a path that is
+not a run directory — the row's own claim, derived by reading, confirmed by running. **Task 16 then
+moved which refusal that is**, in the same batch: a `resume` path that is not a directory reuses the
+shipped `E-IO-FAILED` (Decision 17's third not-minted code), so the printed identifier is
+`E-IO-FAILED` where at task 15's commit it was `E-RESUME-NO-IDENTITY`. Both are exit 1 and both are
+*"`resume`'s own refusal for a path that is not a run directory"*; the identifier is recorded here so
+the next reader does not have to re-measure it.
+
+**An eighth item, and it is a behaviour of a command this slice ships rather than of one it inherits.**
+A resume stopped by an apparatus fact that **moved** while the run was down now writes the run record
+— `status: failed`, the reconstituted executions aggregated, `provenance.apparatus` naming the ledger
+that holds the moving observation — and exits `4`. Task 13 made that state reachable and measured the
+loss it created (exit non-zero, no `run.yaml`, repeated at every later resume); task 16 closed it. It
+belongs in this enumeration because it is the one place `_execute_prepared`'s own control flow moved:
+the *"with NO results, nothing was paid for"* early return now asks whether a **prior** attempt
+completed anything. For `run` and `draft` the condition is unchanged, `resumed` being `None`.
+
+**And the consequence a reader would find by diffing rather than by reading is the pointer**:
+reaching the tail means `point_latest` runs, so `latest` now names the resumed directory where the
+previous behaviour returned before it. That matches what a **mid-plan** apparatus stop with results
+already does — the pointer follows the later terminal write, and a published record nothing points at
+would have to be found by name — and it is asserted in the record fixture rather than left to be
+discovered. The H7d comment beside the zero-results return treats the pointer as part of what a stop
+with *no* results must not touch, and that case is unchanged. The
+sibling case — an apparatus that has become **unreachable** — deliberately keeps today's behaviour
+(exit `5`, no record) and is filed in `spec-defects.md` with the terminality of `run.yaml` as the
+reason.
+
+## Correction, 2026-08-24, from the whole-branch fix round — Decision 17's counts, and the earlier correction's own sibling claim
+
+**Appended, never edited: a design records what was decided when it was written.** Two items, both
+counts, both re-derived from the code rather than adjusted.
+
+**(1) Decision 17's prose contradicts its own table, and its heading is ambiguous between two nouns.**
+The prose says *"Thirteen `E-RESUME-*` codes plus `E-FREEZE-CONFIG-EDITED`"*; **the table directly
+below it lists fourteen `E-RESUME-*` rows** plus that one, and the code agrees with the table:
+`grep -rho 'E-RESUME-[A-Z-]*' src/publishable/*.py | sort -u` → **14**, of which eleven are a literal
+`code="E-RESUME-…"` and three (`-CODE-MOVED`, `-PARAMS-MOVED`, `-LOCKFILE-MOVED`) are raised through a
+loop variable — the under-count a keyword-form grep produces, and the likeliest origin of "thirteen".
+The correct figures, each with its noun attached: **fourteen `E-RESUME-*` codes; fifteen codes minted
+in total; fifteen § Errors rows, one per code.** The heading's *"fourteen codes are minted"* is right
+for the `E-RESUME-*` family and wrong as a total, and *"Cost if wrong: fourteen rows in the wrong
+table"* is fifteen rows. **The evidence is the decision's own table** — it was right all along, which
+is what makes this a carried count rather than a wrong decision, and the figure reached
+`docs/feasibility-llm-growth-studies.md` § Executability, the one section required to be dated and
+re-derived, where it now carries its own appended correction. Nothing about what `resume` refuses
+changes.
+
+**(2) The batch-1 correction above repeats its own fault one row over: arm C's authorized editor is
+plan task 5, not task 6.** That correction fixes arms B and D ("their editor is plan task 3") and
+asserts *"the two sibling parentheticals (arm C → task 6, arm E → task 15) are correct"*. The plan gives
+arm C to **task 5** — its § Task 5 section reads *"You are the SOLE AUTHORIZED EDITOR of guard-pin arm
+C"* — and `git log -S '"recorded_columns",' -- tests/test_cli.py` returns `d4e0afd` *"H9b task 5"*, so
+the edit was properly authorized by the plan and it is the design's parenthetical, and then the
+correction to it, that name the wrong task. **Arm E → task 15 is correct** (plan § Task 15 holds that
+sentence), so the sibling claim is half right, which is how it survived. The general shape, and it is
+why this is appended rather than shrugged at: **a correction is a claim too**, and the row beside the
+one being fixed is where the next instance of the same fault is.

@@ -25,9 +25,9 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9b, H9c, H9d, then H3c-3's remaining
+**Order of the slices that remain: H9c, H9d, then H3c-3's remaining
 14 — the H4, H5, H6, H7 and H8 families are all complete, H6a and H6b both having merged on
-2026-08-23, and H9a on the same day.**
+2026-08-23, and H9a and H9b on the same day.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -196,6 +196,80 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H9b (`resume`) merged on 2026-08-23 — the second of H9's four, and NOT additive.** `resume` is a
+second entry into phases 6-10 of a run that stopped without writing `run.yaml`. It compares recorded
+against recomputed and the recorded side is a **new run-start artifact**: `identity.json`, five keys
+(`code_hash`, `parameters_hash`, `uv_lock_hash`, `config_path`, `draft`), written inside the lock
+before `sweep.yaml`, because a crashed directory holds no `run.yaml` to read a claim from —
+`input_manifest_hash` is deliberately absent, `manifest/input.json` being the operand rather than a
+hash of one. It reads `sweep.yaml`'s plan and recorded order, `allocation.json`'s memberships and
+`apparatus/probes.jsonl`'s baseline **back** rather than re-deriving any of them, reconstitutes a
+**full** `ExecutionResult` for every triple it skips (phase 8 reads results, not the disk — the
+scoping's *"`aggregated` survives, it is recomputed from `units.parquet`"* is false, and that one
+falsification is why the slice came to eighteen tasks), may **take over** a lock whose holder is
+provably dead, and refuses fourteen named ways. **It retires no refusal and unblocks ZERO configs** —
+`resume` runs at no `validate` and from no step, and a crashed run directory is a property of an
+operator's history rather than of a config — so the four-row table in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build is
+repeated character for character; quote that table rather than any number from this paragraph.
+
+**Six things move, and the disclosure enumerates them with a seventh appended**: `identity.json` in
+every run directory; two keys on `executions.jsonl`'s line (`returned`, `recorded_columns`);
+`dry-run`'s printed fixed-file count; `run.yaml`'s `attempts` becoming a **count of ledger records**;
+`resume`'s four invocation shapes; `freeze`'s new `E-FREEZE-CONFIG-EDITED`; and, appended,
+`apparatus.replay_ledger`'s defaulted code parameter. **Item 3 is the under-read one** — `dry-run`'s
+transcript is what a user reads before spending money, and a reviewer finds that item by *running*
+rather than by reading, which is why it is listed third rather than as "a test literal moves".
+
+Five things worth carrying. **A stop that discards work already done is worse than the change it
+protects against.** A resume whose apparatus had moved while the run was down exited non-zero with no
+`run.yaml`, and repeated identically for as long as the fact stayed moved — *every execution paid for,
+the record lost*, this repository's most expensive defect class, made real and pinned by the task that
+created it and closed by the next. It now publishes `status: failed` with the reconstituted executions
+aggregated and the moving observation in the ledger the record names. **The exit code was decided by
+§ Exit codes' own qualifying clause rather than by the two the brief offered**: `1` is for a changed
+fact *"caught before the first execution ran, which leaves nothing to mark `failed` at all"*, which is
+exactly false once there are results to mark, and `5` is the class you retry — so it is `4`, from the
+shipped status fold, no code minted. **And the closure is scoped by a fact about the artifact, not by
+convenience**: writing `run.yaml` *ends* the run, so the same treatment for an *unreachable* apparatus
+would convert a recoverable state into a permanently truncated one. That half is filed with the
+terminality as its reason.
+
+**A lock is the one thing here that cannot be pinned by a mutation alone, and the criterion is where
+the earlier measurement went wrong.** Two candidate protocols were falsified on trial 0 by
+five-process probes; the shipped one is an exclusive `O_CREAT|O_EXCL` token as the mutex, the holder
+dead **only** on `ProcessLookupError` from `os.kill(pid, 0)` for a pid recorded against this
+`gethostname()`, then the ordinary lock — whose exclusive create stays the only claim. Re-raced
+against the **shipped** code: **0 violations in 60 trials × 5 processes, and 0 in 120 × 5** with a
+stagger inside the residual window, against **36 of 60 violated** with the token deleted and **60 of
+60** with no exclusion at all. But *"two winners in a trial"* — the criterion the earlier probe used —
+**flags the shipped protocol too**, and did, on 3 of 3 trials: a winner releases the lock when its run
+ends, so a second `resume` winning afterwards is legitimate. The violation is **two holders at one
+time**, and a control that cannot fail is not a control: without the stagger, the token-less variant
+violated nothing either. `lock` gains `started_at` for the diagnostic and the liveness test
+deliberately does not read it, so PID reuse refuses rather than guesses.
+
+**A mutation is a claim, and so is a pin.** The two-thread mutual-exclusion test's first version
+released both threads together inside the liveness syscall — and deleting the token's `O_EXCL` left it
+**green**, because two threads that unlink before either creates still meet the real claim and exactly
+one wins. The violation needs a **stale verdict**: one thread judging the old holder dead, the other
+taking the lock, the first waking to unlink a *live* holder's lock. The barrier is asymmetric now, and
+that was found by running the prescribed mutation rather than by reading the test. **A brief's mutation
+can also go blind under the very change it is prescribed for**: *"move the two-token arm above the
+built branches"* was to be caught by a `resume <path>` fixture — true only while `"resume"` was still a
+`NOT_BUILT_COMMANDS` key. Measured after the dispatch landed: full suite **green**, zero failures,
+because none of the four remaining keys has a built branch or a two-token form. What binds that
+invariant is the self-maintaining document-versus-CLI pair, measured by putting `resume` in both
+places, which fails nine tests.
+
+**And a pin can be honoured by not colliding with it.** Guard-pin arm R (editor NONE) pins every line
+of the four documents carrying a worked-example literal, so a new `identity.json` example showing
+`8e21…`/`1a2b…`/`6b1f…` and a ledger line showing `0.607` **added four lines and failed it**. The
+digests are elided in the example instead — with a sentence saying the run record is the one place a
+reader compares them — and the ledger's `returned` is `{}`, which is what the worked example's
+repeat-scope step actually returns, the correlation being derived by the template's `aggregate`. No arm
+moved, and the collision was better information than the edit would have been.
 
 **H9a (the re-entry seam, `draft` and `dry-run`) merged on 2026-08-23 — the first of H9's four, and
 NOT additive.** `command_run`'s ten phases are split at the seam every second entry needs: phases 1-5

@@ -4,6 +4,7 @@ per `docs/superpowers/plans/2026-08-20-lineage.md` task 1 and
 `docs/superpowers/specs/2026-08-20-lineage-design.md` § 3.
 """
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -878,3 +879,367 @@ def test_read_record_file_version_mismatch_on_a_bare_file_path(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         read_record_file(member)
     assert e.value.code == "E-UPSTREAM-RECORD-VERSION"
+
+
+# ===========================================================================
+# H9b task 6 — `read_execution_ledger` / `attempt_counts`: the FIRST reader of
+# `executions.jsonl` anywhere in `src/` (§ Corrections against the code,
+# correction 21, re-measured by this task and reported).
+# ===========================================================================
+
+
+def test_h9b_the_ledger_reader_reads_a_real_runs_lines(tmp_path: Path):
+    """Against a genuinely produced ledger, not a synthesized one: the reader's
+    job is to read what `execute_plan` writes, and a hand-written fixture would
+    make that agreement a coincidence.
+
+    The line count and the key set are asserted together — a reader returning
+    `[]` would satisfy any per-line assertion for free.
+    """
+    from publishable.lineage import read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    records = read_execution_ledger(doc["run_dir"])
+    raw = [
+        line
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(records) == len(raw)
+    assert records
+    for entry in records:
+        assert {"step", "scope", "condition", "repeat", "status"} <= set(entry)
+
+
+def test_h9b_an_absent_ledger_is_no_executions_not_a_fault(tmp_path: Path):
+    """A run directory can exist with no `executions.jsonl` at all — a
+    run-start probe raise leaves exactly that shape — and *no executions* is
+    not the same claim as *a broken ledger*."""
+    from publishable.lineage import read_execution_ledger
+
+    (tmp_path / "run_x").mkdir()
+    assert read_execution_ledger(tmp_path / "run_x") == []
+
+
+def test_h9b_attempt_counts_counts_records_per_triple(tmp_path: Path):
+    """`reference.md` § Resuming defines `attempts` as the number of records a
+    triple holds in `executions.jsonl`. The second record is appended BY HAND
+    here — a triple genuinely runs twice only under `resume`, which does not
+    dispatch yet, and the count is what is under test either way.
+
+    The neighbour's staying at `1` is what makes the `2` non-vacuous: a
+    counter keyed on the step alone, or one that counted the whole file,
+    would report `2` for both.
+    """
+    from publishable.lineage import attempt_counts, read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=10)
+    ledger = doc["run_dir"] / "executions.jsonl"
+    lines = [line for line in ledger.read_text().splitlines() if line.strip()]
+    first, second = json.loads(lines[0]), json.loads(lines[1])
+    # A genuine second attempt at the same triple: the same three key fields,
+    # a later clock, and a `failed` status — so the count cannot be read off
+    # `status` either.
+    repeated = dict(first)
+    repeated["status"] = "failed"
+    repeated["started_at"] = "2026-08-23T23:59:59Z"
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(repeated) + "\n")
+
+    counts = attempt_counts(read_execution_ledger(doc["run_dir"]))
+    assert counts[(first["step"], first["condition"], first["repeat"])] == 2
+    assert counts[(second["step"], second["condition"], second["repeat"])] == 1
+    # Every other triple is 1, so no arm of this fixture is 2 by accident.
+    assert sorted(counts.values()) == [1] * (len(counts) - 1) + [2]
+
+
+def test_h9b_a_mangled_ledger_line_refuses_rather_than_reading_as_never_ran(tmp_path: Path):
+    """Three faults, one code (`E-RESUME-LEDGER-UNREADABLE`), each with its own
+    message: a line that is not JSON, a line that parses to something other
+    than an object, and a line missing one of the five keys every line has
+    always carried.
+
+    The alternative is what makes this a refusal rather than a skip: a reader
+    that dropped a mangled line would report the triple as *never ran*, and
+    `resume` would re-execute an execution already paid for — or worse,
+    reconstitute nothing for it and publish intervals over the remainder.
+
+    A control arm asserts the same directory reads clean before the edit, so
+    a refusal that fired for some unrelated reason is not counted as a pass.
+    """
+    from publishable.lineage import read_execution_ledger
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    ledger = doc["run_dir"] / "executions.jsonl"
+    good = ledger.read_text()
+    assert read_execution_ledger(doc["run_dir"])  # the control
+
+    for text, fragment in (
+        (good + "{not json\n", "not valid JSON"),
+        (good + '["step01", 1]\n', "parsed to list"),
+        (good + '{"step": "s", "scope": "repeat", "condition": 0}\n', "missing repeat, status"),
+    ):
+        ledger.write_text(text)
+        with pytest.raises(ContractError) as excinfo:
+            read_execution_ledger(doc["run_dir"])
+        assert excinfo.value.code == "E-RESUME-LEDGER-UNREADABLE"
+        assert fragment in str(excinfo.value)
+    ledger.write_text(good)
+    assert read_execution_ledger(doc["run_dir"])
+
+
+# ===========================================================================
+# H9b task 10 — `sweep.yaml`'s recorded plan: the reader and the four-tuple
+# cross-check (design Decision 9). `freeze`'s own reader was measured and
+# does not fit — it is inline in `command_freeze`, reports through `_refuse`
+# and returns an exit code rather than raising, carries `E-FREEZE-*` codes,
+# and reads `conditions` only, never `order` or `execution_order`. The grep
+# behind that claim is in `read_sweep_plan`'s docstring.
+# ===========================================================================
+
+
+def _h9b_sweep_project(tmp_path: Path, **overrides) -> dict:
+    """One run whose `sweep.yaml` has TWO conditions, so a cross-check over a
+    reordering has something to reorder and a length mismatch can be produced
+    by dropping one entry."""
+    return run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units=6,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        **overrides,
+    )
+
+
+def test_h9b_the_recorded_plan_reader_returns_the_file_not_a_re_derivation(tmp_path: Path):
+    """`read_sweep_plan` hands back exactly what `sweep.yaml` holds: the
+    condition entries in recorded order, the recorded `order` scalar, and the
+    realized `(condition, repeat)` pairs.
+
+    Asserted against the file's OWN parsed content rather than against a
+    hand-written expectation, because the claim is *this is the file* — a
+    literal expectation would pass for a reader that re-derived the same
+    answer from the config, which is the reading Decision 9 refuses.
+    """
+    from publishable.lineage import read_sweep_plan
+
+    doc = _h9b_sweep_project(tmp_path)
+    raw = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    recorded = read_sweep_plan(doc["run_dir"])
+    assert list(recorded.conditions) == raw["conditions"]
+    assert recorded.order == raw["order"] == "as_declared"
+    assert list(recorded.execution_order) == [
+        (entry["condition"], entry["repeat"]) for entry in raw["execution_order"]
+    ]
+    # Four pairs: 2 conditions × 2 seeds. Stated so a fixture that recorded
+    # nothing cannot satisfy the equalities above by being empty on both
+    # sides.
+    assert len(recorded.execution_order) == 4
+    assert isinstance(recorded.execution_order, tuple)
+    assert isinstance(recorded.conditions, tuple)
+
+
+def test_h9b_a_sweep_yaml_that_cannot_be_read_as_a_plan_is_plan_missing(tmp_path: Path):
+    """`E-RESUME-PLAN-MISSING` covers absent, unparseable, and every shape
+    fault in the three fields this reader projects — one code for one remedy
+    (the run died before its plan was written, or the directory was edited).
+
+    A control arm reads the same directory clean before and after each edit,
+    so a refusal that fired for an unrelated reason is not counted as a pass.
+    """
+    from publishable.lineage import read_sweep_plan
+
+    doc = _h9b_sweep_project(tmp_path)
+    path = doc["run_dir"] / "sweep.yaml"
+    good = path.read_text()
+    assert read_sweep_plan(doc["run_dir"]).conditions  # the control
+
+    parsed = yaml.safe_load(good)
+    no_conditions = dict(parsed)
+    no_conditions.pop("conditions")
+    bad_order = dict(parsed) | {"order": ["randomized"]}
+    bad_pair = dict(parsed) | {"execution_order": [{"condition": 0, "repeat": 7}]}
+    for text, fragment in (
+        ("conditions: [\n", "does not parse"),
+        ("just a string\n", "holds no `conditions` list"),
+        (yaml.safe_dump(no_conditions), "holds no `conditions` list"),
+        (yaml.safe_dump(bad_order), "not the recorded mode string"),
+        (yaml.safe_dump(bad_pair), "execution_order entry 1 is not a recorded"),
+    ):
+        path.write_text(text)
+        with pytest.raises(ContractError) as excinfo:
+            read_sweep_plan(doc["run_dir"])
+        assert excinfo.value.code == "E-RESUME-PLAN-MISSING"
+        assert fragment in str(excinfo.value)
+        path.write_text(good)
+        assert read_sweep_plan(doc["run_dir"]).conditions  # the control again
+
+    path.unlink()
+    with pytest.raises(ContractError) as excinfo:
+        read_sweep_plan(doc["run_dir"])
+    assert excinfo.value.code == "E-RESUME-PLAN-MISSING"
+    assert "is absent" in str(excinfo.value)
+
+
+def test_h9b_the_cross_check_is_over_the_full_four_tuple(tmp_path: Path):
+    """**The mutation this test exists for**: a cross-check on `index` and
+    `label` only. The `values` arm below edits a recorded condition's
+    `values` and NOTHING else, so the two-field reading passes it and the
+    four-tuple reading refuses — the two branches were checked in that
+    order.
+
+    `values` is what determines the cfg an execution runs under, so a resume
+    that accepted a moved one would execute the remainder of a plan under
+    different parameters than the completed part ran under, with every label
+    agreeing. `is_baseline` decides which condition every `vs_baseline`
+    contrast is computed against.
+    """
+    from publishable.lineage import RecordedPlan, check_recorded_conditions, read_sweep_plan
+    from publishable.sweep import expand
+
+    doc = _h9b_sweep_project(tmp_path)
+    conditions = expand(yaml.safe_load(Path(doc["cfg"]).read_text()))
+    recorded = read_sweep_plan(doc["run_dir"])
+    # The control: the run's own file agrees with its own config.
+    check_recorded_conditions(recorded, conditions)
+    assert len(conditions) == 2
+
+    def edited(position: int, **changes) -> RecordedPlan:
+        entries = [dict(entry) for entry in recorded.conditions]
+        entries[position].update(changes)
+        return dataclasses.replace(recorded, conditions=tuple(entries))
+
+    for plan, field in (
+        (edited(0, index=7), "index"),
+        (edited(1, label="analysis.method=kendall"), "label"),
+        (edited(1, values={"analysis.method": "kendall"}), "values"),
+        # Flipped from whatever the file records rather than written as a
+        # literal: a literal `False` is a no-op edit for a design whose
+        # first condition is not the baseline, and a no-op edit tests
+        # nothing (measured — this arm did not raise until it was flipped).
+        (edited(0, is_baseline=not recorded.conditions[0].get("is_baseline")), "is_baseline"),
+    ):
+        with pytest.raises(ContractError) as excinfo:
+            check_recorded_conditions(plan, conditions)
+        assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+        assert f"`{field}` disagrees" in str(excinfo.value)
+
+    # Shape before fields, and both arms MEASURED before they were built: a
+    # bare-string entry used to be coerced to an empty mapping and reported as
+    # an `index` disagreement, and a non-mapping `values` raised a bare
+    # `TypeError` (a list) or `ValueError` (a string) out of `main`, un-coded
+    # — the *presence checked, shape not* fault this slice's batch 4 review
+    # found one function over, in `apparatus.replay_ledger`.
+    for plan, fragment in (
+        (
+            dataclasses.replace(recorded, conditions=("just a string", *recorded.conditions[1:])),
+            "recorded entry is a str, not a mapping",
+        ),
+        (edited(0, values=[1, 2]), "recorded `values` is a list, not a mapping"),
+        (edited(0, values="abc"), "recorded `values` is a str, not a mapping"),
+    ):
+        with pytest.raises(ContractError) as excinfo:
+            check_recorded_conditions(plan, conditions)
+        assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+        assert fragment in str(excinfo.value)
+
+    # A length disagreement is named before any per-entry field, so the
+    # per-entry message can name a condition that exists on both sides.
+    with pytest.raises(ContractError) as excinfo:
+        check_recorded_conditions(
+            dataclasses.replace(recorded, conditions=recorded.conditions[:1]), conditions
+        )
+    assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+    assert "records 1 condition(s)" in str(excinfo.value)
+
+
+def test_h9b_the_cross_check_is_in_recorded_order_not_by_index_lookup(tmp_path: Path):
+    """A file whose two condition entries are SWAPPED holds both conditions
+    and both indices, so an index-keyed lookup finds every one of them and
+    agrees on all four fields. Compared in recorded order, it refuses.
+
+    The recorded order is itself a fact of the plan — `execution_order`'s
+    pairs are matched against it — so this is a distinct reading from the
+    field set, and no arm of the four-tuple test can see it.
+    """
+    from publishable.lineage import check_recorded_conditions, read_sweep_plan
+    from publishable.sweep import expand
+
+    doc = _h9b_sweep_project(tmp_path)
+    conditions = expand(yaml.safe_load(Path(doc["cfg"]).read_text()))
+    recorded = read_sweep_plan(doc["run_dir"])
+    swapped = dataclasses.replace(recorded, conditions=tuple(reversed(recorded.conditions)))
+    with pytest.raises(ContractError) as excinfo:
+        check_recorded_conditions(swapped, conditions)
+    assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+
+
+# ===========================================================================
+# H9b task 11 — `allocation.json` read rather than re-drawn (design Decision
+# 10). This is the reader § Allocation and § Resuming both say does not
+# exist; the application onto `Prepared` is pinned in `tests/test_cli.py`,
+# where `_prepare_run` lives.
+# ===========================================================================
+
+
+def test_h9b_the_allocation_reader_returns_the_file_and_absence_is_not_a_fault(tmp_path: Path):
+    """A drawn axis's own `allocation.json`, read back as the file holds it —
+    and `None` for a design that declares neither an arm axis nor a holdout,
+    which § The other files a run writes makes the ordinary case.
+
+    Both arms in one test because the pair is the claim: absence is not a
+    refusal, and a present file is returned rather than re-derived.
+    """
+    from publishable.lineage import read_allocation
+
+    keys = [f"p{i}" for i in range(8)]
+    drawn = run_a_project(
+        tmp_path / "drawn",
+        roster_csv="patient_id\n" + "\n".join(keys) + "\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    document = read_allocation(drawn["run_dir"])
+    assert document == json.loads((drawn["run_dir"] / "allocation.json").read_text())
+    assert sorted(
+        document["arms"]["arm"]["control"] + document["arms"]["arm"]["treatment"]
+    ) == sorted(keys)
+
+    plain = run_a_project(tmp_path / "plain", units=6)
+    assert not (plain["run_dir"] / "allocation.json").exists()
+    assert read_allocation(plain["run_dir"]) is None
+
+
+def test_h9b_an_unusable_allocation_file_is_stale_not_absent(tmp_path: Path):
+    """An unparseable file is `E-RESUME-ALLOCATION-STALE`, never treated as
+    absence: absence says *nothing was partitioned* and would let the run
+    re-draw the whole allocation, which is the one thing Decision 10 exists
+    to prevent.
+
+    A control reads the same directory clean before each edit.
+    """
+    from publishable.lineage import read_allocation
+
+    keys = [f"p{i}" for i in range(8)]
+    doc = run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(keys) + "\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    path = doc["run_dir"] / "allocation.json"
+    good = path.read_text()
+    for text, fragment in (("{not json", "will not parse"), ("[1, 2]", "holds list")):
+        assert read_allocation(doc["run_dir"]) is not None  # the control
+        path.write_text(text)
+        with pytest.raises(ContractError) as excinfo:
+            read_allocation(doc["run_dir"])
+        assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+        assert fragment in str(excinfo.value)
+        path.write_text(good)

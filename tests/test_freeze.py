@@ -103,20 +103,60 @@ def _ledger_lines(run_dir: Path) -> list[dict]:
 
 
 def _edit_config_yaml(run_dir: Path, **changes) -> None:
+    """Edit the run directory's `config.yaml` copy AND re-record the
+    `parameters_hash` `identity.json` holds for it.
+
+    The re-record is not cosmetic. Gate (c2) — H9b's `E-FREEZE-CONFIG-EDITED`
+    — compares this copy's `parameters_hash` against the recorded one and sits
+    **before** template resolution (e) and the plan cross-check (h), and
+    `covered_config` covers everything but `metadata` and the two host paths,
+    so ANY edit here moves that hash. Without the re-record every caller below
+    stops at (c2) and never reaches the gate it names: measured, four of them
+    did, silently, because `_assert_refused` could not read the code it was
+    handed (H9b whole-branch review, Major 3). Re-recording models the honest
+    state each of those fixtures means — a directory whose copy is the one the
+    run started under, with the fault somewhere later — and leaves (c2)'s own
+    coverage to the two tests that edit `config.yaml` directly and do not
+    touch `identity.json`.
+    """
+    from publishable.hashes import parameters_hash
+
     doc = yaml.safe_load((run_dir / "config.yaml").read_text())
     doc.update(changes)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(doc))
+    identity = run_dir / "identity.json"
+    if identity.is_file():
+        recorded = json.loads(identity.read_text())
+        recorded["parameters_hash"] = parameters_hash(doc)
+        identity.write_text(json.dumps(recorded))
 
 
 def _load_sweep_yaml(run_dir: Path) -> dict:
     return yaml.safe_load((run_dir / "sweep.yaml").read_text())
 
 
-def _assert_refused(result, code: str, exit_code: int, ledger_before: list[dict], run_dir: Path):
+def _assert_refused(
+    result, code: str, exit_code: int, ledger_before: list[dict], run_dir: Path, capsys
+) -> str:
+    """One `_precheck` refusal, asserted by its CODE and not only by the fact
+    that it happened.
+
+    `_Refused` carries the exit code alone (`freeze._refuse` prints the
+    identifier through its own `Collector` and returns the tuple), so the
+    code is only observable on stderr and this helper is the one place that
+    reads it. It took `code` and never read it from H8b (`60f5d61`) until the
+    H9b whole-branch review's Major 3: renaming one refusal's code left every
+    caller green, so twenty tests asserted *that* a refusal happened and
+    never *which*. Returns stderr, so a caller whose message is the point
+    can assert on it without a second `readouterr`.
+    """
     assert isinstance(result, _Refused), result
     assert result.exit_code == exit_code
+    err = capsys.readouterr().err
+    assert code in err, err
     # Every refusal makes NO probe call and writes NO ledger line.
     assert _ledger_lines(run_dir) == ledger_before
+    return err
 
 
 # --- Task 4: the refusal gate, direct calls to `_precheck` -----------------
@@ -144,7 +184,7 @@ def test_a_run_ended_gate_a_refuses_and_writes_no_line(installed, registries, tm
     assert (run_dir / "run.yaml").exists()
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-RUN-ENDED", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-RUN-ENDED", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_b_config_yaml_absent_is_no_config(installed, registries, tmp_path, capsys):
@@ -154,7 +194,7 @@ def test_gate_b_config_yaml_absent_is_no_config(installed, registries, tmp_path,
     before = _ledger_lines(run_dir)
     (run_dir / "config.yaml").unlink()
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_b_config_yaml_not_a_mapping_is_no_config(installed, registries, tmp_path, capsys):
@@ -164,7 +204,7 @@ def test_gate_b_config_yaml_not_a_mapping_is_no_config(installed, registries, tm
     before = _ledger_lines(run_dir)
     (run_dir / "config.yaml").write_text("- just\n- a\n- list\n")
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_c_repo_root_txt_absent_is_no_config(installed, registries, tmp_path, capsys):
@@ -174,7 +214,7 @@ def test_gate_c_repo_root_txt_absent_is_no_config(installed, registries, tmp_pat
     before = _ledger_lines(run_dir)
     (run_dir / "environment" / "repo_root.txt").unlink()
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_c_repo_root_txt_empty_is_no_config(installed, registries, tmp_path, capsys):
@@ -184,7 +224,7 @@ def test_gate_c_repo_root_txt_empty_is_no_config(installed, registries, tmp_path
     before = _ledger_lines(run_dir)
     (run_dir / "environment" / "repo_root.txt").write_text("")
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_c_repo_root_txt_naming_a_nonexistent_path_is_no_config_not_template_unknown(
@@ -205,9 +245,7 @@ def test_gate_c_repo_root_txt_naming_a_nonexistent_path_is_no_config_not_templat
     bogus = str(tmp_path / "does-not-exist-at-all")
     (run_dir / "environment" / "repo_root.txt").write_text(bogus)
     result = _precheck(run_dir)
-    err = capsys.readouterr().err
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
-    assert "E-FREEZE-NO-CONFIG" in err
+    err = _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
     assert "not a directory" in err
     assert "E-TEMPLATE-UNKNOWN" not in err
 
@@ -225,9 +263,7 @@ def test_gate_c_repo_root_txt_naming_a_plain_file_is_no_config_not_template_unkn
     plain_file.write_text("not a repo")
     (run_dir / "environment" / "repo_root.txt").write_text(str(plain_file))
     result = _precheck(run_dir)
-    err = capsys.readouterr().err
-    _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir)
-    assert "E-FREEZE-NO-CONFIG" in err
+    err = _assert_refused(result, "E-FREEZE-NO-CONFIG", EXIT_WRONG, before, run_dir, capsys)
     assert "not a directory" in err
     assert "E-TEMPLATE-UNKNOWN" not in err
 
@@ -239,7 +275,7 @@ def test_gate_e_unknown_template_reuses_the_shipped_code(installed, registries, 
     before = _ledger_lines(run_dir)
     _edit_config_yaml(run_dir, experiment_type="no_such_template_xyz")
     result = _precheck(run_dir)
-    _assert_refused(result, "E-TEMPLATE-UNKNOWN", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-TEMPLATE-UNKNOWN", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_e_installed_only_template_reuses_the_shipped_code(
@@ -257,7 +293,7 @@ def test_gate_e_installed_only_template_reuses_the_shipped_code(
     before = _ledger_lines(run_dir)
     _edit_config_yaml(run_dir, experiment_type="installed_only_tmpl")
     result = _precheck(run_dir)
-    _assert_refused(result, "E-TEMPLATE-INSTALLED-UNSUPPORTED", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-TEMPLATE-INSTALLED-UNSUPPORTED", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_e_a_load_fault_reuses_E_TEMPLATE_LOAD_and_carries_credentials(
@@ -284,7 +320,7 @@ def test_gate_e_a_load_fault_reuses_E_TEMPLATE_LOAD_and_carries_credentials(
     (doc["root"] / "templates" / "broken.py").write_text("raise RuntimeError('boom')\n")
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-TEMPLATE-LOAD", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-TEMPLATE-LOAD", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_e_a_collision_reuses_E_TEMPLATE_COLLISION(installed, registries, tmp_path, capsys):
@@ -294,7 +330,7 @@ def test_gate_e_a_collision_reuses_E_TEMPLATE_COLLISION(installed, registries, t
     (doc["root"] / "templates" / "second.py").write_text(_F_TEMPLATE)
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-TEMPLATE-COLLISION", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-TEMPLATE-COLLISION", EXIT_WRONG, before, run_dir, capsys)
 
 
 _NO_PROBE_TEMPLATE = """\
@@ -331,7 +367,7 @@ def test_gate_f_no_apparatus_probe_declared(installed, registries, tmp_path, cap
     (doc["root"] / "templates" / "no_probe.py").write_text(_NO_PROBE_TEMPLATE)
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-NO-APPARATUS", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-NO-APPARATUS", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_i_ledger_missing_covers_an_absent_ledger(installed, registries, tmp_path, capsys):
@@ -343,7 +379,7 @@ def test_gate_i_ledger_missing_covers_an_absent_ledger(installed, registries, tm
     shutil.rmtree(run_dir / "apparatus")
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-LEDGER-MISSING", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-LEDGER-MISSING", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_i_ledger_missing_covers_a_ledger_with_no_qualifying_line(
@@ -360,7 +396,7 @@ def test_gate_i_ledger_missing_covers_a_ledger_with_no_qualifying_line(
     )
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-LEDGER-MISSING", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-LEDGER-MISSING", EXIT_WRONG, before, run_dir, capsys)
 
 
 # --- Batch 4 review, Major 2: the three hand-edited ledger shapes core's
@@ -486,7 +522,7 @@ class FAssay(BaseTemplate):
     (doc["root"] / "templates" / "switched.py").write_text(_switched)
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-PROBE-MISMATCH", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-PROBE-MISMATCH", EXIT_WRONG, before, run_dir, capsys)
 
 
 # --- Fixture F5 (sibling arm) / M16, the part reachable without a probe ----
@@ -524,7 +560,7 @@ def test_f5_sibling_arm_credential_precheck_before_any_probe_call(
     (doc["root"] / ".env").unlink()
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-APPARATUS-RAISED", EXIT_EXTERNAL, before, run_dir)
+    _assert_refused(result, "E-APPARATUS-RAISED", EXIT_EXTERNAL, before, run_dir, capsys)
 
 
 def test_m1_credential_check_precedes_the_metered_call_end_to_end_through_main(
@@ -630,7 +666,7 @@ def test_gate_g_sweep_yaml_absent_is_plan_missing(installed, registries, tmp_pat
     before = _ledger_lines(run_dir)
     (run_dir / "sweep.yaml").unlink()
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_g_sweep_yaml_unreadable_is_plan_missing(installed, registries, tmp_path, capsys):
@@ -640,7 +676,7 @@ def test_gate_g_sweep_yaml_unreadable_is_plan_missing(installed, registries, tmp
     before = _ledger_lines(run_dir)
     (run_dir / "sweep.yaml").write_text("not: [valid, yaml: at all\n")
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISSING", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_h_a_structural_edit_is_plan_mismatch(installed, registries, tmp_path, capsys):
@@ -654,7 +690,7 @@ def test_gate_h_a_structural_edit_is_plan_mismatch(installed, registries, tmp_pa
     )  # one condition, not two
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_gate_h_values_only_edit_is_plan_mismatch(installed, registries, tmp_path, capsys):
@@ -695,7 +731,7 @@ def test_gate_h_values_only_edit_is_plan_mismatch(installed, registries, tmp_pat
 
     before = _ledger_lines(run_dir)
     result = _precheck(run_dir)
-    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir)
+    _assert_refused(result, "E-FREEZE-PLAN-MISMATCH", EXIT_WRONG, before, run_dir, capsys)
 
 
 def test_ready_carries_cfgs_keyed_by_condition_index(installed, registries, tmp_path, capsys):
@@ -1317,3 +1353,91 @@ def test_a_nonexistent_run_directory_is_E_IO_FAILED_not_E_FREEZE_NO_CONFIG(tmp_p
     assert code == EXIT_WRONG
     assert "E-IO-FAILED" in output
     assert "E-FREEZE-NO-CONFIG" not in output
+
+
+# --- H9b task 16, Fixture K: `freeze`'s own `parameters_hash` comparison ----
+# Design Decision 15. `resume`'s comparison does NOT close this one: `resume`
+# re-reads the PROJECT's config (Decision 7) and never touches the run
+# directory's copy, while the standing `spec-defects.md` filing's gap is an
+# edit to that copy — a probe measuring under parameters the run never
+# adopted. Closed here rather than deferred, because no remaining slice has
+# `freeze` as its surface.
+
+
+def test_h9b_freeze_refuses_a_config_copy_edited_since_the_run_started(
+    installed, registries, tmp_path, capsys
+):
+    """The edit is to `parameters` ONLY, and to a value the sweep does not
+    range over, so `E-FREEZE-PLAN-MISMATCH` cannot fire and the new gate is
+    the only thing that can refuse — measured by the control below, which
+    freezes the same directory clean before the edit.
+
+    Both figures are in the message: a refusal that named neither would leave
+    an operator with nothing to compare, and the recorded one is what says
+    which side moved.
+    """
+    from publishable.cli import main
+    from publishable.hashes import parameters_hash
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    recorded = json.loads((run_dir / "identity.json").read_text())["parameters_hash"]
+
+    # The control FIRST: unedited, this directory freezes at exit 0. Without
+    # it the refusal below could be firing for any reason at all.
+    assert main(["freeze", str(run_dir)]) == 0
+    capsys.readouterr()
+    # Read AFTER the control, which legitimately appended its own probe round:
+    # what the refusal must not do is append to what is there NOW.
+    before = _ledger_lines(run_dir)
+
+    config = yaml.safe_load((run_dir / "config.yaml").read_text())
+    assert config["parameters"]["instrument"]["model"] == "m1"
+    config["parameters"]["instrument"]["model"] = "m3"
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(config))
+    edited = parameters_hash(config)
+    assert edited != recorded
+
+    code = main(["freeze", str(run_dir)])
+    printed = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-FREEZE-CONFIG-EDITED" in printed, printed
+    assert recorded in printed and edited in printed
+    assert "E-FREEZE-PLAN-MISMATCH" not in printed
+    # A refusal makes no probe call and writes no ledger line — every other
+    # gate's own property, asserted here rather than assumed.
+    assert _ledger_lines(run_dir) == before
+
+
+def test_h9b_freeze_with_no_identity_json_behaves_exactly_as_before(
+    installed, registries, tmp_path, capsys
+):
+    """The negative control, and it asserts `freeze`'s FULL shipped output
+    rather than only its exit code: a run directory started by a build that
+    predates `identity.json` has nothing to compare, so the gate must be
+    silent — not merely non-fatal.
+
+    Two-sided: the same directory is frozen with the artifact present and
+    then with it removed, and the two outputs are compared. The comparison is
+    what makes this a control rather than an assertion that some output
+    appeared, and the `E-FREEZE-CONFIG-EDITED` absence is asserted on stderr,
+    the stream a refusal writes to.
+    """
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    assert (run_dir / "identity.json").is_file()
+    with_artifact_code = main(["freeze", str(run_dir)])
+    with_artifact = capsys.readouterr()
+
+    (run_dir / "identity.json").unlink()
+    without_code = main(["freeze", str(run_dir)])
+    without = capsys.readouterr()
+
+    assert with_artifact_code == without_code == 0
+    assert "E-FREEZE-CONFIG-EDITED" not in without.err
+    assert without.out == with_artifact.out
+    assert without.err == with_artifact.err

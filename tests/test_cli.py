@@ -1,8 +1,12 @@
+import dataclasses
 import hashlib
 import importlib
 import json
+import math
+import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from collections import namedtuple
@@ -9585,7 +9589,14 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert statuses, column
         assert statuses <= {"built", "NOT BUILT"}, column
     assert ("dry-run", "built") in tables["Command"]
-    assert ("resume", "NOT BUILT") in tables["Command"]
+    # H9b guard-pin arm E, EDITED by its sole authorized editor, H9b task 15,
+    # to the post-edit state written in advance in the design's § The guard
+    # pin: `("resume", "built")`, and a `("reproduce", "NOT BUILT")`
+    # row-presence line so the table keeps a marked probe of an unbuilt row.
+    # The `set(NOT_BUILT_COMMANDS)` equalities below are SELF-MAINTAINING and
+    # were not edited.
+    assert ("resume", "built") in tables["Command"]
+    assert ("reproduce", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -16387,7 +16398,21 @@ def test_resolver_io_has_no_reuse_from_and_step_io_does(tmp_path: Path):
 
 def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     """Arm A — THE RUN DIRECTORY'S ROOT. ONE OF TWO ARMS AN AUTHORIZED TASK
-    MAY EDIT, and task 3 is that task.
+    MAY EDIT.
+
+    **RE-AUTHORIZED by H9b (guard-pin arm B).** SOLE AUTHORIZED EDITOR:
+    H9b's `identity.json` write-site task — plan task 3, whose own section
+    grants that authority and prescribes the diff
+    (`docs/superpowers/plans/2026-08-23-resume.md` § Task 3). The H9b design's
+    § The guard pin and the task 1 brief both spell that task's number "4";
+    plan task 4 is the batch's real-command review, whose brief says *must
+    not touch: anything*, so the NUMBER is stale and the DESCRIPTIVE half —
+    *the `identity.json` task* — governs. Two sibling parentheticals in the
+    same table (arm C's "plan task 6", arm E's "plan task 15") are correct
+    against the plan, which is what identifies this one as the slip. Reported
+    as a finding in `.superpowers/sdd/2026-08-23-resume/task-b1-report.md`.
+    The H8b-era clause this replaces read "task 3 is that task", meaning
+    H8b's own task 3, a closed slice's.
 
     Driven WITH a sweep so the list includes `conditions` (a run with no
     sweep has no such directory). No existing test in this file asserts the
@@ -16398,11 +16423,14 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
     Decision 7's new artifacts move, and none of them is this assertion, so
     this is new coverage.
 
-    Task 3 appends `'config.yaml'` to this list, keeping it sorted, and
-    nothing else changes. The post-edit list is:
-    `['conditions', 'config.yaml', 'environment', 'executions.jsonl',
-    'manifest', 'run.yaml', 'sweep.yaml']`. Task 3's report must show the
-    diff is exactly one entry per arm with nothing reordered.
+    The authorized task appends `'identity.json'` to this list, keeping it
+    sorted, and nothing else changes. The post-edit list, copied verbatim
+    from the H9b design's § The guard pin: `['conditions', 'config.yaml',
+    'environment', 'executions.jsonl', 'identity.json', 'manifest',
+    'run.yaml', 'sweep.yaml']` — one entry appended, sorted, nothing
+    reordered, and that task's report must show the diff is exactly that.
+    (H8b's own already-applied instruction, which this paragraph replaces,
+    appended `'config.yaml'` for the same reason.)
 
     The `lock` assertion below is implied by the list equality above it —
     if `lock` existed, `iterdir()` would list it and the equality would fail
@@ -16421,6 +16449,7 @@ def test_h8b_arm_a_the_run_directorys_root(tmp_path):
         "config.yaml",
         "environment",
         "executions.jsonl",
+        "identity.json",
         "manifest",
         "run.yaml",
         "sweep.yaml",
@@ -20527,7 +20556,29 @@ def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
 
 
 def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
-    """H9a guard-pin ARM D. SOLE AUTHORIZED EDITOR: NONE. NEW COVERAGE
+    """H9a guard-pin ARM D. **RE-AUTHORIZED as H9b guard-pin arm C: SOLE
+    AUTHORIZED EDITOR: H9b task 6, by controller ruling recorded in the H9b
+    design's Decision 5** (`docs/superpowers/specs/2026-08-23-resume-design.md`
+    § Decision 5 and § The guard pin, which says of this arm "SOLE AUTHORIZED
+    EDITOR: NONE at HEAD, and Decision 5 re-authorizes it"). The clause it
+    replaces read NONE; nothing else here moves, and this task changed no
+    assertion. Post-edit set, copied verbatim from that table: `{step, scope,
+    condition, repeat, status, started_at, wall_seconds, error, returned,
+    recorded_columns}` — two keys added, none removed.
+
+    **EDITED to that post-edit set by plan task 5, not task 6, and the
+    discrepancy is stated rather than resolved silently** (the third option
+    the design's own § Correction, 2026-08-23, from batch 1 names). Task 5's
+    dispatched brief opens *"You are the SOLE AUTHORIZED EDITOR of guard-pin
+    arm C"* and task 5 is the task that adds the two keys, so it is the
+    "ledger task" the design's parenthetical describes; the parenthetical
+    names plan task 6, which computes `attempts` from this file and adds no
+    key to it. Tasks 5 and 6 are one batch, so no task edited this arm out of
+    turn either way — the edit made here is exactly the two-key addition the
+    clause above specified in advance, nothing reordered and nothing removed,
+    and the batch report carries the discrepancy as a finding.
+
+    NEW COVERAGE
     (design § 7's table; task 1 brief; § Corrections 10): the claim exists
     in two docstrings in this file (grepped below) and in no assertion
     before this task.
@@ -20567,6 +20618,8 @@ def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
             "started_at",
             "wall_seconds",
             "error",
+            "returned",
+            "recorded_columns",
         }
 
 
@@ -21666,7 +21719,18 @@ def test_h9a_dry_run_dispatches_end_to_end_and_prints_the_transcript(tmp_path: P
     assert "statistics: basis units (n=10 resolved); correction holm;" in out
     assert "scale:  40 unit-executions (4 executions × 10 units handed to each)" in out
     assert "would create 4 step directories under " in out
-    assert "and 7 fixed files in that directory:" in out
+    # H9b guard-pin arm D. SOLE AUTHORIZED EDITOR: H9b's `identity.json`
+    # write-site task — plan task 3, whose section grants it (the H9b design
+    # and the task 1 brief spell that task's number "4", which is the
+    # real-command review that may touch nothing; see arm B's docstring for
+    # the same slip and its finding). Post-edit state, written now: `8`,
+    # because `_DRY_RUN_FIXED_FILES` gains `identity.json`. Nothing else in
+    # this line moves. The set-to-set comparison against a real run's tree
+    # (`_h9a_fixture_u`, which asserts `real_files - artifacts == fixed`) is
+    # SELF-MAINTAINING and MUST NOT be edited: it is the second, independent
+    # assertion that catches an entry added to the tuple but not written, or
+    # written but not listed.
+    assert "and 8 fixed files in that directory:" in out
     # The pointer a run repoints OUTSIDE the run directory. It is not in the
     # brief's fixed-file list and not inside the parsed block, so nothing else
     # in these tests holds it — and an unheld sentence in this output is the
@@ -22357,3 +22421,2955 @@ def test_h9a_fixture_y_dry_run_creates_nothing_while_the_probe_round_runs(
     assert len(calls.read_text().split()) == calls_before + 2
     # Positive 2: the transcript printed.
     assert "creates nothing" in out
+
+
+# ===========================================================================
+# H9b guard pin — captured in batch 1, before any code moves.
+#
+# `docs/superpowers/specs/2026-08-23-resume-design.md` § The guard pin is the
+# authority; its eight arms are A–H. Arms A and G are BUILT here (below);
+# arms B, C, D and E are shipped assertions whose editor clauses this task
+# RE-AUTHORIZES in place, changing no assertion; arms F and H are cited in
+# `.superpowers/sdd/2026-08-23-resume/task-b1-report.md` and deliberately
+# NOT re-captured — re-capturing a claim already pinned is H8a's *same list
+# pinned twice* fault.
+#
+# Arm F: `test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf` (a
+# completed `run`'s whole `run.yaml`, leaf by leaf) and
+# `test_h9a_arm_b_runs_full_stdout_line_by_line` (`run`'s full stdout). They
+# are what Decision 14's behaviour-preservation claim is measured against.
+#
+# Arm H: `test_h8b_arm_b_environments_contents` (`environment/`'s contents —
+# `identity.json` is not under it), `test_h8a_arm_a_a_clean_run_top_level_
+# shape_status_and_exit` and `test_h8a_arm_b_the_provenance_key_list_and_
+# upstream_empty` (`run.yaml`'s and `provenance`'s key lists),
+# `test_h8c_arm_a_the_records_field_level_shape` (the record's field-level
+# shape), `test_h8b_arm_e_sweep_yamls_recorded_plan_shape` (`sweep.yaml`'s
+# key list), and H9a's arms C and E (the four exit codes and the four early
+# exits).
+#
+# **Both arms built here are half live and half `xfail(strict=True)`**, per
+# the design's appended A3: the live halves are the fixtures' own measured
+# state, and the `xfail` halves are what tasks 9 and 14 make pass. A reviewer
+# must not read an `xfail` as coverage — which is also why the fixture-state
+# halves exist at all: `xfail(strict=True)` absorbs EVERY failure reason, so
+# a crash fixture that silently never crashed would still report `xfail`.
+# ===========================================================================
+
+# Arm A's project (design § Fixtures as claims, fixture B), with ONE
+# documented departure: fixture B prescribes "one recorded key deliberately
+# colliding with a declared attribute name", and that is **unreachable
+# through `io.record`** — `artifacts.py` raises `E-STEP-KEY-COLLISION` for a
+# recorded column shadowing a declared attribute, `docs/reference.md`
+# § Validation documents the refusal, and a first capture of this fixture
+# with a recorded `cohort` produced eight `failed` executions carrying that
+# code (measured; reported as a finding in the batch report). So the
+# collision half of fixture B is dropped here and the attribute is carried
+# undisturbed; the *structural* claim it existed to separate belongs to the
+# task whose reader subtracts attribute columns.
+#
+# What remains, and each half is load-bearing:
+#   * TWO repeat-scope steps, one recording (`units.parquet` exists,
+#     `recorded_columns` is non-empty) and one SCALAR-ONLY (a `completed`
+#     triple that legitimately writes no `units.parquet`) — the two readings
+#     "recorded nothing" and "file missing" cannot be told apart by a
+#     one-step fixture.
+#   * A declared attribute (`cohort`).
+#   * A crash driven by a COUNTER FILE outside `input_dir`, so the crash
+#     point is deterministic rather than timing-dependent, and `os._exit` so
+#     the `lock` is left behind — the state Decision 2 is about. The counter
+#     file is consulted only when it EXISTS, which is what makes the same
+#     committed step source produce a clean run and a crashed one.
+_H9B_RECORDING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+_TRIP = __TRIP__
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == _TRIP:
+        os._exit(9)
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _tick()
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * 2.0}})
+        return {{"n_units": len(units)}}
+"""
+
+_H9B_SCALAR_STEP = """\
+# src/steps/{step_name}.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"handed": len(io.units)}}
+"""
+
+_H9B_CRASH_TRIP = 3
+
+
+def _h9b_round_trip_project(tmp_path: Path, control: Path) -> dict[str, Any]:
+    """Arm A's project, scaffolded, committed, and run STRAIGHT THROUGH once.
+
+    `control` is the crash counter's path, baked into the committed step
+    source and **absent** for this run, so the same source is inert here and
+    crashes under `_h9b_crash_run` below. It is outside `input_dir` so that
+    writing it moves no input manifest.
+    """
+    return run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+
+
+def _h9b_crash_run(doc: dict[str, Any], control: Path) -> Path:
+    """A second `run` of the same project, crashed mid-plan, in a SUBPROCESS.
+
+    A subprocess and not `main(...)`: the crash is `os._exit(9)`, which in
+    process would take the test session with it — and `os._exit` is the whole
+    point, since a contained raise unwinds `RunLock.__exit__` and removes the
+    `lock` this fixture exists to leave behind.
+
+    The counter file is created here and removed before returning, so a
+    resume of the returned directory re-executes without crashing again.
+    """
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    assert control.read_text().strip() == str(_H9B_CRASH_TRIP), control.read_text()
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    return crashed
+
+
+def _h9b_run_yaml_leaves(run_doc: Any, tmp_path: Path) -> list[tuple[str, Any]]:
+    """`run.yaml`'s normalized leaves, per the task 1 brief's list.
+
+    Delegates to H9a arm A's `_h9a_run_yaml_leaves` — the same walk, the same
+    sort, the same normalization — and adds the ONE key this brief adds,
+    `attempts`, on top. Written as a delegation rather than a copy because
+    H9a's helper is not an arm and re-implementing its walk would be two
+    normalizers to keep in step.
+
+    Two entries of the inherited set are EXTENSIONS beyond this brief's list
+    and are reported as such: `commit` (a fresh commit's SHA is timestamp-
+    sensitive, measured twice by H9a) and `input_manifest_hash` (one of the
+    three hashes this brief names, so it is on the list by another route).
+    Nothing else is added, and nothing was added after seeing a diff.
+    """
+    return [
+        (path, "<normalized>" if path.rsplit(".", 1)[-1] == "attempts" else value)
+        for path, value in _h9a_run_yaml_leaves(run_doc, tmp_path)
+    ]
+
+
+_H9B_ARM_A_GOLDEN = [
+    ("code_hash", "<normalized>"),
+    ("config.data.input_dir", "<normalized>"),
+    ("config.data.input_manifest_policy", "hash_all"),
+    ("config.data.output_dir", "<normalized>"),
+    ("config.data.units.allocation", "within"),
+    ("config.data.units.attributes.0", "cohort"),
+    ("config.data.units.cluster_by", None),
+    ("config.data.units.from", "index.csv"),
+    ("config.data.units.holdout", None),
+    ("config.data.units.key", "patient_id"),
+    ("config.data.units.measurements", None),
+    ("config.data.units.weight_by", None),
+    ("config.entrypoint", "cohort_pilot.experiment:CohortPilotExperiment"),
+    ("config.experiment_type", "generic"),
+    ("config.limits.max_executions", 500),
+    ("config.limits.max_failed_fraction", 0.2),
+    ("config.limits.max_ineligible_fraction", 0.5),
+    ("config.limits.min_clusters", 10),
+    ("config.limits.min_reported_n", 10),
+    ("config.limits.min_units_per_cell", 20),
+    ("config.metadata.authors.0", "Kyungjoon Lee"),
+    ("config.metadata.description", "an end-to-end helper run"),
+    ("config.metadata.institution", ""),
+    ("config.metadata.name", "cohort-pilot"),
+    ("config.parameters.analysis.confidence", 0.95),
+    ("config.parameters.analysis.drop_missing", True),
+    ("config.parameters.analysis.method", "pearson"),
+    ("config.parameters.analysis.min_samples", 30),
+    ("config.plugin", None),
+    ("config.replication.order", "as_declared"),
+    ("config.replication.rationale", "four seeds"),
+    ("config.replication.repeats.0.kind", "seed"),
+    ("config.replication.repeats.0.n", 4),
+    ("config.schema_version", "1.0"),
+    ("config.statistics.correction", "holm"),
+    ("config.sweep.grid.analysis.method.0", "pearson"),
+    ("config.sweep.grid.analysis.method.1", "spearman"),
+    ("config.template_version", "1.0.0"),
+    ("draft", False),
+    ("execution.conditions.0.index", 0),
+    ("execution.conditions.0.label", "method=pearson"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.attempts", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.status", "completed"),
+    ("execution.conditions.0.steps.step02_step02_score.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.index", 1),
+    ("execution.conditions.1.label", "method=spearman"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed84.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed08.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed27.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed76.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.attempts", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.status", "completed"),
+    ("execution.conditions.1.steps.step02_step02_score.seed84.wall_seconds", "<normalized>"),
+    ("layout.conditions", True),
+    ("layout.repeats", True),
+    ("parameters_hash", "<normalized>"),
+    ("provenance.allocation", None),
+    ("provenance.allocation_hash", None),
+    ("provenance.apparatus", None),
+    ("provenance.environment.hardware.cpu_count", 8),
+    ("provenance.environment.hostname", "<normalized>"),
+    ("provenance.environment.manager", "uv"),
+    ("provenance.environment.os", "Darwin-25.5.0-arm64"),
+    ("provenance.environment.python_version", "3.13.7"),
+    ("provenance.environment.uv_lock", None),
+    ("provenance.environment.uv_lock_hash", None),
+    ("provenance.git.branch", "main"),
+    ("provenance.git.code_dirty", False),
+    ("provenance.git.commit", "<normalized>"),
+    ("provenance.git.config_committed", True),
+    ("provenance.git.remote", None),
+    ("provenance.git.repo_root", "<normalized>"),
+    ("provenance.input_manifest", "manifest/input.json"),
+    ("provenance.input_manifest_hash", "<normalized>"),
+    ("provenance.publishable_version", "0.1.0"),
+    ("provenance.units.key", "patient_id"),
+    ("provenance.units.n", 20),
+    (
+        "provenance.units_hash",
+        "sha256:7f1d7ab1a8929a672b645ee56727f6bbb5156c438cfb0a0b989acd90f34a7ca2",
+    ),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.0", 13.462378863959492),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.1", 24.537621136040507),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.correction", None),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.method", "t_over_units"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.completed", 20),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.resolved", 20),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.n", 4),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.value", 19.0),
+    ("results.conditions.0.index", 0),
+    ("results.conditions.0.is_baseline", False),
+    ("results.conditions.0.label", "method=pearson"),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed08.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed27.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed76.n_units", 20),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed84.n_units", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed08.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed27.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed76.handed", 20),
+    ("results.conditions.0.per_repeat.step02_step02_score.seed84.handed", 20),
+    ("results.conditions.0.values.analysis.method", "pearson"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.0", 13.462378863959492),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.1", 24.537621136040507),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.correction", None),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.method", "t_over_units"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.completed", 20),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.resolved", 20),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.n", 4),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.value", 19.0),
+    ("results.conditions.1.index", 1),
+    ("results.conditions.1.is_baseline", False),
+    ("results.conditions.1.label", "method=spearman"),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed08.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed27.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed76.n_units", 20),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed84.n_units", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed08.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed27.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed76.handed", 20),
+    ("results.conditions.1.per_repeat.step02_step02_score.seed84.handed", 20),
+    ("results.conditions.1.values.analysis.method", "spearman"),
+    ("run_id", "<normalized>"),
+    ("schema_version", "1.0"),
+    ("status", "completed"),
+]
+
+
+def test_h9b_arm_a_the_straight_through_golden(tmp_path: Path):
+    """H9b guard-pin ARM A, the LIVE half: the straight-through `run`'s whole
+    `run.yaml`, leaf by leaf. SOLE AUTHORIZED EDITOR: NONE (design § The
+    guard pin). A failure here is a finding to report, not an assertion to
+    edit.
+
+    The literal below was CAPTURED BY RUNNING this exact fixture through a
+    throwaway driver, discarded once the literal was copied in — never
+    transcribed from `run_record.py`. It is a module constant because the
+    `xfail`ed resume half asserts against the SAME golden: one capture, two
+    consumers, which is not the *same list pinned twice* (that fault is two
+    captures of one claim).
+
+    `units=20` clears `limits.min_reported_n` (10), so no
+    `W-STATS-COLUMN-THIN` side effect has to be kept in sync.
+
+    Mutation (production code, full suite): `run_record.py`'s `_execution_
+    block` writing `"attempts": 1` cannot be caught here — `attempts` is on
+    this brief's own normalization list — so the mutation run against this
+    arm was `stats.py`'s `repeat_spread` `std`, reported in the batch report
+    with its full-suite count.
+    """
+    doc = _h9b_round_trip_project(tmp_path, tmp_path / "crash_control")
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+def test_h9b_arm_a_the_crash_fixture_is_really_crashed(tmp_path: Path):
+    """H9b guard-pin ARM A, the fixture's OWN state — live, and the reason
+    the `xfail` half below means anything. SOLE AUTHORIZED EDITOR: NONE.
+
+    `xfail(strict=True)` absorbs every failure reason, so a fixture that
+    silently never crashed (a subprocess that could not import
+    `publishable`, a counter file at the wrong path, an `os._exit` never
+    reached) would still report `xfail` and be read as *correctly failing
+    until task 9*. These are the claims design § 0 measured, asserted here
+    instead of trusted.
+
+    What is NOT asserted here, deliberately: the crashed directory's FULL
+    sorted root list. That list is guard-pin arm B's
+    (`test_h8b_arm_a_the_run_directorys_root`), which an authorized task
+    moves when `identity.json` lands; a second copy here would be H8a's
+    *same list pinned twice* AND would need an unauthorized edit in the same
+    slice. Each path below is asserted individually, and the two absences —
+    `run.yaml` and a `latest` pointing at this run — are the two facts
+    `resume` is defined against.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+
+    for name in ("config.yaml", "executions.jsonl", "manifest", "environment", "sweep.yaml"):
+        assert (crashed / name).exists(), name
+    assert (crashed / "environment" / "repo_root.txt").exists()
+    assert (crashed / "manifest" / "input.json").exists()
+    # The `lock` is still held by a process that no longer exists — the state
+    # Decision 2's takeover is for, and the reason `os._exit` is the crash.
+    holder = json.loads((crashed / "lock").read_text())
+    assert holder["host"] == socket.gethostname()
+    with pytest.raises(ProcessLookupError):
+        os.kill(holder["pid"], 0)
+    # No `run.yaml`: the run did not end, which is what `resume` is for.
+    assert (crashed / "run.yaml").exists() is False
+    # And no `latest` pointing HERE (§ Corrections 10: `point_latest` runs
+    # after `run.yaml`). The pointer exists, from the straight-through run of
+    # the same project, and resolves to THAT directory — asserted rather than
+    # asserted-absent, because an absence would also pass for a fixture whose
+    # first run never happened.
+    pointer = doc["results_dir"] / "latest"
+    text = doc["results_dir"] / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == doc["run_dir"].name
+    assert named != crashed.name
+    # Exactly the executions that ran before the trip, all `completed`: the
+    # crash was mid-plan, not before it and not after it.
+    lines = [
+        json.loads(line)
+        for line in (crashed / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert [entry["status"] for entry in lines] == ["completed", "completed"]
+    assert {entry["step"] for entry in lines} == {"step01_summarize_units"}
+
+
+def test_h9b_arm_a_crash_and_resume_equals_straight_through(tmp_path: Path):
+    """H9b guard-pin ARM A, the half that was `xfail(strict=True)`: a
+    crash-and-resume round trip equals a straight-through run, LEAF BY LEAF,
+    against the same golden the live half captured.
+
+    **The marker is removed here, by task 15, and not by task 9** — the arm
+    drives `main(["resume", ...])`, so it could not pass until `resume`
+    DISPATCHED, which is this task. The controller's dispatch authorizes the
+    conversion on this NONE-editor arm; nothing else about the arm moved, and
+    the golden is the one committed in batch 1 before any comparison ran.
+
+    **What it now asserts that the `xfail` did not.** A strict `xfail` asserts
+    only *this fails somehow* — it passed while `main` printed the unbuilt
+    diagnostic and exited 2, which is a state that says nothing about
+    `resume`. Live, the same body asserts `main(["resume", <dir>])` returns
+    `EXIT_OK`, that a `run.yaml` exists to load at all, and that every one of
+    its 94 normalized leaves equals the straight-through golden in order.
+
+    This is the arm design Decision 4 exists for, and no per-key assertion
+    substitutes for it: `_gather_repeats` builds its column order from row
+    iteration order and `summarize_step` derives a metric's column order from
+    that, so a parquet round trip can move `run.yaml`'s column order with
+    every value correct.
+
+    The normalization list is the brief's, fixed BEFORE this comparison was
+    ever run — a normalization decided after seeing a diff is a normalization
+    chosen to hide it. `attempts` is on it because a resumed triple's count
+    is 2 where a straight-through one's is 1, which is Decision 6's own
+    claim and is pinned by that task's fixture, not laundered here.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert main(["resume", str(crashed)]) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+def test_h9b_arm_g_the_dead_holder_fixture(tmp_path: Path):
+    """H9b guard-pin ARM G, the LIVE half: the race fixture's own state.
+    SOLE AUTHORIZED EDITOR: NONE.
+
+    Same reason as arm A's fixture-state half — an `xfail(strict=True)` race
+    that never raced would still report `xfail`. The holder pid is a REAL
+    reaped process (the crashed subprocess's own), never a fabricated
+    number: a fabricated pid makes the fixture agree with a liveness test
+    that always answers *dead*.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    holder = json.loads((crashed / "lock").read_text())
+    # A SUBSET, not an equality: `lock` holds two keys today (§ Corrections
+    # 9) and task 14 adds `started_at`, which § One execution at a time
+    # already documents. An equality here would fail on that addition, and
+    # this arm's editor is NONE — an arm that forces an unauthorized edit is
+    # the H6a fault this pin exists to avoid. What the arm needs is the two
+    # keys a liveness test reads.
+    assert {"host", "pid"} <= set(holder), holder
+    assert holder["host"] == socket.gethostname()
+    with pytest.raises(ProcessLookupError):
+        os.kill(holder["pid"], 0)
+    assert (crashed / "lock.takeover").exists() is False
+
+
+def test_h9b_arm_g_the_takeovers_mutual_exclusion(tmp_path: Path, monkeypatch, capsys):
+    """H9b guard-pin ARM G, the half that was `xfail(strict=True)`: two
+    `resume`s racing one dead-holder run directory reach exactly one holder
+    and exactly one `E-RUN-LOCKED`.
+
+    **The marker is removed here, in task 15's commit, though task 14 built
+    the takeover** — deliberately, and reported as a deferral rather than as
+    compliance: the arm drives `main(["resume", ...])`, which printed the
+    unbuilt diagnostic until this task, so removing it one commit earlier
+    would have left task 14's own commit red. Nothing else about the arm
+    moved.
+
+    **Deterministic on purpose.** The five-process probe of design § 0 (60
+    trials × 5 processes, zero violations; two winners by trial 22 with the
+    token deleted) is the DISCOVERY instrument and is cited in the batch
+    report — a probe proves the moment, a test proves tomorrow.
+
+    Driven through `main(["resume", ...])` rather than through the takeover
+    helper by name: this arm's editor is NONE, so a helper renamed in task 14
+    would force an unauthorized edit here.
+
+    **What the barrier does, stated exactly rather than generously.** It is
+    released inside the liveness syscall, between the verdict's evidence and
+    the lock's replacement. Under the SHIPPED protocol only one thread ever
+    reaches that syscall — the other refuses at the exclusive takeover token
+    — so the single arrival times out, the barrier breaks, and it is inert.
+    It bites under the mutation that deletes the token, where both threads
+    arrive and are released into the unlink-then-create window together.
+    So the barrier does not make the shipped path deterministic; it makes the
+    MUTATION's interleaving deterministic, which is what an arm is for.
+
+    The wrapper's own call count is asserted, because a monkeypatch aimed at
+    a name the code no longer calls is silently inert: a task 14 that tests
+    liveness without `run_identity`'s `os.kill` fails here, and that is a
+    finding about the arm's hook rather than about the protocol.
+    """
+    import threading
+
+    from publishable import run_identity
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    dead_pid = json.loads((crashed / "lock").read_text())["pid"]
+
+    barrier = threading.Barrier(2)
+    real_kill = run_identity.os.kill
+    hits: list[int] = []
+
+    def kill(pid: int, sig: int) -> None:
+        if pid != dead_pid:
+            return real_kill(pid, sig)
+        try:
+            real_kill(pid, sig)
+        except ProcessLookupError:
+            hits.append(pid)
+            try:
+                barrier.wait(timeout=5.0)
+            except threading.BrokenBarrierError:
+                pass
+            raise
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+    codes: list[int] = []
+    lock_seen = threading.Lock()
+
+    def resume() -> None:
+        code = main(["resume", str(crashed)])
+        with lock_seen:
+            codes.append(code)
+
+    threads = [threading.Thread(target=resume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert not any(thread.is_alive() for thread in threads)
+
+    out, err = capsys.readouterr()
+    assert hits, "the liveness hook never fired — the barrier was aimed at a dead name"
+    assert sorted(codes) == [EXIT_OK, EXIT_WRONG], codes
+    assert (out + err).count("E-RUN-LOCKED") == 1, (out, err)
+    assert (crashed / "run.yaml").exists()
+    assert (crashed / "lock").exists() is False
+    assert (crashed / "lock.takeover").exists() is False
+
+
+# --- H9b task 3: `identity.json`'s write site -------------------------------
+
+_H9B_IDENTITY_PROBE_MODULE = """\
+import json
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9b_identity_probe")
+def probe(cfg):
+    out = Path(cfg.data.output_dir)
+    (run_dir,) = sorted(p for p in out.glob("run_*"))
+    Path(os.environ["H9B_IDENTITY_SNAPSHOT"]).write_text(
+        json.dumps(sorted(p.name for p in run_dir.iterdir()))
+    )
+    return Apparatus(facts={"model_revision": "r1"})
+"""
+
+
+def test_h9b_identity_json_exists_while_the_lock_is_held(
+    installed, registries, tmp_path, monkeypatch, capsys
+):
+    """`identity.json` is written INSIDE `with RunLock(run_dir)`, before
+    anything executes.
+
+    **Guard-pin arm B cannot see this**, checked in advance rather than
+    assumed: arm B lists the root of a COMPLETED run directory, where the
+    file is present whether it was written inside the lock or after it. So
+    the position gets its own pin, and the only observer core has inside that
+    window is the apparatus run-start probe (`Observer.observe_round`, called
+    within the same `with` block).
+
+    The probe snapshots the run directory's own root, so the evidence is a
+    positive presence — `identity.json` there, `lock` there, `run.yaml` not
+    yet — rather than an absence that a probe which never ran would also
+    satisfy.
+    """
+    site = installed(
+        "dist-h9b-identity",
+        "1.0",
+        {"publishable.probes": {"h9b_identity_probe": "h9b_identity_probe_mod:probe"}},
+    )
+    (site / "h9b_identity_probe_mod.py").write_text(_H9B_IDENTITY_PROBE_MODULE)
+    snapshot = tmp_path / "snapshot.json"
+    monkeypatch.setenv("H9B_IDENTITY_SNAPSHOT", str(snapshot))
+    cfg = _h9a_probe_project(
+        tmp_path,
+        monkeypatch,
+        package="h9b_identity_pkg",
+        template_name="h9b_identity_assay",
+        probe_name="h9b_identity_probe",
+    )
+    assert main(["run", str(cfg)]) == EXIT_OK
+    names = json.loads(snapshot.read_text())
+    assert "identity.json" in names, names
+    # Inside the lock, not merely before the record: the lock file is what
+    # marks that window, and `run.yaml` is written after it is released.
+    assert "lock" in names, names
+    assert "run.yaml" not in names, names
+
+
+def test_h9b_identity_json_records_the_runs_own_figures(tmp_path: Path):
+    """Every figure in `identity.json` is the one `run.yaml` records — not a
+    recomputation that happens to agree.
+
+    A second derivation is a second answer, so the comparison is against the
+    record the same run wrote, and `config_path` is compared against the
+    config file the run was given, relative to the repo root and
+    POSIX-separated.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    identity = json.loads((doc["run_dir"] / "identity.json").read_text())
+    assert list(identity) == [
+        "code_hash",
+        "parameters_hash",
+        "uv_lock_hash",
+        "config_path",
+        "draft",
+    ]
+    assert identity["code_hash"] == run_doc["code_hash"]
+    assert identity["parameters_hash"] == run_doc["parameters_hash"]
+    assert identity["uv_lock_hash"] == run_doc["provenance"]["environment"]["uv_lock_hash"]
+    assert identity["draft"] is False
+    # The recorded name is relative and POSIX-separated, and it resolves to
+    # the config the run was given — the honouring direction, which task 2's
+    # containment refusals do not prove.
+    assert identity["config_path"] == "configs/cohort-pilot/config.yaml"
+    assert (doc["root"] / identity["config_path"]).resolve() == doc["cfg"].resolve()
+    # `input_manifest_hash` is deliberately absent (design Decision 1): the
+    # manifest itself is the durable operand.
+    assert "input_manifest_hash" not in identity
+
+    def reject(name: str) -> object:
+        raise AssertionError(f"non-finite JSON token {name!r} in {identity}")
+
+    # The file survives a reader that REFUSES `NaN`/`Infinity`, which plain
+    # `json.loads` accepts (plan correction 22: "serializable by invariant"
+    # was a wrong ground, so the round trip is performed rather than argued).
+    text = (doc["run_dir"] / "identity.json").read_text()
+    assert json.loads(text, parse_constant=reject) == identity
+    with pytest.raises(AssertionError):
+        json.loads('{"code_hash": NaN}', parse_constant=reject)
+
+
+def test_h9b_a_draft_run_records_draft_true(tmp_path: Path):
+    """`draft` is read from `_execute_prepared`'s own parameter, so the two
+    entries into one execution path disagree here and nowhere else.
+
+    Both arms in one test on purpose: a `draft: true` assertion alone passes
+    for a build that hardcodes `true`, and the `run` arm above passes for one
+    that hardcodes `false`.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    assert json.loads((doc["run_dir"] / "identity.json").read_text())["draft"] is False
+    assert main(["draft", str(doc["cfg"])]) == EXIT_OK
+    (drafted,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    drafted_identity = json.loads((drafted / "identity.json").read_text())
+    assert drafted_identity["draft"] is True
+    # Everything else is the same run's own figures, so the flag is the only
+    # difference between the two records' identity claims.
+    assert (
+        drafted_identity["code_hash"]
+        == json.loads((doc["run_dir"] / "identity.json").read_text())["code_hash"]
+    )
+
+
+# ===========================================================================
+# H9b task 5 — `executions.jsonl` gains `recorded_columns` and `returned`
+# (design Decision 5). Guard-pin arm C holds the LINE'S KEY SET; these hold
+# what the two new values ARE, which no key-set assertion can see.
+# ===========================================================================
+
+# Two recorded keys whose SORTED order is the reverse of their insertion
+# order, on purpose: `recorded_columns` is documented as sorted, and a
+# reconstitution that narrowed a read-back row by iterating that sorted list
+# would reorder `run.yaml`'s columns with every value correct — the failure
+# guard-pin arm A's own docstring names and the one it cannot yet see (its
+# resume half is `xfail` until `resume` dispatches). `zeta` is recorded first.
+_H9B_TWO_COLUMN_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"zeta": float(i), "alpha": i}})
+        return {{"n_units": len(units)}}
+"""
+
+# A repeat step that records NOTHING and returns a scalar — `finalize` writes
+# `units.parquet` only `if self._rows`, so this execution completes and the
+# file is absent. It is the second half of what makes an empty
+# `recorded_columns` meaningful rather than ambiguous.
+_H9B_SCALAR_ONLY_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"n_seen": len(io.units)}}
+"""
+
+# A `summary` step returning an `Estimate` — the one value a step may return
+# that `json` cannot encode at all, and the whole reason `returned` is written
+# through `run_record.summary_values`.
+_H9B_ESTIMATE_SUMMARY_STEP = """\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
+                                      method="mixed model, REML"),
+                 "converged": True}}
+"""
+
+# A repeat step returning a non-finite float. Legal and reachable (design
+# appendix A1: `coerce_scalars` passes it through and `run.yaml` records it),
+# so the ledger must round-trip it rather than refuse it or null it.
+_H9B_NAN_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"r": float("nan")}}
+"""
+
+
+def _h9b_ledger(run_dir: Path) -> list[dict[str, Any]]:
+    """Every line of `executions.jsonl`, in the order execution wrote them.
+
+    Plain `json.loads`, deliberately: the ledger's lines are written with
+    `json.dumps`' shipped `allow_nan=True`, so `NaN` round-trips exactly
+    through the same module — which is the encoding rule design appendix A1
+    fixed, and which a strict reader would refuse.
+    """
+    return [
+        json.loads(line)
+        for line in (run_dir / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+
+
+def test_h9b_recorded_columns_is_the_recorded_union_not_the_files_columns(tmp_path: Path):
+    """`recorded_columns` names what the step RECORDED — not what
+    `units.parquet` holds, which also carries every declared attribute.
+
+    This is the assertion that makes `resume`'s narrowing structural: the two
+    readings differ by exactly the attribute column, so a build emitting the
+    file's column list instead publishes `cohort` as a recorded column and a
+    reconstituted row would carry an attribute value into the unit table
+    `stats` reads.
+
+    Both halves are asserted in one test on purpose. `recorded_columns ==
+    ["alpha", "zeta"]` alone passes for a build that never wrote the
+    attribute anywhere; the parquet assertion beside it is what proves
+    `cohort` is genuinely in the file and therefore genuinely excluded here
+    rather than absent from both.
+
+    The sorted order is the REVERSE of the insertion order (`zeta` is
+    recorded first), which is what a later narrowing-by-sorted-list defect
+    can be caught by; the parquet column order is asserted here for the same
+    reason — it is the order a reconstituted row must reproduce.
+
+    **This fixture is cited by task 8**, which needs exactly this shape (a
+    declared attribute beside recorded columns) and builds no second copy of
+    it. Fixture B of design § Fixtures as claims prescribes one recorded key
+    COLLIDING with the attribute's name; that state is unreachable through
+    `io.record` (`E-STEP-KEY-COLLISION`, measured by batch 1 as eight failed
+    executions), so the attribute is carried undisturbed, exactly as arm A's
+    own fixture does, and the report carries why.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_TWO_COLUMN_STARTER_STEP,
+    )
+    (entry,) = _h9b_ledger(doc["run_dir"])
+    assert entry["recorded_columns"] == ["alpha", "zeta"]
+    from publishable.artifacts import _decode_parquet
+
+    (parquet,) = sorted(doc["run_dir"].rglob("units.parquet"))
+    rows = _decode_parquet(parquet.read_bytes())
+    assert list(rows[0].keys()) == ["unit", "cohort", "zeta", "alpha"]
+
+
+def test_h9b_a_scalar_only_step_records_an_empty_column_list_and_no_table(tmp_path: Path):
+    """An EMPTY `recorded_columns` is a claim, and it is not the same claim as
+    a missing file.
+
+    `artifacts.finalize` writes `units.parquet` only `if self._rows`, so a
+    step that records nothing completes and writes none. Without this line a
+    reader would have to choose between refusing every such run and resuming
+    a run whose table was genuinely lost — which is why the list is written
+    even when it is empty rather than omitted.
+
+    The recording step's own non-empty list is asserted in the same test: an
+    empty-list assertion alone passes for a build that writes `[]`
+    unconditionally.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["tally"],
+        extra_step_source=_H9B_SCALAR_ONLY_STEP,
+    )
+    ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
+    assert ledger["step02_tally"]["status"] == "completed"
+    assert ledger["step02_tally"]["recorded_columns"] == []
+    assert ledger["step01_summarize_units"]["recorded_columns"] == ["present"]
+    # The distinction the empty list exists to carry, asserted rather than
+    # assumed: the completed step wrote no table at all.
+    step_dirs = {p.parent.name for p in doc["run_dir"].rglob("units.parquet")}
+    assert "step02_tally" not in step_dirs
+    assert "step01_summarize_units" in step_dirs
+
+
+def test_h9b_returned_is_written_through_summary_values(tmp_path: Path):
+    """A `summary` step's `Estimate` reaches the ledger as the SAME expansion
+    `run.yaml`'s summary block holds — one function, two records, so the two
+    cannot disagree.
+
+    Asserted as an equality against `run.yaml`'s own block rather than
+    against a hand-written literal: a literal here would be a second
+    spelling of the expansion, which is the thing this decision exists to
+    prevent. The `converged: True` sibling is carried because
+    `summary_values` expands only the values that carry an interval, and a
+    test with an `Estimate` alone could not see a build that expanded
+    everything.
+
+    Grep run before writing this, every hit attributed. `grep -n
+    "Estimate(" tests/test_cli.py` → 10 hits, of which those at
+    `_ESTIMATE_SUMMARY_STEP` and its five neighbours (the
+    `W-STEP-ESTIMATE-N` family) and `_H5A_*`/`_H8C_*`'s summary steps are
+    `summary`-scope steps returning an `Estimate` through a real run. **So
+    shipped fixtures DO reach this line already**, and the mutation that
+    drops `summary_values` is caught by them too — it raises `TypeError` out
+    of the ledger write, which sits OUTSIDE the per-execution `try`, so the
+    whole run dies rather than the execution failing. This test is the
+    positive form of that: it asserts what the value IS, which a crash
+    cannot.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_H9B_ESTIMATE_SUMMARY_STEP,
+    )
+    ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    recorded = run_doc["results"]["summary"]["step02_summarize"]
+    assert ledger["step02_summarize"]["returned"] == recorded
+    # And the shape, so a test asserting only the equality could not pass for
+    # two records that are identically wrong.
+    assert recorded["adjusted"] == {
+        "value": 0.031,
+        "reported": True,
+        "ci95": [0.008, 0.055],
+        "n": 612,
+        "method": "mixed model, REML",
+    }
+    assert recorded["converged"] is True
+    # A repeat step's plain mapping travels unexpanded, which is what
+    # `summary_values`' idempotence on an already-flat mapping means here.
+    assert ledger["step01_summarize_units"]["returned"] == {"n_units": 10}
+
+
+def test_h9b_a_non_finite_return_round_trips_through_the_ledger(tmp_path: Path):
+    """A step returning `float("nan")` is legal (design appendix A1:
+    `coerce_scalars` passes it through and `run.yaml` records it), so the
+    ledger keeps `json.dumps`' shipped `allow_nan=True` and the value comes
+    back as `nan` rather than as `None`.
+
+    `math.isnan` rather than an equality, because `nan != nan`. The
+    `is not None` assertion is stated separately because it is the failure a
+    non-finite-to-`null` encoding would produce, and a resumed `per_repeat`
+    differing from a straight-through one is what that would cost.
+
+    The raw text is asserted too: the defect could live in the SERIALIZATION,
+    and a reader that normalises it away would hide it — this is the
+    `yaml.safe_load`-resolves-aliases fault in its json form.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        _starter_step=_H9B_NAN_STARTER_STEP,
+    )
+    text = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert "NaN" in text
+    (entry,) = _h9b_ledger(doc["run_dir"])
+    value = entry["returned"]["r"]
+    assert value is not None
+    assert math.isnan(value)
+
+
+# ===========================================================================
+# H9b task 7 — `Resumed`, the value object a second entry into phases 6-10
+# pins (design Decision 14). This task changes no behaviour, so what is
+# pinned is the shape and the signature.
+# ===========================================================================
+
+
+def test_h9b_resumed_is_frozen_and_replace_works():
+    """Frozen for the reason `Prepared` is: phases 6-10 must not write back
+    into what a second entry decided, since every field was read off the
+    previous attempt's artifacts.
+
+    Two branches, checked in advance: a MUTABLE dataclass permits the
+    assignment, so this test distinguishes the readings rather than asserting
+    a property both would satisfy. `dataclasses.replace` is asserted beside
+    it because that — not mutation — is how Decision 10's overrides travel,
+    and a build that made this class mutable to allow them would pass a
+    frozen-only test's converse.
+    """
+    from publishable.cli import Resumed
+
+    resumed = Resumed(
+        run_dir=Path("/nowhere/run_x"),
+        prior_results=(),
+        attempts={("step01", 0, "seed1"): 2},
+        baseline=None,
+        recorded_manifest={"files": []},
+        # Task 10's field, added here rather than defaulted: a default would
+        # let a caller that forgot to read `sweep.yaml` re-realize the order
+        # silently, and this constructor is the only one in the suite.
+        execution_order=None,
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        resumed.run_dir = Path("/elsewhere")  # type: ignore[misc]
+    moved = dataclasses.replace(resumed, run_dir=Path("/elsewhere/run_y"))
+    assert moved.run_dir == Path("/elsewhere/run_y")
+    assert resumed.run_dir == Path("/nowhere/run_x")
+    # A tuple rather than a list, one level down: a frozen dataclass holding a
+    # list still hands out something the aggregate phase could append to.
+    assert isinstance(resumed.prior_results, tuple)
+    with pytest.raises(AttributeError):
+        resumed.prior_results.append(None)  # type: ignore[attr-defined]
+
+
+def test_h9b_execute_prepared_accepts_resumed_and_defaults_it_to_none():
+    """The parameter exists, is keyword-only, and defaults to `None` — which
+    is what makes `run` and `draft` unchanged by its addition.
+
+    Asserted on the SIGNATURE rather than by passing a `Resumed` through:
+    task 7 wires nothing, so a behavioural assertion here would be a claim
+    task 9 has to delete, and deleting an assertion looks exactly like
+    weakening a pin. The unpack block is asserted untouched by the diff, not
+    by a test.
+    """
+    import inspect
+
+    from publishable.cli import Resumed, _execute_prepared
+
+    parameter = inspect.signature(_execute_prepared).parameters["resumed"]
+    assert parameter.default is None
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.annotation == (Resumed | None)
+    assert Resumed.__dataclass_params__.frozen is True
+
+
+# ===========================================================================
+# H9b task 8 — `_reconstitute`: a FULL `ExecutionResult` per skipped triple
+# (design Decision 4). Guard-pin arm A is the arbiter for the whole-record
+# equality, and its resume half runs `main(["resume", …])`, which does not
+# dispatch until task 15 — so these tests call the reconstitution DIRECTLY
+# and compare against the run's own record. `xfail(strict=True)` absorbs
+# every failure reason, so a green suite with arm A still `xfail`ing is no
+# evidence at all about this function.
+# ===========================================================================
+
+# A step that skips two units and records the rest, so `ineligible.jsonl`
+# exists and `recorded`/`skipped` are two different non-empty sets — a
+# fixture where every unit records makes a reconstitution that dropped
+# `skipped` entirely indistinguishable from a correct one.
+_H9B_SKIPPING_STARTER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            if i < 2:
+                io.skip(unit.key, "ineligible by design")
+            else:
+                io.record(unit.key, {{"zeta": float(i), "alpha": i}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def _h9b_reconstituted(doc: dict[str, Any]) -> tuple[Any, Any]:
+    """`(prepared, results)` for a run that already happened: the plan is
+    rebuilt by the shipped `_prepare_run` — which is what `resume` itself
+    does (Decision 7) — and the results are reconstituted from the run
+    directory's own artifacts."""
+    from publishable.cli import _prepare_run, _reconstitute
+    from publishable.lineage import read_execution_ledger
+
+    prepared = _prepare_run(doc["cfg"], allow_dirty=False)
+    assert not isinstance(prepared, int), prepared
+    results = _reconstitute(
+        prepared.plan,
+        run_dir=doc["run_dir"],
+        records=read_execution_ledger(doc["run_dir"]),
+        collapse=len(prepared.repeats) <= 1,
+    )
+    return prepared, results
+
+
+def test_h9b_reconstitution_rebuilds_every_completed_triple(tmp_path: Path):
+    """A completed run reconstitutes to one result per plan triple, in plan
+    order, with the rows narrowed to what the step RECORDED.
+
+    Three claims no key-set assertion could carry:
+
+    * the declared attribute `cohort` is IN `units.parquet` and OUT of the
+      reconstituted row — the narrowing, asserted against a file that
+      genuinely holds the column;
+    * the row's key ORDER is the file's (`unit`, `zeta`, `alpha`), not
+      `recorded_columns`' sorted order (`alpha`, `zeta`). `_gather_repeats`
+      builds its column order from row iteration order and `summarize_step`
+      derives a metric's from that, so a narrowing that iterated the sorted
+      list would move `run.yaml`'s column order with every value correct;
+    * `recorded` and `skipped` are the two different sets the step produced,
+      so a reconstitution that dropped either is visible here.
+
+    The values are computed from the fixture's own arithmetic (`i` over the
+    roster in order), never transcribed from a run.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_SKIPPING_STARTER_STEP,
+    )
+    prepared, results = _h9b_reconstituted(doc)
+    assert isinstance(results, tuple)
+    assert [r.execution for r in results] == list(prepared.plan)
+    assert all(r.status == "completed" for r in results)
+
+    result = results[0]
+    assert list(result.rows[0].keys()) == ["unit", "zeta", "alpha"]
+    assert result.rows[0] == {"unit": "p3", "zeta": 2.0, "alpha": 2}
+    assert result.recorded == frozenset(f"p{i + 1}" for i in range(2, 10))
+    assert result.skipped == frozenset({"p1", "p2"})
+    assert result.returned == {"n_units": 10}
+    # And the column the narrowing removed is genuinely in the file, so the
+    # exclusion above is a real subtraction rather than an absence.
+    from publishable.artifacts import _decode_parquet
+
+    parquet = next(doc["run_dir"].rglob("units.parquet"))
+    assert "cohort" in _decode_parquet(parquet.read_bytes())[0]
+
+
+def test_h9b_reconstituted_results_reassemble_the_runs_own_record(tmp_path: Path):
+    """The claim arm A makes, in the half of it that can run today: the
+    reconstituted results, put back through the SAME assembler the run used,
+    reproduce the run's own `execution` and `layout` blocks leaf for leaf.
+
+    This is a whole-block equality rather than per-key assertions, for
+    Decision 4's own reason — and it is the only available arbiter while arm
+    A's resume half is `xfail`, since that half drives `main(["resume", …])`
+    and `resume` does not dispatch until task 15.
+
+    `attempts` comes from `lineage.attempt_counts` over the real ledger, so
+    the equality also states that a straight-through run's counts are all
+    `1` — the measurement Decision 6 rests its additivity claim on, made
+    here rather than argued.
+    """
+    from publishable.lineage import attempt_counts, read_execution_ledger
+    from publishable.run_record import assemble_run_yaml
+
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=10,
+        unit_attributes=["cohort"],
+        _starter_step=_H9B_SKIPPING_STARTER_STEP,
+    )
+    prepared, results = _h9b_reconstituted(doc)
+    recorded_run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    counts = attempt_counts(read_execution_ledger(doc["run_dir"]))
+    assert set(counts.values()) == {1}
+    rebuilt = assemble_run_yaml(
+        run_id=recorded_run["run_id"],
+        status=recorded_run["status"],
+        config=recorded_run["config"],
+        code_hash=recorded_run["code_hash"],
+        parameters_hash=recorded_run["parameters_hash"],
+        provenance=recorded_run["provenance"],
+        results=list(results),
+        repeats=prepared.repeats,
+        attempts=counts,
+    )
+    assert rebuilt["execution"] == recorded_run["execution"]
+    assert rebuilt["layout"] == recorded_run["layout"]
+
+
+def test_h9b_a_scalar_only_triples_missing_table_is_not_a_refusal(tmp_path: Path):
+    """`finalize` writes `units.parquet` only `if self._rows`, so a completed
+    scalar-only step legitimately has none — and an unconditional
+    `E-RESUME-ROWS-MISSING` would refuse a directory the correct reading
+    resumes.
+
+    The recording step's own rows are asserted in the same test: a build that
+    returned empty rows for everything would satisfy the scalar-only claim
+    for free.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        extra_steps=["tally"],
+        extra_step_source=_H9B_SCALAR_ONLY_STEP,
+    )
+    _, results = _h9b_reconstituted(doc)
+    by_step = {r.execution.step_name: r for r in results}
+    assert by_step["step02_tally"].rows == ()
+    assert by_step["step02_tally"].recorded == frozenset()
+    assert by_step["step02_tally"].returned == {"n_seen": 10}
+    assert len(by_step["step01_summarize_units"].rows) == 10
+
+
+def test_h9b_reconstitution_refuses_a_lost_or_mangled_unit_table(tmp_path: Path):
+    """Three refusals, three faults, three remedies — and a control arm that
+    reads clean first, so a refusal firing for an unrelated reason is not
+    counted as a pass.
+
+    Each arm perturbs exactly one thing from a directory that resumed clean:
+    the table deleted (`E-RESUME-ROWS-MISSING`), the table's bytes truncated
+    and its record naming a column the file lacks (`E-RESUME-ROWS-
+    UNREADABLE`), and the record's `returned` key removed
+    (`E-RESUME-LEDGER-UNREADABLE` — a ledger older than H9b's two keys cannot
+    be resumed, because the alternative is a `per_repeat` hole and a unit
+    table narrowed to `unit` alone).
+    """
+    from publishable.errors import ContractError
+
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        _starter_step=_H9B_TWO_COLUMN_STARTER_STEP,
+    )
+    _, results = _h9b_reconstituted(doc)  # the control
+    assert results and results[0].rows
+
+    table = next(doc["run_dir"].rglob("units.parquet"))
+    ledger = doc["run_dir"] / "executions.jsonl"
+    good_table, good_ledger = table.read_bytes(), ledger.read_text()
+
+    table.unlink()
+    with pytest.raises(ContractError) as missing:
+        _h9b_reconstituted(doc)
+    assert missing.value.code == "E-RESUME-ROWS-MISSING"
+
+    table.write_bytes(good_table[: len(good_table) // 2])
+    with pytest.raises(ContractError) as unreadable:
+        _h9b_reconstituted(doc)
+    assert unreadable.value.code == "E-RESUME-ROWS-UNREADABLE"
+
+    # A table that decodes cleanly but does not hold what the record claims —
+    # the second fault under that code, distinguishable by message.
+    table.write_bytes(good_table)
+    entry = json.loads(good_ledger.splitlines()[0])
+    entry["recorded_columns"] = ["zeta", "omega"]
+    ledger.write_text(json.dumps(entry) + "\n")
+    with pytest.raises(ContractError) as uncovered:
+        _h9b_reconstituted(doc)
+    assert uncovered.value.code == "E-RESUME-ROWS-UNREADABLE"
+    assert "omega" in str(uncovered.value)
+
+    entry = json.loads(good_ledger.splitlines()[0])
+    del entry["returned"]
+    ledger.write_text(json.dumps(entry) + "\n")
+    with pytest.raises(ContractError) as stale:
+        _h9b_reconstituted(doc)
+    assert stale.value.code == "E-RESUME-LEDGER-UNREADABLE"
+
+    ledger.write_text(good_ledger)
+    _, restored = _h9b_reconstituted(doc)
+    assert restored[0].rows
+
+
+def test_h9b_a_ragged_recording_step_round_trips_rectangular(tmp_path: Path):
+    """**A measured residual, asserted rather than left to be discovered.**
+
+    `finalize` writes one column per recorded key across ALL rows, filling
+    `None` where a row recorded nothing — so a step whose units record
+    different key sets produces a RECTANGULAR table, and a reconstituted row
+    carries `None` for a key the original in-memory row did not hold at all.
+    The raggedness is not recoverable and must not be guessed at:
+    `io.record(u, {"note": None})` is legal, so a reader dropping
+    `None`-valued keys would lose a genuinely recorded value.
+
+    What this test pins is that the round trip is rectangular and that no
+    value is invented: every reconstituted row holds both keys, the recorded
+    ones hold the recorded values, and the unrecorded one is `None`. Filed
+    for arm A rather than resolved here, since only a leaf-by-leaf
+    resume-versus-straight-through comparison can say whether it moves a
+    published number.
+    """
+    ragged = """\\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            if i % 2:
+                io.record(unit.key, {{"a": float(i), "b": float(i)}})
+            else:
+                io.record(unit.key, {{"a": float(i)}})
+        return {{"n_units": len(list(io.units))}}
+"""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=4,
+        _starter_step=ragged,
+    )
+    _, results = _h9b_reconstituted(doc)
+    rows = {row["unit"]: row for row in results[0].rows}
+    assert list(rows["p1"].keys()) == ["unit", "a", "b"]
+    assert rows["p1"] == {"unit": "p1", "a": 0.0, "b": None}
+    assert rows["p2"] == {"unit": "p2", "a": 1.0, "b": 1.0}
+
+
+# ===========================================================================
+# H9b task 9 — `resumed` wired into `_execute_prepared`, and
+# `cli.command_resume` (design Decision 14).
+#
+# **These call `command_resume` DIRECTLY, and they remove the crashed run's
+# `lock` first.** They were written before the dispatch (task 15) and the
+# takeover (task 14) existed, and both now do — `main(["resume", …])` reaches
+# `command_resume` and the takeover removes a dead holder's `lock` itself.
+# They are left calling the function directly, and removing the lock by hand,
+# for the reason `_h9b_resume`'s own docstring gives: the holder these arms
+# write is a FOREIGN host, which the liveness test correctly reports rather
+# than takes over. The dispatch and the takeover have their own end-to-end
+# pins, guard-pin arms A and G.
+# ===========================================================================
+
+
+def _h9b_resume(crashed: Path) -> int:
+    """`command_resume` against a crashed directory whose stale `lock` this
+    helper removes — task 14's takeover, done by hand and named as such.
+
+    Left doing it by hand after task 14 landed, deliberately: three callers
+    below re-write a `{"host": "h", "pid": 1}` lock between arms purely to
+    satisfy this helper's assertion, and a takeover would refuse that holder
+    (a foreign host is *cannot tell*, which holds). The takeover's own end-to-
+    end pins are guard-pin arms A and G, both through `main`: arm G races two
+    threads for one dead holder, and arm A drives `main(["resume", …])`
+    against a directory whose stale `lock` only the takeover can remove — so
+    a takeover no-op fails both.
+    """
+    from publishable.cli import command_resume
+
+    lock = crashed / "lock"
+    assert lock.exists(), "the crash fixture must leave a lock behind"
+    lock.unlink()
+    return command_resume(crashed)
+
+
+def _h9b_refused(crashed: Path, capsys) -> str:
+    """A `resume` refusal, as task 16 makes it: **reported, never raised.**
+
+    Decision 13 — every refusal `resume` decides goes through one fresh
+    credential-bearing `Collector` to stderr and returns `EXIT_WRONG`, because
+    `main`'s own `PublishableError` handler prints `{exc}` with no collector in
+    scope and therefore no redaction. Every arm below used to assert
+    `pytest.raises(ContractError)`; each now asserts the exit code AND the
+    identifier on stderr, which is strictly more than the raise asserted — a
+    raise says nothing about what a user is shown.
+
+    Returns stderr so the caller can assert the code, and the message where
+    the message is the point.
+    """
+    from publishable.diagnostics import EXIT_WRONG as _EXIT_WRONG
+
+    code = _h9b_resume(crashed)
+    printed = capsys.readouterr()
+    assert code == _EXIT_WRONG, (code, printed.out, printed.err)
+    return printed.err
+
+
+def test_h9b_a_crash_and_resume_round_trip_equals_the_straight_through_golden(tmp_path: Path):
+    """**The claim Decision 4 and Decision 14 exist for**, measured by the one
+    route available before `resume` dispatches: a crashed run resumed to
+    completion produces `run.yaml` leaf for leaf equal to the straight-through
+    run's, against the SAME golden guard-pin arm A captured.
+
+    Not an arm and not a copy of one: arm A owns the claim, this test is a
+    third consumer of arm A's one captured literal (its own docstring's "one
+    capture, two consumers" reasoning), and arm A's `xfail` marker is left in
+    place because the marker is about `main(["resume", …])`, which task 15
+    owns. A leaf-by-leaf equality is what Decision 4 requires and no per-key
+    assertion substitutes for it: `_gather_repeats` builds its column order
+    from row iteration order and `summarize_step` derives a metric's from
+    that, so a parquet round trip can move `run.yaml`'s column order with
+    every value correct.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+
+
+# Fixture C's own step: a triple that FAILS on its first attempt (a raise,
+# contained — the run keeps going and the ledger line IS written) and a later
+# triple that dies mid-execution (`os._exit`, no line at all). Two trips off
+# one counter, so both are deterministic.
+#
+# **Why two mechanisms rather than one.** Design § Fixtures as claims gives
+# fixture C `attempts: 2` for "the crashed triple", and that is FALSE of this
+# build: `execute_plan` writes the ledger line AFTER the execution returns, so
+# an `os._exit` leaves the interrupted triple no record at all and its resumed
+# attempt is its FIRST record. A second record exists only for a triple whose
+# earlier attempt reached the write — i.e. one that failed and was contained.
+# Measured, reported as a finding, and built the way the code behaves.
+_H9B_FAIL_THEN_CRASH_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return 0
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == 4:
+        os._exit(9)
+    return n
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        n = _tick()
+        if n == 2:
+            raise RuntimeError("this attempt fails and the next one does not")
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * 2.0}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_h9b_an_interrupted_triple_gets_one_record_not_two(tmp_path: Path):
+    """**A design claim measured and found false, pinned as what the code
+    does.** Design § Fixtures as claims gives fixture C `attempts: 2` for the
+    crashed triple. `execute_plan` writes the ledger line AFTER the execution
+    returns, so a triple killed mid-execution by `os._exit` leaves NO record —
+    and its resumed attempt is therefore its first. Every triple in this
+    round trip ends at `attempts: 1`.
+
+    The complement is the next test, which produces a genuine `2` through the
+    only mechanism that can: an attempt that FAILED and was contained, so its
+    line reached disk.
+
+    Asserted on both the ledger and the record, so a record agreeing with a
+    miscounted ledger cannot pass, and on the ledger's own line count, so a
+    fixture that never crashed at all would fail here rather than pass
+    quietly.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert len(_h9b_ledger(crashed)) == 2  # the two lines before the trip
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert set(_h9b_ledger_attempts(crashed).values()) == {1}
+    assert set(_h9b_recorded_attempts(crashed).values()) == {1}
+    # 2 conditions × 4 repeats × 2 repeat-scope steps, every one accounted
+    # for exactly once.
+    assert len(_h9b_ledger(crashed)) == 16
+
+
+def test_h9b_a_contained_failure_then_a_resume_records_two_attempts(tmp_path: Path):
+    """Fixture C's claim, through the mechanism that can produce it: a triple
+    whose first attempt raised (contained, ledger line written, `status:
+    failed`) is re-executed by the resume and reports `attempts: 2`, while
+    every neighbour reports `1`.
+
+    The neighbours' `1` is what makes the `2` non-vacuous — a counter that
+    counted the whole file, or one keyed on the step name, would report `2`
+    for all sixteen. And the failed line is asserted present in the crashed
+    ledger BEFORE the resume, so the `2` is a second attempt at a first
+    attempt that genuinely happened.
+    """
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        # `max_failed_fraction: 1.0`, and it is load-bearing rather than
+        # incidental: one contained failure fails every unit of that
+        # execution, so the shipped `0.2` STOPS the run — which writes
+        # `run.yaml` and makes the directory `E-RESUME-RUN-ENDED` rather than
+        # resumable. Measured (exit 3, a `run.yaml` present) before this line
+        # was added.
+        limits={
+            "max_executions": 500,
+            "max_failed_fraction": 1.0,
+            "max_ineligible_fraction": 0.5,
+            "min_units_per_cell": 20,
+            "min_clusters": 10,
+            "min_reported_n": 10,
+        },
+        _starter_step=_H9B_FAIL_THEN_CRASH_STEP.replace("__CONTROL__", repr(str(control))),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+    crashed = _h9b_crash_subprocess(doc, control, trip=4)
+    failed_before = [e for e in _h9b_ledger(crashed) if e["status"] == "failed"]
+    assert len(failed_before) == 1
+    failed_key = (
+        failed_before[0]["step"],
+        failed_before[0]["condition"],
+        failed_before[0]["repeat"],
+    )
+    assert _h9b_resume(crashed) == EXIT_OK
+    counts = _h9b_ledger_attempts(crashed)
+    assert counts[failed_key] == 2
+    assert {key for key, value in counts.items() if value == 2} == {failed_key}
+    recorded = _h9b_recorded_attempts(crashed)
+    assert recorded[failed_key] == 2
+    assert {key for key, value in recorded.items() if value == 2} == {failed_key}
+    # The retried execution's own status is what the record reports for the
+    # triple: the failed first attempt is not reconstituted (only a
+    # `completed` record is) and the retry succeeded.
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+
+
+def _h9b_crash_subprocess(doc: dict[str, Any], control: Path, *, trip: int) -> Path:
+    """`_h9b_crash_run`'s shape for a fixture whose trip is not
+    `_H9B_CRASH_TRIP`: same subprocess, same `os._exit` requirement, its own
+    expected counter value. Not a widening of that helper — it is guard-pin
+    arm A's fixture and this task may not touch it."""
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    assert control.read_text().strip() == str(trip), control.read_text()
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    return crashed
+
+
+def _h9b_recorded_attempts(run_dir: Path) -> dict[tuple[str, Any, Any], int]:
+    """`run.yaml`'s own `attempts` per triple, for every repeat-scope leaf."""
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    recorded: dict[tuple[str, Any, Any], int] = {}
+    for cond in run_doc["execution"]["conditions"]:
+        for step, entry in cond["steps"].items():
+            for label, leaf in entry.items():
+                recorded[(step, cond["index"], label)] = leaf["attempts"]
+    return recorded
+
+
+def _h9b_ledger_attempts(run_dir: Path) -> dict[tuple[str, Any, Any], int]:
+    from publishable.lineage import attempt_counts, read_execution_ledger
+
+    return attempt_counts(read_execution_ledger(run_dir))
+
+
+def test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest(tmp_path: Path):
+    """Two claims a leaf equality would carry silently, asserted so a reader
+    can see them: the prior attempt's units are IN the published `n` (a
+    `resume` that dropped the reconstituted results would publish intervals
+    over the re-executed triples only, at exit 0, with nothing marking them),
+    and `input_manifest_hash` is the FIRST attempt's recorded figure rather
+    than one recomputed now.
+
+    The manifest arm is asserted against `manifest/input.json`'s own digest,
+    which is what Decision 8 means by "compared, not rebuilt".
+    """
+    from publishable.manifest import manifest_hash
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    straight = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+    assert run_doc["results"]["conditions"] == straight["results"]["conditions"]
+    recorded_manifest = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert run_doc["provenance"]["input_manifest_hash"] == manifest_hash(recorded_manifest)
+
+
+def test_h9b_a_resume_rewrites_no_run_start_artifact(tmp_path: Path):
+    """§ The other files a run writes: the run-start artifacts are "settled
+    before the first execution and never touched again". So a resume must
+    leave every one of them byte-identical — `identity.json` in particular,
+    which is what the resume just compared itself against.
+
+    Bytes, not mtimes: a rewrite producing identical content is still a
+    rewrite, but a content comparison is what the document's claim is about,
+    and `config.yaml`'s is a byte copy either way. The `sweep.yaml` arm is
+    the one a re-derivation would move if the recorded order and a fresh
+    realization ever disagreed.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    names = (
+        "config.yaml",
+        "identity.json",
+        "sweep.yaml",
+        "manifest/input.json",
+        "environment/repo_root.txt",
+        "environment/pyproject.toml",
+        "allocation.json",
+    )
+    before = {name: (crashed / name).read_bytes() for name in names if (crashed / name).exists()}
+    # Not an empty set — an absence assertion would pass for a fixture that
+    # wrote nothing at all.
+    assert {"config.yaml", "identity.json", "sweep.yaml", "manifest/input.json"} <= set(before)
+    assert _h9b_resume(crashed) == EXIT_OK
+    after = {name: (crashed / name).read_bytes() for name in before}
+    assert after == before
+    # And the one pointer a resume DOES move: a crashed run leaves no
+    # `latest` (§ Corrections 10 — `point_latest` runs after `run.yaml`), and
+    # a completed resume writes one pointing here. Asserted rather than
+    # assumed, because nothing else in this batch reads it.
+    pointer = crashed.parent / "latest"
+    text = crashed.parent / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == crashed.name
+
+
+def test_h9b_run_status_is_handed_the_full_plans_length(tmp_path: Path, monkeypatch):
+    """`planned=` is the UNFILTERED plan's length (Decision 6), which is how
+    `run_status`'s bare `assert len(results) >= planned` stays satisfied by
+    construction rather than relaxed.
+
+    **Asserted through a wrapper around `run_status` because the value is
+    otherwise invisible**: `planned` feeds nothing but that assert, so a
+    resume passing the FILTERED length produces a byte-identical `run.yaml`
+    and the prescribed mutation is blind to every record-level assertion —
+    reported as such rather than claimed caught. What it would cost is the
+    tripwire itself: the assert would stop catching a core defect that
+    truncated a resumed plan.
+
+    The wrapper's own call count is asserted, because a monkeypatch aimed at
+    a name the code no longer calls is silently inert.
+    """
+    import publishable.cli as cli_module
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    seen: list[tuple[int, int | None]] = []
+    real = cli_module.run_status
+
+    def spy(results, *, planned=None, stop=None):
+        seen.append((len(results), planned))
+        return real(results, planned=planned, stop=stop)
+
+    monkeypatch.setattr(cli_module, "run_status", spy)
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert len(seen) == 1
+    results_len, planned = seen[0]
+    # 2 conditions × 4 repeats × 2 repeat-scope steps.
+    assert planned == 16
+    assert results_len == 16
+    # And the tripwire it exists for still fires, on a genuinely short list.
+    with pytest.raises(AssertionError):
+        real([], planned=1, stop=None)
+
+
+def test_h9b_the_run_path_is_untouched_by_the_resumed_parameter(tmp_path: Path):
+    """`resumed=None` is every existing caller, and the straight-through run
+    inside the round-trip fixture is itself the control: it goes through the
+    changed `_execute_prepared` and is compared against the golden guard-pin
+    arm A captured BEFORE any of this task's code existed.
+
+    Stated as its own test rather than left implicit in the round trip: the
+    real-command review of this batch is over exactly this path, and green
+    tests are not that review's evidence.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(run_doc, tmp_path) == _H9B_ARM_A_GOLDEN
+    for name in ("config.yaml", "identity.json", "sweep.yaml", "executions.jsonl"):
+        assert (doc["run_dir"] / name).exists(), name
+
+
+def test_h9b_a_randomized_order_round_trip_also_equals_its_straight_through(tmp_path: Path):
+    """The arm-A claim under `order: randomized`, which arm A's own fixture
+    cannot see — it declares `as_declared`.
+
+    Why this arm is not redundant. `_apply_execution_order` reorders the plan
+    **inside** `_execute_prepared`, while `command_resume` calls
+    `_reconstitute(prepared.plan, …)` **before** that — so the reconstituted
+    results arrive in DECLARED order while a straight-through run's arrive in
+    shuffled order. `_execution_block` builds its per-step mapping in list
+    order and `_gather_repeats` builds its column order from row iteration
+    order, so this is exactly the shape that can move `run.yaml` with every
+    value correct.
+
+    Both records are produced in this test rather than compared against a
+    committed golden, because the golden is `as_declared`'s. The
+    normalization is the same helper arm A uses, so nothing was chosen after
+    seeing a diff.
+    """
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "randomized",
+            "rationale": "four seeds, shuffled",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+    straight = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    crashed = _h9b_crash_run(doc, control)
+    assert _h9b_resume(crashed) == EXIT_OK
+    resumed_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert _h9b_run_yaml_leaves(resumed_doc, tmp_path) == _h9b_run_yaml_leaves(straight, tmp_path)
+
+
+# ===========================================================================
+# H9b task 10 — the order a resume executes in comes from `sweep.yaml`
+# (design Decision 9). The reader and the four-tuple cross-check are pinned
+# at unit grain in `tests/test_lineage.py`; these two arms are the wiring,
+# and they are end-to-end because the claim is about which triples
+# `execute_plan` is handed, in which order.
+# ===========================================================================
+
+
+def _h9b_randomized_project(tmp_path: Path, control: Path) -> dict[str, Any]:
+    """Arm A's project under `order: randomized` — the mode whose recorded
+    order and a re-realization can be made to disagree. Two repeat-scope
+    steps and four seeds, so pair-major and step-major layouts differ."""
+    return run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "randomized",
+            "rationale": "four seeds, shuffled",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+
+
+def _h9b_pairs_of(records: list[dict[str, Any]]) -> list[tuple[Any, Any]]:
+    return [(entry["condition"], entry["repeat"]) for entry in records]
+
+
+def test_h9b_a_resume_executes_the_recorded_order_not_a_re_realization(tmp_path: Path):
+    """**The mutation this test exists for**: re-realizing the order under
+    `order: randomized` instead of reading it. The recorded `execution_order`
+    is REVERSED in the crashed directory — an order this design's seed does
+    not reproduce — and the resumed executions come out in the recorded
+    order, pair by pair.
+
+    Under a `batch` level this is what stops a resume opening batch 4 while
+    batch 3 still has executions outstanding: batches are positions in time,
+    and the record is the only statement of which position each execution
+    held.
+
+    The expectation is computed from the edited file and the crashed ledger,
+    never from a literal: the crash point is deterministic (a counter file)
+    but which pairs it leaves outstanding is the shuffle's business, and a
+    hand-written sequence would be a second derivation of the thing under
+    test. Both arms of the reading were checked — a re-realization gives the
+    UNreversed order here, which the equality below rejects.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_randomized_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    reversed_order = list(reversed(recorded["execution_order"]))
+    assert reversed_order != recorded["execution_order"], "the fixture's order must be orderable"
+    recorded["execution_order"] = reversed_order
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(recorded, sort_keys=False))
+
+    before = _h9b_ledger(crashed)
+    done = {(e["step"], e["condition"], e["repeat"]) for e in before if e["status"] == "completed"}
+    assert _h9b_resume(crashed) == EXIT_OK
+    after = _h9b_ledger(crashed)
+    executed = after[len(before) :]
+    # Not an absence: the resume must actually have executed something, or
+    # every sequence equality below is satisfied by two empty lists.
+    assert executed, "the crash fixture must leave executions outstanding"
+
+    # The step names come from the straight-through run's own ledger, in
+    # first-appearance order, rather than from literals: `extra_steps` names
+    # are generated (`step02_score` is written as `step02_step02_score`), and
+    # a wrong literal here would make every triple of that step read as
+    # outstanding — measured, it is how this expectation was first wrong.
+    steps = list(dict.fromkeys(entry["step"] for entry in _h9b_ledger(doc["run_dir"])))
+    assert len(steps) == 2, steps
+    expected = [
+        (entry["condition"], entry["repeat"])
+        for entry in reversed_order
+        for step in steps
+        if (step, entry["condition"], entry["repeat"]) not in done
+    ]
+    assert _h9b_pairs_of(executed) == expected
+    # And the record itself is untouched by the resume — the edit above is
+    # what the resume obeyed, not something it rewrote to match.
+    assert yaml.safe_load((crashed / "sweep.yaml").read_text())["execution_order"] == reversed_order
+
+
+def test_h9b_an_as_declared_resume_keeps_the_step_major_layout(tmp_path: Path):
+    """The other branch, and it is the one a mutation would break silently:
+    `_apply_execution_order` regroups repeat executions PAIR-major where
+    `build_plan` lays them out step-major, so applying the recorded order
+    unconditionally would make a resumed `as_declared` run execute in an
+    order its first attempt did not — with `sweep.yaml`'s own
+    `execution_order` still recording the declared sequence, so nothing in
+    the record would show it.
+
+    Asserted as the straight-through run's OWN pair sequence, restricted to
+    the outstanding triples, rather than as a literal.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    straight_pairs = _h9b_pairs_of(_h9b_ledger(doc["run_dir"]))
+    straight_triples = [
+        (e["step"], e["condition"], e["repeat"]) for e in _h9b_ledger(doc["run_dir"])
+    ]
+    crashed = _h9b_crash_run(doc, control)
+    before = _h9b_ledger(crashed)
+    done = {(e["step"], e["condition"], e["repeat"]) for e in before if e["status"] == "completed"}
+    assert _h9b_resume(crashed) == EXIT_OK
+    executed = _h9b_ledger(crashed)[len(before) :]
+    assert executed
+    expected = [
+        (triple[1], triple[2])
+        for triple, _pair in zip(straight_triples, straight_pairs, strict=True)
+        if triple not in done
+    ]
+    assert _h9b_pairs_of(executed) == expected
+    # The recorded order is not `None` in the file — it is recorded under
+    # `as_declared` too — so this arm is about the MODE the resume read, and
+    # a build that applied the record regardless would fail here rather than
+    # find nothing to apply.
+    assert yaml.safe_load((crashed / "sweep.yaml").read_text())["execution_order"]
+
+
+def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Path, capsys):
+    """The cross-check refuses BEFORE anything executes, which is what makes
+    a refusal free: the ledger is the same length after the refusal as
+    before, and there is no `run.yaml`.
+
+    One arm per code, both through `command_resume` rather than through the
+    reader, so the wiring is what is pinned: a `values` edit is
+    `E-RESUME-PLAN-MISMATCH` and a truncated file is
+    `E-RESUME-PLAN-MISSING`.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    before = _h9b_ledger(crashed)
+
+    moved = json.loads(json.dumps(recorded))
+    moved["conditions"][1]["values"]["analysis.method"] = "kendall"
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(moved, sort_keys=False))
+    assert "E-RESUME-PLAN-MISMATCH" in _h9b_refused(crashed, capsys)
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+    (crashed / "sweep.yaml").write_text("order: as_declared\n")
+    # The lock the previous refusal never took, so the helper's own assertion
+    # holds a second time.
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    assert "E-RESUME-PLAN-MISSING" in _h9b_refused(crashed, capsys)
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+# ===========================================================================
+# H9b task 11 — `allocation.json` applied onto `Prepared` (design Decision
+# 10). **Every fixture here declares a DRAWN axis** (`method: random`), where
+# a second draw is a second allocation: a `by_attribute` axis re-reads the
+# same column and gives the same partition, so correct and buggy readings
+# coincide and the fixture would test one reading twice.
+# ===========================================================================
+
+_H9B_DRAWN_KEYS = [f"p{i}" for i in range(8)]
+
+
+def _h9b_drawn_project(
+    tmp_path: Path,
+    control: Path | None = None,
+    units_overrides: dict[str, Any] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """A committed project with a DRAWN arm axis and `allocation: between`, so
+    each condition IS one arm and its membership is a draw with no column
+    behind it. `control`, when given, bakes the crash counter into the
+    scaffolded step exactly as arm A's project does."""
+    starter = (
+        _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+            "__TRIP__", str(_H9B_CRASH_TRIP)
+        )
+        if control is not None
+        else None
+    )
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides=units_overrides
+        or {
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        _starter_step=starter,
+        **extra,
+    )
+
+
+def _h9b_swapped(document: dict[str, Any]) -> dict[str, Any]:
+    """The recorded arms with one unit SWAPPED between the two arms — an
+    allocation the seeded draw does not reproduce, and still a partition of
+    the same roster, so the only reading that can tell the two apart is
+    *which file was read*. Sizes are unchanged on purpose: a size change
+    would also be visible to a count assertion, and this fixture is about
+    identity."""
+    edited = json.loads(json.dumps(document))
+    arms = edited["arms"]["arm"]
+    arms["control"][0], arms["treatment"][0] = arms["treatment"][0], arms["control"][0]
+    # And a `seed` the config does not resolve to, so the round-trip
+    # assertion below can see WHERE the seed came from: the declared seed is
+    # 11 and a recomputed plan carries 11, so an override that took `seed`
+    # from the plan rather than from the record would satisfy an equality
+    # that only edited the memberships. Measured — that arm was blind until
+    # this line existed.
+    edited["seed"]["arm"] = 99
+    assert edited != document
+    return edited
+
+
+def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
+    """A committed project with a DRAWN holdout and **no group axis**, which is
+    not a choice: `data.units.holdout` beside a cell structure is refused by
+    name (`E-DATA-HOLDOUT-CELLS`, H3d's, owned by H3c-3's remaining 14), so
+    the two halves of `allocation.json` cannot be exercised by one config on
+    this build. Measured — the combined fixture was written first and refused
+    at `validate`."""
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={"holdout": {"method": "random", "frac": 0.5, "seed": 4321}},
+    )
+
+
+def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest(
+    tmp_path: Path,
+):
+    """`dataclasses.replace` must round-trip all **36** fields (plan
+    § Corrections, correction 17), so the field count is asserted here: a
+    future field added to `Prepared` and forgotten by this override fails
+    loudly rather than travelling as whatever `_prepare_run` computed.
+
+    Four fields move and thirty-two are the same objects, asserted field by
+    field rather than by a count — `group_axes` and `holdout_plan` are the
+    record, `eval_roster` is `_evaluation_roster` re-derived from the
+    overridden holdout, and `arm_members_map` is `units.arm_members` called
+    AGAIN on the overridden axes. That second call is overriding a *result*,
+    not moving a call: `_resolved_group_axes` and `arm_members` stay exactly
+    where they are inside `_prepare_run` (Ruling S), and re-deriving the
+    per-condition mapping here by hand would make this function a second
+    producer of arm membership.
+
+    **And the rebuilt document equals the recorded one**, which is what makes
+    `provenance.allocation_hash` cover the file on disk: a resume never
+    rewrites `allocation.json`, so a `seed` or `strata` taken from the
+    recomputed plans instead of the record would publish a hash of a document
+    no file holds.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert len(dataclasses.fields(Prepared)) == 36
+
+    overridden = _resumed_allocation(prepared, edited)
+    moved = {"group_axes", "holdout_plan", "eval_roster", "arm_members_map"}
+    for field in dataclasses.fields(Prepared):
+        if field.name not in moved:
+            assert getattr(overridden, field.name) is getattr(prepared, field.name), field.name
+    # The membership is the FILE's, not the draw's — and the draw is what
+    # `prepared` holds, so this is the two readings separated.
+    assert {
+        level: list(keys) for level, keys in overridden.group_axes["arm"].members.items()
+    } == edited["arms"]["arm"]
+    assert {
+        level: list(keys) for level, keys in prepared.group_axes["arm"].members.items()
+    } == recorded["arms"]["arm"]
+    # `arm_members` re-reduced over the overridden axes: condition 0 is the
+    # control arm, condition 1 the treatment arm.
+    assert overridden.arm_members_map is not None
+    assert overridden.arm_members_map[0] == frozenset(edited["arms"]["arm"]["control"])
+    assert overridden.arm_members_map[1] == frozenset(edited["arms"]["arm"]["treatment"])
+    # No holdout declared here, so `eval_roster` is the whole roster still.
+    assert overridden.holdout_plan is None
+    assert [u.key for u in overridden.eval_roster or []] == _H9B_DRAWN_KEYS
+    # The round trip: what `_execute_prepared` hashes is what the file holds.
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+    assert overridden.group_axes["arm"].seed == 99
+    assert prepared.group_axes["arm"].seed == 11
+
+
+def test_h9b_the_holdout_partition_is_read_rather_than_redrawn(tmp_path: Path):
+    """The holdout half of the same override, over a DRAWN holdout for the
+    same reason the axis is drawn: `by_attribute` re-reads a column and the
+    two readings coincide.
+
+    `eval_roster` is what every denominator counts against, so the claim that
+    matters is that it follows the recorded **test** partition rather than a
+    second shuffle — asserted as unit identities, not as a size, since a
+    re-drawn 50 % split has the same size.
+    """
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_holdout_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert sorted(recorded["holdout"]["train"] + recorded["holdout"]["test"]) == sorted(
+        _H9B_DRAWN_KEYS
+    )
+    edited = json.loads(json.dumps(recorded))
+    block = edited["holdout"]
+    block["train"][0], block["test"][0] = block["test"][0], block["train"][0]
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert overridden.holdout_plan is not None
+    assert list(overridden.holdout_plan.test) == block["test"]
+    assert list(overridden.holdout_plan.train) == block["train"]
+    assert overridden.holdout_plan.seed == recorded["holdout"]["seed"]
+    # The narrowing every denominator reads, re-derived from the record.
+    assert [u.key for u in overridden.eval_roster or []] == [
+        key for key in _H9B_DRAWN_KEYS if key in set(block["test"])
+    ]
+    # And the pre-override plan is the draw, so the two readings differ.
+    assert prepared.holdout_plan is not None
+    assert list(prepared.holdout_plan.test) != list(overridden.holdout_plan.test)
+
+
+def test_h9b_an_allocation_that_cannot_be_applied_is_refused(tmp_path: Path):
+    """**The second mutation this test exists for**: accepting a membership
+    naming a unit the roster no longer holds. Set equality in both
+    directions, `units.arms_of`'s own rule (§ Allocation: "each unit belongs
+    to exactly one arm") — a roster that lost a unit leaves the record naming
+    one that no longer exists, and a roster that gained one leaves that unit
+    in no arm at all, with no fourth part of `n` for it.
+
+    Five arms, one code, one remedy: an absent unit, a renamed axis, a level
+    set that moved, a holdout the config does not declare, and a holdout the
+    config declares that the record does not. A control asserts the
+    unedited document applies cleanly, so a refusal that fired for an
+    unrelated reason is not counted as a pass.
+    """
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    _resumed_allocation(prepared, recorded)  # the control
+
+    absent = json.loads(json.dumps(recorded))
+    absent["arms"]["arm"]["control"][0] = "p_not_in_the_roster"
+    renamed = json.loads(json.dumps(recorded))
+    renamed["arms"]["site"] = renamed["arms"].pop("arm")
+    levels = json.loads(json.dumps(recorded))
+    levels["arms"]["arm"]["placebo"] = levels["arms"]["arm"].pop("control")
+    holdout = json.loads(json.dumps(recorded))
+    holdout["holdout"] = {"train": _H9B_DRAWN_KEYS[:4], "test": _H9B_DRAWN_KEYS[4:]}
+    for document, fragment in (
+        (absent, "disagree"),
+        (renamed, "records the axes"),
+        (levels, "with the levels"),
+        (holdout, "records a holdout this config does not declare"),
+    ):
+        with pytest.raises(ContractError) as excinfo:
+            _resumed_allocation(prepared, document)
+        assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+        assert fragment in str(excinfo.value)
+
+    # The other direction of the holdout arm needs a config that declares one.
+    with_holdout = _h9b_holdout_project(tmp_path / "held")
+    held = _prepare_run(Path(with_holdout["cfg"]), allow_dirty=False)
+    assert isinstance(held, Prepared)
+    stripped = json.loads((with_holdout["run_dir"] / "allocation.json").read_text())
+    _resumed_allocation(held, stripped)  # the control on this project too
+    stripped.pop("holdout")
+    with pytest.raises(ContractError) as excinfo:
+        _resumed_allocation(held, stripped)
+    assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+    assert "records no holdout while this config declares one" in str(excinfo.value)
+
+
+def test_h9b_a_resume_executes_the_recorded_arms_not_a_second_draw(tmp_path: Path):
+    """The end-to-end claim: the units a resumed execution is HANDED come
+    from `allocation.json`, not from a second draw.
+
+    The recorded arms are swapped one unit each way before the resume — same
+    sizes, same roster, an allocation the seed does not reproduce — and each
+    newly executed triple's own `units.parquet` holds exactly its recorded
+    arm. Read from the step directories rather than from `run.yaml`, because
+    the claim is about unit identity and every count is unchanged by a swap.
+    """
+    from publishable.artifacts import READERS
+    from publishable.sweep import condition_dir_name
+
+    control_file = tmp_path / "crash_control"
+    doc = _h9b_drawn_project(tmp_path, control_file)
+    crashed = _h9b_crash_run(doc, control_file)
+    recorded = json.loads((crashed / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    (crashed / "allocation.json").write_text(json.dumps(edited, indent=2))
+
+    before = _h9b_ledger(crashed)
+    assert _h9b_resume(crashed) == EXIT_OK
+    executed = _h9b_ledger(crashed)[len(before) :]
+    assert executed, "the crash fixture must leave executions outstanding"
+
+    labels = {
+        c["index"]: c["label"]
+        for c in yaml.safe_load((crashed / "sweep.yaml").read_text())["conditions"]
+    }
+    arms = {0: set(edited["arms"]["arm"]["control"]), 1: set(edited["arms"]["arm"]["treatment"])}
+    stale = {
+        0: set(recorded["arms"]["arm"]["control"]),
+        1: set(recorded["arms"]["arm"]["treatment"]),
+    }
+    seen = 0
+    for entry in executed:
+        table = (
+            crashed
+            / "conditions"
+            / condition_dir_name(entry["condition"], labels[entry["condition"]])
+            / entry["repeat"]
+            / entry["step"]
+            / "units.parquet"
+        )
+        if not table.exists():  # the scalar-only step writes none
+            continue
+        rows = READERS[".parquet"](table.read_bytes())
+        assert {row["unit"] for row in rows} == arms[entry["condition"]]
+        assert {row["unit"] for row in rows} != stale[entry["condition"]]
+        seen += 1
+    assert seen, "no recording triple was re-executed, so nothing was measured"
+
+
+# ===========================================================================
+# H9b task 12 — the input manifest is COMPARED, not rebuilt (design Decision
+# 8). The comparison and the threading landed with task 9's entry point;
+# these are the pins, and the second one is discriminating where the
+# existing one cannot be. `E-INPUT-CHANGED` is deliberately not reused —
+# that code is phase 8's end-of-run re-verification, it answers a different
+# question, and it has no § Errors row.
+# ===========================================================================
+
+
+def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_path: Path, capsys):
+    """**The mutation this test exists for**: comparing the fresh manifest
+    against itself. `verify_manifest(input_dir, manifest)` compares the
+    directory against the manifest it is HANDED (plan § Corrections,
+    correction 2), so a resume that rebuilt one would compare now against now
+    and always come back clean.
+
+    Two branches were checked in this order: a self-comparison passes this
+    fixture, and the recorded comparison refuses it.
+
+    Every execution already recorded is over a dataset that no longer exists,
+    and § What status means says there is no honest way to report that as
+    `partial` — so this refuses before the lock, and the ledger is the same
+    length afterwards as before.
+
+    Three arms: a file whose CONTENT moved, a file that was ADDED (the arm
+    `verify_manifest`'s own `present - manifest` branch answers, and the one
+    that cannot perturb the roster), and a `manifest/input.json` that cannot
+    be read at all — one code for one remedy.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    # `run_a_project` returns no input dir of its own, so it is read off the
+    # config the run executed — the same file `_prepare_run` resolves it from.
+    input_dir = Path(yaml.safe_load(Path(doc["cfg"]).read_text())["data"]["input_dir"]).expanduser()
+    before = _h9b_ledger(crashed)
+
+    added = input_dir / "a_new_input.csv"
+    added.write_text("x\n1\n")
+    assert "E-RESUME-INPUT-MOVED" in _h9b_refused(crashed, capsys)
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+    added.unlink()
+
+    # The control: with the input dir restored, the same directory resumes.
+    # Asserted before the content arm rather than after, so a refusal that
+    # fired for an unrelated reason cannot be counted as a pass — and the
+    # lock this helper needs is put back by hand each time, because the
+    # holder written here is a foreign host, which the takeover reports
+    # rather than replaces.
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    roster = input_dir / "index.csv"
+    kept = roster.read_text()
+    # A row APPENDED rather than a column renamed: a renamed column fails
+    # unit resolution instead (`E-UNITS-ATTR-MISSING` inside `_prepare_run`,
+    # which RETURNS an exit code rather than raising), so that edit would
+    # have tested the wrong refusal — measured, it is how this arm first
+    # failed.
+    roster.write_text(kept + "p_new,a,x\n")
+    assert "E-RESUME-INPUT-MOVED" in _h9b_refused(crashed, capsys)
+    assert _h9b_ledger(crashed) == before
+    roster.write_text(kept)
+
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    (crashed / "manifest" / "input.json").write_text("{not json")
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-INPUT-MOVED" in reported
+    assert "cannot be compared" in reported
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path: Path):
+    """**The mutation this test exists for**: using the FRESH manifest in
+    phases 6-10. `run.yaml`'s `input_manifest_hash` must be the first
+    attempt's figure.
+
+    **Why this cannot be pinned through `command_resume`**, and it is the
+    reason this test hand-assembles a `Resumed`: `manifest_hash` covers each
+    file's `st_mtime_ns`, and the pre-lock comparison is an equality between
+    the fresh manifest and the recorded one — so on every directory a resume
+    accepts, the two hashes are equal and an assertion comparing
+    `run.yaml`'s figure against `manifest/input.json`'s digest passes under
+    both readings. The existing assertion in
+    `test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest`
+    is exactly that shape and is blind to this mutation (grepped:
+    `input_manifest_hash` appears in that test at one line, comparing against
+    `manifest_hash(recorded_manifest)` where recorded == fresh). It is left
+    in place — it asserts a claim a reader wants to see — and this test is
+    what discriminates.
+
+    The recorded manifest handed in differs from the fresh one in ONE file's
+    `mtime` and nothing else, which `manifest_hash` covers and
+    `verify_manifest` does not read under `hash_all` (it compares `sha256`
+    when one is recorded) — so phase 8 stays clean and `status` stays
+    `completed`, and the only observable difference is which manifest the
+    record was assembled from.
+    """
+    from publishable.cli import Prepared, Resumed, _execute_prepared, _prepare_run, _reconstitute
+    from publishable.lineage import attempt_counts, read_execution_ledger
+    from publishable.manifest import manifest_hash
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    (crashed / "lock").unlink()
+
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert recorded["policy"] == "hash_all"
+    assert manifest_hash(recorded) == manifest_hash(prepared.manifest)  # the two agree today
+    doctored = json.loads(json.dumps(recorded))
+    name = sorted(doctored["files"])[0]
+    doctored["files"][name]["mtime"] += 1
+    assert manifest_hash(doctored) != manifest_hash(prepared.manifest)
+
+    records = read_execution_ledger(crashed)
+    resumed = Resumed(
+        run_dir=crashed,
+        prior_results=_reconstitute(
+            prepared.plan,
+            run_dir=crashed,
+            records=records,
+            collapse=len(prepared.repeats) <= 1,
+        ),
+        attempts=attempt_counts(records),
+        baseline=None,
+        recorded_manifest=doctored,
+        execution_order=None,
+    )
+    assert _execute_prepared(prepared, draft=False, resumed=resumed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["provenance"]["input_manifest_hash"] == manifest_hash(doctored)
+    assert run_doc["provenance"]["input_manifest_hash"] != manifest_hash(prepared.manifest)
+    # Phase 8 asked its own question and came back clean, which is what the
+    # threading is FOR: the inputs did not move during this attempt.
+    assert run_doc["status"] == "completed"
+
+
+# ===========================================================================
+# H9b task 13 — the apparatus baseline is REPLAYED, not re-probed (design
+# Decision 11). **The fixture makes the two readings differ**: a probe whose
+# answers are read from a file the fixture rewrites BETWEEN the crash and the
+# resume, so the original baseline and the resume's own first probe are
+# different values. Without that the mutation removing the replay is blind,
+# which is exactly how H9a's Fixture Y failed — three shipped arms all
+# driving a `generic` project whose `apparatus_probe` was `None`.
+# ===========================================================================
+
+_H9B_APPARATUS_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("h9b_resume_assay")
+class H9bResumeAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9b_resume_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# The probe reads its answer out of a FILE, so the fixture can move the
+# apparatus between two commands without touching the probe's code — which
+# `code_hash` covers and `resume` refuses on.
+_H9B_FILE_PROBE_MODULE = """\
+import json
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+_FACTS = Path(__FACTS__)
+
+
+@register_probe("h9b_resume_probe")
+def probe(cfg):
+    return Apparatus(facts=json.loads(_FACTS.read_text()))
+"""
+
+
+def _h9b_apparatus_crash(
+    tmp_path: Path, installed, facts: Path, control: Path, tag: str
+) -> dict[str, Any]:
+    """A run of a probe-declaring project, crashed mid-plan by `os._exit` in a
+    SUBPROCESS — the state a resume exists for: a `lock` left behind, no
+    `run.yaml`, completed executions on the ledger, and an
+    `apparatus/probes.jsonl` holding the run's own baseline.
+
+    A subprocess for `_h9b_crash_run`'s reason (`os._exit` in process would
+    take the session with it), and `PYTHONPATH` is what carries the
+    `installed` distribution into it — `monkeypatch.syspath_prepend` is
+    in-process only, so without this the child would report
+    `E-PROBE-UNKNOWN` instead of crashing where the fixture aims.
+    """
+    facts.write_text(json.dumps({"model_revision": "r1"}))
+    # `tag` gives each test its own MODULE name, which is not decoration: a
+    # module already in `sys.modules` is not re-imported, so its
+    # `@register_probe` decorator never re-runs — and the `registries`
+    # fixture clears `PROBES` between tests, so a second test reusing the
+    # module name fails `check_registration` with `E-PLUGIN-DECORATOR`
+    # instead of running. Measured, and it is why the shipped probe fixtures
+    # in this file each carry their own module name too.
+    site = installed(
+        f"dist-h9b13{tag}",
+        "1.0",
+        {"publishable.probes": {"h9b_resume_probe": f"h9b13{tag}_probe_mod:probe"}},
+    )
+    (site / f"h9b13{tag}_probe_mod.py").write_text(
+        _H9B_FILE_PROBE_MODULE.replace("__FACTS__", repr(str(facts)))
+    )
+    doc = run_a_project(
+        tmp_path,
+        experiment_type="h9b_resume_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}], "rationale": "four seeds"},
+        units=8,
+        _local_template=_H9B_APPARATUS_TEMPLATE,
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+    )
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+        env={**os.environ, "PYTHONPATH": str(site)},
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    assert not (crashed / "run.yaml").exists()
+    # The baseline this task replays, and the fixture's own claim about it:
+    # the crashed run answered `r1`, more than once.
+    lines = [
+        json.loads(line)
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert lines and all(entry["facts"]["model_revision"] == "r1" for entry in lines)
+    assert [entry for entry in _h9b_ledger(crashed) if entry["status"] == "completed"]
+    doc["crashed"] = crashed
+    return doc
+
+
+def test_h9b_a_resume_gates_against_the_original_runs_first_answered_fact(
+    installed, registries, tmp_path, capsys
+):
+    """**The mutation this test exists for**: dropping the baseline and
+    letting the resume's own first probe set one. The apparatus has MOVED
+    while the run was down (`r1` → `r2`), so a resume gated against the
+    original run's first-answered fact reports it, and a resume gated against
+    itself would adopt `r2` and finish — retiring the one guard that stops a
+    run being measured through two different apparatus states for the whole
+    remainder of the run.
+
+    Both branches were checked in that order: with the replay the resume does
+    not complete and `E-APPARATUS-CHANGED` is on the operator's screen; with
+    the replay removed it completes at exit 0 with a published record.
+
+    **The record loss task 13 measured here is CLOSED by task 16**, and this
+    is where the closure is pinned. Before it: exit 1, no `run.yaml`, and the
+    same answer at every later resume, so every completed execution stayed on
+    disk paid for and unpublishable — *every execution paid for, the record
+    lost*. Now the stop still fails the run and still executes nothing, and
+    the run PUBLISHES what it already did: `status: failed`, the reconstituted
+    executions aggregated, `provenance.apparatus` naming the ledger that holds
+    the moving observation, and exit **4** — § Exit codes' *"the run stopped:
+    `status: failed`. There is a record of what happened"*, whose row already
+    reads **`run`, `draft`, `resume` only**.
+
+    **Exit 4 rather than either code the brief named**, and § Exit codes is
+    the ground rather than a preference: its `1` row is *"a changed apparatus
+    fact caught before the first execution ran, which leaves nothing to mark
+    `failed` at all"* — a clause that is exactly false here, the prior
+    attempt's executions being what there is to mark — and `5` is the class
+    you retry, which an apparatus that MOVED is not. The code is not chosen at
+    the stop site at all: `run_status` maps `apparatus_changed` to `failed`
+    and the shipped final mapping maps `failed` to `EXIT_FAILED`, which is the
+    same answer H7d Part B gives a mid-plan move that completed at least one
+    execution.
+
+    **The cost is asserted too**: `run.yaml` ends the run, so the second
+    resume now refuses `E-RESUME-RUN-ENDED` instead of repeating the stop.
+    That is correct for a MOVED fact and only for one — the apparatus cannot
+    move back, so no later resume could ever pass the gate.
+    """
+    facts = tmp_path / "apparatus_facts.json"
+    control = tmp_path / "crash_control"
+    doc = _h9b_apparatus_crash(tmp_path, installed, facts, control, "moved")
+    crashed = doc["crashed"]
+    before = _h9b_ledger(crashed)
+    steps = sorted(p for p in crashed.rglob("units.parquet"))
+    assert steps, "the crash must leave step artifacts behind"
+
+    # The apparatus moves while the run is down. Nothing under `src/**` or
+    # `templates/**` changes, so `code_hash` still matches and the resume
+    # gets as far as the probe.
+    facts.write_text(json.dumps({"model_revision": "r2"}))
+    code = _h9b_resume(crashed)
+    output = capsys.readouterr()
+    assert "E-APPARATUS-CHANGED" in (output.out + output.err)
+    # ONE diagnostic, not two: the run-start containment records the stop on
+    # the shared `StopSignal` and the stop block prints it, so a build that
+    # printed at both sites would say it twice.
+    assert (output.out + output.err).count("E-APPARATUS-CHANGED") == 1
+    # `EXIT_FAILED`, and it follows from `status` rather than from a literal at
+    # the stop site — see the docstring for why neither `EXIT_WRONG` nor
+    # `EXIT_EXTERNAL` is the answer once there are results to mark.
+    assert code == EXIT_FAILED
+    # **The record exists**, which is the whole of the closure.
+    record = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert record["status"] == "failed"
+    # And it holds what the run DID: the reconstituted executions, aggregated.
+    # Asserted through the record's own shape rather than through a count of
+    # lines, because a record that existed and held nothing would pass a
+    # count.
+    # `execution` is the per-triple block, and every entry in it is a
+    # RECONSTITUTED execution of the first attempt — nothing ran this time.
+    executed = [
+        entry
+        for condition in record["execution"]["conditions"]
+        for by_repeat in condition["steps"].values()
+        for entry in by_repeat.values()
+    ]
+    assert executed and all(entry["status"] == "completed" for entry in executed), executed
+    assert len(executed) == len([e for e in before if e["status"] == "completed"])
+    # And the per-condition results the aggregate phase built from them.
+    assert record["results"]["conditions"], record["results"]
+    # The moving observation is legible from the artifacts, H7d Part B's own
+    # rule: `provenance.apparatus.facts` carries the value the results were
+    # MEASURED through (the first attempt's `r1`, never the `r2` that stopped
+    # the run), and the ledger it names holds the moving observation, appended
+    # before the gate fired.
+    assert record["provenance"]["apparatus"]["ledger"] == "apparatus/probes.jsonl"
+    assert record["provenance"]["apparatus"]["facts"] == {
+        key: {"model_revision": "r1"} for key in record["provenance"]["apparatus"]["facts"]
+    }
+    probes = [
+        json.loads(line)
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert probes[-1]["facts"]["model_revision"] == "r2", probes[-1]
+    # **`latest` now points HERE**, which is a consequence of publishing and is
+    # asserted rather than left to be discovered: the fall-through reaches the
+    # tail, so `point_latest` runs where the previous behaviour returned before
+    # it. That is the same thing a MID-plan apparatus stop with results already
+    # does — the pointer follows the later terminal write, and a record nothing
+    # points at would be a record a reader has to find by name. The
+    # straight-through control run of the same project is what it pointed at
+    # before, which is why this is an equality against the crashed directory
+    # rather than an assertion that some pointer exists.
+    pointer = doc["results_dir"] / "latest"
+    text = doc["results_dir"] / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == crashed.name, named
+    # Nothing this attempt executed: the ledger and the step artifacts are
+    # exactly as the crash left them, so the record published is a record of
+    # the FIRST attempt's work and not of a second round of it.
+    assert _h9b_ledger(crashed) == before
+    assert sorted(p for p in crashed.rglob("units.parquet")) == steps
+    # The cost: the run has ended, so a second resume refuses by name rather
+    # than repeating the stop.
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    assert "E-RESUME-RUN-ENDED" in _h9b_refused(crashed, capsys)
+
+
+def test_h9b_a_resume_through_an_unmoved_apparatus_completes(
+    installed, registries, tmp_path, capsys
+):
+    """The honouring direction, without which the test above is a refusal
+    test and nothing more: the same crashed directory, the same replayed
+    baseline, an apparatus that did NOT move — and the resume completes,
+    publishes a record, and its `provenance.apparatus.facts` carries the
+    fact the FIRST attempt answered.
+
+    A run that crashed before ever probing is a separate claim and is not
+    this fixture: an absent or empty baseline mints no refusal (Decision 11),
+    and `freeze`'s `E-FREEZE-LEDGER-MISSING` must not be inherited by copy.
+    Every other resuming test in this file drives a project that declares no
+    probe, which IS that case — grepped rather than counted: over this
+    file's H9b region `experiment_type=` appears once (this fixture's
+    `h9b_resume_assay`) and `apparatus_probe` appears once (this fixture's
+    own template), so every other resume runs against `generic`, whose
+    `apparatus_probe` is `None`, and reaches `replay_ledger` with no ledger
+    at all.
+    """
+    facts = tmp_path / "apparatus_facts.json"
+    control = tmp_path / "crash_control"
+    doc = _h9b_apparatus_crash(tmp_path, installed, facts, control, "unmoved")
+    crashed = doc["crashed"]
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+    assert run_doc["provenance"]["apparatus"]["facts"] == {
+        key: {"model_revision": "r1"} for key in run_doc["provenance"]["apparatus"]["facts"]
+    }
+    # And the ledger grew: the resume's own probe rounds are appended to the
+    # same file the first attempt wrote.
+    lines = [
+        line
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(lines) > 1
+
+
+def test_h9b_replay_ledger_carries_the_callers_code_and_freeze_keeps_its_own(tmp_path: Path):
+    """`replay_ledger` grows a code parameter defaulting to `freeze`'s own
+    (plan § Corrections, correction 18), so `freeze` is byte-identical and
+    `resume` prints a code naming the command that found the fault — a
+    `FREEZE` code printed by a command that is not `freeze` is a lie about
+    which command found it, and § Exit codes' rule is that the identifier is
+    the contract, which is also why the shipped code is not renamed.
+
+    Both directions in one test: the default and the override, over one
+    mangled ledger.
+    """
+    from publishable.apparatus import replay_ledger
+
+    (tmp_path / "apparatus").mkdir()
+    (tmp_path / "apparatus" / "probes.jsonl").write_text("{not json\n")
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path)
+    assert excinfo.value.code == "E-FREEZE-LEDGER-UNREADABLE"
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path, code="E-RESUME-PROBES-UNREADABLE")
+    assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
+
+
+def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: Path, capsys):
+    """The wiring of the code above: `command_resume` passes
+    `E-RESUME-PROBES-UNREADABLE`, so a hand-edited `apparatus/probes.jsonl`
+    in a crashed directory refuses under `resume`'s code rather than
+    `freeze`'s — and it refuses before executing, so the ledger is the same
+    length afterwards.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    before = _h9b_ledger(crashed)
+    (crashed / "apparatus").mkdir(exist_ok=True)
+    (crashed / "apparatus" / "probes.jsonl").write_text('{"phase": "run_start"}\n')
+    assert "E-RESUME-PROBES-UNREADABLE" in _h9b_refused(crashed, capsys)
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+# ===========================================================================
+# H9b task 15 — `resume` dispatched (design Decision 3 / Ruling X; plan
+# task 15). `resume` joins `OPERATION_COMMANDS`'s existing one-path arity arm
+# and leaves `NOT_BUILT_COMMANDS`. Correction 12 (`_dispatch`'s branch order
+# is load-bearing): the built branches are still evaluated before the
+# `NOT_BUILT_COMMANDS` lookups, which is the only reason adding a name to
+# `OPERATION_COMMANDS` is safe.
+#
+# All four invocation shapes were measured through the REAL console script
+# (`uv run publishable …`, outside this repository) and every one matched the
+# design's disclosure item 5, including the row it derived by reading rather
+# than by running:
+#
+#   resume            → exit 2, "`resume` takes exactly one path and no flags"
+#   resume a b        → exit 2, the same line
+#   resume --json     → exit 2, the same line
+#   resume new        → exit 1, "  error   E-RESUME-NO-IDENTITY new/identity.json
+#                       is absent or unreadable, …"
+#
+# Task 16 then moved that last identifier, deliberately and in the same batch:
+# a `resume` path that is not a directory is `E-IO-FAILED` (design Decision 17,
+# `diff`'s own precedent), so `resume new` now prints that code at the same
+# exit 1. Re-measured through the console script after task 16; the
+# disclosure's claim — exit 2 → 1, `resume`'s own refusal for a path that is
+# not a run directory — is unchanged in substance, and the assertion below
+# names the code the build actually prints rather than the one it printed for
+# one commit.
+#
+# The last is the shape H9a got wrong three ways for `draft new`, so it is
+# pinned below rather than only disclosed.
+# ===========================================================================
+
+_RESUME_ARITY_MESSAGE = "`resume` takes exactly one path and no flags"
+
+
+def test_h9b_resume_with_no_path_is_an_invocation_error(capsys):
+    assert main(["resume"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["resume", "a", "b"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument, so
+    a mutation replacing the condition with a bare `len(rest) != 1` fails this
+    while passing the two above. `draft`'s own three tests are the shipped
+    precedent and cover the SAME arm with a different probe — stated as a
+    difference rather than as new coverage: neutering the arm fails both
+    sets."""
+    assert main(["resume", "--json"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_new_reaches_real_argument_handling_not_a_roadmap_notice(capsys):
+    """Disclosure item 5's last row, measured. `"new"` is a single token, so
+    `rest == ["new"]` never trips the arity arm, and the two-token lookup
+    `"resume new"` never happens because the built branches return first — so
+    the call dispatches into `command_resume` with `new` as its path and gets
+    `resume`'s own refusal for a directory that is not a run directory.
+
+    Asserted on the code AND on the identifier: `EXIT_INVOCATION` and
+    `EXIT_WRONG` are different answers, and a mutation that dropped `resume`
+    from `OPERATION_COMMANDS` while keeping the handler would print
+    `unknown command` at the same exit code as the arity arm."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "resume" not in NOT_BUILT_COMMANDS
+    assert "resume new" not in NOT_BUILT_COMMANDS
+    code = main(["resume", "new"])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG, err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    assert "E-IO-FAILED" in err
+
+
+def test_h9b_resume_dispatches_into_command_resume_with_the_path_it_was_given(capsys):
+    """The positive half: a single token really reaches `command_resume`, and
+    the path it receives is the one typed. A `resume <path>` fixture is what
+    the branch-order mutation is measured against — and this asserts the
+    directory's own name appears in the refusal, so a dispatcher that passed
+    some other path (or refused before dispatching) fails here rather than
+    passing on an exit code the arity arm produces too."""
+    assert main(["resume", "_no_such_run_dir_"]) == EXIT_WRONG
+    err = capsys.readouterr().err
+    assert "_no_such_run_dir_" in err
+
+
+# ===========================================================================
+# H9b task 16 — the refusals wired: one reporting mechanism (design Decision
+# 13), the three hash comparisons' own fixtures, the recorded order checked
+# pre-lock, and a path that is no directory answered with the shipped
+# `E-IO-FAILED`.
+#
+# Every refusal below is REPORTED, never raised: `_h9b_refused` asserts the
+# exit code and the identifier on stderr, which is strictly more than the
+# `pytest.raises` these arms used before this task.
+# ===========================================================================
+
+
+def test_h9b_each_recorded_hash_that_moved_is_refused_by_its_own_code(tmp_path: Path, capsys):
+    """The three identity comparisons, one arm each, each perturbing exactly
+    one key of `identity.json` and nothing else — so a build that compared the
+    wrong figure, or the same figure three times, fails the arm whose key it
+    is not reading.
+
+    The recorded figure is edited rather than the tree, deliberately: editing
+    `src/**` to move `code_hash` would ALSO make the tree dirty
+    (`E-CODE-DIRTY` inside `_prepare_run`, which returns an exit code rather
+    than raising), so that arm would test a different refusal — the same
+    wrong-refusal trap task 12's report recorded for a renamed roster column.
+
+    The lockfile arm moves `null` → a string, which is the direction this
+    project's own fixtures can produce: `run_a_project` writes no `uv.lock`
+    (`W-ENV-UNLOCKED` on every run here), so the recomputed figure is `None`
+    and § Resuming's *"in either direction, `null` included"* is what makes
+    the arm reachable at all.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    identity_path = crashed / "identity.json"
+    recorded = json.loads(identity_path.read_text())
+    before = _h9b_ledger(crashed)
+    assert recorded["uv_lock_hash"] is None, recorded
+
+    for key, value, code in (
+        ("code_hash", "sha256:" + "0" * 64, "E-RESUME-CODE-MOVED"),
+        ("parameters_hash", "sha256:" + "1" * 64, "E-RESUME-PARAMS-MOVED"),
+        ("uv_lock_hash", "sha256:" + "2" * 64, "E-RESUME-LOCKFILE-MOVED"),
+    ):
+        moved = dict(recorded)
+        moved[key] = value
+        identity_path.write_text(json.dumps(moved, indent=2))
+        reported = _h9b_refused(crashed, capsys)
+        assert code in reported, reported
+        # The message names the figure and both sides, which is what makes the
+        # refusal actionable rather than a bare mismatch.
+        assert key in reported and value in reported
+        # And nothing executed: the ledger is the length the crash left, and
+        # no record was written.
+        assert _h9b_ledger(crashed) == before
+        assert not (crashed / "run.yaml").exists()
+        # The lock the refusal never took (this file's own helper removes it).
+        (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+
+    # The control, last: restored, the same directory resumes. Without it
+    # every arm above would pass for a directory that could not be resumed at
+    # all.
+    identity_path.write_text(json.dumps(recorded, indent=2))
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert (crashed / "run.yaml").exists()
+
+
+def test_h9b_an_edited_execution_order_is_refused_before_the_lock(tmp_path: Path, capsys):
+    """`E-RUN-ORDER-MISMATCH` became reachable from a FILE when the recorded
+    order became an input (Decision 9), and it is documented as *core's
+    resolved state disagreeing with itself* — raised inside
+    `_execute_prepared`, after the lock, straight into `main`'s un-redacted
+    printer. So the same disagreement is decided pre-lock under
+    `E-RESUME-PLAN-MISMATCH` instead, and this is the pin.
+
+    The edit drops one `(condition, repeat)` pair from `execution_order`,
+    which is exactly what `_apply_execution_order` counts: with the check
+    removed, this directory refuses under the OTHER code from inside the lock
+    — both branches checked in that order, which is why the assertion names
+    the code rather than only the exit.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_randomized_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    assert recorded["order"] == "randomized"
+    before = _h9b_ledger(crashed)
+
+    short = list(recorded["execution_order"])[:-1]
+    assert short != recorded["execution_order"]
+    recorded["execution_order"] = short
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(recorded, sort_keys=False))
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-PLAN-MISMATCH" in reported, reported
+    assert "E-RUN-ORDER-MISMATCH" not in reported
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+def test_h9b_a_resume_path_that_is_no_directory_is_the_shipped_io_failure(tmp_path: Path, capsys):
+    """Decision 17's third not-minted code: a `resume` path that does not
+    exist reuses `E-IO-FAILED` at exit 1, which § Exit codes already assigns
+    to *"a `diff` operand path that doesn't exist"* — the same question, and
+    `diff` is the precedent. Reported through a `Collector` because that
+    section says of this code *"it is not a `ContractError`"*.
+
+    Both shapes, since `is_dir()` answers both: an absent path and a path that
+    is a FILE — a run record passed by mistake being the plausible one, and
+    the shape `E-RESUME-NO-IDENTITY` would otherwise answer with the wrong
+    remedy.
+    """
+    from publishable.cli import command_resume
+
+    a_file = tmp_path / "run.yaml"
+    a_file.write_text("run_id: nope\n")
+    for path in (tmp_path / "no_such_dir", a_file):
+        assert command_resume(path) == EXIT_WRONG
+        err = capsys.readouterr().err
+        assert "E-IO-FAILED" in err, err
+        assert str(path) in err
+
+
+_H9B_CREDENTIAL_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9b_credential_assay")
+class H9bCredentialAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9B_RESUME_TOKEN"], "m2": ["H9B_RESUME_TOKEN"]},
+        ),
+    }
+"""
+
+
+def test_h9b_a_resume_refusal_is_redacted_through_its_own_collector(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture J, the credential positive control for Decision 13: a refusal
+    `resume` decides is printed through a FRESH `Collector` whose
+    `credentials` is the set `_prepare_run` resolved, so a declared credential
+    in its text prints as `<redacted:…>`. Raised into `main` instead, the same
+    text reaches a handler that prints `{exc}` with no collector in scope.
+
+    **The raise is monkeypatched, and the reason is a measured fact rather
+    than convenience**: no shipped `E-RESUME-*` message interpolates a config
+    value — grepped over `command_resume`/`_resume_prepared`, `run_identity`,
+    `lineage` and `apparatus.replay_ledger`, every one of the fourteen
+    messages is built from paths, hashes, counts and field NAMES — so a
+    credential cannot reach one of them today. The property under test is the
+    containment, not any one message: the patch is aimed at `cli.read_sweep_
+    plan`, a real raise site inside the contained body, and the credential is
+    **declared** through `Param(requires_env=)` and set in the environment, so
+    the redaction has a real value to match. An undeclared one would pass
+    vacuously.
+    """
+    token = "sk-h9b-resume-do-not-print"
+    monkeypatch.setenv("H9B_RESUME_TOKEN", token)
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        experiment_type="h9b_credential_assay",
+        parameters={"instrument.model": "m1"},
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H9B_CREDENTIAL_TEMPLATE,
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+    )
+    crashed = _h9b_crash_run(doc, control)
+
+    import publishable.cli as cli_module
+
+    def raising(run_dir: Path):
+        raise ContractError(
+            f"the recorded plan cannot be read; the reader was handed {token}",
+            code="E-RESUME-PLAN-MISSING",
+        )
+
+    monkeypatch.setattr(cli_module, "read_sweep_plan", raising)
+    capsys.readouterr()
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-PLAN-MISSING" in reported
+    assert token not in reported, reported
+    assert "<redacted:H9B_RESUME_TOKEN>" in reported, reported
