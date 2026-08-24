@@ -7,6 +7,7 @@ re-inventing the scaffold-and-commit dance is how a fixture drifts from what
 `run` actually writes.
 """
 
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from publishable.reproduce import (
     classify_operand,
     destination_for,
     prepare_checkout,
+    restore_environment,
     verify_code_hash,
 )
 from publishable.study import study_add, study_new
@@ -281,7 +283,13 @@ here claims one.
 """
 
 
-def _fixture_a(tmp_path: Path, *, lockfile: bytes | None = _A_LOCKFILE) -> dict:
+def _fixture_a(
+    tmp_path: Path,
+    *,
+    working_lock: bytes | None = _A_LOCKFILE,
+    committed_lock: bytes | None = None,
+    edit_pyproject: bool = False,
+) -> dict:
     """Fixture A: a real repository, a real remote, and a record that carries it.
 
     The remote is a **local bare repo** and never the network: a fixture that
@@ -303,11 +311,44 @@ def _fixture_a(tmp_path: Path, *, lockfile: bytes | None = _A_LOCKFILE) -> dict:
     """
     doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
     root = doc["root"]
+    if committed_lock is not None:
+        # COMMITTED at the recorded commit, which is what makes the clone carry
+        # one — the bare remote below is made after this, so its HEAD is this
+        # commit and the second run records it.
+        (root / "uv.lock").write_bytes(committed_lock)
+        subprocess.run(["git", "-C", str(root), "add", "uv.lock"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "lockfile",
+            ],
+            check=True,
+        )
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "clone", "--bare", "-q", str(root), str(bare)], check=True)
     subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(bare)], check=True)
-    if lockfile is not None:
-        (root / "uv.lock").write_bytes(lockfile)
+    if working_lock is not None:
+        # Written LAST, so it can differ from the committed one by
+        # construction: this is the shape Fixture I needs and no
+        # single-lockfile fixture can supply. An uncommitted change to a
+        # tracked `uv.lock` does not make the tree dirty to `run`'s gate, which
+        # reads `git status --porcelain -- src templates`.
+        (root / "uv.lock").write_bytes(working_lock)
+    elif committed_lock is None:
+        (root / "uv.lock").unlink(missing_ok=True)
+    if edit_pyproject:
+        # § 0.7's recipe: an UNCOMMITTED edit, so the run records a copy the
+        # commit does not hold.
+        pyproject = root / "pyproject.toml"
+        pyproject.write_bytes(pyproject.read_bytes() + b"\n# h9c fixture J\n")
 
     before = {p.name for p in doc["results_dir"].glob("run_*")}
     assert main(["run", str(doc["cfg"])]) == EXIT_OK
@@ -320,6 +361,7 @@ def _fixture_a(tmp_path: Path, *, lockfile: bytes | None = _A_LOCKFILE) -> dict:
         "root": root,
         "bare": bare,
         "cfg": doc["cfg"],
+        "results_dir": doc["results_dir"],
         "run_dir": run_dir,
         "record": record,
         "record_path": run_dir / "run.yaml",
@@ -959,3 +1001,343 @@ def test_a_non_draft_record_is_not_given_the_draft_line(tmp_path: Path):
     lines, code, c, seen = _verify(fx["record"], dest)
     assert code is None
     assert "draft" not in seen
+
+
+# ==========================================================================
+# The environment — Fixtures G, H, I, J, L. Design Decision 3 (Ruling AA).
+# ==========================================================================
+
+
+_I_COMMITTED_LOCK = b'version = 1\nrequires-python = ">=3.11"\n\n[[package]]\nname = "committed"\n'
+"""A SECOND lockfile's bytes, differing from `_A_LOCKFILE` by construction.
+
+Fixture I's whole claim is that the two candidate lockfiles can disagree and
+that the disagreement is reported rather than resolved. A single-lockfile
+fixture cannot supply that: the two branches would be byte-identical and no
+assertion could tell *reported* from *silently used*.
+"""
+
+
+def _stub_sync(monkeypatch) -> list[tuple[str, ...]]:
+    """Observe the `uv sync --locked` seam instead of running it, and say why.
+
+    **No fixture in this slice can produce a lockfile a real `uv sync --locked`
+    would accept.** `uv lock` inside a `publishable new` project fails outright
+    — *"Because publishable was not found in the package registry"* — so plan
+    correction 22 forbids any recipe from running it, and every fixture
+    lockfile here is WRITTEN. A written lockfile cannot satisfy a real
+    `--locked` resolve, so an arm that ran the sync would be asserting on
+    `uv`'s refusal rather than on this module's ranking.
+
+    So the design's *"step 3's success arm"* is armed as *reached the sync step
+    with the right lockfile in place*, and never as *synced*. That is a
+    narrowing of the design's wording, reported rather than quietly
+    reinterpreted. The failure path is armed by letting the real call run,
+    where failure is the expected outcome.
+    """
+    calls: list[tuple[str, ...]] = []
+
+    def stub(dest: Path):
+        calls.append(("uv", "sync", "--locked", str(dest)))
+        return subprocess.CompletedProcess(["uv", "sync", "--locked"], 0, "", "")
+
+    monkeypatch.setattr(reproduce_module, "_uv_sync", stub)
+    return calls
+
+
+def _restore(fx: dict, dest: Path, operand_path: Path | None = None):
+    c = Collector()
+    lines, code = restore_environment(
+        Record(fx["record"], operand_path or fx["record_path"]), dest, c
+    )
+    seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
+    return lines, code, c, seen
+
+
+def _bundle_member(tmp_path: Path, fx: dict, name: str = "main") -> Path:
+    bundle = tmp_path / "bundle"
+    study_new(bundle, "Ruling AA")
+    study_add(bundle, fx["record_path"], name)
+    member = bundle / f"{name}.run.yaml"
+    # The measured degradation, asserted rather than assumed: the recorded
+    # `uv_lock` path survives redaction while the directory it points into is
+    # not in the bundle, so it is a DANGLING reference and only the digest
+    # travels.
+    copied = yaml.safe_load(member.read_text())
+    assert copied["provenance"]["environment"]["uv_lock"] == "environment/uv.lock"
+    assert not (member.parent / "environment").exists()
+    assert copied["provenance"]["environment"]["uv_lock_hash"] is not None
+    return member
+
+
+# --- The run-directory form: the byte copy wins, and the clone is reported. -
+
+
+def test_the_byte_copy_is_restored_and_a_commit_with_no_lockfile_is_reported(
+    tmp_path: Path, monkeypatch
+):
+    """Step 2, on § 0.1's measured shape: the run recorded an UNTRACKED
+    `uv.lock` and the clone of the recorded commit has none.
+
+    Three assertions and each is a different claim: the checkout's lockfile is
+    byte-equal to the RECORDED copy; the clone's absence is a printed fact
+    rather than a silence; and the sync was reached.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    assert not (dest / "uv.lock").exists()
+
+    lines, code, c, seen = _restore(fx, dest)
+    assert code is None, seen
+    assert c.findings == []
+    assert (dest / "uv.lock").read_bytes() == _A_LOCKFILE
+    assert (dest / "uv.lock").read_bytes() == (
+        fx["run_dir"] / "environment" / "uv.lock"
+    ).read_bytes()
+    assert any("the commit carries none" in line for line in lines), lines
+    assert calls == [("uv", "sync", "--locked", str(dest))]
+
+
+def test_fixture_i_two_disagreeing_lockfiles_report_differs_and_restore_the_recorded_one(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture I. The commit carries one lockfile, the run used another, and the
+    two differ BY CONSTRUCTION.
+
+    The byte copy wins because it is what the run actually used;
+    `uv_lock_hash` covers it, and the clone's committed copy is only a claim
+    about the commit. The `DIFFERS` line naming the clone's digest is the arm
+    that separates *reported* from *silently overwritten* — the bytes alone
+    would look identical under both.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_I_COMMITTED_LOCK, working_lock=_A_LOCKFILE)
+    assert _I_COMMITTED_LOCK != _A_LOCKFILE
+    dest = _prepared_checkout(tmp_path, fx)
+    assert (dest / "uv.lock").read_bytes() == _I_COMMITTED_LOCK
+
+    lines, code, c, seen = _restore(fx, dest)
+    assert code is None, seen
+    assert c.findings == []
+    assert (dest / "uv.lock").read_bytes() == _A_LOCKFILE
+    differs = [line for line in lines if "DIFFERS" in line and "uv.lock" in line]
+    assert len(differs) == 1, lines
+    committed_digest = "sha256:" + hashlib.sha256(_I_COMMITTED_LOCK).hexdigest()
+    assert committed_digest in differs[0], differs
+    assert fx["record"]["provenance"]["environment"]["uv_lock_hash"] in differs[0], differs
+    assert calls
+
+
+def test_a_commit_whose_lockfile_matches_the_record_is_reported_identical(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture I's third branch, and it is not decoration: with *absent* and
+    *DIFFERS* both armed, an implementation could still print `DIFFERS`
+    unconditionally whenever a lockfile exists. This is the arm that says
+    otherwise."""
+    _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_A_LOCKFILE, working_lock=_A_LOCKFILE)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _restore(fx, dest)
+    assert code is None, seen
+    assert any("identical to the run's" in line and "uv.lock" in line for line in lines), lines
+    assert not any("DIFFERS" in line for line in lines), lines
+
+
+def test_a_byte_copy_edited_after_the_run_is_lockfile_edited_and_is_not_used(
+    tmp_path: Path, monkeypatch
+):
+    """The digest check is what makes correction 28's filesystem probe safe
+    rather than a proxy: a copy that does not match the record is REFUSED, not
+    used.
+
+    The clone's own lockfile is asserted UNTOUCHED, because a build that
+    refused after copying would satisfy a code-only assertion.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_I_COMMITTED_LOCK, working_lock=_A_LOCKFILE)
+    dest = _prepared_checkout(tmp_path, fx)
+    (fx["run_dir"] / "environment" / "uv.lock").write_bytes(b"edited after the run\n")
+
+    lines, code, c, seen = _restore(fx, dest)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-LOCKFILE-EDITED"]
+    assert fx["record"]["provenance"]["environment"]["uv_lock_hash"] in seen
+    assert (dest / "uv.lock").read_bytes() == _I_COMMITTED_LOCK
+    assert dest.is_dir()
+    assert calls == []
+
+
+# --- The bundle form: Fixtures G and H, and H is not optional. -------------
+
+
+def test_fixture_g_a_bundle_whose_lockfile_was_never_committed_is_unreachable(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture G. `E-REPRODUCE-LOCKFILE-UNREACHABLE`, and the message must name
+    BOTH facts — the recorded digest and what the clone holds. A message
+    asserting only the code would pass if it named neither."""
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path)
+    member = _bundle_member(tmp_path, fx)
+    dest = _prepared_checkout(tmp_path, fx)
+    assert not (dest / "uv.lock").exists()
+
+    lines, code, c, seen = _restore(fx, dest, operand_path=member)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-LOCKFILE-UNREACHABLE"]
+    assert fx["record"]["provenance"]["environment"]["uv_lock_hash"] in seen
+    assert "no uv.lock at all" in seen
+    assert dest.is_dir(), "the checkout is kept"
+    assert calls == []
+
+
+def test_fixture_h_a_bundle_whose_lockfile_is_committed_reaches_the_sync(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture H, AND IT IS NOT OPTIONAL. Without it Fixture G proves only that
+    something refused, and *"a bundle can never sync"* and *"a bundle syncs when
+    the lockfile travels with the commit"* stay indistinguishable.
+
+    The lockfile is committed AND is the one the run used, so the recorded
+    digest and the clone's agree. The sync step is REACHED — see `_stub_sync`
+    for why *reached* is the honest claim rather than *synced*.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_A_LOCKFILE, working_lock=_A_LOCKFILE)
+    member = _bundle_member(tmp_path, fx)
+    dest = _prepared_checkout(tmp_path, fx)
+
+    lines, code, c, seen = _restore(fx, dest, operand_path=member)
+    assert code is None, seen
+    assert c.findings == []
+    assert any("not reachable" in line for line in lines), lines
+    assert any("the commit's own copy matches" in line for line in lines), lines
+    assert calls == [("uv", "sync", "--locked", str(dest))]
+
+
+def test_a_bundle_whose_committed_lockfile_disagrees_with_the_record_is_unreachable(
+    tmp_path: Path, monkeypatch
+):
+    """The third bundle branch: a lockfile IS committed and it is the wrong one.
+
+    This is what separates *the clone's lockfile is used when one exists* from
+    *when it matches the record* — Fixture G's clone holds none, so G alone
+    cannot tell those two readings apart, and this is the mutation
+    *accept the clone's lockfile in the bundle form without comparing digests*.
+    """
+    _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_I_COMMITTED_LOCK, working_lock=_A_LOCKFILE)
+    member = _bundle_member(tmp_path, fx)
+    dest = _prepared_checkout(tmp_path, fx)
+    assert (dest / "uv.lock").read_bytes() == _I_COMMITTED_LOCK
+
+    lines, code, c, seen = _restore(fx, dest, operand_path=member)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-LOCKFILE-UNREACHABLE"]
+    committed_digest = "sha256:" + hashlib.sha256(_I_COMMITTED_LOCK).hexdigest()
+    assert committed_digest in seen
+    assert fx["record"]["provenance"]["environment"]["uv_lock_hash"] in seen
+
+
+# --- Fixture J: `pyproject.toml`, and its POSITION. -----------------------
+
+
+def test_fixture_j_a_moved_pyproject_is_reported_differs_before_the_uv_sync_line(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture J. § 0.7's recipe — an uncommitted edit to `pyproject.toml`, the
+    run performed, then reproduced.
+
+    **The ordering is the whole point of the row**, so the assertion is on the
+    line AND on its position before the `uv sync` line: this file is what
+    explains a `uv sync --locked` failure a reader would otherwise have to
+    guess at, and after the failure it explains nothing. And it is NOT copied
+    in — the commit's own manifest stays as committed, asserted here, because
+    overwriting it with an uncommitted edit would make the checkout a tree that
+    exists nowhere.
+    """
+    _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, edit_pyproject=True)
+    dest = _prepared_checkout(tmp_path, fx)
+    committed = (dest / "pyproject.toml").read_bytes()
+    recorded = (fx["run_dir"] / "environment" / "pyproject.toml").read_bytes()
+    assert committed != recorded, "the fixture's two copies must differ by construction"
+
+    lines, code, c, seen = _restore(fx, dest)
+    assert code is None, seen
+    assert c.findings == [], seen
+    differs = [i for i, line in enumerate(lines) if line.startswith("pyproject.toml: DIFFERS")]
+    sync = [i for i, line in enumerate(lines) if line.startswith("uv sync:")]
+    assert len(differs) == 1 and len(sync) == 1, lines
+    assert differs[0] < sync[0], lines
+    assert (dest / "pyproject.toml").read_bytes() == committed
+
+
+def test_an_unmoved_pyproject_is_reported_identical(tmp_path: Path, monkeypatch):
+    """Fixture J's negative control. Without it, an implementation printing
+    `DIFFERS` unconditionally would satisfy the arm above."""
+    _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _restore(fx, dest)
+    assert code is None, seen
+    assert any(line == "pyproject.toml: identical to the run's" for line in lines), lines
+
+
+# --- Fixture L: `uv_lock_hash: null`. Decision 6, and task 6 owns the ruling.
+
+
+def test_fixture_l_a_record_that_pinned_no_environment_refuses_and_keeps_the_checkout(
+    tmp_path: Path, monkeypatch
+):
+    """Fixture L. `E-REPRODUCE-UNLOCKED` at exit `1`, **and the destination
+    exists and holds the checked-out tree.**
+
+    The existence assertion is the one that matters: a refusal arm asserting
+    only the code would pass identically if the checkout were discarded, which
+    is exactly the behaviour Decision 6 exists to specify — *a stop must be
+    legible from the artifacts*.
+
+    `uv sync` is asserted NOT reached, because the refusal is the point.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, working_lock=None)
+    assert fx["record"]["provenance"]["environment"]["uv_lock_hash"] is None
+    dest = _prepared_checkout(tmp_path, fx)
+
+    lines, code, c, seen = _restore(fx, dest)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-UNLOCKED"]
+    assert calls == []
+    # The checkout is kept, and it holds the CHECKED-OUT TREE rather than merely
+    # existing: an empty directory would satisfy `is_dir()` alone.
+    assert dest.is_dir()
+    assert (dest / "pyproject.toml").is_file()
+    assert (dest / ".git").is_dir()
+    assert (
+        code_hash_of(hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands)))
+        == fx["record"]["code_hash"]
+    )
+    # The closing transcript's `uv sync` line is replaced by the stated gap.
+    assert any("uv sync: not run" in line for line in lines), lines
+
+
+def test_a_real_uv_sync_failure_is_exit_five(tmp_path: Path):
+    """The failure path, with the REAL `uv sync --locked` — the one arm that
+    must not stub it, because failure is the expected outcome and a written
+    lockfile guarantees it (`uv lock` cannot resolve in a scaffolded project,
+    which is why no fixture lockfile is a real one).
+
+    Exit `5` is § Exit codes' *"a clone or `uv sync` that failed"*, and this is
+    that clause's second reader.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _restore(fx, dest)
+    assert code == EXIT_EXTERNAL, seen
+    assert [f.code for f in c.findings] == ["E-IO-FAILED"]
+    assert "uv sync --locked" in seen
+    # Everything before the sync still ran and still reported.
+    assert (dest / "uv.lock").read_bytes() == _A_LOCKFILE

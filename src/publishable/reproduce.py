@@ -16,6 +16,7 @@ See `docs/superpowers/specs/2026-08-24-reproduce-design.md` § Decision 1 for
 the five verdicts and the grounds each rests on.
 """
 
+import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -507,3 +508,181 @@ def verify_code_hash(operand: Record, dest: Path, c: Collector) -> tuple[list[st
     lines += [f"  {rel}" for rel, _ in pairs]
     lines += list(_CODE_HASH_CAUSES)
     return (lines, EXIT_WRONG)
+
+
+# --------------------------------------------------------------------------
+# The environment. Design Decision 3 (Ruling AA) and Decision 6.
+# --------------------------------------------------------------------------
+
+
+def _sha256_of(path: Path) -> str:
+    """`uv_support.uv_lock_info`'s own spelling of the digest, `sha256:` prefix
+    included, so the two answers are comparable.
+
+    `uv_lock_info` itself is deliberately NOT called: it answers *what does this
+    repo hold now*, taking a repo root and looking for `uv.lock` beneath it,
+    which is a different question from *what is the digest of this particular
+    file* — and the two lockfiles this function is asked about live at two
+    paths neither of which is a repo root's `uv.lock` in the sense that helper
+    means.
+    """
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def restore_environment(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+    """Decision 3's ranking, in order, each step printing what it found.
+
+    **Ruling AA: the two lockfile sources are both real and neither is
+    preferred silently.** Measured — a run records an **untracked** `uv.lock`
+    into `environment/uv.lock` while `git clone` of the recorded commit has
+    **none**, because the dirty gate's pathspec is the hashed trees only. The
+    recorded `uv_lock_hash` is the authority; the run directory's byte copy is
+    the preferred carrier, because it is what the run actually used, while the
+    clone's committed lockfile is a claim about the commit. Where they
+    disagree, the disagreement is the interesting fact and is **printed rather
+    than resolved.**
+
+    **"Reachable beside the operand" is a FILESYSTEM PROBE, and this says so**
+    (plan correction 28). The test is
+    `(<operand>.parent / "environment" / "uv.lock").is_file()` — a probe for a
+    file, not a structural fact about which form the operand is. It is correct
+    for both measured forms, and it is stated because a bundle placed *inside*
+    a run directory would take the run-directory branch. What makes the probe
+    safe rather than a proxy is the digest check that follows it:
+    `E-REPRODUCE-LOCKFILE-EDITED` fires when the copy's sha256 does not match
+    the record's `uv_lock_hash`, so a foreign copy is refused rather than used.
+
+    **`pyproject.toml` is a third input** (§ 0.7), found **by convention and
+    not by record** — `provenance.environment` names `uv_lock` and no
+    `pyproject.toml` at all. It is compared and reported **before** `uv sync`
+    speaks, because it is the input that explains a `uv sync --locked` failure
+    a reader would otherwise have to guess at. It is **not copied in**: it is a
+    tracked file at the recorded commit, and overwriting the commit's own
+    manifest with an uncommitted edit would make the checkout a tree that
+    exists nowhere. And it **does not refuse**.
+
+    Returns `(transcript lines, exit code or None)`, the same contract
+    `verify_code_hash` uses.
+    """
+    record = operand.doc
+    env = (record.get("provenance") or {}).get("environment") or {}
+    recorded_digest = env.get("uv_lock_hash")
+    clone_lock = dest / "uv.lock"
+    lines: list[str] = []
+
+    if recorded_digest is None:
+        # Decision 6 (Q3). The checkout is KEPT and the closing transcript is
+        # printed with the `uv sync` line replaced by the stated gap: exit `1`
+        # because nothing outside the machine refused — `5`'s class is the one
+        # you retry — and the thing you asked about is genuinely wrong, since
+        # you asked to reproduce a run whose environment was never pinned.
+        # This is what `W-ENV-UNLOCKED`'s shipped message already promises:
+        # *"`reproduce` will not be able to restore it"*.
+        c.error(
+            "E-REPRODUCE-UNLOCKED",
+            "provenance.environment.uv_lock_hash",
+            "is null: this run pinned no environment, so there is no lockfile to "
+            "restore one from and `uv sync --locked` has nothing to check against. "
+            f"The checkout is kept at {dest}; `uv sync` in it would resolve a NEW "
+            "environment, which is not the one the recorded numbers came through",
+        )
+        lines.append("uv sync: not run — the record pinned no environment")
+        return (lines, EXIT_WRONG)
+
+    byte_copy = operand.path.parent / "environment" / "uv.lock"
+    if byte_copy.is_file():
+        copy_digest = _sha256_of(byte_copy)
+        if copy_digest != recorded_digest:
+            c.error(
+                "E-REPRODUCE-LOCKFILE-EDITED",
+                str(byte_copy),
+                f"hashes {copy_digest}, and the record says {recorded_digest} — the "
+                "run directory's own copy of the lockfile was edited after the run, so "
+                f"it is not the environment these numbers came through. The checkout is "
+                f"kept at {dest}",
+            )
+            return (lines, EXIT_WRONG)
+
+        # The clone's own lockfile is REPORTED before it is overwritten. Never
+        # silently replaced without the line: a reader whose commit carries a
+        # different lockfile than the run used has learned something, and it is
+        # the one fact this step is in a position to tell them.
+        if not clone_lock.is_file():
+            lines.append("uv.lock: the commit carries none; restored from the run's own copy")
+        elif _sha256_of(clone_lock) == recorded_digest:
+            lines.append("uv.lock: the commit's copy is identical to the run's")
+        else:
+            lines.append(
+                f"uv.lock: DIFFERS — the commit carries {_sha256_of(clone_lock)} and the "
+                f"run used {recorded_digest}; the run's own copy is what is restored"
+            )
+        clone_lock.write_bytes(byte_copy.read_bytes())
+        lines.append(f"uv.lock: restored from {byte_copy}")
+    else:
+        # The bundle form. `provenance.environment.uv_lock` survives `study add`
+        # unredacted while the directory it points into is not in the bundle, so
+        # the recorded path is a DANGLING reference and only the digest travels.
+        # The clone's committed lockfile is used if and only if it matches.
+        lines.append(f"uv.lock: the run's own copy is not reachable from {operand.path}")
+        if clone_lock.is_file() and _sha256_of(clone_lock) == recorded_digest:
+            lines.append(
+                f"uv.lock: the commit's own copy matches the recorded {recorded_digest}, "
+                "so it is what the environment is restored from"
+            )
+        else:
+            held = _sha256_of(clone_lock) if clone_lock.is_file() else "no uv.lock at all"
+            c.error(
+                "E-REPRODUCE-LOCKFILE-UNREACHABLE",
+                str(dest),
+                f"holds {held}, and the record's environment is {recorded_digest} — no "
+                "lockfile matching the record is reachable, so the environment these "
+                "numbers came through cannot be rebuilt. A bundle carries no lockfile of "
+                f"its own; the checkout is kept at {dest}",
+            )
+            return (lines, EXIT_WRONG)
+
+    # Step 4, and it happens BEFORE `uv sync` on purpose.
+    recorded_pyproject = operand.path.parent / "environment" / "pyproject.toml"
+    clone_pyproject = dest / "pyproject.toml"
+    if recorded_pyproject.is_file() and clone_pyproject.is_file():
+        if recorded_pyproject.read_bytes() == clone_pyproject.read_bytes():
+            lines.append("pyproject.toml: identical to the run's")
+        else:
+            lines.append(
+                "pyproject.toml: DIFFERS — the run's copy is not byte-identical to the "
+                f"commit's. Not copied in ({clone_pyproject} is the commit's own "
+                "manifest); this is the input to check first if `uv sync --locked` fails"
+            )
+    elif not recorded_pyproject.is_file():
+        lines.append(
+            f"pyproject.toml: the run's own copy is not reachable from {operand.path}, "
+            "so it is not compared"
+        )
+
+    sync = _uv_sync(dest)
+    if sync.returncode != 0:
+        c.error(
+            "E-IO-FAILED",
+            str(dest),
+            f"`uv sync --locked` failed: {sync.stderr.strip() or sync.stdout.strip()}",
+        )
+        return (lines, EXIT_EXTERNAL)
+    lines.append("uv sync: --locked, against the restored lockfile")
+    return (lines, None)
+
+
+def _uv_sync(dest: Path) -> subprocess.CompletedProcess[str]:
+    """`uv sync --locked` in the checkout, as its own function.
+
+    Separate from `_git` and from `restore_environment` for one reason worth
+    stating: it is the **only** seam in this module that reaches a network and
+    resolves a real dependency tree, so it is the one an arm has to observe
+    rather than perform. A fixture's lockfile is *written*, never resolved —
+    `uv lock` inside a scaffolded project fails outright — so no fixture in
+    this slice can produce a lockfile a real `--locked` sync would accept, and
+    an arm that ran it would be asserting on `uv`'s refusal rather than on this
+    module's behaviour. The success path is therefore armed by observing this
+    call's argv and cwd; the failure path is armed by letting it really run,
+    where failure is the expected outcome.
+    """
+    return subprocess.run(["uv", "sync", "--locked"], cwd=dest, capture_output=True, text=True)
