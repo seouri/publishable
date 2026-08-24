@@ -2598,6 +2598,18 @@ and `_compute_declared_contrasts`, and those two only from `_execute_prepared` (
 `command_dry_run` (4427-4572) does not call at all. `command_dry_run`'s only call into the sequence is
 `_prepare_run` (2095-2567), whose phase 1 is `validate_config`.
 
+**AMENDED 2026-08-24 (H9c task 14): the THIRD and last of its three commands is discharged, and it
+is discharged more simply than either of the other two — `reproduce` never enters the sequence at
+all.** The precondition binds a command that re-enters `run`'s phases past phase 1. `reproduce`
+prepares a checkout and stops: it clones, checks out, recomputes `code_hash`, restores the
+environment, writes the config and the expectation, and prints instructions. Read rather than
+inferred: `grep -n "resolve_contrasts\|_prepare_run\|_execute_prepared" src/publishable/reproduce.py`
+returns **no hits at all**, and `cli._dispatch` routes `reproduce` to `command_reproduce`, which is
+in `reproduce.py` and not in `cli.py`'s phase chain. So the precondition has no third live
+obligation. **This clause of the entry is now discharged for every command it named**
+(`dry-run`/`draft` by H9a, `resume` by H9b, `reproduce` here); the entry itself stays OPEN because
+its other clauses are about `validate`'s own guards and are not H9's.
+
 **AMENDED 2026-08-11 (task 14 of the S5 checkpoint plan):** A fourth unguarded `expand(doc)` call
 in this same function, found and closed in the same task. `_check_contrasts` calls `expand(doc)`
 directly to resolve `of`/`against` against condition labels, and a `sweep.grid` axis value of
@@ -3770,6 +3782,26 @@ whether `read_run_record` should refuse a record missing either hash (widening
 `E-UPSTREAM-RECORD-UNREADABLE`'s existing "no `run_id`" check to the same two fields), or whether
 `UpstreamLedger.record` should carry the missing-hash case through as `None` on purpose and say so
 in `reference.md` § Lineage between runs, which currently states only the present case.
+
+**DECLINED and RE-OWNED 2026-08-24 (H9c task 14): the ground this entry was routed to H9 on is
+FALSE of `reproduce`.** The owner line above says H9 *"walks a resolved `run_id` back through its
+own recorded ancestors."* Re-read against `reference.md` § Reproducing on another device: **it does
+not.** That section's seven steps read one record's `provenance.git` (remote and commit), its
+`environment` (the lockfile hash), its embedded `config`, and its `apparatus.facts`;
+`provenance.upstream` is named in **none** of them. Confirmed against the built command:
+`grep -n "upstream\|UpstreamLedger\|read_upstream" src/publishable/reproduce.py` returns **no
+hits** — `reproduce` reads a record through `lineage.read_record_file` and never through
+`UpstreamLedger`, and it walks no chain of any kind. So H9c cannot settle the design question this
+entry poses, and taking it in order to strike it would be worse than declining it.
+
+**Owner: unassigned, with the reason** — no remaining slice has `lineage.py`'s upstream ledger or
+§ Lineage between runs as its surface: H9d is `demo`/`docs`/`list-templates` and H3c-3's remaining
+14 is folds and holdouts inside cells. **Secondarily H8b's `diff`**, which this entry already names
+as the other consumer that would observe a silently-`None` hash as a false absence of drift — H8b is
+complete, so that is a name for whoever reopens `diff`, not a live owner. **The check its closer
+must make is unchanged** and is stated two paragraphs above: refuse a record missing either hash
+(widening `E-UPSTREAM-RECORD-UNREADABLE`), or carry `None` through on purpose and say so in
+§ Lineage between runs.
 
 ## `register_template` appears outside § The importable surface — checked, not a defect
 
@@ -6864,6 +6896,25 @@ H7c owes only that the attribute is readable, which it now is.
 are present-tense specification of unbuilt commands, not defects; filed to prevent either reader
 being folded into an unrelated slice's scope.
 
+**AMENDED 2026-08-24 (H9c task 14): the `reproduce` half is HALF discharged and half NARROWED — it
+is amended rather than struck, because the narrowing is what survives.** H9c built step 6
+(`reproduce.prepare_env`, design Decision 12). What it discharges: for the two template homes this
+interpreter can construct — core's `generic` and a **project-local** `templates/**` inside the
+checkout — `reproduce` copies `.env.example` to `.env` when none exists and lists the template's
+`required_env` names. What it **cannot** discharge, and what this row now carries: for a
+**plugin-provided** template the list is unbuildable in-process. Measured (plan correction 8):
+`templates.registry.get_template` returns `None` for an installed template — `_claims` attaches
+`cls=None` to an entry-point claim and `_merged` keeps only claims with a class — **and** the plugin
+is installed by `uv sync` into the **clone's** environment, not into `reproduce`'s, so no in-process
+call could resolve it even if `get_template` did. § Reproducing on another device's step 6 is
+narrowed to say so, and `reproduce` names the template and its plugin and defers to the `validate`
+line its own closing transcript already prints — `validate` in the prepared checkout reads
+`required_env` itself, in the interpreter where the plugin exists. **Owner of the residue:
+unassigned, with the reason** — the residue is a document narrowing that has landed, not work
+outstanding; the `dry-run` half of the table above landed with H9a. Pinned by
+`test_an_installed_template_names_its_plugin_and_defers_to_validate` and its control,
+`test_a_name_no_template_claims_is_reported_as_such_rather_than_as_a_plugin`.
+
 ## OPEN — `BaseTemplate.field_convention` is declarable and read by nothing
 
 Measured at `478c1f3` and re-confirmed on 2026-08-16: `grep -rn "field_convention" src/publishable/`
@@ -9301,6 +9352,17 @@ whatever it holds. One row, one emit site, two conditions.
 
 ## OPEN — `diff`'s `uv.lock` row prints two digests and never names the package whose pin moved — **Owner: H9**
 
+**RE-OWNED 2026-08-24 (H9c task 14): H9d, and the input this entry was waiting on has landed.**
+H9c's design § 4 routes it: *which* lockfile is authoritative when a run's own copy and a commit's
+own copy disagree is the question H9c's Decision 3 (Ruling AA) answers — the recorded
+`uv_lock_hash` is the authority, the run directory's byte copy is the preferred carrier, and the
+committed copy is used only when it matches. Rendering **per-package detail lines** underneath the
+two digests is `diff`'s surface, not `reproduce`'s: `reproduce` prints no comparison table and
+resolves no dependency graph. **Owner: H9d** (`demo`, `docs`, `list-templates`) — the only remaining
+slice with a CLI rendering surface, H8b (`diff`'s own slice) being complete and H3c-3's remaining 14
+being folds and holdouts inside cells. Stated as a fact with a reason rather than as *"whichever
+slice next touches `diff`"*, which this file rejects by name.
+
 **Filed 2026-08-22 by H5b task 15, as the residual of this slice's own cost-if-wrong.** H5b changes what
 `aggregated` reports for a config whose `code_hash`, `parameters_hash` and `input_manifest_hash` are all
 `identical` between two runs, so the only `diff` row that moves across the upgrade is `uv.lock` — the
@@ -9669,6 +9731,20 @@ re-owned after they were filed — and every re-owning in this file happens in a
 because a dated record is appended to rather than retro-edited. **Count by owner, over the whole
 entry, not over its heading.**
 
+**AMENDED 2026-08-24 (H9c task 14): what H9c did to each of its four rows, so the next reader of this
+table does not have to walk four entries to find out.** The table's cells are left as they were —
+this is an appended amendment, not a retro-edit.
+
+| Row H9c owned | Disposition |
+|---|---|
+| ~~Whether a missing `uv.lock` should refuse the run instead of warning is unresolved~~ | **STRUCK** by H9c task 6 (Decisions 5 and 6) |
+| `UpstreamLedger.record` copies a missing hash as `None` | **DECLINED and RE-OWNED to unassigned** by task 14 — the ground routing it to H9 (*"`reproduce` walks a chain of ancestors"*) is false of the built command |
+| `diff`'s `uv.lock` row never names the package whose pin moved | **RE-OWNED to H9d** by task 14 — H9c's Decision 3 supplied the input it was waiting on; rendering the detail lines is `diff`'s surface |
+| The S4c-task-9 `resolve_contrasts` precondition | **Third and last command discharged** by task 14 — `reproduce` enters no phase of `run`'s sequence at all |
+
+**So H9c leaves none of its four to H9d except by an explicit re-owning**, and the count this table
+exists to correct is now down to whatever H9d's own scoping measures rather than up.
+
 ## OPEN — the worked example's seed **labels** cannot be produced by the seed **values** printed beside them — **Owner: unassigned, with the reason**
 
 `reference.md` § `sweep.yaml` — the resolved plan prints `labels: [seed17, seed42, seed137, seed1009, seed2027]` and
@@ -9986,6 +10062,18 @@ binds the `NOT BUILT` rows to the mapping's keys in both directions. **Owner: un
 reason** — no remaining slice names the dispatcher's ordering as its surface; H9c and H9d each build one
 of those four names and whichever runs first should close this rather than re-derive it.
 
+**AMENDED 2026-08-24 (H9c task 11/14): H9c built one of the four and the order is STILL unpinnable,
+so this stays OPEN with a smaller mapping.** `reproduce` left `NOT_BUILT_COMMANDS`, which now holds
+**three** keys — `demo`, `docs`, `list-templates` — none containing a space and none with a built
+branch, so the two orderings remain indistinguishable by any fixture and H9c added no test that
+could separate them. What H9c did instead is refuse to rest anything on the order: its four
+dispatch arms assert the **outcome** (the exit code and the identifier) and never which branch
+answered, and the comment beside `"reproduce": command_reproduce` in `cli._dispatch` says so and
+cites this entry. **The obligation this entry names is unchanged and now falls to H9d alone**, which
+builds the remaining three: at the moment a two-token unbuilt name exists, or a built branch shares
+a name with a `NOT_BUILT_COMMANDS` key, the order becomes real and a test must exist before it
+does.
+
 ## OPEN — two comments in `report.py`'s and `test_report.py`'s surface assert that H8c task 10's bundle render "does not exist yet", and it shipped — **Owner: unassigned, with the reason (H8c is closed)**
 
 **Filed 2026-08-24 by H9b's whole-branch fix round**, found by the sweep Minor 2 required
@@ -10000,3 +10088,170 @@ slice's later change"* shape, in a **closed** slice, which is why it is filed ra
 branch — H9b's own two instances of it are corrected in this round. **Owner: unassigned, with the
 reason** — no remaining slice (H9c, H9d, H3c-3's remaining 14) has `report` as its surface. The remedy
 is deletion, not rewriting.
+
+## OPEN — a tracked `.gitattributes` carrying a `text`/`eol` attribute makes `code_hash` a property of how a working tree was MATERIALIZED rather than of the commit — **Owner: unassigned, with the reason (no remaining slice has `hashes.py` or § How the three are computed as its surface)**
+
+**Filed 2026-08-24 by H9c task 14**, and reproduced by this task rather than carried from the design.
+`code_hash` folds the **bytes on disk** under `src/**` and `templates/**`. A tracked `.gitattributes`
+declaring `* text eol=crlf` tells git to write CRLF into every working tree it materializes — so the
+repository the author never re-checked-out holds LF and every clone of the identical commit holds
+CRLF, and the two hash differently. `reproduce` passes `-c core.autocrlf=false` at both git
+invocations (H9c Decision 7) and that flag does **not** reach this: `.gitattributes` overrides
+`core.autocrlf`, which is the whole point of the file.
+
+**Reproduced, outside this repository, on `git version 2.50.1 (Apple Git-155)`:**
+
+```bash
+mkdir -p ga/orig/src/pkg && cd ga/orig
+printf 'x = 1\ny = 2\n' > src/pkg/mod.py
+printf '* text eol=crlf\n'  > .gitattributes
+git init -q . && git add -A && git commit -qm init
+cd .. && git -c core.autocrlf=false clone -c core.autocrlf=false -q ./orig ./clone
+```
+
+```python
+from publishable.hashes import code_hash
+code_hash(Path("ga/orig"),  None)   # sha256:6bac8c5…   b'x = 1\ny = 2\n'
+code_hash(Path("ga/clone"), None)   # sha256:80ffbc4…   b'x = 1\r\ny = 2\r\n'
+```
+
+**The load-bearing claim is the INEQUALITY, not either digest.** Both figures are this fixture's, over
+this two-file tree, and a reader reproducing the recipe on another tree will get two different numbers
+that are still different from each other. (The design's § 0.5 records `d37416e` against `0cc6ddd` from
+its own fixture; neither pair is canonical, and quoting one as though it were is how a recipe stops
+reproducing.)
+
+**Not closed by H9c, by ruling.** Decision 7 states why `reproduce` may not override it: a
+`.gitattributes` is **tracked**, so it travels with the commit and is part of what the commit says the
+tree is — neutralizing it would make `reproduce` produce a tree the repository's own rules say is
+wrong, and H6a Ruling F's ground (*"a rule that does not travel with the tree cannot define the tree's
+identity"*) runs the other way here precisely because this rule **does** travel. The honest fix is at
+the hashing end, not at the clone end.
+
+**The check its closer must make.** Either (a) `code_hash` normalizes line endings before folding, at
+the cost of making the digest no longer a fold of the bytes on disk — which is the property H6a
+Ruling C's refusal of a definition marker leans on, so changing it is a second undated definition
+change; or (b) `reference.md` § How the three are computed states the dependency, so a reader who
+sees `E-REPRODUCE-CODE-HASH` on a faithful clone finds the cause named. `reproduce` already names
+*"a tracked `.gitattributes`, which it may not [neutralize]"* in its closed candidate set
+(`reproduce._CODE_HASH_CAUSES`), which is the narrow half of (b) and is not the same as the document
+saying it.
+
+**Owner: unassigned, with the reason.** No remaining slice has `hashes.py` or § How the three are
+computed as its surface — **H9d** is `demo`/`docs`/`list-templates` and **H3c-3's remaining 14** is
+folds and holdouts inside cells — and **H6 is complete**. Stated as a fact with a reason rather than
+as *"whichever slice next touches `code_hash`"*, which this file rejects by name.
+
+**Severity:** Minor in reach and Major in kind. No project in this repository's own record ships a
+`.gitattributes`, so nothing observed hits it; what it costs when it is hit is a `code_hash` refusal
+on a clone that is byte-faithful to the commit, with no document naming the cause.
+
+## OPEN — a study bundle carries no lockfile, so a bundle member whose project never committed one cannot be reproduced from the bundle alone — **Owner: unassigned, with the reason (`study add`'s bundle contents are H8c's surface, and H8c is complete)**
+
+**Filed 2026-08-24 by H9c task 14**, measured against `study add`'s real output. A bundle member is a
+redacted copy of one run's `run.yaml`. `study._redact` reaches `data.input_dir`/`data.output_dir`,
+`provenance.git.repo_root`, `provenance.environment.hostname` and `provenance.input_manifest` — and
+**not** `provenance.environment.uv_lock`, which survives reading `"environment/uv.lock"` while the
+bundle holds no `environment/` directory at all. So the member names a path that resolves nowhere:
+a **dangling reference**, unmarked.
+
+**Reproduced, and pinned by a shipped arm rather than by a scratch script.**
+`tests/test_reproduce.py`'s `_bundle_member` helper asserts exactly this state before every arm that
+uses it — `copied["provenance"]["environment"]["uv_lock"] == "environment/uv.lock"`,
+`not (member.parent / "environment").exists()`, and `uv_lock_hash is not None`. Run
+`uv run pytest tests/test_reproduce.py -k bundle` to reproduce it.
+
+**What it costs, and where H9c already pays it.** Only the **digest** travels, so `reproduce`'s
+bundle form cannot use the run's own copy of the lockfile and must fall back to the commit's
+committed one, using it if and only if its sha256 matches the recorded `uv_lock_hash`. When the
+project never committed a lockfile — which is every scaffolded project today, since
+`W-ENV-UNLOCKED` fires on every scaffolded run — that fallback has nothing to match and the bundle
+form refuses with `E-REPRODUCE-LOCKFILE-UNREACHABLE`. That refusal is correct and is not the defect;
+the defect is that the member advertises a lockfile it does not carry.
+
+**The check its closer must make**, stated so it is not re-derived: either (a) `study add` copies
+`environment/uv.lock` into the bundle and rewrites the member's `uv_lock` to point at it — which
+makes the bundle bigger and makes it carry a second copy of a file the commit may also hold; or
+(b) `study add` **redacts** `provenance.environment.uv_lock` in a member the way it already redacts
+`provenance.input_manifest`, so the dangling reference becomes visible as a redaction rather than
+reading as a path. (b) is the smaller change and loses nothing, because `uv_lock_hash` beside it is
+the figure every reader actually compares.
+
+**Owner: unassigned, with the reason.** `study add`'s bundle contents are **H8c's** surface and H8c
+is complete; **H9d** is `demo`/`docs`/`list-templates` and **H3c-3's remaining 14** is folds and
+holdouts inside cells. Widening the bundle's contents inside H9c would be charter growth (H9c
+design § 4 routes it here for that reason).
+
+**Severity:** Minor. The consequence is a path that resolves nowhere in a published artifact, not a
+wrong number.
+
+## OPEN — `provenance.environment` names no `pyproject.toml`, though `run` writes `environment/pyproject.toml` — **Owner: unassigned, with the reason (H6 is complete and no remaining slice has `provenance` as its surface)**
+
+**Filed 2026-08-24 by H9c task 14.** `run` copies the repository's manifest into the run directory —
+`cli.py` writes `(run_dir / "environment" / "pyproject.toml")` at run start, and
+`environment/pyproject.toml` is in the run directory's own fixed-file list — while
+`provenance.environment` records `manager`, `python_version`, `os`, `hostname`, `uv_lock`,
+`uv_lock_hash` and `hardware`, and **nothing naming that second copy**. So a reader of `run.yaml`
+alone cannot know the file exists.
+
+**Reproduced by grep, both halves, rather than from memory:**
+`grep -n "pyproject.toml" src/publishable/cli.py` → the write at run start and the fixed-file list
+entry; `grep -n "uv_lock\|pyproject" src/publishable/provenance.py` → **no hits**, the environment
+block being assembled in `cli.py`, whose `"uv_lock"`/`"uv_lock_hash"` pair is the whole of what it
+records about the two manifests. `docs/reference.md` § What `run.yaml` records shows the same seven
+keys and no eighth.
+
+**Not closed by H9c, and the consequence is bounded.** H9c's Decision 3 compares the recorded
+`pyproject.toml` against the checkout's committed one and prints `identical` or `DIFFERS` — it finds
+the file **by convention** (`<run_dir>/environment/pyproject.toml`, beside the lockfile) rather than
+by record, which works for the run-directory form and is simply absent in the bundle form, where the
+transcript says so. A fourth environment key is **refused by ruling** for H9c (H6a Decision 12 /
+Ruling E: `uv.lock` is the carrier, and a `pyproject_hash` would be a second one), so what is filed
+here is the **naming** gap, not a proposal for a hash.
+
+**The check its closer must make:** whether `provenance.environment` should gain a
+`pyproject: "environment/pyproject.toml"` key beside `uv_lock` — a name, not a hash, so H6a Ruling E
+is untouched — or whether § What `run.yaml` records should state that the run directory holds a
+manifest copy the record does not name.
+
+**Owner: unassigned, with the reason.** **H6 is complete**; **H9d** is
+`demo`/`docs`/`list-templates` and **H3c-3's remaining 14** is folds and holdouts inside cells.
+Neither has `provenance` or § What `run.yaml` records as its surface.
+
+**Severity:** Minor. Nothing is wrong; something reachable is unnamed.
+
+## OPEN — `templates/registry.py`'s `_claims` docstring says *"the two cross-module imports are the whole set"* and there are **three** — **Owner: unassigned, with the reason (no remaining slice has the template registry as its surface)**
+
+**Filed 2026-08-24 by H9c task 14**, first noticed by H9c batch 2 (finding (e)) and re-grepped here
+rather than carried. `_claims`' docstring justifies keeping the helper private with *"the two
+cross-module imports are the whole set, both read-only."* Grepped
+`grep -rn "_claims" src/publishable/` and every hit attributed:
+
+| Hit | What it is |
+|---|---|
+| `src/publishable/validate.py:43` | a real import |
+| `src/publishable/freeze.py:42` | a real import — **the third, and the one the docstring's count misses** |
+| `src/publishable/generators/experiment.py:10` | a real import |
+| `validate.py:521`, `:524`, `:810`, `:820`; `freeze.py:198`, `:258`; `experiment.py:86`, `:96` | prose and call sites inside the three modules above |
+| `src/publishable/reproduce.py:951`, `:1028` | **prose only.** H9c is not a fourth importer: `reproduce` uses the public `get_template` and `template_provenance` and names `_claims` in two docstrings |
+
+So the number was right when it was written and went stale when `freeze.py` landed. This is
+`CLAUDE.md`'s *a comment claiming a guarantee the code does not provide*, in its mildest form.
+
+**The remedy is DELETION, not a rewrite.** *"Prefer deleting a claim to rewriting it"* applies
+exactly: the clause that justifies keeping the helper private is *"both read-only, and neither is a
+signal that this function is meant for general use"*, which stands on its own and needs no count.
+Replacing `two` with `three` would recreate the same obligation for the next importer.
+
+**Why H9c did not fix it.** `templates/registry.py` was on batch 2's must-not-touch list, and tasks
+11-15 touch `cli.py`, `reproduce.py`, the four documents and this file — editing a fourth module's
+docstring to close a finding raised in a different batch is the *carried finding that grew a surface*
+shape. Filed instead.
+
+**Owner: unassigned, with the reason.** No remaining slice has the template registry as its surface:
+**H9d** is `demo`/`docs`/`list-templates` — `list-templates` reads the registry and is the nearest
+thing to a natural closer, which is a reason to look, not an assignment — and **H3c-3's remaining 14**
+is folds and holdouts inside cells. H7 is complete.
+
+**Severity:** Minor. Nothing behavioural; a reader who trusts the count adds a fourth importer
+believing there were two.
