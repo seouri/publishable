@@ -72,8 +72,16 @@ This is the class batch 3's own § 3c calls *"where the whole-branch Majors on f
 lived"*, found by the method that section says it used. Note the by-**code** count (three) is
 correct; it is the **path** count and the by-**type** count that are short.
 
-**Routed: H9d**, with both sites named — the § Errors row and the `CLAUDE.md` entry — and with
-the instruction to derive by reading the call sites and then confirm by grep, not the reverse.
+**Routed: CLEAR BEFORE MERGE** (see the gate's disposition), with both sites named — the § Errors
+row and the `CLAUDE.md` entry — and derived by reading the call sites, then confirmed by grep, not
+the reverse.
+
+**Name the exclusion, or the fix produces a NINTH number.** Reading the call sites gives *nine*
+`find_repo_root` calls, not eight: `provenance.py:171` is `git_provenance`'s own. `main`'s row
+excluded it at six and the corrected count excludes it at eight, and **neither says why** — the
+ground is that it is not an independent path to the code: it runs inside `cli._prepare_run`'s own
+sequence, which the row's first enumerated path already counts. State that in the repair, or the
+next reader re-derives nine and this finding recurs at H9d's gate.
 
 ### Major 2 — a normative sentence about a shipped command is false: the detached checkout passes no `-c`
 
@@ -105,9 +113,10 @@ and asserts nothing about the checkout's argv.
 This is not cosmetic: a reader following the sentence would believe the checkout re-materializes the
 tree under the flag, and would conclude a later refactor moving the flag off the clone is safe.
 
-**Routed: H9d.** The honest repair is to say *two placements on the clone, persisted for the
-checkout*, or simply to delete the "each passing" clause — **prefer deleting a claim to rewriting
-it**, per `CLAUDE.md`. This is the same fault class `ff2b8eb` ruled on, four lines away.
+**Routed: CLEAR BEFORE MERGE.** The honest repair is to say *two placements on the clone,
+persisted for the checkout*, or simply to delete the "each passing" clause — **prefer deleting a
+claim to rewriting it**, per `CLAUDE.md`. This is the same fault class `ff2b8eb` ruled on, four
+lines away.
 
 ### Minor 1 — arm E's coverage claim is false in TWO batch reports; the behaviour is armed elsewhere
 
@@ -420,6 +429,23 @@ still to kill something:
 | batch 1, Ruling Z's candidate set | `lines += []` in `verify_code_hash` | **failed** `test_fixture_d1_a_pre_redefinition_code_hash_is_refused_with_the_candidate_set` |
 | batch 2, `write_expectation`'s write-once | `if target.exists():` → `if False:` | **1 failed, 624 passed** — `test_fixture_o_arm_2_…` alone |
 | batch 2, task 7's write siting | `config_dir_in` returns `operand.path.parent/…` | **9 failed** — see Minor 1 |
+| batch 2, T8-A — `prepare_env`'s credential containment | `raise` as the first statement of the outer `except BaseException` | **2 failed** — `test_fixture_r_a_template_raising_at_import_is_a_redacted_diagnostic` and `test_the_sys_path_entry_is_removed_on_the_failure_path_too` |
+
+**T8-A was re-run at HEAD deliberately, and it is the one check where *green* and *still armed*
+could have diverged.** `prepare_env`'s signature changed in batch 3 — two return values to three,
+one of the four removed lines under `tests/` being the helper's unpack — so a mutation proven at
+`7a86d1b` might at HEAD be failing on an arity error rather than on containment, which would be *a
+mutation placed one line off tests a different property*, against § Secrets' redaction promise.
+**It is not.** The failure was read, not inferred:
+
+```
+E  publishable.templates.discovery.PartialLoadError: the project-local template
+   …/templates/cred_assay.py raised while importing and registers nothing usable:
+   RuntimeError('the assay could not reach its vault with sk-h9c-task8-do-not-print')
+```
+
+The uncontained exception carries the declared credential **verbatim** out of the function — which
+is exactly the leak the `try` prevents. The guard transferred. **No Critical.**
 
 No earlier guard was found dead. One earlier **claim** about a guard was found false (Minor 1).
 

@@ -25,12 +25,19 @@ shapes each established **by behaviour**, not by reading. Clear the two sentence
 
 | # | Severity | Finding | Routed |
 |---|---|---|---|
-| 1 | **Major** | `E-GIT-NO-REPO`'s § Errors row was widened six paths → seven and misses the **eighth**: `reproduce.py:373`, `prepare_checkout`'s destination walk-up, a **third** site catching it **by type**. `CLAUDE.md`'s H9c entry repeats the undercount | H9d |
-| 2 | **Major** | `reference.md` § Reproducing step 2's paragraph says the two git invocations are *"a clone and a detached checkout, **each passing** `-c core.autocrlf=false`"*. Measured from the real argv: both flags are on the **clone**; the checkout passes none | H9d |
+| 1 | **Major** | `E-GIT-NO-REPO`'s § Errors row was widened six paths → seven and misses the **eighth**: `reproduce.py:373`, `prepare_checkout`'s destination walk-up, a **third** site catching it **by type**. `CLAUDE.md`'s H9c entry repeats the undercount | **clear before merge** |
+| 2 | **Major** | `reference.md` § Reproducing step 2's paragraph says the two git invocations are *"a clone and a detached checkout, **each passing** `-c core.autocrlf=false`"*. Measured from the real argv: both flags are on the **clone**; the checkout passes none | **clear before merge** |
 | 3 | Minor | Batch 1's concern 2 and batch 2's § 1 claim arm E is *"the only thing standing between"* the config write-back and a modified run directory. Its fixture stops at `E-REPRODUCE-UNLOCKED`; it never reaches `write_config`. The behaviour is armed — by Fixtures M/O/F | H9d |
 | 4 | Minor | `restore_environment`'s `pyproject.toml` comparison prints nothing when the record's copy exists and the commit's does not, in the function whose ruling is that every absence is printed | H9d |
 | 5 | Minor | `apparatus.expectation_from`'s `code=` parameter has one caller, which uses the default and re-codes the exception anyway; the docstring describes a seam nothing exercises | H9d |
 | 6 | Minor | `test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on` pins three. Deliberately not renamed, with eight citations grepped and disclosed — right for a batch, wrong to leave | H9d |
+
+**The disposition is exact, because a routing and a hold are different things.** The two Majors are
+**cleared on this branch, before merge** — three sentences, no code — which is H7d Part A's
+precedent (*"held the merge on two Majors, both closed the same day"*). Only the four Minors are
+**routed to H9d**. **If a controller overrules to MERGE as-is, the two Majors need
+`spec-defects.md` entries with `Owner: H9d` before that merge lands** — a `whole-branch-review.md`
+is not a filing, and *a ledger line saying "filed" is not a filing*.
 
 Each finding's exact command and output is in `task-b3-review.md`; the two Majors are reproduced
 below because they are the hold.
@@ -126,7 +133,11 @@ Established **by behaviour** unless marked otherwise. Full commands and outputs 
   already resolved a declared probe (read), so a config declaring no probe is unchanged and a stray
   file beside it is inert. Every `cli.py` and `apparatus.py` hunk on the branch is additive or gated
   the same way. Correction 11's hazard is armed: `check_unexpected` records onto the **expectation**
-  object, and Fixture Q pins `unobserved` against a no-file control.
+  object, and Fixture Q pins `unobserved` against a no-file control. **What pins the artifacts is
+  guard-pin arm G**, green at HEAD and untouched by this branch:
+  `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty` and
+  `test_h8b_arm_a_the_run_directorys_root` hold the `run.yaml` key list and the run directory's root
+  list — the half a leaf-by-leaf worktree diff would have covered.
 - **`null → value` passes.** `changed` alone raises `AssertionError`; `record` then `changed`
   returns `None`; the shipped path does the latter.
 - **The record-loss fix is real and pinned.** Narrowing the branch back fails exactly
@@ -153,6 +164,10 @@ Established **by behaviour** unless marked otherwise. Full commands and outputs 
   programmatically; no fifth number minted; the design's own reason is correctly reported false and
   the verdict re-derived on grounds that hold.
 - **Every earlier-batch guard mutated at HEAD still kills something.** No dead guard was found.
+  Including **T8-A**, re-run at HEAD on purpose because `prepare_env`'s signature changed in batch 3
+  and a mutation proven at `7a86d1b` could have degenerated into an arity check. It did not: the
+  failure was **read**, and the uncontained exception carries the declared credential verbatim,
+  which is the leak the `try` exists to stop.
 - **The delta is accounted for**: 3132 → 3230 = +98 = 90 new test functions (0 removed), three of
   them parametrized at 2, 4 and 5 cases. The only four removed lines under `tests/` are the three
   authorized assertion edits and one docstring clause.
@@ -163,7 +178,11 @@ Established **by behaviour** unless marked otherwise. Full commands and outputs 
 
 1. `docs/reference.md:1215` — `E-GIT-NO-REPO`'s row: seven → **eight** paths, and a **third**
    by-type catch named (`reproduce.prepare_checkout`'s destination walk-up). Derive by reading the
-   call sites, then confirm by grep — not the reverse.
+   call sites, then confirm by grep — not the reverse. **And name the exclusion**: reading gives
+   *nine* calls, `provenance.py:171`'s `git_provenance` being the ninth. It is excluded because it
+   is not an independent path — it runs inside `cli._prepare_run`'s sequence, which the row's first
+   enumerated path already counts. Main's row excluded it at six and the corrected row excludes it
+   at eight; neither says why, and an unstated exclusion is how a third wrong count gets written.
 2. `CLAUDE.md`'s H9c entry — the same correction, appended rather than rewritten in place if the
    entry is treated as record.
 3. `docs/reference.md:4232` — delete or repair the *"each passing `-c core.autocrlf=false`"* clause.
