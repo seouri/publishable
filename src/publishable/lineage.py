@@ -14,7 +14,7 @@ refused as the reader's home on its own docstring's grounds — its own first li
 
 import dataclasses
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -524,17 +524,20 @@ class RecordedPlan:
     recorded.
 
     - `conditions` — the recorded `conditions` list, entry for entry, in
-      **recorded order**, each entry exactly as the file holds it. Not
-      narrowed to the four checked fields here: the cross-check below is what
-      names them, and a reader that dropped the rest would make a future
-      check over a fifth field invisible.
+      **recorded order**, each entry exactly as the file holds it, whatever
+      its type. Not narrowed to the four checked fields, and not coerced
+      either: the cross-check below is what names the fields *and* what
+      refuses a non-mapping entry, and a reader that dropped the rest — or
+      substituted an empty mapping for an entry it did not like — would make
+      a future check over a fifth field invisible and hide a hand-edited
+      file behind a field-level message.
     - `order` — the recorded `order` scalar (`as_declared` | `randomized`),
       which is the **mode the first attempt actually ran under**.
     - `execution_order` — the realized `(condition index, repeat label)`
       sequence, in file order.
     """
 
-    conditions: tuple[dict[str, Any], ...]
+    conditions: tuple[Any, ...]
     order: str
     execution_order: tuple[tuple[int, str], ...]
 
@@ -614,8 +617,11 @@ def read_sweep_plan(run_dir: Path) -> RecordedPlan:
                 code="E-RESUME-PLAN-MISSING",
             )
         pairs.append((entry["condition"], entry["repeat"]))
-    conditions = tuple(entry if isinstance(entry, dict) else {} for entry in recorded["conditions"])
-    return RecordedPlan(conditions=conditions, order=order, execution_order=tuple(pairs))
+    return RecordedPlan(
+        conditions=tuple(recorded["conditions"]),
+        order=order,
+        execution_order=tuple(pairs),
+    )
 
 
 def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]") -> None:
@@ -650,6 +656,32 @@ def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]
             code="E-RESUME-PLAN-MISMATCH",
         )
     for condition, entry in zip(conditions, recorded.conditions, strict=True):
+        # Shape, not just fields, and `freeze`'s own precedent for the code: a
+        # non-mapping entry is `E-FREEZE-PLAN-MISMATCH` there, so it is
+        # `E-RESUME-PLAN-MISMATCH` here. Without this the reader either
+        # substitutes an empty mapping — reporting a field-level
+        # disagreement for a file that holds no fields at all — or `.get`
+        # raises `AttributeError` out of `main`. The `values` arm is the same
+        # fault one level down and was MEASURED: a recorded
+        # `values: [1, 2]` reached `dict(...)` and raised a bare `TypeError`,
+        # and `values: "abc"` a bare `ValueError`, both un-coded and both out
+        # of `main` — the identical *presence checked, shape not* Major this
+        # slice's batch 4 review found in `apparatus.replay_ledger`.
+        if not isinstance(entry, Mapping):
+            raise ContractError(
+                f"condition {condition.index}'s recorded entry is a "
+                f"{type(entry).__name__}, not a mapping — the run directory or the "
+                "config was edited; the run cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
+        recorded_values = entry.get("values")
+        if recorded_values is not None and not isinstance(recorded_values, Mapping):
+            raise ContractError(
+                f"condition {condition.index}'s recorded `values` is a "
+                f"{type(recorded_values).__name__}, not a mapping — the run directory "
+                "or the config was edited; the run cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
         mismatch: str | None = None
         if entry.get("index") != condition.index:
             mismatch = "index"

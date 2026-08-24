@@ -747,9 +747,14 @@ class Observer:
         # H8b task 6: `freeze` is the first caller that must NOT start from
         # an empty accumulator — it needs the run's own baseline
         # (`replay_ledger`'s result) so an incoming fact is compared against
-        # what the RUN first answered, never against itself. Every shipped
-        # caller (`command_run`'s run-start and per-execution rounds) omits
-        # this and gets a fresh `Observations`, exactly as before — this
+        # what the RUN first answered, never against itself. H9b task 13 is
+        # the second such caller: a `resume` passes the previous attempt's
+        # replayed baseline, so `cli.py`'s one `Observer(...)` call site now
+        # passes this keyword EXPLICITLY — `None` for `run` and `draft`,
+        # which is this default and the same fresh `Observations` as before,
+        # and the replay for a resume. (This comment used to say every
+        # shipped caller *omits* the keyword; that stopped being true at H9b
+        # task 13, and the behaviour it described did not change.) The
         # keyword adds one parameter and one `or Observations()`, on
         # `execute_plan`'s own defaulted-keyword precedent
         # (`observer=`/`stop=`), rather than assigning

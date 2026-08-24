@@ -2368,6 +2368,13 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
     *lost* a unit leaves the record naming a unit that no longer exists, and
     a roster that *gained* one leaves that unit in no arm at all — with no
     fourth part of `n` for it, and nothing in the record marking it.
+    **Bounded by the methods that are realized**: union-equals-roster holds
+    for `by_attribute` (`arms_of`'s set-equality rule) and for `random` (the
+    shipped draw partitions the whole roster), which are the two
+    `HOLDOUT_METHODS_REALIZED`-style pair this build has. A future method
+    that partitioned only part of a roster would make this guard refuse a
+    legitimate resume, and the fix would then be here rather than in the
+    method.
 
     **Fold partitions are deliberately not touched here.** They are recorded
     in `sweep.yaml`'s own `partitions` block rather than in this file, and

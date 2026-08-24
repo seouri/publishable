@@ -1124,6 +1124,25 @@ def test_h9b_the_cross_check_is_over_the_full_four_tuple(tmp_path: Path):
         assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
         assert f"`{field}` disagrees" in str(excinfo.value)
 
+    # Shape before fields, and both arms MEASURED before they were built: a
+    # bare-string entry used to be coerced to an empty mapping and reported as
+    # an `index` disagreement, and a non-mapping `values` raised a bare
+    # `TypeError` (a list) or `ValueError` (a string) out of `main`, un-coded
+    # — the *presence checked, shape not* fault this slice's batch 4 review
+    # found one function over, in `apparatus.replay_ledger`.
+    for plan, fragment in (
+        (
+            dataclasses.replace(recorded, conditions=("just a string", *recorded.conditions[1:])),
+            "recorded entry is a str, not a mapping",
+        ),
+        (edited(0, values=[1, 2]), "recorded `values` is a list, not a mapping"),
+        (edited(0, values="abc"), "recorded `values` is a str, not a mapping"),
+    ):
+        with pytest.raises(ContractError) as excinfo:
+            check_recorded_conditions(plan, conditions)
+        assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+        assert fragment in str(excinfo.value)
+
     # A length disagreement is named before any per-entry field, so the
     # per-entry message can name a condition that exists on both sides.
     with pytest.raises(ContractError) as excinfo:
