@@ -772,9 +772,25 @@ def test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on():
     the separate, both-members-pinned enumeration task 3 mints."""
     from publishable.apparatus import APPARATUS_CODES, STOP_CODES
 
-    assert STOP_CODES == {"E-APPARATUS-RAISED", "E-APPARATUS-CHANGED"}
+    # GUARD-PIN ARM C, edited by H9c plan task 9 — its SOLE AUTHORIZED EDITOR.
+    # One member added, none removed, nothing reordered, matching the design's
+    # advance spec. The function's NAME still says "the two codes"; it is left
+    # alone deliberately — batch 1's report cites this arm by that name, and a
+    # rename would break the citation a reader follows. Disclosed in task 9's
+    # report rather than corrected silently.
+    assert STOP_CODES == {
+        "E-APPARATUS-RAISED",
+        "E-APPARATUS-CHANGED",
+        "E-APPARATUS-UNEXPECTED",
+    }
     assert "E-APPARATUS-CHANGED" not in APPARATUS_CODES
     assert "E-APPARATUS-RAISED" in APPARATUS_CODES
+    # ADDED beside arm D's two shipped assertions above, never editing one
+    # (H9c § 8, arm D: editor NONE; task 9 may add a sibling). Opposite
+    # membership from `STOP_CODES` on purpose — plan correction 12: the loop
+    # breaks on a `STOP_CODES` member before `command_run`'s containment filter
+    # is reached, which is `E-APPARATUS-CHANGED`'s own documented reason.
+    assert "E-APPARATUS-UNEXPECTED" not in APPARATUS_CODES
 
 
 def test_changed_is_reflexivity_safe_for_a_constant_nan_fact():

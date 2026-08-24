@@ -25624,3 +25624,444 @@ def test_h9c_arm_f_w_env_unlocked_names_reproduce_in_its_own_message(tmp_path: P
     message = lines[headers[0] + 1].strip()
     assert message.endswith("`reproduce` will not be able to restore it"), message
     assert "the environment is not pinned" in message, message
+
+
+# ==========================================================================
+# H9c task 9 — Ruling BB's second half: `run`'s first probe compares against
+# `configs/<name>/apparatus.expected.json`. Fixtures P and Q.
+#
+# **This is the behaviour change to a shipped command.** What moves: a run
+# whose config directory holds that file compares each probe round against it,
+# per condition, and a contradiction is `E-APPARATUS-UNEXPECTED`. What does NOT
+# move: a run without the file, in any way — the comparison is `None` unless
+# the file is there, and it is sited AFTER the shipped `check_changed`.
+# ==========================================================================
+
+
+_H9C_P_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9c_expect_assay")
+class H9cExpectAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9c_p_probe"
+    apparatus_facts = ["model_revision", "region"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+# The probe's answers come out of a JSON file the fixture rewrites between
+# runs, keyed by the condition's own swept value — so the two conditions can
+# carry DIFFERENT facts, which is what makes the per-condition arm and the
+# flatten mutation discriminating. A probe reading its condition's swept
+# parameter is the shipped shape (`test_a_probe_reading_a_swept_parameter_
+# gets_ITS_condition_s_value`).
+_H9C_P_PROBE_MODULE = """\
+import json
+import os
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9c_p_probe")
+def probe(cfg):
+    with open(os.environ["H9C_P_ANSWERS"], encoding="utf-8") as fh:
+        answers = json.load(fh)
+    return Apparatus(facts=answers[cfg.parameters.instrument.model])
+"""
+
+
+def _h9c_p_project(tmp_path: Path, installed, answers: dict[str, dict], capsys):
+    """A real run through the real probe, with the answers under fixture
+    control. Returns the project and the record of that first run.
+
+    The expectation file is written from THIS run's own recorded
+    `provenance.apparatus.facts` — hand-written with `json.dump`, deliberately
+    NOT through task 10's writer: this fixture tests the READER against a file,
+    and building the file with the producer under test would make the two agree
+    by construction.
+    """
+    site = installed(
+        "dist-h9c-p", "1.0", {"publishable.probes": {"h9c_p_probe": "h9c_p_mod:probe"}}
+    )
+    (site / "h9c_p_mod.py").write_text(_H9C_P_PROBE_MODULE)
+    # Popped, and the reason is a measured one rather than hygiene: the
+    # `registries` fixture restores `plugins.PROBES` and `installed` restores
+    # `sys.path`, but **nothing restores `sys.modules`** — so a second test
+    # reusing this module name imports the cached module, `@register_probe`
+    # never runs again, and the run fails `E-PLUGIN-DECORATOR` ("points at
+    # `h9c_p_mod:probe`, which calls no `@register_*` naming it"). Measured:
+    # every arm below passed in isolation and six failed that way when run
+    # together. The shipped convention is a unique module name per test
+    # (`p9_probe_mod`, `s9_probe_mod`, …); one name plus this pop is the same
+    # property with one file instead of six.
+    sys.modules.pop("h9c_p_mod", None)
+    answers_path = tmp_path / "answers.json"
+    answers_path.write_text(json.dumps(answers))
+    os.environ["H9C_P_ANSWERS"] = str(answers_path)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h9c_expect_assay",
+        parameters={"instrument.model": "m1"},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H9C_P_TEMPLATE,
+    )
+    record = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    facts = record["provenance"]["apparatus"]["facts"]
+    assert len(facts) == 2, facts
+    return {**doc, "answers_path": answers_path, "record": record, "facts": facts}
+
+
+def _h9c_p_rerun(fx, *, expectation: dict | None, answers: dict, capsys) -> dict:
+    """Write the expectation (or not) beside the config, change the probe's
+    answers, and run again. Returns the exit code, the output and the fresh run
+    directory if one was written."""
+    config_dir = fx["cfg"].parent
+    if expectation is not None:
+        (config_dir / "apparatus.expected.json").write_text(json.dumps(expectation, indent=2))
+    fx["answers_path"].write_text(json.dumps(answers))
+    before = {p.name for p in fx["results_dir"].glob("run_*")}
+    capsys.readouterr()
+    code = main(["run", str(fx["cfg"])])
+    out = capsys.readouterr()
+    fresh = [p for p in fx["results_dir"].glob("run_*") if p.name not in before]
+    return {
+        "code": code,
+        "output": out.out + out.err,
+        "run_dir": fresh[0] if len(fresh) == 1 else None,
+    }
+
+
+_H9C_P_ANSWERS_BASE = {
+    "m1": {"model_revision": "r1", "region": "eu"},
+    "m2": {"model_revision": "r2", "region": "eu"},
+}
+
+
+def test_h9c_fixture_p_the_expectation_file_does_not_dirty_the_tree(
+    tmp_path: Path, installed, registries, capsys
+):
+    """The ground for placing the file at `<config_dir>/apparatus.expected.json`
+    is a MEASUREMENT, not the pathspec: the dirty gate reads
+    `git status --porcelain -- src templates`, and this asserts the untracked
+    file is really there and really untracked while the run still exits `0`.
+    Reasoning from the pathspec alone would be answering with a proxy."""
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    got = _h9c_p_rerun(fx, expectation=fx["facts"], answers=_H9C_P_ANSWERS_BASE, capsys=capsys)
+    assert got["code"] == EXIT_OK, got["output"]
+    porcelain = subprocess.run(
+        ["git", "-C", str(fx["root"]), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "configs/cohort-pilot/apparatus.expected.json" in porcelain, porcelain
+    assert (fx["cfg"].parent / "apparatus.expected.json").is_file()
+
+
+def test_h9c_fixture_p_arm_1_a_moved_value_is_e_apparatus_unexpected(
+    tmp_path: Path, installed, registries, capsys
+):
+    """Fixture P arm 1. A moved value fails, and the arm asserts **the
+    identifier** — so reusing `E-APPARATUS-CHANGED` fails it — and that the run
+    did **not** finish `completed`, so removing the code from `STOP_CODES`
+    fails it too.
+
+    The exit code is `1`: § Exit codes' *"the thing you asked about is wrong"*,
+    reached because the run-start round raises before the first execution and
+    `run_status`'s shipped fold gives a zero-results apparatus stop that code.
+    No exit code is minted.
+    """
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    moved = {
+        "m1": {"model_revision": "r9-substituted", "region": "eu"},
+        "m2": {"model_revision": "r2", "region": "eu"},
+    }
+    got = _h9c_p_rerun(fx, expectation=fx["facts"], answers=moved, capsys=capsys)
+    assert got["code"] == EXIT_WRONG, got["output"]
+    assert "E-APPARATUS-UNEXPECTED" in got["output"], got["output"]
+    assert "E-APPARATUS-CHANGED" not in got["output"], got["output"]
+    assert "r9-substituted" in got["output"] and "r1" in got["output"], got["output"]
+    # The run did not finish. A `STOP_CODES` member breaks the loop; a
+    # non-member would escape `execute_plan`'s wrapper and, at the run-start
+    # round, would escape `command_run`'s containment filter entirely.
+    if got["run_dir"] is not None:
+        assert not (got["run_dir"] / "run.yaml").exists(), sorted(
+            p.name for p in got["run_dir"].iterdir()
+        )
+
+
+def test_h9c_fixture_p_arm_2_null_to_value_passes(tmp_path: Path, installed, registries, capsys):
+    """Fixture P arm 2. **The tolerance § Reproducing on another device calls
+    *"more evidence rather than less"*** — the reproduction pinned something
+    the original did not.
+
+    This is also correction 27's own arm: on a seeded `Observations`, `changed`
+    **alone** raises `AssertionError` for exactly this transition, so a build
+    that dropped the `record` call before `changed` fails here rather than
+    passing quietly. And it is what the `!=` mutation fails: `None != "us"` is
+    `True`.
+    """
+    unanswered = {
+        "m1": {"model_revision": "r1", "region": None},
+        "m2": {"model_revision": "r2", "region": None},
+    }
+    fx = _h9c_p_project(tmp_path, installed, unanswered, capsys)
+    # The fixture must actually carry the `null` it claims to.
+    assert all(cond["region"] is None for cond in fx["facts"].values()), fx["facts"]
+    got = _h9c_p_rerun(fx, expectation=fx["facts"], answers=_H9C_P_ANSWERS_BASE, capsys=capsys)
+    assert got["code"] == EXIT_OK, got["output"]
+    assert "E-APPARATUS-UNEXPECTED" not in got["output"], got["output"]
+    # And the run recorded what it OBSERVED, not what it was compared against.
+    record = yaml.safe_load((got["run_dir"] / "run.yaml").read_text())
+    assert all(
+        cond["region"] == "eu" for cond in record["provenance"]["apparatus"]["facts"].values()
+    ), record["provenance"]["apparatus"]["facts"]
+
+
+def test_h9c_fixture_p_arm_3_value_to_null_passes(tmp_path: Path, installed, registries, capsys):
+    """Fixture P arm 3, the other direction, and it is not the same arm: a
+    build special-casing only the incoming `null` would pass arm 2 and fail
+    here, and the `!=` mutation fails both."""
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    assert all(cond["region"] == "eu" for cond in fx["facts"].values()), fx["facts"]
+    unanswered = {
+        "m1": {"model_revision": "r1", "region": None},
+        "m2": {"model_revision": "r2", "region": None},
+    }
+    got = _h9c_p_rerun(fx, expectation=fx["facts"], answers=unanswered, capsys=capsys)
+    assert got["code"] == EXIT_OK, got["output"]
+    assert "E-APPARATUS-UNEXPECTED" not in got["output"], got["output"]
+
+
+def test_h9c_fixture_p_arm_4_a_fact_is_compared_per_condition(
+    tmp_path: Path, installed, registries, capsys
+):
+    """Fixture P arm 4. **Two conditions with DIFFERENT facts**, and the
+    expectation carries `region` for one condition and not for the other — so
+    the comparison must be per condition.
+
+    The mutation this arm catches is *compare against the whole `facts` rather
+    than per condition*: flattened, the two conditions' `model_revision` values
+    (`r1` and `r2`) collapse to one first-answered entry, and the second
+    condition's own answer then reads as a change. Per condition, both pass.
+    A one-condition fixture cannot tell the two apart.
+
+    It also catches the dropped-`record` mutation for a second shape: the
+    incoming `region` for condition `01` is a fact the expectation does not
+    carry at all, which `changed` alone asserts on.
+    """
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    keys = sorted(fx["facts"])
+    assert len(keys) == 2
+    # The two conditions' recorded facts really do differ, and the expectation
+    # drops `region` from the second only.
+    assert fx["facts"][keys[0]]["model_revision"] != fx["facts"][keys[1]]["model_revision"]
+    expectation = {
+        keys[0]: dict(fx["facts"][keys[0]]),
+        keys[1]: {"model_revision": fx["facts"][keys[1]]["model_revision"]},
+    }
+    got = _h9c_p_rerun(fx, expectation=expectation, answers=_H9C_P_ANSWERS_BASE, capsys=capsys)
+    assert got["code"] == EXIT_OK, got["output"]
+    assert "E-APPARATUS-UNEXPECTED" not in got["output"], got["output"]
+
+
+def test_h9c_a_malformed_expectation_file_is_a_diagnostic_not_a_traceback(
+    tmp_path: Path, installed, registries, capsys
+):
+    """Not JSON at all. Reported as `E-IO-FAILED` — the code Decision 14
+    already routes a local-file fault to, on `diff`'s and `resume`'s precedent
+    — and never treated as *absent*, which would silently retire the
+    comparison the file exists to make."""
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    (fx["cfg"].parent / "apparatus.expected.json").write_text("{not json at all")
+    before = {p.name for p in fx["results_dir"].glob("run_*")}
+    capsys.readouterr()
+    code = main(["run", str(fx["cfg"])])
+    out = capsys.readouterr()
+    both = out.out + out.err
+    assert code == EXIT_WRONG, both
+    assert "E-IO-FAILED" in both, both
+    assert "apparatus.expected.json" in both, both
+    # **What the failure leaves, asserted rather than assumed.** The read is
+    # sited where the shipped `_probe_for` dispatch guard is — beside the
+    # `Observer` construction — which is AFTER the run directory exists and
+    # before `run.yaml`. So a run directory is created and carries no
+    # `run.yaml`, exactly the shape any other pre-`run.yaml` failure already
+    # leaves. Measured; the first draft of this arm asserted no directory at
+    # all and was wrong.
+    fresh = [p for p in fx["results_dir"].glob("run_*") if p.name not in before]
+    assert len(fresh) == 1, fresh
+    assert not (fresh[0] / "run.yaml").exists()
+    assert not (fresh[0] / "executions.jsonl").exists()
+
+
+_H9C_P_DRIFT_PROBE_MODULE = """\
+import json
+import os
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9c_p_probe")
+def probe(cfg):
+    path = Path(os.environ["H9C_P_ANSWERS"])
+    answers = json.loads(path.read_text())
+    counter = path.with_suffix(".count")
+    seen = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(seen + 1))
+    model = cfg.parameters.instrument.model
+    if seen >= answers["_drift_after"]:
+        return Apparatus(facts=answers["_drift"][model])
+    return Apparatus(facts=answers[model])
+"""
+
+
+def test_h9c_a_mid_plan_unexpected_fact_is_exit_four_with_a_record(
+    tmp_path: Path, installed, registries, capsys
+):
+    """**The `4` half of the derivation, and it is not the `1` half's arm.**
+    § Exit codes: `1` is *a changed apparatus fact caught before the first
+    execution ran, which leaves nothing to mark `failed` at all*; `4` is *the
+    run stopped: `status: failed`. There is a record of what happened.* Arm 1
+    above is the first; this is the second, and both come from `run_status`'s
+    shipped fold rather than from a choice made here.
+
+    **Reaching it takes a fact the run's OWN gate does not fire on, and that
+    is the arm's whole construction.** `check_unexpected` is sited AFTER
+    `check_changed`, so any fact that moves *within* the run raises
+    `E-APPARATUS-CHANGED` first and mid-plan `E-APPARATUS-UNEXPECTED` would be
+    unreachable. The probe here answers `region: null` for its first three
+    calls and `region: "us"` afterwards: `null -> value` passes the run's own
+    gate (nothing was first-*answered* yet), while the expectation says `eu` —
+    so the contradiction is the expectation's alone, and it lands on the
+    fourth call, which is the second pre-execution round, after one execution
+    has completed.
+
+    Also the arm for *remove it from `STOP_CODES`*: without membership the
+    raise escapes `execute_plan`'s wrapper as an ordinary `ContractError`
+    rather than breaking the loop.
+    """
+    site = installed(
+        "dist-h9c-d", "1.0", {"publishable.probes": {"h9c_p_probe": "h9c_p_mod:probe"}}
+    )
+    (site / "h9c_p_mod.py").write_text(_H9C_P_DRIFT_PROBE_MODULE)
+    sys.modules.pop("h9c_p_mod", None)
+    answers_path = tmp_path / "answers.json"
+    answers_path.write_text(
+        json.dumps(
+            {
+                "m1": {"model_revision": "r1", "region": None},
+                "m2": {"model_revision": "r2", "region": None},
+                "_drift_after": 3,
+                "_drift": {
+                    "m1": {"model_revision": "r1", "region": "us"},
+                    "m2": {"model_revision": "r2", "region": "us"},
+                },
+            }
+        )
+    )
+    os.environ["H9C_P_ANSWERS"] = str(answers_path)
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h9c_expect_assay",
+        parameters={"instrument.model": "m1"},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        _local_template=_H9C_P_TEMPLATE,
+    )
+    # The first run is the recording one, and its own gate did NOT fire — the
+    # fixture must not have drifted inside it, or this arm would be testing
+    # `E-APPARATUS-CHANGED`.
+    record = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert record["status"] == "completed", record["status"]
+    keys = sorted(record["provenance"]["apparatus"]["facts"])
+    expectation = {key: {"model_revision": None, "region": "eu"} for key in keys}
+    for key in keys:
+        expectation[key]["model_revision"] = record["provenance"]["apparatus"]["facts"][key][
+            "model_revision"
+        ]
+    (doc["cfg"].parent / "apparatus.expected.json").write_text(json.dumps(expectation, indent=2))
+
+    answers_path.with_suffix(".count").unlink(missing_ok=True)
+    before = {p.name for p in doc["results_dir"].glob("run_*")}
+    capsys.readouterr()
+    code = main(["run", str(doc["cfg"])])
+    out = capsys.readouterr()
+    both = out.out + out.err
+    fresh = [p for p in doc["results_dir"].glob("run_*") if p.name not in before]
+    assert len(fresh) == 1, fresh
+
+    assert code == EXIT_FAILED, both
+    assert "E-APPARATUS-UNEXPECTED" in both, both
+    assert "E-APPARATUS-CHANGED" not in both, both
+    assert "eu" in both and "us" in both, both
+    # There IS a record of what happened, which is what `4` means.
+    stopped = yaml.safe_load((fresh[0] / "run.yaml").read_text())
+    assert stopped["status"] == "failed", stopped["status"]
+    # And the ledger kept the moving observation, so the stop is legible from
+    # the artifacts — `_observe_one` appends before either gate.
+    ledger = [
+        json.loads(line)
+        for line in (fresh[0] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    assert any(line["facts"].get("region") == "us" for line in ledger), ledger
+
+
+def test_h9c_fixture_q_the_reproductions_own_record_counts_only_its_own_probes(
+    tmp_path: Path, installed, registries, capsys
+):
+    """**Fixture Q — the arm that catches Decision 4's rejected alternative.**
+    Seeding the run's OWN `Observations` from the expectation inflates
+    `provenance.apparatus.unobserved`'s `total_probes` (and `null_probes`)
+    while every arm of Fixture P stays green, because `Observations.record`
+    bumps those counters.
+
+    **Compared against a control run of the same project with NO expectation
+    file, in this same test, rather than against a literal.** Two reasons: the
+    figure depends on the plan's shape, so a literal would be a second source
+    of truth for it; and the same comparison pins *"`provenance` gains no key
+    naming the expectation"* (task 10's disclosure item 4) without pinning the
+    key list a second time — which is H8a's *same list pinned twice*.
+    """
+    fx = _h9c_p_project(tmp_path, installed, _H9C_P_ANSWERS_BASE, capsys)
+    control = _h9c_p_rerun(fx, expectation=None, answers=_H9C_P_ANSWERS_BASE, capsys=capsys)
+    assert control["code"] == EXIT_OK, control["output"]
+    assert not (fx["cfg"].parent / "apparatus.expected.json").exists()
+    control_record = yaml.safe_load((control["run_dir"] / "run.yaml").read_text())
+
+    with_file = _h9c_p_rerun(
+        fx, expectation=fx["facts"], answers=_H9C_P_ANSWERS_BASE, capsys=capsys
+    )
+    assert with_file["code"] == EXIT_OK, with_file["output"]
+    record = yaml.safe_load((with_file["run_dir"] / "run.yaml").read_text())
+
+    # The counts are the run's OWN probes, identical to the control's.
+    assert (
+        record["provenance"]["apparatus"]["unobserved"]
+        == control_record["provenance"]["apparatus"]["unobserved"]
+    ), record["provenance"]["apparatus"]["unobserved"]
+    # A positive control on the figure itself: it counts real probe calls, so
+    # it is non-zero and equals the ledger's own occurrences of the fact.
+    ledger = [
+        json.loads(line)
+        for line in (with_file["run_dir"] / "apparatus" / "probes.jsonl").read_text().splitlines()
+    ]
+    calls = sum(1 for line in ledger if "model_revision" in line["facts"])
+    assert calls > 0
+    assert (
+        record["provenance"]["apparatus"]["unobserved"]["model_revision"]["total_probes"] == calls
+    )
+    # `provenance` gains no key naming the expectation.
+    assert list(record["provenance"]) == list(control_record["provenance"])
+    assert (
+        record["provenance"]["apparatus"]["facts"]
+        == control_record["provenance"]["apparatus"]["facts"]
+    )
+    assert "expected" not in json.dumps(record["provenance"]["apparatus"])

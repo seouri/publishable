@@ -3218,6 +3218,37 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 dispatch_c.error(dispatch_code, "experiment_type", str(exc))
                 print(dispatch_c.render(), file=sys.stderr)
                 return EXIT_WRONG
+            # H9c task 9 (Ruling BB): the recorded expectation, when the
+            # CONFIG'S OWN DIRECTORY holds an `apparatus.expected.json` —
+            # § Reproducing on another device's own location, which `reproduce`
+            # writes and a reader may edit.
+            #
+            # **It is outside `src/**` and `templates/**`, so neither
+            # `code_hash` nor the dirty gate sees it — and the ground is a
+            # MEASUREMENT rather than the pathspec.** Measured on a real run:
+            # an untracked `uv.lock` at a repo root left
+            # `git status --porcelain` reading `?? uv.lock` while the run
+            # exited `0`, because the gate reads
+            # `git status --porcelain -- src templates`. Reasoning from the
+            # pathspec alone would be answering with a proxy.
+            #
+            # Read only when a probe is declared: with no probe there is
+            # nothing to compare, `observer` stays `None`, and a stray file is
+            # inert exactly as it is today. `expectation_from`'s refusal is
+            # contained here rather than raised, on the same shape and for the
+            # same reason as `_probe_for`'s wrapper above — `main`'s
+            # `PublishableError` handler applies no redaction pass.
+            expected: apparatus.Observations | None = None
+            expected_path = config_path.parent / "apparatus.expected.json"
+            if expected_path.is_file():
+                try:
+                    expected = apparatus.expectation_from(expected_path)
+                except ContractError as exc:
+                    expectation_c = Collector()
+                    expectation_c.credentials = credentials
+                    expectation_c.error(exc.code or "E-IO-FAILED", str(expected_path), str(exc))
+                    print(expectation_c.render(), file=sys.stderr)
+                    return EXIT_WRONG
             observer = apparatus.Observer(
                 probe_name=declared_probe,
                 probe=probe_fn,
@@ -3236,6 +3267,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 # the keyword's shipped default and what `freeze` already
                 # uses one branch over.
                 observations=None if resumed is None else resumed.baseline,
+                # A SECOND `Observations`, never merged into the run's own:
+                # `record` bumps `_total_counts`/`_null_counts`, which feed
+                # `provenance.apparatus.unobserved` and
+                # `W-APPARATUS-UNANSWERED`, so seeding the run's own object
+                # from a foreign record would make this record claim probe
+                # calls it never made (H9c plan correction 11).
+                expected=expected,
             )
 
         # Bound BEFORE the `try` below, not inside it: the run-start round can

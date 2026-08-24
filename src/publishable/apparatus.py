@@ -648,6 +648,119 @@ def replay_ledger(run_dir: Path, *, code: str = "E-FREEZE-LEDGER-UNREADABLE") ->
     return observations
 
 
+def expectation_from(path: Path, *, code: str = "E-IO-FAILED") -> Observations:
+    """The facts recorded in `<config_dir>/apparatus.expected.json`, as an
+    `Observations` — so **the shipped gate is the comparison** (H9c plan
+    § Corrections, correction 10). Never a `!=`.
+
+    `replay_ledger` above is the shipped precedent for reconstituting one of
+    these from a file, and this is the second such reader: both replay through
+    `Observations.record` rather than reimplementing it, so the first-answered
+    rule, the per-condition scoping, the `null -> value` and `value -> null`
+    transitions and `_unchanged`'s `nan` reflexivity carve-out all come along
+    unchanged rather than being re-derived. `null -> value` **passing** is what
+    § Reproducing on another device calls *"more evidence rather than less"*,
+    and `_unchanged` is what keeps a constant `nan` from contradicting itself.
+
+    **A SECOND object, never the run's own.** `record` bumps `_total_counts`
+    and `_null_counts`, which feed `provenance.apparatus.unobserved` and
+    `W-APPARATUS-UNANSWERED` — so seeding the run's own `Observations` from a
+    foreign record (the shape `Resumed.baseline` uses, where the counts were
+    that run's real probes) would make the reproduction's record claim probe
+    calls it never made (correction 11). This object is asked for `changed`
+    and nothing else: never `facts_document`, `unobserved` or
+    `warn_unanswered`.
+
+    **The refusal is the caller's `code`, defaulting to `E-IO-FAILED`, and no
+    code is minted.** The file is one a reader is invited to **edit**
+    (§ Reproducing on another device says so), so a malformed one is an
+    ordinary local-file fault of exactly the class Decision 14 already routes
+    to `E-IO-FAILED` on `diff`'s and `resume`'s precedent — not a statement
+    about the apparatus, which has not been probed yet. Treating it as
+    *absent* was the alternative and is worse: an edit that broke the JSON
+    would silently retire the comparison the file exists to make.
+    **§ Errors' `E-IO-FAILED` row owes this site a mention; task 14 owns it.**
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ContractError(f"{path} could not be read: {exc}", code=code) from exc
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ContractError(
+            f"{path} is not valid JSON: {exc} — it is a mapping of condition key to "
+            "fact mapping, and it is a file you may edit",
+            code=code,
+        ) from exc
+    if not isinstance(doc, Mapping):
+        raise ContractError(
+            f"{path} parsed to a {type(doc).__name__}, not a JSON object of condition "
+            "key to fact mapping",
+            code=code,
+        )
+    observations = Observations()
+    for key, facts in doc.items():
+        if not isinstance(facts, Mapping):
+            raise ContractError(
+                f"{path}'s condition `{key}` holds a {type(facts).__name__}, not a JSON "
+                "object of fact name to value",
+                code=code,
+            )
+        observations.record(str(key), facts)
+    return observations
+
+
+def check_unexpected(
+    expected: Observations, condition_key_value: str, facts: Mapping[str, Any]
+) -> None:
+    """`E-APPARATUS-UNEXPECTED` for the first fact that contradicts the
+    expectation, or silence. Ruling BB's second half.
+
+    **`record` runs before `changed`, and that is the mechanism rather than a
+    flourish** (H9c plan correction 27). `Observations.changed`'s own `assert`
+    rests on a caller contract its docstring states — *"`record` runs before
+    `changed` for the same `facts`"* — which holds for a run's own object and
+    **not** for one seeded from a foreign record. Measured on a seeded object,
+    `changed` **alone** raises `AssertionError` for three shapes: an incoming
+    fact the expectation does not carry, a condition it does not carry, and —
+    the one that matters — **`null -> value`**, which § Reproducing on another
+    device requires to **PASS** and calls *"more evidence rather than less"*.
+    With `record(incoming)` first, which is what `Observer._observe_one`
+    itself does for the run's own object, all eight measured shapes are right
+    and there is still no new comparison function.
+
+    **A distinct code from `E-APPARATUS-CHANGED`, because the remedy is
+    distinct.** That one means *the apparatus moved during this run - stop*;
+    this one means *this apparatus is not the recorded one - either accept that
+    this is not a reproduction, or edit `apparatus.expected.json`, which
+    § Reproducing on another device says you may*. One code covering both would
+    be H4d's *one code, five faults* again.
+
+    **The message names both values, and the safety argument is NOT
+    `check_changed`'s.** There, both values came from a probe and `check_facts`
+    had already refused a fact equal to or containing a declared credential
+    before anything was recorded. Here the *expected* value comes from a file a
+    **reader edited**, which core never credential-checked - so the ground is
+    the caller's instead: every site that prints this code does so through a
+    fresh credential-bearing `Collector` (`command_run`'s run-start
+    containment, and the stop block for a mid-plan raise), and
+    `Collector.render` is where redaction happens.
+    """
+    expected.record(condition_key_value, facts)
+    result = expected.changed(condition_key_value, facts)
+    if result is None:
+        return
+    fact, first, incoming = result
+    raise ContractError(
+        f"condition `{condition_key_value}`'s fact `{fact}` is not the recorded one: "
+        f"`apparatus.expected.json` says {first} and this run observed {incoming} — this "
+        "apparatus is not the one the recorded numbers came through. Either accept that "
+        "this is not a reproduction, or edit `apparatus.expected.json` beside the config",
+        code="E-APPARATUS-UNEXPECTED",
+    )
+
+
 APPARATUS_CODES: frozenset[str] = frozenset(
     {
         "E-APPARATUS-RAISED",
@@ -675,12 +788,14 @@ STOP_CODES: frozenset[str] = frozenset(
     {
         "E-APPARATUS-RAISED",
         "E-APPARATUS-CHANGED",
+        "E-APPARATUS-UNEXPECTED",
     }
 )
-"""The two codes `execute_plan`'s loop breaks on (task 5). At this commit
-there is a shared set-equality assertion over both members (each member's
-absence is independently checked by deleting it and rerunning that one
-test), plus each member is now also pinned individually and end to end:
+"""The THREE codes `execute_plan`'s loop breaks on (task 5; H9c task 9 added
+the third). At this commit there is a shared set-equality assertion over all
+three members (each member's absence is independently checked by deleting it
+and rerunning that one test), plus each member is now also pinned individually
+and end to end:
 `E-APPARATUS-RAISED` by Fixture K2
 (`test_a_probe_that_raises_is_a_redacted_diagnostic_at_run`, Part A) and
 `E-APPARATUS-CHANGED` by batch 3's fix round
@@ -690,11 +805,22 @@ test), plus each member is now also pinned individually and end to end:
 `E-APPARATUS-CHANGED`); task 5 added Fixture U, the unreachable-mid-plan
 sibling for `E-APPARATUS-RAISED` (`tests/test_cli.py`).
 
-**`E-APPARATUS-CHANGED` is deliberately NOT a member of `APPARATUS_CODES`.**
+**`E-APPARATUS-UNEXPECTED` is H9c task 9's, and it is here for the same
+reason `E-APPARATUS-CHANGED` is**: the loop must `break` on it so a probe
+contradicting `apparatus.expected.json` stops the run rather than escaping
+`execute_plan`. It is pinned end to end by H9c's Fixture P arm 1
+(`tests/test_cli.py`), which asserts the identifier AND that the run did not
+finish `completed`. **No exit code is minted**: `1` before the first execution
+and `4` once there are results, from `run_status`'s shipped fold — the same
+derivation H9b recorded, not a choice.
+
+**Neither `E-APPARATUS-CHANGED` nor `E-APPARATUS-UNEXPECTED` is a member of
+`APPARATUS_CODES`.**
 That frozenset is `command_run`'s containment filter for a probe CALL
 crossing the run-start round or the `execute_plan` boundary; after task 5 a
 changed fact never reaches that filter at all, because the loop this
-constant names breaks on it first. Admitting it to `APPARATUS_CODES` would
+constant names breaks on it first, and the same is true of an unexpected
+one. Admitting either to `APPARATUS_CODES` would
 add a member nothing exercises through that filter — an unpinned addition to
 an enumeration this project has already been burned by once. This is not a
 claim that a changed fact **cannot** reach a run-start call: task 13 is where
@@ -736,6 +862,7 @@ class Observer:
         run_dir: Path,
         credentials: Mapping[str, str],
         observations: "Observations | None" = None,
+        expected: "Observations | None" = None,
     ) -> None:
         self.probe_name = probe_name
         self.probe = probe
@@ -761,6 +888,13 @@ class Observer:
         # `observer.observations = ...` from outside the class after
         # construction.
         self.observations = observations if observations is not None else Observations()
+        # H9c task 9 (Ruling BB): the recorded expectation, when the config's
+        # own directory holds an `apparatus.expected.json`, as a SECOND
+        # `Observations` — never merged into `self.observations`, whose counts
+        # are this run's own and reach `provenance.apparatus.unobserved`
+        # (correction 11). `None` for every run without that file, which is
+        # every run this build already made.
+        self.expected = expected
 
     def observe_round(self, *, phase: str, condition_index: int | None) -> None:
         """The phase-independent entry point every caller uses (Decision 2,
@@ -807,6 +941,16 @@ class Observer:
         )
         self.observations.record(key, facts)
         check_changed(self.observations, key, facts)
+        # AFTER the shipped gate, and the ordering is the structural form of
+        # *no run without the file may change in any way*: `self.expected` is
+        # `None` unless the config's directory holds an
+        # `apparatus.expected.json`, so every step above is reached in exactly
+        # the order it already was. `E-APPARATUS-CHANGED` therefore wins over
+        # `E-APPARATUS-UNEXPECTED` when both would fire, which is the right
+        # precedence: a run whose apparatus moved *during itself* has a fault
+        # no expectation file can excuse.
+        if self.expected is not None:
+            check_unexpected(self.expected, key, facts)
 
     def warn_unanswered(self, c: Collector) -> None:
         """`W-APPARATUS-UNANSWERED`, delegated to `Observations` — this
