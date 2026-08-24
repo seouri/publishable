@@ -166,7 +166,7 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "freeze", "report"}
+OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "resume", "freeze", "report"}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -181,7 +181,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "docs": "Operation commands",
     "list-templates": "Operation commands",
     "reproduce": "Reproducing on another device",
-    "resume": "Resuming",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
@@ -5335,6 +5334,17 @@ def _dispatch(command: str, rest: list[str]) -> int:
             "dry-run": command_dry_run,
             "run": command_run,
             "draft": command_draft,
+            # `resume` joins the existing one-path arm rather than getting a
+            # second enforcer of the same rule, exactly as `draft`, `freeze`
+            # and `report` did. Safe only because of this function's branch
+            # ORDER (plan § Corrections, correction 12): the built branches
+            # precede the `NOT_BUILT_COMMANDS` lookups, and the two-token arm
+            # (`f"{command} {rest[0]}"`) is evaluated first — so
+            # `publishable resume new` now dispatches into `command_resume`
+            # with `new` as its path instead of printing the unbuilt
+            # diagnostic, which is item 5 of the design's disclosure and is
+            # pinned rather than merely disclosed.
+            "resume": command_resume,
             "freeze": command_freeze,
             "report": command_report,
         }

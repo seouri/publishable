@@ -9589,13 +9589,14 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert statuses, column
         assert statuses <= {"built", "NOT BUILT"}, column
     assert ("dry-run", "built") in tables["Command"]
-    # H9b guard-pin arm E. SOLE AUTHORIZED EDITOR: H9b task 15 (the dispatch
-    # task). Post-edit state, written now: this line becomes
-    # `("resume", "built")` AND a line `assert ("reproduce", "NOT BUILT") in
-    # tables["Command"]` is added, so the table keeps a marked row-presence
-    # probe of its own. The `set(NOT_BUILT_COMMANDS)` equalities below are
-    # SELF-MAINTAINING and must not be edited.
-    assert ("resume", "NOT BUILT") in tables["Command"]
+    # H9b guard-pin arm E, EDITED by its sole authorized editor, H9b task 15,
+    # to the post-edit state written in advance in the design's § The guard
+    # pin: `("resume", "built")`, and a `("reproduce", "NOT BUILT")`
+    # row-presence line so the table keeps a marked probe of an unbuilt row.
+    # The `set(NOT_BUILT_COMMANDS)` equalities below are SELF-MAINTAINING and
+    # were not edited.
+    assert ("resume", "built") in tables["Command"]
+    assert ("reproduce", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -22880,16 +22881,23 @@ def test_h9b_arm_a_the_crash_fixture_is_really_crashed(tmp_path: Path):
     assert {entry["step"] for entry in lines} == {"step01_summarize_units"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H9b task 9 builds `resume`'s execution; until then `resume` prints the "
-    "unbuilt diagnostic and no record is written",
-)
 def test_h9b_arm_a_crash_and_resume_equals_straight_through(tmp_path: Path):
-    """H9b guard-pin ARM A, the `xfail` half: a crash-and-resume round trip
-    equals a straight-through run, LEAF BY LEAF, against the same golden the
-    live half captured. SOLE AUTHORIZED EDITOR: NONE — task 9 removes the
-    `xfail` marker and nothing else.
+    """H9b guard-pin ARM A, the half that was `xfail(strict=True)`: a
+    crash-and-resume round trip equals a straight-through run, LEAF BY LEAF,
+    against the same golden the live half captured.
+
+    **The marker is removed here, by task 15, and not by task 9** — the arm
+    drives `main(["resume", ...])`, so it could not pass until `resume`
+    DISPATCHED, which is this task. The controller's dispatch authorizes the
+    conversion on this NONE-editor arm; nothing else about the arm moved, and
+    the golden is the one committed in batch 1 before any comparison ran.
+
+    **What it now asserts that the `xfail` did not.** A strict `xfail` asserts
+    only *this fails somehow* — it passed while `main` printed the unbuilt
+    diagnostic and exited 2, which is a state that says nothing about
+    `resume`. Live, the same body asserts `main(["resume", <dir>])` returns
+    `EXIT_OK`, that a `run.yaml` exists to load at all, and that every one of
+    its 94 normalized leaves equals the straight-through golden in order.
 
     This is the arm design Decision 4 exists for, and no per-key assertion
     substitutes for it: `_gather_repeats` builds its column order from row
@@ -22938,16 +22946,17 @@ def test_h9b_arm_g_the_dead_holder_fixture(tmp_path: Path):
     assert (crashed / "lock.takeover").exists() is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H9b task 14 builds the takeover; until then `resume` prints the unbuilt "
-    "diagnostic and neither thread holds anything",
-)
 def test_h9b_arm_g_the_takeovers_mutual_exclusion(tmp_path: Path, monkeypatch, capsys):
-    """H9b guard-pin ARM G, the `xfail` half: two `resume`s racing one
-    dead-holder run directory reach exactly one holder and exactly one
-    `E-RUN-LOCKED`. SOLE AUTHORIZED EDITOR: NONE — task 14 removes the
-    `xfail` marker and nothing else.
+    """H9b guard-pin ARM G, the half that was `xfail(strict=True)`: two
+    `resume`s racing one dead-holder run directory reach exactly one holder
+    and exactly one `E-RUN-LOCKED`.
+
+    **The marker is removed here, in task 15's commit, though task 14 built
+    the takeover** — deliberately, and reported as a deferral rather than as
+    compliance: the arm drives `main(["resume", ...])`, which printed the
+    unbuilt diagnostic until this task, so removing it one commit earlier
+    would have left task 14's own commit red. Nothing else about the arm
+    moved.
 
     **Deterministic on purpose.** The five-process probe of design § 0 (60
     trials × 5 processes, zero violations; two winners by trial 22 with the
@@ -24985,3 +24994,85 @@ def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: P
     assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
+
+
+# ===========================================================================
+# H9b task 15 — `resume` dispatched (design Decision 3 / Ruling X; plan
+# task 15). `resume` joins `OPERATION_COMMANDS`'s existing one-path arity arm
+# and leaves `NOT_BUILT_COMMANDS`. Correction 12 (`_dispatch`'s branch order
+# is load-bearing): the built branches are still evaluated before the
+# `NOT_BUILT_COMMANDS` lookups, which is the only reason adding a name to
+# `OPERATION_COMMANDS` is safe.
+#
+# All four invocation shapes were measured through the REAL console script
+# (`uv run publishable …`, outside this repository) and every one matched the
+# design's disclosure item 5, including the row it derived by reading rather
+# than by running:
+#
+#   resume            → exit 2, "`resume` takes exactly one path and no flags"
+#   resume a b        → exit 2, the same line
+#   resume --json     → exit 2, the same line
+#   resume new        → exit 1, "  error   E-RESUME-NO-IDENTITY new/identity.json
+#                       is absent or unreadable, …"
+#
+# The last is the shape H9a got wrong three ways for `draft new`, so it is
+# pinned below rather than only disclosed.
+# ===========================================================================
+
+_RESUME_ARITY_MESSAGE = "`resume` takes exactly one path and no flags"
+
+
+def test_h9b_resume_with_no_path_is_an_invocation_error(capsys):
+    assert main(["resume"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["resume", "a", "b"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument, so
+    a mutation replacing the condition with a bare `len(rest) != 1` fails this
+    while passing the two above. `draft`'s own three tests are the shipped
+    precedent and cover the SAME arm with a different probe — stated as a
+    difference rather than as new coverage: neutering the arm fails both
+    sets."""
+    assert main(["resume", "--json"]) == EXIT_INVOCATION
+    assert _RESUME_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9b_resume_new_reaches_real_argument_handling_not_a_roadmap_notice(capsys):
+    """Disclosure item 5's last row, measured. `"new"` is a single token, so
+    `rest == ["new"]` never trips the arity arm, and the two-token lookup
+    `"resume new"` never happens because the built branches return first — so
+    the call dispatches into `command_resume` with `new` as its path and gets
+    `resume`'s own refusal for a directory that is not a run directory.
+
+    Asserted on the code AND on the identifier: `EXIT_INVOCATION` and
+    `EXIT_WRONG` are different answers, and a mutation that dropped `resume`
+    from `OPERATION_COMMANDS` while keeping the handler would print
+    `unknown command` at the same exit code as the arity arm."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "resume" not in NOT_BUILT_COMMANDS
+    assert "resume new" not in NOT_BUILT_COMMANDS
+    code = main(["resume", "new"])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG, err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    assert "E-RESUME-NO-IDENTITY" in err
+
+
+def test_h9b_resume_dispatches_into_command_resume_with_the_path_it_was_given(capsys):
+    """The positive half: a single token really reaches `command_resume`, and
+    the path it receives is the one typed. A `resume <path>` fixture is what
+    the branch-order mutation is measured against — and this asserts the
+    directory's own name appears in the refusal, so a dispatcher that passed
+    some other path (or refused before dispatching) fails here rather than
+    passing on an exit code the arity arm produces too."""
+    assert main(["resume", "_no_such_run_dir_"]) == EXIT_WRONG
+    err = capsys.readouterr().err
+    assert "_no_such_run_dir_" in err
