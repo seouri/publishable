@@ -3315,9 +3315,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # `break`s inside `execute_plan` (H7d task 5/6) rather than
             # escaping, and `E-APPARATUS-RAISED` at run-start reaches this
             # branch through `APPARATUS_CODES` alone — so the union is now
-            # load-bearing rather than cheap insurance, and narrowing this
-            # filter to `APPARATUS_CODES` would let a resume's changed fact
-            # escape to `main`'s un-redacted printer.
+            # load-bearing rather than cheap insurance: narrowing this filter
+            # to `APPARATUS_CODES` fails that test (measured, full suite, one
+            # failure), because the raise escapes this containment, and
+            # `main`'s own handler prints `{exc}` with no collector in scope.
+            # The shipped comment's own "narrowing this filter leaves the
+            # full suite unchanged" was true when it was written and is not
+            # true now.
             if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
             probe_c = Collector()
