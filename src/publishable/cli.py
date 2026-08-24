@@ -167,7 +167,16 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "resume", "freeze", "report"}
+OPERATION_COMMANDS = {
+    "validate",
+    "dry-run",
+    "run",
+    "draft",
+    "resume",
+    "reproduce",
+    "freeze",
+    "report",
+}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -181,7 +190,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
     "docs": "Operation commands",
     "list-templates": "Operation commands",
-    "reproduce": "Reproducing on another device",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
@@ -3218,6 +3226,37 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 dispatch_c.error(dispatch_code, "experiment_type", str(exc))
                 print(dispatch_c.render(), file=sys.stderr)
                 return EXIT_WRONG
+            # H9c task 9 (Ruling BB): the recorded expectation, when the
+            # CONFIG'S OWN DIRECTORY holds an `apparatus.expected.json` —
+            # § Reproducing on another device's own location, which `reproduce`
+            # writes and a reader may edit.
+            #
+            # **It is outside `src/**` and `templates/**`, so neither
+            # `code_hash` nor the dirty gate sees it — and the ground is a
+            # MEASUREMENT rather than the pathspec.** Measured on a real run:
+            # an untracked `uv.lock` at a repo root left
+            # `git status --porcelain` reading `?? uv.lock` while the run
+            # exited `0`, because the gate reads
+            # `git status --porcelain -- src templates`. Reasoning from the
+            # pathspec alone would be answering with a proxy.
+            #
+            # Read only when a probe is declared: with no probe there is
+            # nothing to compare, `observer` stays `None`, and a stray file is
+            # inert exactly as it is today. `expectation_from`'s refusal is
+            # contained here rather than raised, on the same shape and for the
+            # same reason as `_probe_for`'s wrapper above — `main`'s
+            # `PublishableError` handler applies no redaction pass.
+            expected: apparatus.Observations | None = None
+            expected_path = config_path.parent / "apparatus.expected.json"
+            if expected_path.is_file():
+                try:
+                    expected = apparatus.expectation_from(expected_path)
+                except ContractError as exc:
+                    expectation_c = Collector()
+                    expectation_c.credentials = credentials
+                    expectation_c.error(exc.code or "E-IO-FAILED", str(expected_path), str(exc))
+                    print(expectation_c.render(), file=sys.stderr)
+                    return EXIT_WRONG
             observer = apparatus.Observer(
                 probe_name=declared_probe,
                 probe=probe_fn,
@@ -3236,6 +3275,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 # the keyword's shipped default and what `freeze` already
                 # uses one branch over.
                 observations=None if resumed is None else resumed.baseline,
+                # A SECOND `Observations`, never merged into the run's own:
+                # `record` bumps `_total_counts`/`_null_counts`, which feed
+                # `provenance.apparatus.unobserved` and
+                # `W-APPARATUS-UNANSWERED`, so seeding the run's own object
+                # from a foreign record would make this record claim probe
+                # calls it never made (H9c plan correction 11).
+                expected=expected,
             )
 
         # Bound BEFORE the `try` below, not inside it: the run-start round can
@@ -3389,7 +3435,37 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # opposite case (bring it back and resume again), so it keeps
             # today's behaviour and is filed in `spec-defects.md` with that
             # terminality as the reason rather than folded in here.
-            if exc.code == "E-APPARATUS-CHANGED" and resumed is not None and resumed.prior_results:
+            # **H9c task 9: `E-APPARATUS-UNEXPECTED` joins this branch, and the
+            # ground is that the two sites must ALREADY agree.** `execute_plan`
+            # maps every non-`E-APPARATUS-RAISED` `STOP_CODES` member to
+            # `stop.reason = "apparatus_changed"` for a MID-PLAN raise, so a
+            # resume whose apparatus contradicts `apparatus.expected.json`
+            # mid-plan already publishes what the prior attempt did. Only the
+            # RUN-START copy of the same question branched on the code by name,
+            # and the asymmetry cost the whole record: measured, on a crash
+            # leaving 2 completed executions on disk, a resume whose run-start
+            # round answered a fact the expectation contradicts returned exit
+            # `1` with NO `run.yaml`, and — the fact still contradicting — every
+            # later resume returned the same. *Every execution paid for, the
+            # record lost* is verbatim what H9b task 16 fixed here for the
+            # sibling code, and this is the same defect reached through the code
+            # added beside it.
+            #
+            # **No vocabulary is added and no code is minted.** `stop.reason`
+            # stays the closed set of three `run_status` documents, and it is
+            # `"apparatus_changed"` for exactly the reason `execute_plan`
+            # already uses it for this code; the reader is told which fault
+            # occurred by `stop.code`/`stop.message`, which carry
+            # `E-APPARATUS-UNEXPECTED` verbatim into the printed diagnostic. The
+            # exit code is `4` from `run_status`'s shipped fold, which is also
+            # what design Decision 4 says it should be — *"`1` before the first
+            # execution and `4` once there are results"* — so widening this is
+            # what makes the code answer the design rather than a change to it.
+            if (
+                exc.code in ("E-APPARATUS-CHANGED", "E-APPARATUS-UNEXPECTED")
+                and resumed is not None
+                and resumed.prior_results
+            ):
                 stop.reason = "apparatus_changed"
                 stop.code = exc.code
                 stop.message = str(exc)
@@ -5467,6 +5543,7 @@ def _dispatch(command: str, rest: list[str]) -> int:
         # cycle of its own.
         from publishable.freeze import command_freeze
         from publishable.report import command_report
+        from publishable.reproduce import command_reproduce
 
         handlers: dict[str, Callable[[Path], int]] = {
             "validate": command_validate,
@@ -5485,6 +5562,21 @@ def _dispatch(command: str, rest: list[str]) -> int:
             # and the order is filed as unpinned in
             # `docs/superpowers/spec-defects.md`.
             "resume": command_resume,
+            # `reproduce` joins the same one-path arm for the same reason, and
+            # its function-local import is `command_freeze`'s: `reproduce.py`
+            # imports `validate.declared_credential_names_for` at module scope
+            # and `cli.py` imports `validate` at module scope, so a module-scope
+            # import here would put a third module on that chain for no gain.
+            # `publishable reproduce new` dispatches into `command_reproduce`
+            # with `new` as its path rather than printing the unbuilt
+            # diagnostic — `new` is a single token, so the arity arm accepts it
+            # and the two-token `NOT_BUILT_COMMANDS` lookup never happens. That
+            # is item 5 of the design's disclosure, MEASURED through the real
+            # console script and pinned below rather than predicted, and it does
+            # NOT rest on this function's branch order (which is filed as
+            # unpinned in `docs/superpowers/spec-defects.md`): the arms assert
+            # the code and the identifier, never which branch answered.
+            "reproduce": command_reproduce,
             "freeze": command_freeze,
             "report": command_report,
         }

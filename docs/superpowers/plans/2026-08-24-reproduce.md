@@ -749,6 +749,14 @@ ordered triple); omit the apparatus block when `provenance.apparatus` is non-`nu
 
 ## Task 14
 
+> **AMENDED 2026-08-24 by the controller, after batch 1 measured what Decision 14's table does not
+> anticipate.** **A failed `git clone` and a failed `uv sync` both report `E-IO-FAILED` at exit `5`, and
+> § Errors has a row for neither.** Minting a fourteenth code would contradict correction 29, so **the
+> count stays at thirteen and `E-IO-FAILED`'s existing row must widen to cover both sites** — *one row per
+> code covering EVERY emit site*, checked against the table's own **scope sentence**. That shape has
+> produced a whole-branch Major on four sub-slices, and H9a alone found thirteen rows narrower than their
+> code and one wider.
+
 **`spec-defects.md`, and every filing this slice makes, closes or declines.** Design § 5. **Task 6 owns
 the missing-lockfile entry; every other one is yours.**
 

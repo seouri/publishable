@@ -25,9 +25,9 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9c, H9d, then H3c-3's remaining
+**Order of the slices that remain: H9d, then H3c-3's remaining
 14 — the H4, H5, H6, H7 and H8 families are all complete, H6a, H6b and H9a all having merged on
-2026-08-23, and H9b on 2026-08-24.**
+2026-08-23, and H9b and H9c both on 2026-08-24.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -196,6 +196,59 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H9c (`reproduce`) merged on 2026-08-24 — the third of H9's four.** `reproduce` takes one path and
+**does not resolve a target device**: *"reproducing on another device"* names where the user is, not an
+argument, so it runs **on** the other device against a record it is given — which is what makes the
+**bundle-member form a first-class arm** rather than a note. Given a run record it clones the recorded
+remote into a **derived** destination (the remote's last component, `_`, the `run_id`), checks out the
+recorded commit detached, recomputes `code_hash` with `run`'s own predicate, restores the environment
+against the recorded `uv_lock_hash`, writes the config back **re-serialized from the record** and
+self-checked with `parameters_hash`, writes `configs/<name>/apparatus.expected.json` when the run
+measured through an apparatus, lists `required_env`, and **stops** — both remaining inputs need a
+person. Given a config it does the same from step 4 onward, in the repository the config sits in, and
+names the three things it did not verify. **It retires no refusal and unblocks ZERO configs** — so the
+four-row table in [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on
+this build is repeated character for character; quote that table rather than any number from this
+paragraph. **Thirteen codes are minted — twelve `E-REPRODUCE-*` and one `E-APPARATUS-*` — thirteen
+§ Errors rows, and no exit code**; `5` gains readers for its *"a clone or `uv sync` that failed"*
+clause at three sites.
+
+**Two behaviour changes, and a wrong disclosure would be worse than none, so both are measured.**
+`run` and `draft` gain **one comparison**: the first probe round now checks
+`configs/<name>/apparatus.expected.json` when that file sits beside the config *and* the template
+declares a probe — `E-APPARATUS-UNEXPECTED`, exit `1` before the first execution and `4` once there
+are results. Measured on both worktrees through the console script: with no such file, 93 `run.yaml`
+leaves compared and every difference in the normalization list written in advance. And
+`publishable reproduce <path>` stops printing *"specified but not built"* at exit `2` and starts
+dispatching, while **`publishable reproduce new` prints `E-IO-FAILED` at exit `1` — exit `2` → `1`,
+and the identifier is new** — all four invocation shapes measured through the real console script
+outside the repository rather than predicted, which is what H9a got wrong three ways for `draft new`.
+A `resume` whose run-start round contradicts the expectation, with a prior attempt's executions on
+disk, **keeps its record**: exit `4` with a `run.yaml` rather than `1` with none.
+
+Five things worth carrying. **A design's own derivation can go false inside its own slice.** Design
+§ 7 argued the executability verdict from *"none of the nine configs is a run record, so none is an
+operand `reproduce` accepts"* — and Decision 13's config form, built two tasks later, accepts a config,
+which all nine are. The verdict holds on a different ground (`reproduce` runs at no `validate`, is
+invoked from no step, and **accepting a config as an operand is not a config executing**), and the
+entry derives it rather than repeating the sentence. **A brief's task boundary can be impossible.**
+§ CLI reference's `reproduce` row was task 15's, but guard-pin arm B's authorized post-edit state
+**parses that table** — so the `Status` cell had to flip in the dispatch commit or the branch was red;
+measured, flipping it back fails arm B and the document-versus-code bind. **A shipped comparison can
+degenerate rather than transfer.** Decision 13 says the config form runs Decision 3's lockfile
+ranking; it cannot — that ranking's authority is the recorded `uv_lock_hash` and its carrier is the
+run directory's byte copy, and a config has neither — so the form prints the repository's own lockfile
+and its digest **and the absence of anything to rank it against**, a fourth honest absence beside the
+three not-verified lines. **`E-GIT-NO-REPO` was reused rather than a fourteenth code minted** for a
+config outside every repository, which makes it a **seventh** path to that code and a **third** site
+catching it by code — **and the gate then found an eighth**, `prepare_checkout`'s walk-up from the derived
+destination's parent, where a raise IS the ordinary case, so the exception path is the pass branch and the
+quiet return is the refusal; the row had been widened six → seven and still undercounted — and its row's closing sentence, *"a config outside every repository prints
+`✓ config valid` and refuses only at `run`"*, went false in the same edit and was corrected in it.
+And **`E-IO-FAILED` has no § Errors row at all** — it lives as one sentence in § Exit codes saying it
+*"exits `1`"*, which is now false at three sites; the sentence was widened to name every site rather
+than a fourteenth code being minted for the clone and the sync.
 
 **H9b (`resume`) merged on 2026-08-24 — the second of H9's four, and NOT additive.** `resume` is a
 second entry into phases 6-10 of a run that stopped without writing `run.yaml`. It compares recorded

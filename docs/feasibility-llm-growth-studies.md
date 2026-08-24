@@ -2191,3 +2191,77 @@ and the *"unblocks ZERO configs"* verdict is untouched: a miscount of how many r
 nothing about whether any of these nine configs can reach one, and none can — `resume` and `freeze` both
 need a run directory an operator already has. The design's own Decision 17 is the origin of both wrong
 figures and carries its own appended correction.
+
+### Measured on 2026-08-24 against commit `386aa3f` — after H9c
+
+**H9c builds `reproduce`.** The command dispatches. Given a run record — a run directory's own
+`run.yaml` or a bundle member — it clones the recorded remote into a derived directory, checks out
+the recorded commit, recomputes `code_hash` with `run`'s own predicate, restores the environment
+against the recorded `uv_lock_hash`, writes the config back re-serialized from the record and
+self-checked with `parameters_hash`, writes `configs/<name>/apparatus.expected.json` when the run
+measured through an apparatus, lists `required_env`, and stops. Given a config it does the same from
+step 4 onward, in the repository the config sits in, and names the three things it did not verify.
+Twelve `E-REPRODUCE-*` codes are minted plus one `E-APPARATUS-*` — **thirteen codes, thirteen rows**,
+each figure carrying its noun. `run` and `draft` gain one comparison, against
+`configs/<name>/apparatus.expected.json` when that file exists.
+
+**It unblocks ZERO configs, and the four rows are derived rather than repeated. The derivation is not
+the one this slice's design wrote**, and that is stated rather than papered over: design § 7 argued
+*"none of the nine configs is a run record, so none of them is an operand `reproduce` accepts."*
+**That reason is false at this commit** — Decision 13's config form ships, and all nine of these
+configs *are* config files, so all nine are operands `reproduce` accepts. The verdict survives on a
+different ground, which is the one below.
+
+- **Row 1, transplantable configs validating with zero errors — 8 of 8.** `reproduce` runs at no
+  `validate` and is invoked from no step, so nothing it does can reach `validate`'s answer. The one
+  behaviour change to a shipped command — `run`'s first probe round comparing against
+  `configs/<name>/apparatus.expected.json` — is read **only when that file exists beside the config**
+  and only when the template declares a probe, and no shipped code but `reproduce` writes one. Read
+  rather than assumed: `cli.py` builds `expected_path = config_path.parent / "apparatus.expected.json"`
+  inside the branch that has already resolved a declared probe, so a config whose template declares
+  none never reaches the read at all — which is every one of these nine, since `generic` is the
+  template they validate against.
+- **Row 2, blocked on `io.reuse_from` — 0.** Untouched. `reproduce` reads no upstream and walks no
+  lineage chain: `grep -n "upstream\|UpstreamLedger\|read_upstream" src/publishable/reproduce.py`
+  returns no hits.
+- **Row 3, meet the `report_by`-under-`resample` gap — 7.** Untouched, and unowned. It is a
+  construction chosen inside `summarize_step`, in phase 8 of the run command's own sequence;
+  `reproduce` enters no phase of that sequence — `grep -n
+  "resolve_contrasts\|_prepare_run\|_execute_prepared" src/publishable/reproduce.py` returns no hits
+  either — and it renders no intervals at all.
+- **Row 4, free of every core-side dependency this analysis can name — 1.** `reproduce` requires a
+  record with a remote, or a config plus the repository it sits in and a lockfile that resolves.
+  Neither is a property of a config's declarations, and **accepting a config as an operand is not a
+  config executing** — `reproduce` prepares an environment and stops, executing no step and reporting
+  no result. So it can add no dependency to this row and remove none.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The block above is byte-identical to the H9b entry's, extracted rather than retyped**, by the same
+two independent methods the H8a and H9a entries describe — a programmatic walk that finds the last
+`| Figure | Count | Visible to` header and reads forward while the line starts with `|`, and a fixed
+six-line slice from the same index — `diff`-ed to empty, six lines each. Its cells still name **H8a**,
+because updating them is exactly how a repeated table stops being repeated. **No fifth number is
+minted, and no single figure is quoted for this analysis' executability** — quote the table, or name
+the dependency.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** Thirteen codes are minted and none
+is retired. Twelve are `E-REPRODUCE-*`, reachable only from a command none of these nine invokes. The
+thirteenth, `E-APPARATUS-UNEXPECTED`, is reachable only from a `run` whose config directory holds a
+file only `reproduce` writes **and** whose template declares an `apparatus_probe` — none of these nine
+declares one. No exit code is minted: `5` gains readers for its *"a clone or `uv sync` that failed"*
+clause, which is `EXIT_EXTERNAL` acquiring readers exactly as H7d Part B and H9b did, and
+`E-APPARATUS-UNEXPECTED`'s `1`-versus-`4` split is `run_status`'s shipped fold rather than a choice.
+
+**Two behaviour changes worth naming even though they move no row.** `publishable reproduce <path>`
+stops printing *"specified but not built"* at exit `2` and starts dispatching; `publishable reproduce
+new` now prints `E-IO-FAILED` at exit **`1`** — **exit `2` → `1`, and the identifier is new** —
+measured through the real console script rather than predicted. And a `run` or `resume` whose apparatus
+contradicts an expectation file **keeps its record**: a resume whose run-start round contradicts it,
+with a prior attempt's executions already on disk, exits `4` with a `run.yaml` rather than `1` with
+none. Both are reachable only outside these nine, which is why the table does not move.
