@@ -2138,8 +2138,13 @@ class Resumed:
     - `baseline` — the apparatus observations replayed from
       `apparatus/probes.jsonl`, so a fact that moved during the crash is
       gated against the ORIGINAL run's first-answered value rather than
-      against this attempt's first probe. `None` when the run declared no
-      probe, which is not an error (Decision 11).
+      against this attempt's first probe. **EMPTY, not `None`, for a run
+      that never probed** — `replay_ledger` returns an empty `Observations`
+      for an absent ledger, which is exactly what an `Observer` builds for
+      itself, so an absent baseline mints no refusal (Decision 11) and this
+      path needs no branch for it. `None` stays legal at the type level for
+      a caller with no ledger to offer, and is what every `Observer` outside
+      a resume gets.
     - `recorded_manifest` — the manifest the first attempt wrote, so phase
       8's `verify_manifest` asks whether the inputs moved during THIS
       attempt and `run.yaml`'s `input_manifest_hash` stays the original
@@ -3212,6 +3217,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 cfgs=cfgs,
                 run_dir=run_dir,
                 credentials=credentials,
+                # On a resume, the ORIGINAL run's first-answered facts
+                # (Decision 11), replayed from `apparatus/probes.jsonl` by
+                # `command_resume`. Without this the resumed run's own first
+                # probe would become the baseline — retiring the apparatus
+                # gate for the whole remainder of the run, which is the one
+                # guard that stops a run being measured through two different
+                # apparatus states. `None` for `run` and `draft`, which is
+                # the keyword's shipped default and what `freeze` already
+                # uses one branch over.
+                observations=None if resumed is None else resumed.baseline,
             )
 
         try:
@@ -3287,20 +3302,22 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # `APPARATUS_CODES` itself (plan correction 4: that frozenset is
             # `_probe_for`'s dispatch-time filter, and admitting an unpinned
             # member there is the thing this project has already been burned
-            # by). `apparatus.STOP_CODES` is unioned in here too, but at HEAD
-            # no path reaches this `try` carrying either of its members: a
-            # mid-plan raise of either code now `break`s inside `execute_plan`
-            # (task 5/6) rather than escaping, and a run-start raise of
-            # `E-APPARATUS-CHANGED` is what Decision 11 rules out and task 13
-            # pins (one call per condition, no prior observation to disagree
-            # with) — `E-APPARATUS-RAISED` at run-start already reaches this
-            # branch through `APPARATUS_CODES` alone. Verified by running:
-            # narrowing this filter to `APPARATUS_CODES` leaves the full suite
-            # unchanged. Kept anyway as cheap insurance against a later stop
-            # routed back through this `try` — a branch nothing currently
-            # reaches is not the same claim as a branch that cannot ever be
-            # reached, and Decision 14's own fresh `Collector` on the stop
-            # path (task 7) is the mechanism, not this filter.
+            # by). `apparatus.STOP_CODES` is unioned in here too, and **H9b
+            # task 13 made one of its members reachable**: this comment used
+            # to say no path reaches this `try` carrying either, which was
+            # true only while every run-start round started from an EMPTY
+            # baseline. A RESUME starts from the previous attempt's replayed
+            # baseline (H9b Decision 11), so its run-start round HAS a prior
+            # observation to disagree with, and a fact that moved while the
+            # run was down raises `E-APPARATUS-CHANGED` here. Measured, and
+            # pinned by `test_h9b_a_resume_gates_against_the_original_runs_
+            # first_answered_fact`. A mid-plan raise of either code still
+            # `break`s inside `execute_plan` (H7d task 5/6) rather than
+            # escaping, and `E-APPARATUS-RAISED` at run-start reaches this
+            # branch through `APPARATUS_CODES` alone — so the union is now
+            # load-bearing rather than cheap insurance, and narrowing this
+            # filter to `APPARATUS_CODES` would let a resume's changed fact
+            # escape to `main`'s un-redacted printer.
             if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
             probe_c = Collector()
@@ -3314,15 +3331,18 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             print(probe_c.render(), file=sys.stderr)
             # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
             # apparatus itself unreachable — is the one code in this
-            # containment's filter that earns exit 5. Everything else that
-            # actually reaches this branch is the four Decision 9 contract
-            # refusals from `APPARATUS_CODES` (`E-APPARATUS-FACT-TYPE`,
-            # `-FACT-MISSING`, `-FACT-CREDENTIAL`, `-RETURN`) — NOT
-            # `STOP_CODES`' members, which cannot reach here at all: a
-            # mid-plan stop `break`s inside `execute_plan` instead of
-            # raising, and a run-start `E-APPARATUS-CHANGED` is exactly what
-            # Decision 11 rules out (see the comment above this `try`).
-            # Those four keep `EXIT_WRONG`, unchanged by this slice.
+            # containment's filter that earns exit 5. The four Decision 9
+            # contract refusals from `APPARATUS_CODES`
+            # (`E-APPARATUS-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`,
+            # `-RETURN`) keep `EXIT_WRONG`, and so — **measured rather than
+            # decided** — does a RESUME's run-start `E-APPARATUS-CHANGED`,
+            # which H9b task 13 made reachable here (see the corrected
+            # comment above this `try`). Whether that state deserves
+            # `EXIT_EXTERNAL` instead, and whether a resume that can never
+            # complete is a record loss worth its own refusal, is NOT settled
+            # here: H9b task 13's report routes it, and changing an exit code
+            # in the task that made the state reachable would be deciding a
+            # question by side effect.
             if exc.code == "E-APPARATUS-RAISED":
                 return EXIT_EXTERNAL
             return EXIT_WRONG
@@ -4729,6 +4749,9 @@ def command_resume(run_dir: Path) -> int:
        memberships and the holdout partition through `dataclasses.replace`;
        `E-RESUME-ALLOCATION-STALE` when the record cannot be applied to this
        roster (Decision 10).
+    9. the apparatus baseline, replayed from `apparatus/probes.jsonl` under
+       `E-RESUME-PROBES-UNREADABLE`; an absent or empty one is legitimate
+       and mints no refusal (Decision 11).
 
     **This deviates from the plan's stated order in one place, deliberately.**
     The task section lists the hash comparison BEFORE `_prepare_run`. Doing it
@@ -4759,10 +4782,10 @@ def command_resume(run_dir: Path) -> int:
     against this host's `gethostname()`, and the unlink — and until it lands
     this function takes no lock of its own and `_execute_prepared`'s
     `RunLock` refuses a directory whose crashed holder left a `lock` behind.
-    The fourteen refusals' diagnostics (task 16) are the rest, and the
-    apparatus baseline replay is task 13's. `sweep.yaml`'s recorded
-    `execution_order` and the four-tuple cross-check are step 7 above
-    (task 10), and `allocation.json` is step 8 (task 11).
+    The fourteen refusals' diagnostics (task 16) are the rest. `sweep.yaml`'s
+    recorded `execution_order` and the four-tuple cross-check are step 7
+    above (task 10), `allocation.json` is step 8 (task 11), and the
+    apparatus baseline is step 9 (task 13).
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
@@ -4838,11 +4861,16 @@ def command_resume(run_dir: Path) -> int:
                 collapse=len(prepared.repeats) <= 1,
             ),
             attempts=attempt_counts(records),
-            # Task 13's: replayed from `apparatus/probes.jsonl`. `None` is
-            # also the correct value for a run that declared no probe, which
-            # is every config that does not name one — so this is a seam
-            # rather than a hole.
-            baseline=None,
+            # The ORIGINAL run's baseline, replayed through the shipped
+            # `Observations.record` (Decision 11) under `resume`'s OWN code:
+            # `replay_ledger` defaults to `freeze`'s, which would be a lie
+            # about which command found the fault. An absent or empty ledger
+            # comes back as an empty `Observations` and mints NO refusal —
+            # `freeze`'s `E-FREEZE-LEDGER-MISSING` exists because probing
+            # then would pin a fact the run never adopted, while a run that
+            # crashed before its first probe is entitled to set one exactly
+            # as the original run's first probe would have.
+            baseline=apparatus.replay_ledger(run_dir, code="E-RESUME-PROBES-UNREADABLE"),
             recorded_manifest=recorded_manifest,
             # The RECORDED order, and `None` when the record says nothing was
             # shuffled — read off `sweep.yaml`'s own `order` scalar rather

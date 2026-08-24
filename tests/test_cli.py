@@ -24734,3 +24734,250 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     # Phase 8 asked its own question and came back clean, which is what the
     # threading is FOR: the inputs did not move during this attempt.
     assert run_doc["status"] == "completed"
+
+
+# ===========================================================================
+# H9b task 13 — the apparatus baseline is REPLAYED, not re-probed (design
+# Decision 11). **The fixture makes the two readings differ**: a probe whose
+# answers are read from a file the fixture rewrites BETWEEN the crash and the
+# resume, so the original baseline and the resume's own first probe are
+# different values. Without that the mutation removing the replay is blind,
+# which is exactly how H9a's Fixture Y failed — three shipped arms all
+# driving a `generic` project whose `apparatus_probe` was `None`.
+# ===========================================================================
+
+_H9B_APPARATUS_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("h9b_resume_assay")
+class H9bResumeAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9b_resume_probe"
+    apparatus_facts = ["model_revision"]
+"""
+
+# The probe reads its answer out of a FILE, so the fixture can move the
+# apparatus between two commands without touching the probe's code — which
+# `code_hash` covers and `resume` refuses on.
+_H9B_FILE_PROBE_MODULE = """\
+import json
+from pathlib import Path
+
+from publishable import Apparatus, register_probe
+
+_FACTS = Path(__FACTS__)
+
+
+@register_probe("h9b_resume_probe")
+def probe(cfg):
+    return Apparatus(facts=json.loads(_FACTS.read_text()))
+"""
+
+
+def _h9b_apparatus_crash(
+    tmp_path: Path, installed, facts: Path, control: Path, tag: str
+) -> dict[str, Any]:
+    """A run of a probe-declaring project, crashed mid-plan by `os._exit` in a
+    SUBPROCESS — the state a resume exists for: a `lock` left behind, no
+    `run.yaml`, completed executions on the ledger, and an
+    `apparatus/probes.jsonl` holding the run's own baseline.
+
+    A subprocess for `_h9b_crash_run`'s reason (`os._exit` in process would
+    take the session with it), and `PYTHONPATH` is what carries the
+    `installed` distribution into it — `monkeypatch.syspath_prepend` is
+    in-process only, so without this the child would report
+    `E-PROBE-UNKNOWN` instead of crashing where the fixture aims.
+    """
+    facts.write_text(json.dumps({"model_revision": "r1"}))
+    # `tag` gives each test its own MODULE name, which is not decoration: a
+    # module already in `sys.modules` is not re-imported, so its
+    # `@register_probe` decorator never re-runs — and the `registries`
+    # fixture clears `PROBES` between tests, so a second test reusing the
+    # module name fails `check_registration` with `E-PLUGIN-DECORATOR`
+    # instead of running. Measured, and it is why the shipped probe fixtures
+    # in this file each carry their own module name too.
+    site = installed(
+        f"dist-h9b13{tag}",
+        "1.0",
+        {"publishable.probes": {"h9b_resume_probe": f"h9b13{tag}_probe_mod:probe"}},
+    )
+    (site / f"h9b13{tag}_probe_mod.py").write_text(
+        _H9B_FILE_PROBE_MODULE.replace("__FACTS__", repr(str(facts)))
+    )
+    doc = run_a_project(
+        tmp_path,
+        experiment_type="h9b_resume_assay",
+        parameters={},
+        replication={"repeats": [{"kind": "seed", "n": 4}], "rationale": "four seeds"},
+        units=8,
+        _local_template=_H9B_APPARATUS_TEMPLATE,
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+    )
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+        env={**os.environ, "PYTHONPATH": str(site)},
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stdout, completed.stderr)
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    assert not (crashed / "run.yaml").exists()
+    # The baseline this task replays, and the fixture's own claim about it:
+    # the crashed run answered `r1`, more than once.
+    lines = [
+        json.loads(line)
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert lines and all(entry["facts"]["model_revision"] == "r1" for entry in lines)
+    assert [entry for entry in _h9b_ledger(crashed) if entry["status"] == "completed"]
+    doc["crashed"] = crashed
+    return doc
+
+
+def test_h9b_a_resume_gates_against_the_original_runs_first_answered_fact(
+    installed, registries, tmp_path, capsys
+):
+    """**The mutation this test exists for**: dropping the baseline and
+    letting the resume's own first probe set one. The apparatus has MOVED
+    while the run was down (`r1` → `r2`), so a resume gated against the
+    original run's first-answered fact reports it, and a resume gated against
+    itself would adopt `r2` and finish — retiring the one guard that stops a
+    run being measured through two different apparatus states for the whole
+    remainder of the run.
+
+    Both branches were checked in that order: with the replay the resume does
+    not complete and `E-APPARATUS-CHANGED` is on the operator's screen; with
+    the replay removed it completes at exit 0 with a published record.
+
+    **What this test measures rather than asserts as intended**, because it
+    is a cost this task creates: the resume's exit code, and the fact that
+    the record is now UNREACHABLE — the completed executions stay on disk,
+    every one of them paid for, and no `run.yaml` is ever written, at this or
+    any later resume. Reported and routed rather than tidied.
+    """
+    facts = tmp_path / "apparatus_facts.json"
+    control = tmp_path / "crash_control"
+    doc = _h9b_apparatus_crash(tmp_path, installed, facts, control, "moved")
+    crashed = doc["crashed"]
+    before = _h9b_ledger(crashed)
+    steps = sorted(p for p in crashed.rglob("units.parquet"))
+    assert steps, "the crash must leave step artifacts behind"
+
+    # The apparatus moves while the run is down. Nothing under `src/**` or
+    # `templates/**` changes, so `code_hash` still matches and the resume
+    # gets as far as the probe.
+    facts.write_text(json.dumps({"model_revision": "r2"}))
+    code = _h9b_resume(crashed)
+    output = capsys.readouterr()
+    assert "E-APPARATUS-CHANGED" in (output.out + output.err)
+    # Measured, not chosen: `EXIT_WRONG`. A run-start `E-APPARATUS-CHANGED`
+    # lands in `_execute_prepared`'s probe containment, whose own comment
+    # said this state was unreachable — see that comment, corrected by this
+    # task, and the report's routed escalation. Pinned as the literal so a
+    # later slice that moves it to `EXIT_EXTERNAL` moves this assertion
+    # deliberately rather than by accident.
+    assert code == EXIT_WRONG
+    assert not (crashed / "run.yaml").exists()
+    # Nothing was lost — and nothing can be recovered either, which is the
+    # cost: the ledger and the step artifacts are exactly as the crash left
+    # them, and a second resume against the same moved apparatus refuses
+    # again rather than eventually publishing.
+    assert _h9b_ledger(crashed) == before
+    assert sorted(p for p in crashed.rglob("units.parquet")) == steps
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    again = _h9b_resume(crashed)
+    assert again == code
+    assert not (crashed / "run.yaml").exists()
+
+
+def test_h9b_a_resume_through_an_unmoved_apparatus_completes(
+    installed, registries, tmp_path, capsys
+):
+    """The honouring direction, without which the test above is a refusal
+    test and nothing more: the same crashed directory, the same replayed
+    baseline, an apparatus that did NOT move — and the resume completes,
+    publishes a record, and its `provenance.apparatus.facts` carries the
+    fact the FIRST attempt answered.
+
+    A run that crashed before ever probing is a separate claim and is not
+    this fixture: an absent or empty baseline mints no refusal (Decision 11),
+    and `freeze`'s `E-FREEZE-LEDGER-MISSING` must not be inherited by copy —
+    every other resume test in this file drives a project with no probe at
+    all, which is that case, so it is pinned by thirty of them rather than
+    by an arm here.
+    """
+    facts = tmp_path / "apparatus_facts.json"
+    control = tmp_path / "crash_control"
+    doc = _h9b_apparatus_crash(tmp_path, installed, facts, control, "unmoved")
+    crashed = doc["crashed"]
+    assert _h9b_resume(crashed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+    assert run_doc["provenance"]["apparatus"]["facts"] == {
+        key: {"model_revision": "r1"} for key in run_doc["provenance"]["apparatus"]["facts"]
+    }
+    # And the ledger grew: the resume's own probe rounds are appended to the
+    # same file the first attempt wrote.
+    lines = [
+        line
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(lines) > 1
+
+
+def test_h9b_replay_ledger_carries_the_callers_code_and_freeze_keeps_its_own(tmp_path: Path):
+    """`replay_ledger` grows a code parameter defaulting to `freeze`'s own
+    (plan § Corrections, correction 18), so `freeze` is byte-identical and
+    `resume` prints a code naming the command that found the fault — a
+    `FREEZE` code printed by a command that is not `freeze` is a lie about
+    which command found it, and § Exit codes' rule is that the identifier is
+    the contract, which is also why the shipped code is not renamed.
+
+    Both directions in one test: the default and the override, over one
+    mangled ledger.
+    """
+    from publishable.apparatus import replay_ledger
+
+    (tmp_path / "apparatus").mkdir()
+    (tmp_path / "apparatus" / "probes.jsonl").write_text("{not json\n")
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path)
+    assert excinfo.value.code == "E-FREEZE-LEDGER-UNREADABLE"
+    with pytest.raises(ContractError) as excinfo:
+        replay_ledger(tmp_path, code="E-RESUME-PROBES-UNREADABLE")
+    assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
+
+
+def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: Path):
+    """The wiring of the code above: `command_resume` passes
+    `E-RESUME-PROBES-UNREADABLE`, so a hand-edited `apparatus/probes.jsonl`
+    in a crashed directory refuses under `resume`'s code rather than
+    `freeze`'s — and it refuses before executing, so the ledger is the same
+    length afterwards.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    before = _h9b_ledger(crashed)
+    (crashed / "apparatus").mkdir(exist_ok=True)
+    (crashed / "apparatus" / "probes.jsonl").write_text('{"phase": "run_start"}\n')
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
