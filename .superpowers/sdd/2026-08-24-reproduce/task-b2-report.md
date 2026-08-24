@@ -8,6 +8,7 @@ Four commits, one per task, in order.
 | 8 | `7a86d1b` | Step 6 narrowed: `.env` and `required_env` (Decision 12) |
 | 9 | `09f37ec` | **The behaviour change**: `run` compares against `apparatus.expected.json` (Ruling BB) |
 | 10 | `7a9268d` | `reproduce` writes the expectation, once (Ruling BB) |
+| fix | `2500e6f` | **The whole-batch fix round** — a resume whose run-start round contradicts the expectation kept no record. See § 0 |
 
 **Suite, read from each run's own summary line, full and unfiltered:**
 
@@ -18,12 +19,60 @@ Four commits, one per task, in order.
 | task 8 `7a86d1b` | 3204 | 1 | 2 | +13 |
 | task 9 `09f37ec` | 3212 | 1 | 2 | +8 |
 | task 10 `7a9268d` | 3217 | 1 | 2 | +5 |
+| fix round `2500e6f` | 3218 | 1 | 2 | +1 |
 
 `uv run ruff check .`, `uv run ruff format --check .` and `uv run mypy` clean at every commit.
 Every mutation below was run against the **full, unfiltered** suite and every count is read from
 that run's own summary line. Reverts were done by restoring a pre-mutation copy kept **outside**
 the repo, verified twice — by `git diff --stat` coming back empty against the commit, and by
 **re-running** the tests each mutation had failed. `git checkout -- <file>` was never used.
+
+---
+
+## 0. The fix round — a resume lost its whole record, and the fix makes two sites agree
+
+**Found after tasks 7–10 were committed, measured, closed and pinned in `2500e6f`.**
+
+`cli.py`'s run-start containment branched on the code **by name**:
+
+```python
+if exc.code == "E-APPARATUS-CHANGED" and resumed is not None and resumed.prior_results:
+```
+
+`E-APPARATUS-UNEXPECTED` failed that test and fell to the `else`: print, `return EXIT_WRONG`, no
+`run.yaml`. **Measured on a real crash-and-resume** — a first run answering `region: null`, an
+expectation of `region: "eu"`, a subprocess crash (`os._exit(9)`) leaving **2 completed executions
+on disk**, then a resume whose apparatus answers `region: "us"`:
+
+| | exit | `run.yaml` |
+|---|---:|---|
+| before | **`1`** | **absent** — every execution paid for, the record lost |
+| after | **`4`** | present, `status: failed`, `results.conditions` non-empty |
+
+And, the fact still contradicting, **every later resume returned the same** — the state is terminal.
+That is verbatim the defect **H9b task 16 fixed at this exact site** for the sibling code, reached
+again through the code task 9 added beside it.
+
+**Reaching it needs a fact the resume's own gate does not fire on.** `resumed.baseline` replays the
+crashed run's `null`, so `null → value` passes `check_changed`, and only the expectation
+contradicts. That is why the arm is built the way it is.
+
+**The fix is a widening, and the ground is that the two sites must ALREADY agree.**
+`runner.execute_plan` maps every non-`E-APPARATUS-RAISED` `STOP_CODES` member to
+`stop.reason = "apparatus_changed"`, so the **mid-plan** case on a resume already published. Only the
+run-start copy of the same question named a code. **No vocabulary is added and no code is minted**:
+`stop.reason` stays the closed set of three `run_status` documents, `stop.code`/`stop.message` carry
+`E-APPARATUS-UNEXPECTED` verbatim into the printed diagnostic, and `4` comes out of `run_status`'s
+shipped fold — which is also what design Decision 4 says it should be (*"`1` before the first
+execution and `4` once there are results"*). **The widening makes the code answer the design rather
+than changing it.**
+
+**Pinned**, and the mutation that fails IT alone: narrow the branch back to
+`exc.code == "E-APPARATUS-CHANGED"` → **1 failed, 3217 passed** at `2500e6f`, full suite, and the
+one failure is `test_h9c_a_resume_whose_run_start_contradicts_the_expectation_keeps_the_record`.
+
+**This changes the disclosure in § 3**: a *resume* whose run-start round contradicts the expectation
+and whose prior attempt completed at least one execution exits `4` with a record, not `1`.
 
 ---
 
@@ -97,6 +146,7 @@ Nothing else — same project, same absolute paths, same `code_hash` tree.
 | File present, a value **moved**, at run start | exit `0` — ignored entirely | **exit `1`**, `E-APPARATUS-UNEXPECTED`, run directory kept holding `apparatus/`, `config.yaml`, `environment/`, `identity.json`, `manifest/`, `sweep.yaml` and **no `run.yaml`** |
 | File present, a fact contradicts it **mid-plan** | exit `0` | **exit `4`**, `run.yaml` written with `status: failed`, the moving observation kept in the ledger |
 | File present but **malformed** | exit `0` — ignored | **exit `1`**, `E-IO-FAILED`, run directory kept with no `run.yaml` |
+| File present, contradicted at a **resume's** run-start round, prior attempt having completed work | exit `0` | **exit `4`**, `run.yaml` written with `status: failed` and the prior attempt's results — see § 0 |
 
 The real diagnostic, verbatim from the console script on this branch:
 
@@ -145,6 +195,7 @@ Exactly **one shipped assertion moved**: guard-pin arm C. Everything else is an 
 | `test_h9c_fixture_q_*` (`unobserved` equal to the control's) | T9-6 seed the run's own `Observations` |
 | `test_fixture_o_arm_1_*` (mapping for mapping) | T10-2 flatten the per-condition write |
 | `test_fixture_o_arm_2_*` (the file's bytes unchanged) | T10-1 overwrite an existing file |
+| **`test_h9c_a_resume_whose_run_start_contradicts_the_expectation_keeps_the_record`** (exit `4` **and** `run.yaml` present) | narrow the run-start branch back to `exc.code == "E-APPARATUS-CHANGED"` |
 
 ### The mutation runs, each full-suite, each count read from that run
 
@@ -165,6 +216,7 @@ Exactly **one shipped assertion moved**: guard-pin arm C. Everything else is an 
 | T9-7 | drop `record`, keep `changed` (correction 27's sibling) | `09f37ec` | **2 failed, 3210 passed** | P arm 2, P arm 4 |
 | T10-1 | overwrite an existing expectation | `7a9268d` | **1 failed, 3216 passed** | Fixture O arm 2 |
 | T10-2 | flatten the per-condition mapping | `7a9268d` | **2 failed, 3215 passed** | Fixture O arm 1, the bundle arm |
+| FIX | narrow the run-start branch back to one code | `2500e6f` | **1 failed, 3217 passed** | the resume arm, and nothing else |
 
 **T8-D's second failing arm is attributed rather than counted:** the window arm also depends on the
 purge, because a `cohort_pilot.h9c_marker` cached by an earlier test in the same process is served
@@ -225,6 +277,32 @@ directory at all; the read is sited beside the shipped `_probe_for` dispatch gua
 **after** the run directory exists and before `run.yaml`. Measured, and the arm now asserts the real
 shape — a run directory with no `run.yaml` and no `executions.jsonl`, exactly what any other
 pre-`run.yaml` failure leaves.
+
+**(g) Guard-pin arm C's DOCSTRING, not only its name, claimed two.** It read *"the separate,
+both-members-pinned enumeration"*. Corrected in the fix round: the docstring now names the third
+member and points at the comment explaining why the function's **name** is deliberately left alone.
+A stale name a comment discloses is one thing; a docstring asserting a false property of the code is
+the habit this repo pays for most.
+
+---
+
+## 5a. Two properties the batch's own checks had not reached
+
+**Nothing in `src/` iterates or globs a config's directory**, so the additive sentence H8b used for
+the run directory holds here too. Grepped `config_path.parent`, `config_dir`, `.glob(`, `.iterdir()`
+and `rglob(` across `src/publishable/`; every hit attributed:
+`validate.py:796` reads `config_path.parent.**name**` (for `E-NAME-DIR`) and adding a file changes
+no name; `hashes.py:39` globs `HASHED_TREES` only, which is `("src", "templates")`;
+`validate.py:1217` and `:1345` iterate `data.input_dir`. `freeze`'s `E-FREEZE-CONFIG-EDITED` reads
+the run directory's `config.yaml` **file** and hashes it — no directory listing — and `diff` and
+`resume` likewise take a path. So `apparatus.expected.json` lands beside a config nothing enumerates.
+
+**A checkout whose tracked `configs/<name>/config.yaml` differs from HEAD is still runnable —
+measured, not inferred**, since task 7's write-back necessarily creates that state. On the
+console-script probe project, after an edit to the committed config:
+`git status --porcelain` → ` M configs/cohort-pilot/config.yaml`;
+`git status --porcelain -- src templates` → **empty**, which is the gate's own pathspec; and
+`publishable run <config>` → **exit `0`**.
 
 ---
 
@@ -295,7 +373,13 @@ Reported as hits, attributed, never as a count.
    re-derive it and conclude the refusal is dead.
 4. **`_uv_sync` is still stubbed in every success arm** (batch 1's concern 4, unchanged), and
    nothing in this batch proves a real `uv sync --locked` succeeds.
-5. **The mid-plan `E-APPARATUS-UNEXPECTED` path is narrow by construction.** Because the comparison
+5. **A branch that names a code rather than asking a question is where the next one of these will
+   be.** § 0's defect was one `if` naming `E-APPARATUS-CHANGED` where the sibling site asked *is this
+   a stop?*. `cli.py`'s run-start containment now names two codes; the honest shape is a predicate
+   over `STOP_CODES` minus `E-APPARATUS-RAISED`, which is what `execute_plan` already computes. Not
+   done here — it would restructure a shipped branch beyond what this task's finding requires — and
+   filed as the thing to look at when a fourth `STOP_CODES` member is minted.
+6. **The mid-plan `E-APPARATUS-UNEXPECTED` path is narrow by construction.** Because the comparison
    sits after `check_changed`, any fact that moves *within* the run raises `E-APPARATUS-CHANGED`
    first. Reaching the mid-plan code at all takes a `null → value` transition inside the run against
    a non-null expectation — which is what the arm builds. A later slice that reorders the two gates
