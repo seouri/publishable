@@ -3441,9 +3441,11 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # `credentials` reused, never recomputed.
         if stop.reason in ("apparatus_unreachable", "apparatus_changed"):
             # `stop.code`/`stop.message` are set together with `stop.reason`
-            # at the one call site that sets either (`execute_plan`'s
-            # apparatus gate) — the assert states that contract rather than
-            # silently narrowing `str | None` to `str`.
+            # at every site that sets any of the three — `execute_plan`'s
+            # apparatus gate, and (H9b task 16) the run-start containment
+            # above, for a resume whose apparatus moved. The assert states
+            # that contract rather than silently narrowing `str | None` to
+            # `str`.
             assert stop.code is not None and stop.message is not None, (
                 "a stop reason of one of the two apparatus kinds always sets "
                 "`code` and `message` alongside it"

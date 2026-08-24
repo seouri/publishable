@@ -1039,7 +1039,15 @@ that holds the moving observation — and exits `4`. Task 13 made that state rea
 loss it created (exit non-zero, no `run.yaml`, repeated at every later resume); task 16 closed it. It
 belongs in this enumeration because it is the one place `_execute_prepared`'s own control flow moved:
 the *"with NO results, nothing was paid for"* early return now asks whether a **prior** attempt
-completed anything. For `run` and `draft` the condition is unchanged, `resumed` being `None`. The
+completed anything. For `run` and `draft` the condition is unchanged, `resumed` being `None`.
+
+**And the consequence a reader would find by diffing rather than by reading is the pointer**:
+reaching the tail means `point_latest` runs, so `latest` now names the resumed directory where the
+previous behaviour returned before it. That matches what a **mid-plan** apparatus stop with results
+already does — the pointer follows the later terminal write, and a published record nothing points at
+would have to be found by name — and it is asserted in the record fixture rather than left to be
+discovered. The H7d comment beside the zero-results return treats the pointer as part of what a stop
+with *no* results must not touch, and that case is unchanged. The
 sibling case — an apparatus that has become **unreachable** — deliberately keeps today's behaviour
 (exit `5`, no record) and is filed in `spec-defects.md` with the terminality of `run.yaml` as the
 reason.

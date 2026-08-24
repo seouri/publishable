@@ -11,7 +11,13 @@ Branch `h9b-resume`. Five commits, in brief order:
 | 18 | this commit | both consistency passes, the disclosure checked item by item |
 
 **Suite: 3098 passed / 1 skipped / 4 xfailed at dispatch → 3132 passed / 1 skipped / 2 xfailed now.**
-Twenty-three new tests; the two missing xfails are guard-pin arms A and G, converted to live tests.
+**The arithmetic, both figures, because one of them does not reconcile on its own**: +34 passing, of
+which **2** are guard-pin arms A and G converted from `xfail` to live, leaving **32 new test
+instances** — from **23 new test functions**, because `test_every_undecidable_lock_is_held` is an
+11-way `parametrize` (23 − 1 + 11 = 33 … and `test_h9b_a_resume_path_that_is_no_directory_is_the_
+shipped_io_failure` is one function covering two shapes in a loop, so 32 instances). Per task: 21
+instances in task 14 (12 functions), 5 in task 15, 6 in task 16 (4 in `test_cli.py`, 2 in
+`test_freeze.py`).
 Gates clean at every commit: `ruff check`, `ruff format --check`, `mypy`, `pytest`.
 
 **The session crossed midnight.** Every dated record this batch wrote is dated **2026-08-23**, the
@@ -298,6 +304,18 @@ row names `run` and `draft` only.
 | M11 | `freeze`'s `parameters_hash` gate disabled | **1 failed**, 3131 passed — `…freeze_refuses_a_config_copy_edited_since_the_run_started` |
 | M12 | `check_recorded_order` call removed | **1 failed**, 3131 passed — `…an_edited_execution_order_is_refused_before_the_lock` |
 | M13 | the not-a-directory gate disabled | **2 failed**, 3130 passed — the `E-IO-FAILED` test and the `resume new` test |
+
+**Three findings from the advisor pass, all closed before this report was committed** (and each is a
+trap this repository names by hand): the two new § Errors core raises rows were inserted **between**
+the plan-disagreement row and the paragraph whose antecedent that row is — H9a's Major 1 exactly — so
+they now sit *above* it, the paragraph's `E-RUN-` code-prefix shorthand is replaced by *"the last row
+above"* (three rows now match that prefix), and its *"unlike every other row"* clause names the two new
+rows, which share the property. One of my own new rows located a sibling as *"the row above"* and now
+names what that sibling does. The `assert` beside `stop.code`/`stop.message` carried *"the one call
+site that sets either"* — **false of my own fall-through**, which is a second one; corrected in place
+rather than left as a comment claiming a guarantee. And `point_latest` now runs on this path, which
+nothing asserted and the disclosure did not name: the record fixture asserts `latest` names the resumed
+directory, and disclosure item 8 gains the clause with the mid-plan precedent as its ground.
 
 **The fixtures' own perturbations, each made a no-op in turn** (mutations in the *fixture*, so these
 counts are **selection-scoped** and labelled as such — each was run with `-k` over the matching test):

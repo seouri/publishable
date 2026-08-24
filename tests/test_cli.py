@@ -24976,6 +24976,19 @@ def test_h9b_a_resume_gates_against_the_original_runs_first_answered_fact(
         if line.strip()
     ]
     assert probes[-1]["facts"]["model_revision"] == "r2", probes[-1]
+    # **`latest` now points HERE**, which is a consequence of publishing and is
+    # asserted rather than left to be discovered: the fall-through reaches the
+    # tail, so `point_latest` runs where the previous behaviour returned before
+    # it. That is the same thing a MID-plan apparatus stop with results already
+    # does — the pointer follows the later terminal write, and a record nothing
+    # points at would be a record a reader has to find by name. The
+    # straight-through control run of the same project is what it pointed at
+    # before, which is why this is an equality against the crashed directory
+    # rather than an assertion that some pointer exists.
+    pointer = doc["results_dir"] / "latest"
+    text = doc["results_dir"] / "latest.txt"
+    named = pointer.readlink().name if pointer.is_symlink() else text.read_text().strip()
+    assert named == crashed.name, named
     # Nothing this attempt executed: the ledger and the step artifacts are
     # exactly as the crash left them, so the record published is a record of
     # the FIRST attempt's work and not of a second round of it.
