@@ -23430,6 +23430,10 @@ def test_h9b_resumed_is_frozen_and_replace_works():
         attempts={("step01", 0, "seed1"): 2},
         baseline=None,
         recorded_manifest={"files": []},
+        # Task 10's field, added here rather than defaulted: a default would
+        # let a caller that forgot to read `sweep.yaml` re-realize the order
+        # silently, and this constructor is the only one in the suite.
+        execution_order=None,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         resumed.run_dir = Path("/elsewhere")  # type: ignore[misc]
@@ -24135,3 +24139,170 @@ def test_h9b_a_randomized_order_round_trip_also_equals_its_straight_through(tmp_
     assert _h9b_resume(crashed) == EXIT_OK
     resumed_doc = yaml.safe_load((crashed / "run.yaml").read_text())
     assert _h9b_run_yaml_leaves(resumed_doc, tmp_path) == _h9b_run_yaml_leaves(straight, tmp_path)
+
+
+# ===========================================================================
+# H9b task 10 — the order a resume executes in comes from `sweep.yaml`
+# (design Decision 9). The reader and the four-tuple cross-check are pinned
+# at unit grain in `tests/test_lineage.py`; these two arms are the wiring,
+# and they are end-to-end because the claim is about which triples
+# `execute_plan` is handed, in which order.
+# ===========================================================================
+
+
+def _h9b_randomized_project(tmp_path: Path, control: Path) -> dict[str, Any]:
+    """Arm A's project under `order: randomized` — the mode whose recorded
+    order and a re-realization can be made to disagree. Two repeat-scope
+    steps and four seeds, so pair-major and step-major layouts differ."""
+    return run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "randomized",
+            "rationale": "four seeds, shuffled",
+        },
+        units=20,
+        unit_attributes=["cohort"],
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+        extra_steps=["step02_score"],
+        extra_step_source=_H9B_SCALAR_STEP,
+    )
+
+
+def _h9b_pairs_of(records: list[dict[str, Any]]) -> list[tuple[Any, Any]]:
+    return [(entry["condition"], entry["repeat"]) for entry in records]
+
+
+def test_h9b_a_resume_executes_the_recorded_order_not_a_re_realization(tmp_path: Path):
+    """**The mutation this test exists for**: re-realizing the order under
+    `order: randomized` instead of reading it. The recorded `execution_order`
+    is REVERSED in the crashed directory — an order this design's seed does
+    not reproduce — and the resumed executions come out in the recorded
+    order, pair by pair.
+
+    Under a `batch` level this is what stops a resume opening batch 4 while
+    batch 3 still has executions outstanding: batches are positions in time,
+    and the record is the only statement of which position each execution
+    held.
+
+    The expectation is computed from the edited file and the crashed ledger,
+    never from a literal: the crash point is deterministic (a counter file)
+    but which pairs it leaves outstanding is the shuffle's business, and a
+    hand-written sequence would be a second derivation of the thing under
+    test. Both arms of the reading were checked — a re-realization gives the
+    UNreversed order here, which the equality below rejects.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_randomized_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    reversed_order = list(reversed(recorded["execution_order"]))
+    assert reversed_order != recorded["execution_order"], "the fixture's order must be orderable"
+    recorded["execution_order"] = reversed_order
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(recorded, sort_keys=False))
+
+    before = _h9b_ledger(crashed)
+    done = {(e["step"], e["condition"], e["repeat"]) for e in before if e["status"] == "completed"}
+    assert _h9b_resume(crashed) == EXIT_OK
+    after = _h9b_ledger(crashed)
+    executed = after[len(before) :]
+    # Not an absence: the resume must actually have executed something, or
+    # every sequence equality below is satisfied by two empty lists.
+    assert executed, "the crash fixture must leave executions outstanding"
+
+    # The step names come from the straight-through run's own ledger, in
+    # first-appearance order, rather than from literals: `extra_steps` names
+    # are generated (`step02_score` is written as `step02_step02_score`), and
+    # a wrong literal here would make every triple of that step read as
+    # outstanding — measured, it is how this expectation was first wrong.
+    steps = list(dict.fromkeys(entry["step"] for entry in _h9b_ledger(doc["run_dir"])))
+    assert len(steps) == 2, steps
+    expected = [
+        (entry["condition"], entry["repeat"])
+        for entry in reversed_order
+        for step in steps
+        if (step, entry["condition"], entry["repeat"]) not in done
+    ]
+    assert _h9b_pairs_of(executed) == expected
+    # And the record itself is untouched by the resume — the edit above is
+    # what the resume obeyed, not something it rewrote to match.
+    assert yaml.safe_load((crashed / "sweep.yaml").read_text())["execution_order"] == reversed_order
+
+
+def test_h9b_an_as_declared_resume_keeps_the_step_major_layout(tmp_path: Path):
+    """The other branch, and it is the one a mutation would break silently:
+    `_apply_execution_order` regroups repeat executions PAIR-major where
+    `build_plan` lays them out step-major, so applying the recorded order
+    unconditionally would make a resumed `as_declared` run execute in an
+    order its first attempt did not — with `sweep.yaml`'s own
+    `execution_order` still recording the declared sequence, so nothing in
+    the record would show it.
+
+    Asserted as the straight-through run's OWN pair sequence, restricted to
+    the outstanding triples, rather than as a literal.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    straight_pairs = _h9b_pairs_of(_h9b_ledger(doc["run_dir"]))
+    straight_triples = [
+        (e["step"], e["condition"], e["repeat"]) for e in _h9b_ledger(doc["run_dir"])
+    ]
+    crashed = _h9b_crash_run(doc, control)
+    before = _h9b_ledger(crashed)
+    done = {(e["step"], e["condition"], e["repeat"]) for e in before if e["status"] == "completed"}
+    assert _h9b_resume(crashed) == EXIT_OK
+    executed = _h9b_ledger(crashed)[len(before) :]
+    assert executed
+    expected = [
+        (triple[1], triple[2])
+        for triple, _pair in zip(straight_triples, straight_pairs, strict=True)
+        if triple not in done
+    ]
+    assert _h9b_pairs_of(executed) == expected
+    # The recorded order is not `None` in the file — it is recorded under
+    # `as_declared` too — so this arm is about the MODE the resume read, and
+    # a build that applied the record regardless would fail here rather than
+    # find nothing to apply.
+    assert yaml.safe_load((crashed / "sweep.yaml").read_text())["execution_order"]
+
+
+def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Path):
+    """The cross-check refuses BEFORE anything executes, which is what makes
+    a refusal free: the ledger is the same length after the refusal as
+    before, and there is no `run.yaml`.
+
+    One arm per code, both through `command_resume` rather than through the
+    reader, so the wiring is what is pinned: a `values` edit is
+    `E-RESUME-PLAN-MISMATCH` and a truncated file is
+    `E-RESUME-PLAN-MISSING`.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    before = _h9b_ledger(crashed)
+
+    moved = json.loads(json.dumps(recorded))
+    moved["conditions"][1]["values"]["analysis.method"] = "kendall"
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(moved, sort_keys=False))
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+    (crashed / "sweep.yaml").write_text("order: as_declared\n")
+    # The lock the previous refusal never took, so the helper's own assertion
+    # holds a second time.
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-PLAN-MISSING"
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()

@@ -51,7 +51,9 @@ from publishable.lineage import (
     UpstreamLedger,
     UpstreamResolver,
     attempt_counts,
+    check_recorded_conditions,
     read_execution_ledger,
+    read_sweep_plan,
 )
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.plugin_scaffold import scaffold_plugin
@@ -2141,6 +2143,16 @@ class Resumed:
       8's `verify_manifest` asks whether the inputs moved during THIS
       attempt and `run.yaml`'s `input_manifest_hash` stays the original
       figure (Decision 8).
+    - `execution_order` — `sweep.yaml`'s RECORDED `(condition, repeat)`
+      sequence, applied to the rebuilt plan instead of re-realizing the
+      shuffle (Decision 9), and `None` when the recorded `order` is
+      `as_declared`. `None` is the record's own answer rather than a missing
+      one: `_apply_execution_order` regroups repeat executions pair-major
+      where `build_plan` lays them out step-major, so applying it to a run
+      that declared no shuffle would execute in an order the first attempt
+      did NOT run in. Which of the two it is comes from the recorded `order`
+      scalar rather than from the re-read config, because the file is what
+      the first attempt actually did.
     """
 
     run_dir: Path
@@ -2148,6 +2160,7 @@ class Resumed:
     attempts: dict[tuple[str, int | None, str | None], int]
     baseline: "apparatus.Observations | None"
     recorded_manifest: dict[str, Any]
+    execution_order: tuple[tuple[int, str], ...] | None
 
 
 def _reconstitute(
@@ -2947,16 +2960,26 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # realized, because `execution_order` records `(condition, repeat)` pairs
         # and the plan must match the record; under `as_declared` there is no
         # record to match and the plan's own layout stands.
-        if mode == "randomized":
+        #
+        # On a RESUME the order comes from `sweep.yaml` and never from a
+        # second realization (Decision 9, task 10): `resumed.execution_order`
+        # is the recorded sequence when the recorded `order` was
+        # `randomized`, and `None` when it was `as_declared` — the same
+        # two-branch decision as above, taken from the record because the
+        # record is what the first attempt actually ran. Re-realizing instead
+        # agrees for an unedited file (`order_seed_for` is a pure function of
+        # the design digest) and disagrees for exactly the case the reader
+        # exists for: a recorded order this seed does not reproduce, which
+        # under a `batch` level would open batch 4 while batch 3 still had
+        # executions outstanding.
+        if resumed is not None:
+            if resumed.execution_order is not None:
+                plan = _apply_execution_order(plan, list(resumed.execution_order))
+        elif mode == "randomized":
             plan = _apply_execution_order(plan, execution_order)
 
-        # Written by the FIRST attempt only. A resume reads this file rather
-        # than re-deriving the order (Decision 9); plan task 10 owns that
-        # reader, and until it lands the re-realization above stands, which
-        # for an unedited `sweep.yaml` is the same answer — `order_seed_for`
-        # is a pure function of the design digest, and the digest is one of
-        # the figures `resume` refuses on. What the reader adds is the case
-        # this cannot see: a recorded order the seed does not reproduce.
+        # Written by the FIRST attempt only, and read back by the branch above
+        # rather than re-derived (Decision 9).
         if resumed is None:
             (run_dir / "sweep.yaml").write_text(
                 yaml.safe_dump(
@@ -4557,6 +4580,11 @@ def command_resume(run_dir: Path) -> int:
     5. the three hashes and the input manifest, recomputed by that call and
        compared against the recorded figures.
     6. the ledger, the reconstitution, the attempt counts.
+    7. `sweep.yaml`'s recorded plan — `E-RESUME-PLAN-MISSING` when the file
+       cannot be read as a plan, `E-RESUME-PLAN-MISMATCH` when its conditions
+       disagree with the re-expanded ones over the four-tuple, and the
+       recorded `execution_order` when the recorded mode was `randomized`
+       (Decision 9).
 
     **This deviates from the plan's stated order in one place, deliberately.**
     The task section lists the hash comparison BEFORE `_prepare_run`. Doing it
@@ -4587,10 +4615,10 @@ def command_resume(run_dir: Path) -> int:
     against this host's `gethostname()`, and the unlink — and until it lands
     this function takes no lock of its own and `_execute_prepared`'s
     `RunLock` refuses a directory whose crashed holder left a `lock` behind.
-    `sweep.yaml`'s recorded `execution_order` (task 10), `allocation.json`
-    (task 11), the manifest refusal's own arm (task 12), the apparatus
-    baseline replay (task 13) and the fourteen refusals' diagnostics
-    (task 16) are the rest.
+    `allocation.json` (task 11) and the fourteen refusals' diagnostics
+    (task 16) are the rest, and the apparatus baseline replay is task 13's.
+    `sweep.yaml`'s recorded `execution_order` and the four-tuple cross-check
+    are step 7 below (task 10).
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
@@ -4638,6 +4666,13 @@ def command_resume(run_dir: Path) -> int:
             code="E-RESUME-INPUT-MOVED",
         )
 
+    # The recorded plan, cross-checked over the full four-tuple BEFORE
+    # anything executes (Decision 9). Read here rather than inside
+    # `_execute_prepared` for the reason every other comparison is here: a
+    # refusal at this point has taken no lock and touched no artifact.
+    recorded_plan = read_sweep_plan(run_dir)
+    check_recorded_conditions(recorded_plan, prepared.conditions)
+
     records = read_execution_ledger(run_dir)
     return _execute_prepared(
         prepared,
@@ -4657,6 +4692,13 @@ def command_resume(run_dir: Path) -> int:
             # rather than a hole.
             baseline=None,
             recorded_manifest=recorded_manifest,
+            # The RECORDED order, and `None` when the record says nothing was
+            # shuffled — read off `sweep.yaml`'s own `order` scalar rather
+            # than off the re-read config, because the file is what the first
+            # attempt did (Decision 9).
+            execution_order=(
+                recorded_plan.execution_order if recorded_plan.order == "randomized" else None
+            ),
         ),
     )
 

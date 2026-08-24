@@ -12,7 +12,9 @@ refused as the reader's home on its own docstring's grounds — its own first li
 "Assemble run.yaml. Assembles only — computes nothing."
 """
 
+import dataclasses
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -510,3 +512,157 @@ def attempt_counts(records: list[dict[str, Any]]) -> dict[LedgerKey, int]:
         key = ledger_key(entry)
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+@dataclasses.dataclass(frozen=True)
+class RecordedPlan:
+    """`sweep.yaml`'s two plan facts, as `resume` needs them (H9b Decision 9).
+
+    Frozen, and holding tuples rather than lists, for `Resumed`'s own reason:
+    everything here was read off the previous attempt's artifact, and a caller
+    that could append to it would be publishing an order that run never
+    recorded.
+
+    - `conditions` — the recorded `conditions` list, entry for entry, in
+      **recorded order**, each entry exactly as the file holds it. Not
+      narrowed to the four checked fields here: the cross-check below is what
+      names them, and a reader that dropped the rest would make a future
+      check over a fifth field invisible.
+    - `order` — the recorded `order` scalar (`as_declared` | `randomized`),
+      which is the **mode the first attempt actually ran under**.
+    - `execution_order` — the realized `(condition index, repeat label)`
+      sequence, in file order.
+    """
+
+    conditions: tuple[dict[str, Any], ...]
+    order: str
+    execution_order: tuple[tuple[int, str], ...]
+
+
+def read_sweep_plan(run_dir: Path) -> RecordedPlan:
+    """`<run_dir>/sweep.yaml`'s recorded plan — the file `resume` reads
+    **rather than re-deriving** (H9b Decision 9, `reference.md` § Resuming:
+    "It takes the execution order from `sweep.yaml` rather than re-deriving
+    it").
+
+    **`freeze`'s reader was measured first and does not fit**, which is why
+    this exists rather than a call into it. `grep -rn 'sweep.yaml'
+    src/publishable/*.py` finds the only other reading site inside
+    `freeze.command_freeze` itself (`freeze.py`, its step (g)): it is inline
+    in a 300-line command, it reports through `_refuse`/`Collector` and
+    **returns an exit code** rather than raising, its codes are
+    `E-FREEZE-PLAN-MISSING`/`-MISMATCH`, and it reads `conditions` **only** —
+    it never touches `order` or `execution_order`, which are the two fields
+    `resume` needs most. Reusing it would mean either printing a `FREEZE` code
+    from `resume` (the same lie about which command found the fault that
+    Decision 11 refuses for `E-FREEZE-LEDGER-UNREADABLE`) or threading a code
+    and a raise-versus-return switch through a shipped command's body. The
+    *shape* is copied — the four-tuple, in recorded order — and named as
+    copied at the cross-check below.
+
+    Here rather than in `cli.py` for `read_execution_ledger`'s reason: this
+    module is where a reader over a run directory this build wrote lives.
+
+    **One refusal, `E-RESUME-PLAN-MISSING`, for one remedy.** Absent,
+    unparseable, not a mapping, or holding no `conditions` list — plus the
+    two shape faults a hand-edited file can carry in the fields this reader
+    projects (`order` not a string, an `execution_order` entry that is not a
+    mapping of a condition index and a repeat label). All of them are *this
+    file cannot be read as a plan*, whose remedy is that the run died before
+    its plan was written or the directory was edited. `E-RESUME-PLAN-MISMATCH`
+    is deliberately **not** used for any of them: that code means the recorded
+    plan and the re-expanded config describe different conditions, whose
+    remedy is the config, and merging the two would give one code two
+    remedies.
+    """
+    path = run_dir / "sweep.yaml"
+    if not path.is_file():
+        raise ContractError(
+            f"{path} is absent — the run died before its plan was written, or the "
+            "directory was edited",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    try:
+        recorded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ContractError(
+            f"{path} does not parse: {exc}",
+            code="E-RESUME-PLAN-MISSING",
+        ) from exc
+    if not isinstance(recorded, dict) or not isinstance(recorded.get("conditions"), list):
+        raise ContractError(
+            f"{path} holds no `conditions` list — the run died before its plan was "
+            "written, or the directory was edited",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    order = recorded.get("order")
+    if not isinstance(order, str):
+        raise ContractError(
+            f"{path}'s `order` is {type(order).__name__}, not the recorded mode string",
+            code="E-RESUME-PLAN-MISSING",
+        )
+    pairs: list[tuple[int, str]] = []
+    for position, entry in enumerate(recorded.get("execution_order") or [], start=1):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("condition"), int)
+            or not isinstance(entry.get("repeat"), str)
+        ):
+            raise ContractError(
+                f"{path}'s execution_order entry {position} is not a recorded "
+                "(condition, repeat) pair",
+                code="E-RESUME-PLAN-MISSING",
+            )
+        pairs.append((entry["condition"], entry["repeat"]))
+    conditions = tuple(entry if isinstance(entry, dict) else {} for entry in recorded["conditions"])
+    return RecordedPlan(conditions=conditions, order=order, execution_order=tuple(pairs))
+
+
+def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]") -> None:
+    """Cross-check the recorded conditions against the re-expanded ones over
+    the **full four-tuple** `index`/`label`/`values`/`is_baseline`, in
+    recorded order — `E-RESUME-PLAN-MISMATCH` on any disagreement (H9b
+    Decision 9).
+
+    **The four-tuple is `freeze`'s measured shape, not a choice.** `values` is
+    what determines the cfg an execution runs under, and under `ablate` or a
+    declared `baseline` a label can hold still while `values` moves — so a
+    two-field check would let a resume execute the remainder of a plan under
+    different parameters than the completed part ran under, with every
+    recorded label agreeing. `is_baseline` decides which condition every
+    `vs_baseline` contrast is computed against, which the reconstituted
+    results are then compared through.
+
+    Length first, so the per-entry message can name a condition that exists
+    on both sides. Compared in **recorded order** rather than by index lookup:
+    the order is itself a fact of the recorded plan, and matching on `index`
+    would silently accept a file whose conditions were reordered.
+
+    `conditions` is duck-typed (`Sequence[Any]`) rather than annotated
+    `list[Condition]`: `sweep.Condition` lives in a module this one does not
+    import, and the four attributes read here are the whole contract.
+    """
+    if len(recorded.conditions) != len(conditions):
+        raise ContractError(
+            f"sweep.yaml records {len(recorded.conditions)} condition(s), but the "
+            f"config re-expands to {len(conditions)} — the run directory or the "
+            "config was edited; the run cannot be continued",
+            code="E-RESUME-PLAN-MISMATCH",
+        )
+    for condition, entry in zip(conditions, recorded.conditions, strict=True):
+        mismatch: str | None = None
+        if entry.get("index") != condition.index:
+            mismatch = "index"
+        elif entry.get("label") != condition.label:
+            mismatch = "label"
+        elif dict(entry.get("values") or {}) != dict(condition.values):
+            mismatch = "values"
+        elif bool(entry.get("is_baseline")) != condition.is_baseline:
+            mismatch = "is_baseline"
+        if mismatch is not None:
+            raise ContractError(
+                f"condition {condition.index}'s `{mismatch}` disagrees with sweep.yaml's "
+                "recorded plan — the run directory or the config was edited; the run "
+                "cannot be continued",
+                code="E-RESUME-PLAN-MISMATCH",
+            )
