@@ -52,6 +52,7 @@ from publishable.lineage import (
     UpstreamResolver,
     attempt_counts,
     check_recorded_conditions,
+    read_allocation,
     read_execution_ledger,
     read_sweep_plan,
 )
@@ -2311,6 +2312,146 @@ def _reconstitute(
     return tuple(results)
 
 
+def _stale(detail: str) -> "ContractError":
+    """One refusal, `E-RESUME-ALLOCATION-STALE`, for one remedy: the recorded
+    allocation cannot be applied to what this tree resolves, so the run cannot
+    be continued and a new one must be started. Every arm of the application
+    below raises through here so the code and the remedy cannot drift
+    apart."""
+    return ContractError(
+        f"allocation.json {detail}; the recorded allocation cannot be applied to this "
+        "roster, so the run cannot be continued — start a new run",
+        code="E-RESUME-ALLOCATION-STALE",
+    )
+
+
+def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prepared":
+    """`allocation.json` **read rather than re-drawn** (H9b Decision 10): the
+    arm memberships and the holdout partition `_prepare_run` just resolved are
+    replaced by the ones the first attempt recorded, through
+    `dataclasses.replace` on the frozen `Prepared`.
+
+    **Ruling S is honoured by overriding results, never by moving calls.**
+    `_resolved_group_axes`, `units.arm_members` and `_resolved_holdout` stay
+    exactly where they are, in their current order inside `_prepare_run`;
+    H3c-3's remaining 14 owns the hoist, because folds and holdouts *inside
+    cells* need the axes realized before the cell decomposition. What happens
+    here is one step later and on the other side of the seam: the plans are
+    rebuilt from the record and `arm_members` is called **again**, on the
+    overridden axes, so that the per-condition mapping is a reduction of the
+    membership the run actually used rather than of a second draw. Calling it
+    again is what keeps `units.arm_members` the single authority for that
+    reduction — re-deriving the mapping here by hand would make this function
+    a second producer of arm membership, which is the fault its own docstring
+    exists to prevent a third instance of.
+
+    **Seed and strata come from the record too, not from the recomputed
+    plans**, and that is what makes `provenance.allocation_hash` cover the
+    file on disk: `_execute_prepared` computes it as
+    `allocation_hash(build_allocation_document(group_axes, holdout_plan))`,
+    and a resume never rewrites `allocation.json`, so anything here that
+    differed from the record would publish a hash of a document no file
+    holds. A pin asserts the round trip — the rebuilt document equals the
+    recorded one — rather than trusting this paragraph.
+
+    **What is checked, and every arm is `E-RESUME-ALLOCATION-STALE`.** The
+    axis set, each axis's level set, and the holdout's presence must agree
+    with what this tree resolved; and each recorded membership must be
+    exactly the roster's keys, in both directions. Set equality rather than
+    subset tolerance, `units.arms_of`'s own rule for the same reason
+    (§ Allocation: "each unit belongs to exactly one arm"): a roster that
+    *lost* a unit leaves the record naming a unit that no longer exists, and
+    a roster that *gained* one leaves that unit in no arm at all — with no
+    fourth part of `n` for it, and nothing in the record marking it.
+
+    **Fold partitions are deliberately not touched here.** They are recorded
+    in `sweep.yaml`'s own `partitions` block rather than in this file, and
+    `partition_units` is a pure function of the roster and the design digest
+    — so correct and buggy readings coincide for every fixture this slice can
+    build, and a fold override would be an untested derivation. Named as
+    resolved narrowly rather than left silent.
+    """
+    from publishable.units import arm_members
+
+    roster_keys = {u.key for u in prepared.roster} if prepared.roster is not None else set()
+    recorded_arms = document.get("arms") or {}
+    recorded_seeds = document.get("seed") or {}
+    recorded_strata = document.get("strata") or {}
+    if not isinstance(recorded_arms, dict):
+        raise _stale("holds an `arms` block that is not a mapping of axis to arm")
+    if set(recorded_arms) != set(prepared.group_axes):
+        raise _stale(
+            f"records the axes {sorted(recorded_arms)} while this config resolves "
+            f"{sorted(prepared.group_axes)}"
+        )
+    axes: dict[str, ArmPlan] = {}
+    for axis, plan in prepared.group_axes.items():
+        members = recorded_arms[axis]
+        if not isinstance(members, dict):
+            raise _stale(f"records axis {axis!r} as {type(members).__name__}, not a mapping")
+        if set(members) != set(plan.members):
+            raise _stale(
+                f"records axis {axis!r} with the levels {sorted(members)} while this "
+                f"config resolves {sorted(plan.members)}"
+            )
+        recorded_keys = {key for keys in members.values() for key in keys}
+        if recorded_keys != roster_keys:
+            raise _stale(
+                f"records axis {axis!r} over {len(recorded_keys)} unit(s) that are not "
+                f"this roster's {len(roster_keys)}: "
+                f"{sorted(recorded_keys ^ roster_keys)[:5]} disagree"
+            )
+        axes[axis] = dataclasses.replace(
+            plan,
+            members={level: tuple(keys) for level, keys in members.items()},
+            seed=recorded_seeds.get(axis),
+            strata=tuple(recorded_strata.get(axis) or ()),
+        )
+
+    recorded_holdout = document.get("holdout")
+    holdout = prepared.holdout_plan
+    if (recorded_holdout is None) != (holdout is None):
+        raise _stale(
+            "records a holdout this config does not declare"
+            if holdout is None
+            else "records no holdout while this config declares one"
+        )
+    if recorded_holdout is not None and holdout is not None:
+        train = tuple(recorded_holdout.get("train") or ())
+        test = tuple(recorded_holdout.get("test") or ())
+        if set(train) | set(test) != roster_keys or len(train) + len(test) != len(roster_keys):
+            raise _stale(
+                f"records a holdout over {len(train)} + {len(test)} unit(s) that are not "
+                f"a partition of this roster's {len(roster_keys)}"
+            )
+        holdout = dataclasses.replace(
+            holdout,
+            train=train,
+            test=test,
+            seed=recorded_holdout.get("seed"),
+            strata=tuple(recorded_holdout.get("strata") or ()),
+        )
+
+    eval_roster = _evaluation_roster(prepared.roster, holdout)
+    # `_prepare_run`'s own invariant, restated on this path because this path
+    # has no counterpart of it: a narrowing that returned `None` for a real
+    # roster would hand `execute_plan` no units at all.
+    assert (eval_roster is None) == (prepared.roster is None)
+    return dataclasses.replace(
+        prepared,
+        group_axes=axes,
+        holdout_plan=holdout,
+        eval_roster=eval_roster,
+        # `None` stays `None`: whether a per-condition mapping exists at all
+        # is `_prepare_run`'s decision (it gates on `selector_paths`), and a
+        # resume overrides what that mapping HOLDS, never whether there is
+        # one.
+        arm_members_map=(
+            None if prepared.arm_members_map is None else arm_members(axes, prepared.conditions)
+        ),
+    )
+
+
 def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     """Phases 1-5 of a run, for every command that is a second entry into them.
 
@@ -3022,13 +3163,12 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         if alloc_doc is not None:
             # The WRITE is the first attempt's; the hash is computed either
             # way, because `provenance.allocation_hash` is a figure this
-            # attempt's record carries. Plan task 11 overrides the
-            # memberships themselves from the recorded `allocation.json`
-            # through `dataclasses.replace` on `Prepared` — before this line
-            # — so that a DRAWN axis is read rather than re-drawn; until it
-            # lands this document is the re-derivation, which agrees for
-            # every by-attribute axis and is exactly what task 11's own
-            # drawn-axis fixture separates.
+            # attempt's record carries. On a resume the memberships this
+            # document is rebuilt from were themselves READ from the file
+            # (`_resumed_allocation`, Decision 10), so the document rebuilt
+            # here equals the one on disk and the hash covers it — a
+            # re-derivation would agree for a by-attribute axis and be a
+            # second draw for a drawn one.
             if resumed is None:
                 (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
             alloc_hash = allocation_hash(alloc_doc)
@@ -4585,6 +4725,10 @@ def command_resume(run_dir: Path) -> int:
        disagree with the re-expanded ones over the four-tuple, and the
        recorded `execution_order` when the recorded mode was `randomized`
        (Decision 9).
+    8. `allocation.json` — read rather than re-drawn, overriding the arm
+       memberships and the holdout partition through `dataclasses.replace`;
+       `E-RESUME-ALLOCATION-STALE` when the record cannot be applied to this
+       roster (Decision 10).
 
     **This deviates from the plan's stated order in one place, deliberately.**
     The task section lists the hash comparison BEFORE `_prepare_run`. Doing it
@@ -4615,10 +4759,10 @@ def command_resume(run_dir: Path) -> int:
     against this host's `gethostname()`, and the unlink — and until it lands
     this function takes no lock of its own and `_execute_prepared`'s
     `RunLock` refuses a directory whose crashed holder left a `lock` behind.
-    `allocation.json` (task 11) and the fourteen refusals' diagnostics
-    (task 16) are the rest, and the apparatus baseline replay is task 13's.
-    `sweep.yaml`'s recorded `execution_order` and the four-tuple cross-check
-    are step 7 below (task 10).
+    The fourteen refusals' diagnostics (task 16) are the rest, and the
+    apparatus baseline replay is task 13's. `sweep.yaml`'s recorded
+    `execution_order` and the four-tuple cross-check are step 7 above
+    (task 10), and `allocation.json` is step 8 (task 11).
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
@@ -4672,6 +4816,14 @@ def command_resume(run_dir: Path) -> int:
     # refusal at this point has taken no lock and touched no artifact.
     recorded_plan = read_sweep_plan(run_dir)
     check_recorded_conditions(recorded_plan, prepared.conditions)
+
+    # `allocation.json` read rather than re-drawn (Decision 10). After the
+    # plan cross-check and still before the lock: the override rests on the
+    # roster and the conditions this tree resolved, and both have just been
+    # checked against the record.
+    recorded_allocation = read_allocation(run_dir)
+    if recorded_allocation is not None:
+        prepared = _resumed_allocation(prepared, recorded_allocation)
 
     records = read_execution_ledger(run_dir)
     return _execute_prepared(

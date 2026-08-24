@@ -1153,3 +1153,74 @@ def test_h9b_the_cross_check_is_in_recorded_order_not_by_index_lookup(tmp_path: 
     with pytest.raises(ContractError) as excinfo:
         check_recorded_conditions(swapped, conditions)
     assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+
+
+# ===========================================================================
+# H9b task 11 — `allocation.json` read rather than re-drawn (design Decision
+# 10). This is the reader § Allocation and § Resuming both say does not
+# exist; the application onto `Prepared` is pinned in `tests/test_cli.py`,
+# where `_prepare_run` lives.
+# ===========================================================================
+
+
+def test_h9b_the_allocation_reader_returns_the_file_and_absence_is_not_a_fault(tmp_path: Path):
+    """A drawn axis's own `allocation.json`, read back as the file holds it —
+    and `None` for a design that declares neither an arm axis nor a holdout,
+    which § The other files a run writes makes the ordinary case.
+
+    Both arms in one test because the pair is the claim: absence is not a
+    refusal, and a present file is returned rather than re-derived.
+    """
+    from publishable.lineage import read_allocation
+
+    keys = [f"p{i}" for i in range(8)]
+    drawn = run_a_project(
+        tmp_path / "drawn",
+        roster_csv="patient_id\n" + "\n".join(keys) + "\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    document = read_allocation(drawn["run_dir"])
+    assert document == json.loads((drawn["run_dir"] / "allocation.json").read_text())
+    assert sorted(
+        document["arms"]["arm"]["control"] + document["arms"]["arm"]["treatment"]
+    ) == sorted(keys)
+
+    plain = run_a_project(tmp_path / "plain", units=6)
+    assert not (plain["run_dir"] / "allocation.json").exists()
+    assert read_allocation(plain["run_dir"]) is None
+
+
+def test_h9b_an_unusable_allocation_file_is_stale_not_absent(tmp_path: Path):
+    """An unparseable file is `E-RESUME-ALLOCATION-STALE`, never treated as
+    absence: absence says *nothing was partitioned* and would let the run
+    re-draw the whole allocation, which is the one thing Decision 10 exists
+    to prevent.
+
+    A control reads the same directory clean before each edit.
+    """
+    from publishable.lineage import read_allocation
+
+    keys = [f"p{i}" for i in range(8)]
+    doc = run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(keys) + "\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    path = doc["run_dir"] / "allocation.json"
+    good = path.read_text()
+    for text, fragment in (("{not json", "will not parse"), ("[1, 2]", "holds list")):
+        assert read_allocation(doc["run_dir"]) is not None  # the control
+        path.write_text(text)
+        with pytest.raises(ContractError) as excinfo:
+            read_allocation(doc["run_dir"])
+        assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+        assert fragment in str(excinfo.value)
+        path.write_text(good)

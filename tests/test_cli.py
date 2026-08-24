@@ -24306,3 +24306,286 @@ def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Pat
     assert excinfo.value.code == "E-RESUME-PLAN-MISSING"
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
+
+
+# ===========================================================================
+# H9b task 11 — `allocation.json` applied onto `Prepared` (design Decision
+# 10). **Every fixture here declares a DRAWN axis** (`method: random`), where
+# a second draw is a second allocation: a `by_attribute` axis re-reads the
+# same column and gives the same partition, so correct and buggy readings
+# coincide and the fixture would test one reading twice.
+# ===========================================================================
+
+_H9B_DRAWN_KEYS = [f"p{i}" for i in range(8)]
+
+
+def _h9b_drawn_project(
+    tmp_path: Path,
+    control: Path | None = None,
+    units_overrides: dict[str, Any] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """A committed project with a DRAWN arm axis and `allocation: between`, so
+    each condition IS one arm and its membership is a draw with no column
+    behind it. `control`, when given, bakes the crash counter into the
+    scaffolded step exactly as arm A's project does."""
+    starter = (
+        _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+            "__TRIP__", str(_H9B_CRASH_TRIP)
+        )
+        if control is not None
+        else None
+    )
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides=units_overrides
+        or {
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        _starter_step=starter,
+        **extra,
+    )
+
+
+def _h9b_swapped(document: dict[str, Any]) -> dict[str, Any]:
+    """The recorded arms with one unit SWAPPED between the two arms — an
+    allocation the seeded draw does not reproduce, and still a partition of
+    the same roster, so the only reading that can tell the two apart is
+    *which file was read*. Sizes are unchanged on purpose: a size change
+    would also be visible to a count assertion, and this fixture is about
+    identity."""
+    edited = json.loads(json.dumps(document))
+    arms = edited["arms"]["arm"]
+    arms["control"][0], arms["treatment"][0] = arms["treatment"][0], arms["control"][0]
+    # And a `seed` the config does not resolve to, so the round-trip
+    # assertion below can see WHERE the seed came from: the declared seed is
+    # 11 and a recomputed plan carries 11, so an override that took `seed`
+    # from the plan rather than from the record would satisfy an equality
+    # that only edited the memberships. Measured — that arm was blind until
+    # this line existed.
+    edited["seed"]["arm"] = 99
+    assert edited != document
+    return edited
+
+
+def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
+    """A committed project with a DRAWN holdout and **no group axis**, which is
+    not a choice: `data.units.holdout` beside a cell structure is refused by
+    name (`E-DATA-HOLDOUT-CELLS`, H3d's, owned by H3c-3's remaining 14), so
+    the two halves of `allocation.json` cannot be exercised by one config on
+    this build. Measured — the combined fixture was written first and refused
+    at `validate`."""
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={"holdout": {"method": "random", "frac": 0.5, "seed": 4321}},
+    )
+
+
+def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest(
+    tmp_path: Path,
+):
+    """`dataclasses.replace` must round-trip all **36** fields (plan
+    § Corrections, correction 17), so the field count is asserted here: a
+    future field added to `Prepared` and forgotten by this override fails
+    loudly rather than travelling as whatever `_prepare_run` computed.
+
+    Four fields move and thirty-two are the same objects, asserted field by
+    field rather than by a count — `group_axes` and `holdout_plan` are the
+    record, `eval_roster` is `_evaluation_roster` re-derived from the
+    overridden holdout, and `arm_members_map` is `units.arm_members` called
+    AGAIN on the overridden axes. That second call is overriding a *result*,
+    not moving a call: `_resolved_group_axes` and `arm_members` stay exactly
+    where they are inside `_prepare_run` (Ruling S), and re-deriving the
+    per-condition mapping here by hand would make this function a second
+    producer of arm membership.
+
+    **And the rebuilt document equals the recorded one**, which is what makes
+    `provenance.allocation_hash` cover the file on disk: a resume never
+    rewrites `allocation.json`, so a `seed` or `strata` taken from the
+    recomputed plans instead of the record would publish a hash of a document
+    no file holds.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert len(dataclasses.fields(Prepared)) == 36
+
+    overridden = _resumed_allocation(prepared, edited)
+    moved = {"group_axes", "holdout_plan", "eval_roster", "arm_members_map"}
+    for field in dataclasses.fields(Prepared):
+        if field.name not in moved:
+            assert getattr(overridden, field.name) is getattr(prepared, field.name), field.name
+    # The membership is the FILE's, not the draw's — and the draw is what
+    # `prepared` holds, so this is the two readings separated.
+    assert {
+        level: list(keys) for level, keys in overridden.group_axes["arm"].members.items()
+    } == edited["arms"]["arm"]
+    assert {
+        level: list(keys) for level, keys in prepared.group_axes["arm"].members.items()
+    } == recorded["arms"]["arm"]
+    # `arm_members` re-reduced over the overridden axes: condition 0 is the
+    # control arm, condition 1 the treatment arm.
+    assert overridden.arm_members_map is not None
+    assert overridden.arm_members_map[0] == frozenset(edited["arms"]["arm"]["control"])
+    assert overridden.arm_members_map[1] == frozenset(edited["arms"]["arm"]["treatment"])
+    # No holdout declared here, so `eval_roster` is the whole roster still.
+    assert overridden.holdout_plan is None
+    assert [u.key for u in overridden.eval_roster or []] == _H9B_DRAWN_KEYS
+    # The round trip: what `_execute_prepared` hashes is what the file holds.
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+    assert overridden.group_axes["arm"].seed == 99
+    assert prepared.group_axes["arm"].seed == 11
+
+
+def test_h9b_the_holdout_partition_is_read_rather_than_redrawn(tmp_path: Path):
+    """The holdout half of the same override, over a DRAWN holdout for the
+    same reason the axis is drawn: `by_attribute` re-reads a column and the
+    two readings coincide.
+
+    `eval_roster` is what every denominator counts against, so the claim that
+    matters is that it follows the recorded **test** partition rather than a
+    second shuffle — asserted as unit identities, not as a size, since a
+    re-drawn 50 % split has the same size.
+    """
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_holdout_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert sorted(recorded["holdout"]["train"] + recorded["holdout"]["test"]) == sorted(
+        _H9B_DRAWN_KEYS
+    )
+    edited = json.loads(json.dumps(recorded))
+    block = edited["holdout"]
+    block["train"][0], block["test"][0] = block["test"][0], block["train"][0]
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert overridden.holdout_plan is not None
+    assert list(overridden.holdout_plan.test) == block["test"]
+    assert list(overridden.holdout_plan.train) == block["train"]
+    assert overridden.holdout_plan.seed == recorded["holdout"]["seed"]
+    # The narrowing every denominator reads, re-derived from the record.
+    assert [u.key for u in overridden.eval_roster or []] == [
+        key for key in _H9B_DRAWN_KEYS if key in set(block["test"])
+    ]
+    # And the pre-override plan is the draw, so the two readings differ.
+    assert prepared.holdout_plan is not None
+    assert list(prepared.holdout_plan.test) != list(overridden.holdout_plan.test)
+
+
+def test_h9b_an_allocation_that_cannot_be_applied_is_refused(tmp_path: Path):
+    """**The second mutation this test exists for**: accepting a membership
+    naming a unit the roster no longer holds. Set equality in both
+    directions, `units.arms_of`'s own rule (§ Allocation: "each unit belongs
+    to exactly one arm") — a roster that lost a unit leaves the record naming
+    one that no longer exists, and a roster that gained one leaves that unit
+    in no arm at all, with no fourth part of `n` for it.
+
+    Five arms, one code, one remedy: an absent unit, a renamed axis, a level
+    set that moved, a holdout the config does not declare, and a holdout the
+    config declares that the record does not. A control asserts the
+    unedited document applies cleanly, so a refusal that fired for an
+    unrelated reason is not counted as a pass.
+    """
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    _resumed_allocation(prepared, recorded)  # the control
+
+    absent = json.loads(json.dumps(recorded))
+    absent["arms"]["arm"]["control"][0] = "p_not_in_the_roster"
+    renamed = json.loads(json.dumps(recorded))
+    renamed["arms"]["site"] = renamed["arms"].pop("arm")
+    levels = json.loads(json.dumps(recorded))
+    levels["arms"]["arm"]["placebo"] = levels["arms"]["arm"].pop("control")
+    holdout = json.loads(json.dumps(recorded))
+    holdout["holdout"] = {"train": _H9B_DRAWN_KEYS[:4], "test": _H9B_DRAWN_KEYS[4:]}
+    for document, fragment in (
+        (absent, "disagree"),
+        (renamed, "records the axes"),
+        (levels, "with the levels"),
+        (holdout, "records a holdout this config does not declare"),
+    ):
+        with pytest.raises(ContractError) as excinfo:
+            _resumed_allocation(prepared, document)
+        assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+        assert fragment in str(excinfo.value)
+
+    # The other direction of the holdout arm needs a config that declares one.
+    with_holdout = _h9b_holdout_project(tmp_path / "held")
+    held = _prepare_run(Path(with_holdout["cfg"]), allow_dirty=False)
+    assert isinstance(held, Prepared)
+    stripped = json.loads((with_holdout["run_dir"] / "allocation.json").read_text())
+    _resumed_allocation(held, stripped)  # the control on this project too
+    stripped.pop("holdout")
+    with pytest.raises(ContractError) as excinfo:
+        _resumed_allocation(held, stripped)
+    assert excinfo.value.code == "E-RESUME-ALLOCATION-STALE"
+    assert "records no holdout while this config declares one" in str(excinfo.value)
+
+
+def test_h9b_a_resume_executes_the_recorded_arms_not_a_second_draw(tmp_path: Path):
+    """The end-to-end claim: the units a resumed execution is HANDED come
+    from `allocation.json`, not from a second draw.
+
+    The recorded arms are swapped one unit each way before the resume — same
+    sizes, same roster, an allocation the seed does not reproduce — and each
+    newly executed triple's own `units.parquet` holds exactly its recorded
+    arm. Read from the step directories rather than from `run.yaml`, because
+    the claim is about unit identity and every count is unchanged by a swap.
+    """
+    from publishable.artifacts import READERS
+    from publishable.sweep import condition_dir_name
+
+    control_file = tmp_path / "crash_control"
+    doc = _h9b_drawn_project(tmp_path, control_file)
+    crashed = _h9b_crash_run(doc, control_file)
+    recorded = json.loads((crashed / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    (crashed / "allocation.json").write_text(json.dumps(edited, indent=2))
+
+    before = _h9b_ledger(crashed)
+    assert _h9b_resume(crashed) == EXIT_OK
+    executed = _h9b_ledger(crashed)[len(before) :]
+    assert executed, "the crash fixture must leave executions outstanding"
+
+    labels = {
+        c["index"]: c["label"]
+        for c in yaml.safe_load((crashed / "sweep.yaml").read_text())["conditions"]
+    }
+    arms = {0: set(edited["arms"]["arm"]["control"]), 1: set(edited["arms"]["arm"]["treatment"])}
+    stale = {
+        0: set(recorded["arms"]["arm"]["control"]),
+        1: set(recorded["arms"]["arm"]["treatment"]),
+    }
+    seen = 0
+    for entry in executed:
+        table = (
+            crashed
+            / "conditions"
+            / condition_dir_name(entry["condition"], labels[entry["condition"]])
+            / entry["repeat"]
+            / entry["step"]
+            / "units.parquet"
+        )
+        if not table.exists():  # the scalar-only step writes none
+            continue
+        rows = READERS[".parquet"](table.read_bytes())
+        assert {row["unit"] for row in rows} == arms[entry["condition"]]
+        assert {row["unit"] for row in rows} != stale[entry["condition"]]
+        seen += 1
+    assert seen, "no recording triple was re-executed, so nothing was measured"

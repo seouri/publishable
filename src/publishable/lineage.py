@@ -666,3 +666,45 @@ def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]
                 "cannot be continued",
                 code="E-RESUME-PLAN-MISMATCH",
             )
+
+
+def read_allocation(run_dir: Path) -> dict[str, Any] | None:
+    """`<run_dir>/allocation.json`'s recorded partitions — the file `resume`
+    reads **rather than re-drawing** (H9b Decision 10, `reference.md`
+    § Allocation and § Resuming). `None` when the file is absent, which is the
+    ordinary case: § The other files a run writes makes it "present when
+    either is declared", so a design with no arm axis and no holdout writes
+    none and there is nothing to read.
+
+    **This is the reader those two sections say does not exist.**
+    `build_allocation_document`'s own docstring states the contract this
+    honours — read the existing file rather than calling that function a
+    second time — because a drawn axis has no column to re-read, and
+    `assign.<axis>.seed` makes a second draw *likely* to agree where the
+    record of which unit was in which arm needs better than likely.
+
+    One refusal, `E-RESUME-ALLOCATION-STALE`, shared with the application
+    below for one remedy: this file cannot be applied to what this tree
+    resolves, so the run cannot be continued. A file that will not parse is
+    that fault, not a missing one — an absent file says *nothing was
+    partitioned*, an unparseable one says *the record is unusable*, and
+    conflating them would let a mangled allocation resume as an undeclared
+    one and re-draw the whole thing.
+    """
+    path = run_dir / "allocation.json"
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ContractError(
+            f"{path} will not parse ({type(exc).__name__}: {exc}), so which unit was "
+            "in which arm cannot be read back",
+            code="E-RESUME-ALLOCATION-STALE",
+        ) from exc
+    if not isinstance(document, dict):
+        raise ContractError(
+            f"{path} holds {type(document).__name__}, not an allocation document",
+            code="E-RESUME-ALLOCATION-STALE",
+        )
+    return document
