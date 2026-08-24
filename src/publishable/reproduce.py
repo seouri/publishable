@@ -20,13 +20,14 @@ import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import indent
 from typing import Any
 
 import yaml
 
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
-from publishable.hashes import code_hash_of, hashed_files
+from publishable.hashes import code_hash_of, hashed_files, parameters_hash
 from publishable.lineage import read_record_file
 from publishable.provenance import find_repo_root, unignored_under_hashed_trees
 
@@ -686,3 +687,232 @@ def _uv_sync(dest: Path) -> subprocess.CompletedProcess[str]:
     where failure is the expected outcome.
     """
     return subprocess.run(["uv", "sync", "--locked"], cwd=dest, capture_output=True, text=True)
+
+
+# --------------------------------------------------------------------------
+# The config write-back. Design Decision 11.
+# --------------------------------------------------------------------------
+
+
+_PATH_MARKER = "# REQUIRED: set to your local copy"
+_BLANKED = ("input_dir", "output_dir")
+
+
+def config_dir_in(operand: Record, dest: Path, c: Collector) -> Path | None:
+    """`<dest>/configs/<name>/`, where `<name>` is the record's
+    `config.metadata.name`. Tasks 7 and 10 both write here.
+
+    **`config.metadata.name` is the one name that travels in both operand
+    forms, and that is measured rather than assumed.** The alternative was
+    `identity.json`'s `config_path`, which is the field `generate experiment`'s
+    own `configs/<name>/config.yaml` derivation would suggest — and plan
+    correction 23 rules it out twice over: it is a *mid-run* reader's artifact,
+    and a bundle has no `identity.json` at all. Measured on a real bundle
+    member: `config.metadata.name` survives `study add` unredacted
+    (`_redact` reaches `data.input_dir`/`output_dir`, `git.repo_root`,
+    `environment.hostname` and `provenance.input_manifest`, and no key under
+    `config.metadata`), while `data.input_dir` beside it reads
+    `<redacted by study add>`. So the derivation that works in the
+    run-directory form works in the bundle form, which is Ruling Y's own
+    cost-if-wrong.
+
+    **The refusal is containment only, and the code is `E-IO-FAILED`.** A
+    record is a file, and a hand-edited `config.metadata.name` of `../../etc`
+    would resolve outside the destination this command created — the one shape
+    H8a's containment rule exists for, whose guard *"may be narrower than the
+    gap it closes"*. Nothing is minted for it: Decision 14's own sentence gives
+    `E-IO-FAILED` an unreadable operand path on `diff`'s and `resume`'s
+    precedent, and this is the same class of fault at the other end of the same
+    record. Three shapes share the one code because they share the one remedy —
+    the record's `config.metadata.name` is not usable as a directory name — and
+    the message names which shape was found. **§ Errors' row for `E-IO-FAILED`
+    owes this site a mention; task 14 owns the row.**
+    """
+    metadata = (operand.doc.get("config") or {}).get("metadata")
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str) or not name:
+        c.error(
+            "E-IO-FAILED",
+            str(operand.path),
+            "carries no `config.metadata.name`, so there is no `configs/<name>/` to "
+            "write the config into — the record names no experiment",
+        )
+        return None
+    configs = (dest / "configs").resolve()
+    target = (configs / name).resolve()
+    if target != configs and configs not in target.parents:
+        c.error(
+            "E-IO-FAILED",
+            str(operand.path),
+            f"has `config.metadata.name` of {name!r}, which resolves outside "
+            f"{configs} — a config directory is a name, not a path out of the "
+            "checkout",
+        )
+        return None
+    return dest / "configs" / name
+
+
+def _serialized_config(config: dict[str, Any]) -> str:
+    """The record's embedded config, re-serialized, with `data.input_dir` and
+    `data.output_dir` blanked and each marked.
+
+    **Core generates this file; it does not patch one.** § Reproducing on
+    another device says the two paths are *"blanked and **marked**
+    `# REQUIRED: set to your local copy`"*, and a comment is something only a
+    generator writes. The two marked lines below are emitted by this function
+    rather than located inside somebody else's YAML text: locating two keys in
+    arbitrary YAML to blank them is a text scan over a structure, which is the
+    proxy this repo keeps paying for, and the byte copy that scan would run
+    over does not exist in the bundle form at all (plan correction 24).
+
+    Emitted key by key, in the record's own order, each piece through
+    `yaml.safe_dump` and `data`'s sub-keys indented under it — so every value
+    but the two blanked ones is serialized by the same library that parsed it,
+    and the two blanked ones are literals this function owns. **Nothing here
+    claims the assembly is faithful**: `write_config` re-reads the file and
+    compares `parameters_hash` against the record's, which is the check that
+    would catch a piece this loop dropped or retyped.
+
+    **The comments `init` wrote are lost, and that is disclosed rather than
+    worked around** (plan correction 25). `run.yaml`'s `config` is the parsed
+    dict; no inline comment survives into it, so none can come back out.
+    `write_config`'s transcript names where they still live.
+    """
+    out: list[str] = []
+    for key, value in config.items():
+        if key != "data" or not isinstance(value, dict):
+            out.append(yaml.safe_dump({key: value}, sort_keys=False, allow_unicode=True))
+            continue
+        out.append("data:\n")
+        for sub, sub_value in value.items():
+            if sub in _BLANKED:
+                out.append(f'  {sub}: ""   {_PATH_MARKER}\n')
+                continue
+            piece = yaml.safe_dump({sub: sub_value}, sort_keys=False, allow_unicode=True)
+            out.append(indent(piece, "  "))
+    return "".join(out)
+
+
+def write_config(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+    """Write `configs/<name>/config.yaml` in the checkout. Decision 11.
+
+    Returns `(transcript lines, exit code or None)`, the contract
+    `verify_code_hash` and `restore_environment` already use.
+
+    **The clone's own committed copy is hashed BEFORE it is overwritten**, and
+    the ordering is the whole reason that comparison exists at all: the clone
+    holds `configs/<name>/config.yaml` at the recorded commit, this function
+    replaces it, and a comparison made afterwards would compare the file with
+    itself. `parameters_hash` over a file is a pure function of the file, which
+    is what § CLI reference already says of `diff`'s use of it.
+
+    **`identical` or `DIFFERS`, beside `provenance.git.config_committed`, and
+    neither is a refusal.** `config_committed` records whether the config was
+    *tracked* at run time — measured: `git ls-files --error-unmatch` is what
+    answers it, so an edit made after the commit leaves it `true` while the
+    commit's bytes are the pre-edit ones. A `DIFFERS` under
+    `config_committed: true` is therefore a real, reachable fact about the
+    record rather than an impossible state, and it is reported because the
+    reader has learned something: the numbers came through a config the
+    recorded commit does not hold.
+
+    **The write is self-checked, and this is the task's central assertion.**
+    `hashes.covered_config` excludes `metadata`, `data.input_dir` and
+    `data.output_dir` (plan correction 9, confirmed by measurement: the
+    recorded `parameters_hash` is reproduced exactly by hashing the record's
+    config with both paths blanked, and equally by deleting both keys), so the
+    check below is **blind to the blanking and sensitive to a lossy round
+    trip** — a re-serialization that drops or retypes a key moves the hash.
+    Measured: retyping one `limits.max_executions` from `int` to `str` moves it
+    from `sha256:4d1c41e…` to `sha256:e4fa612…`. That is the two branches that
+    can differ, and it was checked before the check was written.
+
+    **This function overwrites, and `write_expectation` beside it refuses to.
+    The two policies are opposite on purpose.** A config is what `reproduce`
+    is *for* — the clone's copy at the recorded commit is a claim about the
+    commit and the record's is what produced the numbers, so the record wins
+    and the fact is printed. `apparatus.expected.json` is a file
+    § Reproducing on another device invites the reader to **edit**, so
+    replacing one silently would discard a human decision. Neither policy is
+    the other's precedent; do not make them agree.
+    """
+    record = operand.doc
+    config = record.get("config")
+    if not isinstance(config, dict):
+        c.error(
+            "E-IO-FAILED",
+            str(operand.path),
+            "carries no `config` mapping, so there is no config to write back",
+        )
+        return ([], EXIT_WRONG)
+
+    config_dir = config_dir_in(operand, dest, c)
+    if config_dir is None:
+        return ([], EXIT_WRONG)
+    target = config_dir / "config.yaml"
+    lines: list[str] = []
+
+    committed = record.get("provenance", {}).get("git", {}).get("config_committed")
+    if target.is_file():
+        # BEFORE the write below. See the docstring.
+        try:
+            existing = yaml.safe_load(target.read_text())
+        except yaml.YAMLError:
+            existing = None
+        if isinstance(existing, dict):
+            existing_hash = parameters_hash(existing)
+            if existing_hash == record.get("parameters_hash"):
+                lines.append(
+                    "config.yaml: the commit's own copy is identical to the record's "
+                    f"parameters (config_committed: {committed})"
+                )
+            else:
+                lines.append(
+                    f"config.yaml: DIFFERS — the commit's copy hashes {existing_hash} and "
+                    f"the record's parameters are {record.get('parameters_hash')} "
+                    f"(config_committed: {committed}); the RECORD's config is what is "
+                    "written, since it is what produced the numbers"
+                )
+        else:
+            lines.append(
+                f"config.yaml: the commit's copy at {target} is not a YAML mapping, so it "
+                "is not compared"
+            )
+    else:
+        lines.append(
+            f"config.yaml: the commit carries none at configs/{config_dir.name}/ "
+            f"(config_committed: {committed})"
+        )
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target.write_text(_serialized_config(config))
+
+    written = yaml.safe_load(target.read_text())
+    if not isinstance(written, dict) or parameters_hash(written) != record.get("parameters_hash"):
+        got = parameters_hash(written) if isinstance(written, dict) else "not a YAML mapping"
+        c.error(
+            "E-REPRODUCE-CONFIG-WRITEBACK",
+            str(target),
+            f"was written from the record's own `config`, and hashes {got} against the "
+            f"recorded parameters_hash of {record.get('parameters_hash')} — the "
+            "re-serialization lost or retyped something, so this file is not the "
+            f"declaration the run executed. The checkout is kept at {dest}",
+        )
+        return (lines, EXIT_WRONG)
+
+    lines.append(f"config.yaml: written to {target}, parameters_hash matches the record")
+    lines.append(
+        f"config.yaml: `data.input_dir` and `data.output_dir` are blank and marked `{_PATH_MARKER}`"
+    )
+    # Plan correction 25, disclosed rather than worked around.
+    comments_live = (
+        f"{operand.path.parent / 'config.yaml'}"
+        if (operand.path.parent / "config.yaml").is_file()
+        else None
+    )
+    lines.append(
+        "config.yaml: the inline comments `init` wrote are NOT restored — `run.yaml`'s "
+        "`config` is the parsed mapping. They still live in "
+        + (comments_live if comments_live else "no file reachable from this operand")
+    )
+    return (lines, None)

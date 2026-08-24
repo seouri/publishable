@@ -18,7 +18,7 @@ from tests.test_cli import run_a_project
 import publishable.reproduce as reproduce_module
 from publishable.cli import main
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
-from publishable.hashes import code_hash, code_hash_of, hashed_files
+from publishable.hashes import code_hash, code_hash_of, hashed_files, parameters_hash
 from publishable.provenance import unignored_under_hashed_trees
 from publishable.reproduce import (
     _CLONE_CONFIG,
@@ -31,6 +31,7 @@ from publishable.reproduce import (
     prepare_checkout,
     restore_environment,
     verify_code_hash,
+    write_config,
 )
 from publishable.study import study_add, study_new
 
@@ -1341,3 +1342,246 @@ def test_a_real_uv_sync_failure_is_exit_five(tmp_path: Path):
     assert "uv sync --locked" in seen
     # Everything before the sync still ran and still reported.
     assert (dest / "uv.lock").read_bytes() == _A_LOCKFILE
+
+
+# ==========================================================================
+# Fixture M — the config write-back. Design Decision 11, task 7.
+# ==========================================================================
+
+
+def _write_config(fx: dict, dest: Path, operand_path: Path | None = None):
+    c = Collector()
+    lines, code = write_config(Record(fx["record"], operand_path or fx["record_path"]), dest, c)
+    seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
+    return lines, code, c, seen
+
+
+def _edit_the_committed_config(fx: dict, edit) -> dict:
+    """Re-run Fixture A's project with an edit the recorded commit does not hold.
+
+    Measured, and it is what makes Fixture M's second arm constructible at all:
+    `provenance.git.config_committed` is answered by
+    `git ls-files --error-unmatch`, so it reports whether the config is
+    **tracked** — an edit made after the commit leaves it `true` while the
+    commit's bytes are the pre-edit ones. Confirmed against a real run:
+    `config_committed: True`, `code_dirty: False` (the gate reads
+    `-- src templates`, and `configs/` is neither), and
+    `git status --porcelain` reading ` M configs/cohort-pilot/config.yaml`.
+
+    **`edit` must move a key `covered_config` COVERS**, and the first draft of
+    this fixture did not: it edited `metadata.institution`, and
+    `parameters_hash` excludes `metadata` wholesale, so the arm reported
+    `identical` against an edited config and the DIFFERS branch was never
+    reached. Caught by running it. The comparison is a *parameters* comparison
+    by Decision 11's own words, so an edit to `metadata` alone reporting
+    `identical` is correct behaviour and a useless fixture.
+    """
+    doc = yaml.safe_load(fx["cfg"].read_text())
+    edit(doc)
+    fx["cfg"].write_text(yaml.safe_dump(doc, sort_keys=False))
+    before = {p.name for p in fx["results_dir"].glob("run_*")}
+    assert main(["run", str(fx["cfg"])]) == EXIT_OK
+    fresh = [p for p in fx["results_dir"].glob("run_*") if p.name not in before]
+    assert len(fresh) == 1, fresh
+    record = yaml.safe_load((fresh[0] / "run.yaml").read_text())
+    return {**fx, "record": record, "run_dir": fresh[0], "record_path": fresh[0] / "run.yaml"}
+
+
+def test_fixture_m_arm_1_the_written_config_hashes_to_the_recorded_parameters(tmp_path: Path):
+    """The central assertion, and every literal is computed by calling the
+    function rather than pinned: a `parameters_hash` derived from a commit SHA's
+    tree cannot be a stable literal.
+
+    Three things are asserted, not one — the hash, the blanked-plus-marked
+    shape of both paths, and that everything else round-tripped. The hash alone
+    is blind to the blanking by construction (`covered_config` drops both keys),
+    which is exactly why the shape is asserted separately.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code is None, seen
+    assert not c.findings, seen
+
+    target = dest / "configs" / "cohort-pilot" / "config.yaml"
+    assert target.is_file()
+    written = yaml.safe_load(target.read_text())
+    assert parameters_hash(written) == fx["record"]["parameters_hash"]
+
+    # Blanked AND marked — the marker is on each of the two lines, and the
+    # value parses back to the empty string rather than to `None`.
+    assert written["data"]["input_dir"] == ""
+    assert written["data"]["output_dir"] == ""
+    text = target.read_text()
+    for key in ("input_dir", "output_dir"):
+        marked = [
+            ln for ln in text.splitlines() if ln.strip().startswith(f"{key}:") and "REQUIRED" in ln
+        ]
+        assert marked == [f'  {key}: ""   # REQUIRED: set to your local copy'], text
+
+    # Everything the record's config held, still held, with the same types.
+    recorded = fx["record"]["config"]
+    assert list(written) == list(recorded)
+    for key in recorded:
+        if key == "data":
+            continue
+        assert written[key] == recorded[key], key
+    assert {k: v for k, v in written["data"].items() if k not in ("input_dir", "output_dir")} == {
+        k: v for k, v in recorded["data"].items() if k not in ("input_dir", "output_dir")
+    }
+    assert any("parameters_hash matches the record" in ln for ln in lines), lines
+
+
+def test_fixture_m_arm_1_the_committed_copy_is_reported_identical(tmp_path: Path):
+    """The negative control for arm 2, and it is not optional: without it the
+    two readings *"the comparison reports identical"* and *"the comparison is
+    never made"* would be indistinguishable. `config_committed` is asserted
+    into the line, so a build that printed the verdict without the record's
+    own answer beside it fails here."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code is None, seen
+    assert fx["record"]["provenance"]["git"]["config_committed"] is True
+    identical = [ln for ln in lines if ln.startswith("config.yaml: the commit's own copy")]
+    assert identical == [
+        "config.yaml: the commit's own copy is identical to the record's parameters "
+        "(config_committed: True)"
+    ], lines
+    assert not any("DIFFERS" in ln for ln in lines), lines
+
+
+def test_fixture_m_arm_2_a_config_edited_after_the_commit_reports_differs(tmp_path: Path):
+    """**The arm that makes the comparison non-vacuous.** With
+    `config_committed: true` and no edit, `identical` is the answer whether the
+    code compares anything or not — so this arm edits the config after the bare
+    remote was made, runs again, and reproduces from that second record. The
+    clone therefore holds the pre-edit config while the record holds the
+    post-edit one.
+
+    A `DIFFERS` under `config_committed: true` is a real fact about the record,
+    not an impossible state, and both digests are named so a reader can check
+    which side is which.
+    """
+
+    def edit(doc):
+        doc["limits"]["max_executions"] = doc["limits"]["max_executions"] + 1
+        doc["metadata"]["institution"] = "edited after the commit"
+
+    fx = _edit_the_committed_config(_fixture_a(tmp_path), edit)
+    assert fx["record"]["provenance"]["git"]["config_committed"] is True
+    assert fx["record"]["config"]["metadata"]["institution"] == "edited after the commit"
+    dest = _prepared_checkout(tmp_path, fx)
+
+    committed = yaml.safe_load((dest / "configs" / "cohort-pilot" / "config.yaml").read_text())
+    committed_hash = parameters_hash(committed)
+    lines, code, c, seen = _write_config(fx, dest)
+    # NOT a refusal — a reported fact.
+    assert code is None, seen
+    assert not c.findings, seen
+    differs = [ln for ln in lines if "DIFFERS" in ln]
+    assert len(differs) == 1, lines
+    assert committed_hash in differs[0]
+    assert fx["record"]["parameters_hash"] in differs[0]
+    assert "config_committed: True" in differs[0]
+    # And the RECORD's config is what landed.
+    written = yaml.safe_load((dest / "configs" / "cohort-pilot" / "config.yaml").read_text())
+    assert parameters_hash(written) == fx["record"]["parameters_hash"]
+    assert written["metadata"]["institution"] == "edited after the commit"
+
+
+def test_fixture_m_arm_3_a_lossy_round_trip_is_config_writeback(tmp_path: Path):
+    """The `parameters_hash` self-check, armed. The record's `config` has one
+    key **retyped** by the fixture — `limits.max_executions` from `int` to
+    `str` — so the round trip is lossy on purpose while the file is still valid
+    YAML and still holds every key.
+
+    Measured before the check was written: that one retyping moves
+    `parameters_hash`. It is `limits.max_executions` rather than a path,
+    because `covered_config` drops `data.input_dir`/`output_dir` and a retyping
+    there would be invisible to the check by construction — the mutation would
+    then be blind, which is the shape this repo pays for most often.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    record = fx["record"]
+    original = record["config"]["limits"]["max_executions"]
+    assert isinstance(original, int)
+    record["config"]["limits"]["max_executions"] = str(original)
+
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code == EXIT_WRONG, seen
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-CONFIG-WRITEBACK"], seen
+    assert record["parameters_hash"] in seen
+    # The checkout is KEPT, and the file is left where a reader can look at it.
+    assert (dest / "configs" / "cohort-pilot" / "config.yaml").is_file()
+    assert dest.is_dir()
+
+
+def test_the_bundle_form_writes_the_config_with_no_byte_copy_anywhere(tmp_path: Path):
+    """Fixture F, and the mutation *write the config from the byte copy* is what
+    it catches: a bundle member has no `config.yaml` beside it at all
+    (plan correction 24), so that mutation cannot produce a config here.
+
+    Asserted rather than assumed — the member's own directory is checked for
+    the absence — and the write is then asserted to have happened anyway, since
+    a control asserting only an absence passes identically if nothing ran.
+    """
+    fx = _fixture_a(tmp_path)
+    member = _bundle_member(tmp_path, fx)
+    assert not (member.parent / "config.yaml").exists()
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_config(fx, dest, operand_path=member)
+    assert code is None, seen
+    target = dest / "configs" / "cohort-pilot" / "config.yaml"
+    assert parameters_hash(yaml.safe_load(target.read_text())) == fx["record"]["parameters_hash"]
+    # The comment-loss disclosure names NO file in this form, because there is
+    # none — the run-directory form names the run's own copy.
+    disclosure = [ln for ln in lines if "inline comments" in ln]
+    assert len(disclosure) == 1, lines
+    assert "no file reachable from this operand" in disclosure[0]
+
+
+def test_the_run_directory_form_names_where_the_comments_still_live(tmp_path: Path):
+    """The other half of correction 25's disclosure, and the arm that makes the
+    bundle arm above non-vacuous: in the run-directory form the comments DO
+    still live somewhere, and the transcript names the file."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code is None, seen
+    byte_copy = fx["run_dir"] / "config.yaml"
+    assert byte_copy.is_file()
+    disclosure = [ln for ln in lines if "inline comments" in ln]
+    assert len(disclosure) == 1, lines
+    assert str(byte_copy) in disclosure[0]
+
+
+def test_a_record_naming_no_experiment_is_refused_rather_than_traced_back(tmp_path: Path):
+    """The containment guard's first shape. Both shapes below share one code
+    and one remedy, and the message names which was found."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    del fx["record"]["config"]["metadata"]["name"]
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code == EXIT_WRONG, seen
+    assert [f.code for f in c.findings] == ["E-IO-FAILED"], seen
+    assert "no `config.metadata.name`" in seen
+    assert not (dest / "configs" / "cohort-pilot" / "config.yaml").read_text().startswith("schema")
+
+
+def test_a_name_that_escapes_the_checkout_is_refused_and_writes_nothing(tmp_path: Path):
+    """The containment guard, armed by a positive control on each side: the
+    escaping name is refused **and nothing is written outside the
+    destination**, while `test_fixture_m_arm_1_*` above is the arm proving an
+    ordinary name still resolves. Containment ONLY — H8a's rule — so no
+    statement is made about separators in a legal name."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    outside = dest.parent / "escaped"
+    fx["record"]["config"]["metadata"]["name"] = f"../{outside.name}"
+    lines, code, c, seen = _write_config(fx, dest)
+    assert code == EXIT_WRONG, seen
+    assert [f.code for f in c.findings] == ["E-IO-FAILED"], seen
+    assert "resolves outside" in seen
+    assert not outside.exists()
