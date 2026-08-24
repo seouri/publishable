@@ -66,7 +66,8 @@ class RunLock:
                 holder = "unknown (lock file unreadable or removed)"
             raise ContractError(
                 f"{self.path} is held: {holder}. "
-                "A lock left by a killed process is reported, never assumed dead.",
+                "A lock left by a killed process is reported, never assumed dead — "
+                "for `run` and `draft`, and for every case a liveness test cannot answer.",
                 code="E-RUN-LOCKED",
             ) from None
         with os.fdopen(fd, "w") as fh:

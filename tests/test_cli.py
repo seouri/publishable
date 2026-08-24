@@ -23757,14 +23757,14 @@ class Step(BaseStep):
 # `cli.command_resume` (design Decision 14).
 #
 # **These call `command_resume` DIRECTLY, and they remove the crashed run's
-# `lock` first.** Two reasons, both structural rather than convenient:
-# `resume` is not dispatched until plan task 15, so `main(["resume", …])`
-# still prints the unbuilt diagnostic and exits 2 (§ Corrections against the
-# code, correction 11) — which is why guard-pin arm A's resume half stays
-# `xfail`, and why a green suite says nothing about this wiring: `xfail(
-# strict=True)` absorbs every failure reason. And the takeover that removes
-# a dead holder's `lock` is task 14's, so until it lands the test does by
-# hand exactly what Ruling W's step 3 will do after a liveness verdict.
+# `lock` first.** They were written before the dispatch (task 15) and the
+# takeover (task 14) existed, and both now do — `main(["resume", …])` reaches
+# `command_resume` and the takeover removes a dead holder's `lock` itself.
+# They are left calling the function directly, and removing the lock by hand,
+# for the reason `_h9b_resume`'s own docstring gives: the holder these arms
+# write is a FOREIGN host, which the liveness test correctly reports rather
+# than takes over. The dispatch and the takeover have their own end-to-end
+# pins, guard-pin arms A and G.
 # ===========================================================================
 
 
@@ -23776,7 +23776,10 @@ def _h9b_resume(crashed: Path) -> int:
     below re-write a `{"host": "h", "pid": 1}` lock between arms purely to
     satisfy this helper's assertion, and a takeover would refuse that holder
     (a foreign host is *cannot tell*, which holds). The takeover's own end-to-
-    end pin is guard-pin arm G, through `main`.
+    end pins are guard-pin arms A and G, both through `main`: arm G races two
+    threads for one dead holder, and arm A drives `main(["resume", …])`
+    against a directory whose stale `lock` only the takeover can remove — so
+    a takeover no-op fails both.
     """
     from publishable.cli import command_resume
 
@@ -24673,8 +24676,9 @@ def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_
     # The control: with the input dir restored, the same directory resumes.
     # Asserted before the content arm rather than after, so a refusal that
     # fired for an unrelated reason cannot be counted as a pass — and the
-    # lock this helper needs is put back by hand each time, since task 14's
-    # takeover does not exist yet.
+    # lock this helper needs is put back by hand each time, because the
+    # holder written here is a foreign host, which the takeover reports
+    # rather than replaces.
     (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
     roster = input_dir / "index.csv"
     kept = roster.read_text()

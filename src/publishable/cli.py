@@ -4877,26 +4877,11 @@ def command_resume(run_dir: Path) -> int:
     visible cost is that a hash mismatch prints `validate`'s findings first,
     which is the same order `run` prints them in.
 
-    **Decision 13 is NOT implemented here, and it is a redaction rule rather
-    than a formatting one.** It says every refusal `resume` decides is printed
-    through one fresh credential-bearing `Collector` and **never raised into
-    `main`** — because `main`'s own `PublishableError` handler prints `{exc}`
-    with no collector in scope, so anything reaching it is un-redacted. Every
-    refusal below RAISES `ContractError` today, and so do `read_identity`,
-    `config_path_for`, `read_execution_ledger` and `_reconstitute` through
-    this function. There is no live exposure — `resume` is not dispatched, so
-    nothing can reach `main` this way — but the containment does not exist
-    yet and must not be assumed by the task that adds the remaining
-    refusals. **Task 16 owns building it**, over all fourteen codes at once.
-
     10. the lock takeover (Ruling W, task 14): `take_over_dead_lock`'s
         exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
         against this host's `gethostname()`, and the unlink — sited last, so
         that only phase 6's entry separates it from
         `_execute_prepared`'s `with RunLock(run_dir)`, which is its step 4.
-
-    Every step above raises; the containment that turns each raise into a
-    redacted diagnostic is `command_resume`, which is the only caller.
     """
     if not run_dir.is_dir():
         io_c = Collector()
@@ -5490,14 +5475,15 @@ def _dispatch(command: str, rest: list[str]) -> int:
             "draft": command_draft,
             # `resume` joins the existing one-path arm rather than getting a
             # second enforcer of the same rule, exactly as `draft`, `freeze`
-            # and `report` did. Safe only because of this function's branch
-            # ORDER (plan § Corrections, correction 12): the built branches
-            # precede the `NOT_BUILT_COMMANDS` lookups, and the two-token arm
-            # (`f"{command} {rest[0]}"`) is evaluated first — so
-            # `publishable resume new` now dispatches into `command_resume`
-            # with `new` as its path instead of printing the unbuilt
-            # diagnostic, which is item 5 of the design's disclosure and is
-            # pinned rather than merely disclosed.
+            # and `report` did. `publishable resume new` dispatches into
+            # `command_resume` with `new` as its path instead of printing the
+            # unbuilt diagnostic, which is item 5 of the design's disclosure
+            # and is pinned rather than merely disclosed. That outcome does
+            # NOT rest on this function's branch order: hoisting the
+            # `NOT_BUILT_COMMANDS` lookups above the built branches leaves the
+            # full suite green (measured, H9b whole-branch review Minor 4),
+            # and the order is filed as unpinned in
+            # `docs/superpowers/spec-defects.md`.
             "resume": command_resume,
             "freeze": command_freeze,
             "report": command_report,
