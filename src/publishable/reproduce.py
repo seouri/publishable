@@ -16,15 +16,17 @@ See `docs/superpowers/specs/2026-08-24-reproduce-design.md` § Decision 1 for
 the five verdicts and the grounds each rests on.
 """
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from publishable.diagnostics import Collector
+from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.lineage import read_record_file
+from publishable.provenance import find_repo_root
 
 
 @dataclass(frozen=True)
@@ -184,3 +186,234 @@ def classify_operand(path: Path, c: Collector) -> Operand | None:
 
     _refuse_operand(path, c, "is neither a run record nor a config")
     return None
+
+
+# --------------------------------------------------------------------------
+# The destination, and the clone. Design Decisions 7, 8 and 9, plus the
+# thirteenth code (plan correction 26).
+# --------------------------------------------------------------------------
+
+
+_CLONE_CONFIG = ("-c", "core.autocrlf=false")
+"""ONE flag, measured, and it is passed at BOTH placements.
+
+Under an ambient `core.autocrlf = true`, a plain clone of a commit whose blobs
+hold LF checks the working tree out with CRLF, so the file *contents*
+`code_hash` folds over are different bytes and a faithful clone reports a
+`code_hash` that does not match the record. `-c core.autocrlf=false` restores
+the recorded digest; `-c core.eol=lf` alone does not change it at all. H6a
+Ruling M's precedent is ONE ARM PER FLAG, so `core.eol=lf` is dropped rather
+than passed: a flag with no arm is a flag nobody can prove is doing anything.
+
+**The ground for neutralizing at all is H6a Ruling F's own**: a rule that does
+not travel with the tree cannot define the tree's identity. Ruling M declined
+to neutralize `core.autocrlf` FOR THE DIRTY GATE, and the H6a ledger states
+the distinction in as many words — a gate answers "may this run proceed here",
+which is local by nature; a hash answers "is this the same code", which is
+not. `reproduce` is not a gate.
+
+**NOT neutralized:** `core.excludesFile`, because the `.gitignore` files that
+decide `code_hash` are TRACKED and travel with the commit, so a fresh clone has
+no untracked exclude rule for the flag to reach; and a tracked `.gitattributes`,
+which is out of reach BY RULING (design Decision 7) and is one of the
+`code_hash` difference's enumerated candidate causes instead.
+
+**`provenance.py`'s `_NEUTRALIZED_CONFIG_ARGS` is deliberately not shared.**
+That tuple belongs to the dirty gate and the hash predicate and answers a
+different question — which files does git consider — and reusing it here
+because it happens to contain a `-c` would be the copied-recipe fault.
+"""
+
+
+@dataclass(frozen=True)
+class Checkout:
+    """A prepared checkout: the destination that now holds the recorded tree."""
+
+    dest: Path
+
+
+@dataclass(frozen=True)
+class Refused:
+    """A refusal already reported into the caller's `Collector`."""
+
+    exit_code: int
+
+
+Prepared = Checkout | Refused
+
+
+def destination_for(record: dict[str, Any], *, cwd: Path) -> Path:
+    """The derived destination: `<remote's last component>_<run_id>`, under `cwd`.
+
+    § Reproducing on another device's own worked example is
+    `my-study_run_2026-08-06T14-02-11Z_8e21ab3/`, and it is created **relative
+    to the working directory**, which is where the user is.
+
+    **`provenance.git.repo_root` is not an input.** It is
+    `<redacted by study add>` in a bundle member, so a derivation reading it
+    would work in the run-directory form and produce the redaction marker as a
+    directory name in the bundle form. The remote is the only name that travels
+    in both.
+
+    The last component is taken by splitting on `/`, which is correct for an
+    `https://` URL, for a `git@host:owner/name.git` scp-style remote, and for a
+    filesystem path alike, and a single trailing `.git` is removed. A remote
+    holding no `/` at all is used whole rather than being refused: it is a
+    named git remote alias, and a derived name of `""` would be worse than an
+    unusual one.
+    """
+    remote = str(record["provenance"]["git"]["remote"]).rstrip("/")
+    last = remote.rsplit("/", 1)[-1]
+    if last.endswith(".git"):
+        last = last[: -len(".git")]
+    return cwd / f"{last}_{record['run_id']}"
+
+
+def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """One place the subprocess convention lives: capture both streams, never
+    check, and let the caller read `returncode` and report the message git
+    actually produced. A `check=True` here would raise into `main`, which
+    applies no redaction pass."""
+    return subprocess.run(args, capture_output=True, text=True)
+
+
+def prepare_checkout(operand: Record, c: Collector, *, cwd: Path) -> Prepared:
+    """Derive the destination, refuse it if it cannot be used, clone, check out.
+
+    Takes the `Record` rather than its `doc`, because the record's own PATH is
+    an input later steps need (the `environment/uv.lock` byte copy is reachable
+    beside a run directory's `run.yaml` and dangling from a bundle member) and
+    because it is the operand a wrong walk-up would reach for: the guard below
+    walks up from the DESTINATION'S PARENT, and having the operand in scope is
+    what makes that a decision rather than an accident of the signature.
+
+    The order is: the remote must exist, the destination must not, the
+    destination must not nest, then two git invocations. **Nothing is created
+    before the last of the three refusals**, which is why Fixture K asserts the
+    destination's absence rather than only the code — derive-then-refuse and
+    refuse-then-derive are otherwise indistinguishable.
+
+    **Two git invocations, and each `-c` placement has its own job**
+    (design Decision 7, plan correction 1). Measured on git 2.50.1: the
+    **`clone -c`** placement is the load-bearing one — it stores
+    `core.autocrlf=false` into the new repo's `.git/config`, so the
+    `checkout --detach` below and any later `git checkout` in the prepared tree
+    do not re-convert; with the leading `git -c` alone the clone's config reads
+    `true` and a re-materialized file comes back CRLF. The leading `git -c` is
+    kept because it is what the design decided and because it costs nothing,
+    but this build could not arm it by hash: on this git the initial checkout
+    honours either placement on its own. That measurement disagrees with
+    Decision 7's, is reported rather than papered over, and is why the arm on
+    this pair asserts the stored config and the flag list rather than only a
+    digest.
+
+    **Exit codes.** `E-REPRODUCE-NO-REMOTE`, `E-REPRODUCE-DEST-EXISTS` and
+    `E-REPRODUCE-DEST-IN-REPO` are exit `1`: nothing outside the machine
+    refused, and § Exit codes' `5` is *"a clone or `uv sync` that failed"* — a
+    clone that was **attempted**. Keeping `1` here is what preserves `5` as the
+    retry class. A clone that fails, and a recorded commit the remote does not
+    hold, are exit `5`.
+
+    **A failed clone carries `E-IO-FAILED` and mints no code.** Decision 14's
+    table gives a failed clone no row at all while Decision 7 promises it exit
+    `5`, so this build follows Decision 14's own stated device — *"`E-IO-FAILED`
+    covers an unreadable operand path, joining `diff`'s and `resume`'s
+    precedent rather than getting a thirteenth code"* — and the shipped
+    `EXIT_EXTERNAL` precedent, which is `command_run` returning `5` under the
+    already-existing `E-APPARATUS-RAISED` rather than under a code minted for
+    the exit. The count therefore stays at thirteen. Reported as a
+    design-versus-code disagreement.
+    """
+    record = operand.doc
+    git = record["provenance"]["git"]
+    commit = git.get("commit")
+
+    if git.get("remote") is None:
+        # § 0.8: this is the ORDINARY state of a scaffolded project with one
+        # local commit, not an edge case — so the message has to leave the
+        # reader somewhere useful. It names the recorded commit, because a
+        # reader who has the repository can check that out themselves, which
+        # is the whole of what `reproduce`'s first step would have done.
+        c.error(
+            "E-REPRODUCE-NO-REMOTE",
+            "provenance.git.remote",
+            f"is null, so there is no repository to clone — this run was made in a "
+            f"local-only repository. If you have that repository, "
+            f"`git checkout --detach {commit}` in it is the tree this record was "
+            f"made from",
+        )
+        return Refused(EXIT_WRONG)
+
+    dest = destination_for(record, cwd=cwd)
+
+    if dest.exists():
+        # The creation-command family's rule — refusing is how one stays safe
+        # to re-run — and it is also the sentence § Reproducing on another
+        # device gets wrong: *"it can't collide with an existing checkout"* is
+        # false, because a second `reproduce` of one record derives the same
+        # name twice. Decision 9 narrows the claim to what is true.
+        c.error(
+            "E-REPRODUCE-DEST-EXISTS",
+            str(dest),
+            "already exists — `reproduce` derives its destination and never overwrites "
+            "one, so a second reproduction of the same run refuses rather than "
+            "replacing the first; move or remove it, or run from another directory",
+        )
+        return Refused(EXIT_WRONG)
+
+    try:
+        enclosing: Path | None = find_repo_root(dest.parent)
+    except ContractError:
+        # `find_repo_root` RAISES `E-GIT-NO-REPO` rather than returning `None`,
+        # so the ordinary case — a destination outside any repository — is this
+        # exception path. Written this way round on purpose: the alternative
+        # reading, that a raise means "refuse", inverts the guard.
+        enclosing = None
+
+    if enclosing is not None:
+        # The walk-up is from the DESTINATION'S PARENT, never from the operand:
+        # the operand is a record that may live anywhere (a bundle beside a
+        # manuscript, a run directory under `output_dir`), and what must not
+        # nest is the checkout. Nesting a reproduction inside another
+        # experiment's repository makes every walk-up question — which repo,
+        # which `code_hash`, which dirty gate — answerable two ways, which is
+        # what `CLAUDE.md`'s `input_dir`/`output_dir` invariant exists to
+        # prevent.
+        c.error(
+            "E-REPRODUCE-DEST-IN-REPO",
+            str(dest),
+            f"would sit inside the git repository at {enclosing} — a reproduction is a "
+            "checkout of its own and may never nest inside another repository, because "
+            "every walk-up afterwards would have two answers; run `reproduce` from a "
+            "directory outside any repository",
+        )
+        return Refused(EXIT_WRONG)
+
+    clone = _git(["git", *_CLONE_CONFIG, "clone", *_CLONE_CONFIG, str(git["remote"]), str(dest)])
+    if clone.returncode != 0:
+        c.error(
+            "E-IO-FAILED",
+            str(git["remote"]),
+            f"could not be cloned into {dest}: {clone.stderr.strip() or clone.stdout.strip()}",
+        )
+        return Refused(EXIT_EXTERNAL)
+
+    checkout = _git(["git", "-C", str(dest), "checkout", "--detach", str(commit)])
+    if checkout.returncode != 0:
+        # A REWRITTEN OR FORCE-PUSHED HISTORY IS CAUGHT HERE, not by the hash
+        # (plan correction 26): a commit SHA is a hash over its own tree, so a
+        # different tree cannot live at the same SHA. What a rewrite actually
+        # produces is a remote that no longer holds the recorded object, and
+        # that is a failed checkout. The checkout is LEFT on disk: the clone
+        # succeeded and its other refs are worth having.
+        c.error(
+            "E-REPRODUCE-COMMIT-UNREACHABLE",
+            str(commit),
+            f"is not reachable in the clone of {git['remote']} — the remote no longer "
+            f"holds that commit, which is what a rewritten or force-pushed history "
+            f"leaves behind. The clone is at {dest}; git said: "
+            f"{checkout.stderr.strip() or checkout.stdout.strip()}",
+        )
+        return Refused(EXIT_EXTERNAL)
+
+    return Checkout(dest)
