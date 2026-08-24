@@ -2249,3 +2249,155 @@ def test_the_bundle_form_writes_the_expectation_from_the_members_own_record(
     assert code is None, seen
     target = dest / "configs" / "cohort-pilot" / "apparatus.expected.json"
     assert json.loads(target.read_text()) == copied["provenance"]["apparatus"]["facts"]
+
+
+# ==========================================================================
+# Fixture N — the config-operand form (design Decision 13, plan task 12).
+# ==========================================================================
+
+
+def _reproduce_from(cwd: Path, operand: Path) -> int:
+    """Drive the real command through `main`, from a working directory the
+    caller chooses.
+
+    The cwd is an input to this command — Decision 9 derives the record form's
+    destination relative to it — so a config-form arm that ran from the
+    repository would be unable to tell a walk-up from the CONFIG PATH from a
+    walk-up from the cwd, which is the invariant Decision 13 rests on
+    (`CLAUDE.md` § Invariants: *"a walk-up from the path the command was given,
+    not from the working directory"*).
+    """
+    import os
+
+    cwd.mkdir(parents=True, exist_ok=True)
+    here = os.getcwd()
+    try:
+        os.chdir(cwd)
+        return main(["reproduce", str(operand)])
+    finally:
+        os.chdir(here)
+
+
+def test_fixture_n_the_config_form_creates_nothing_and_names_what_it_did_not_verify(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture N. Design Decision 13.
+
+    Four claims, each asserted POSITIVELY — *a control asserting only absences
+    passes identically if nothing ran*, so the two absence assertions here
+    (nothing in the working directory, no new directory in the repository) sit
+    beside three assertions that something was printed and one that the sync
+    seam was reached with the repository as its argument.
+
+    **The three not-verified lines are asserted SEPARATELY**, by their own
+    prefixes rather than against the production tuple — a test that iterates
+    the thing under test moves its expectation and its actual together. Each
+    prefix is a literal here, which is what makes *print two of the three* a
+    mutation this arm fails.
+    """
+    calls = _stub_sync(monkeypatch)
+    doc = _a_run(tmp_path)
+    root: Path = doc["root"]
+    cfg: Path = doc["cfg"]
+    before_dirs = {p for p in root.rglob("*") if p.is_dir() and ".git" not in p.parts}
+
+    cwd = tmp_path / "elsewhere"
+    code = _reproduce_from(cwd, cfg)
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+
+    assert code == EXIT_OK, out
+    # Absences.
+    assert list(cwd.iterdir()) == [], list(cwd.iterdir())
+    assert {p for p in root.rglob("*") if p.is_dir() and ".git" not in p.parts} == before_dirs
+    # The three, each on its own.
+    assert any(line.startswith("code_hash: not verified") for line in lines), out
+    assert any(line.startswith("input_manifest: not verified") for line in lines), out
+    assert any(line.startswith("apparatus: not verified") for line in lines), out
+    # `uv sync` reached, with the repository the config sits in.
+    assert calls == [("uv", "sync", "--locked", str(root))]
+    assert any(line.startswith("uv sync: --locked") for line in lines), out
+    # And step 6 really ran here too, rather than the form stopping early.
+    assert any(line.startswith(".env:") for line in lines), out
+    assert any(line.startswith("required_env:") for line in lines), out
+
+
+def test_the_config_form_walks_up_from_the_config_path_not_the_working_directory(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`CLAUDE.md` § Invariants, and the arm that makes it a test.
+
+    The command is driven from a SECOND, unrelated git repository, so a
+    `find_repo_root(Path.cwd())` would resolve — and resolve to the wrong
+    tree. Both roots are asserted by name, so the arm cannot pass by the two
+    happening to coincide.
+    """
+    calls = _stub_sync(monkeypatch)
+    doc = _a_run(tmp_path)
+    root: Path = doc["root"]
+    other = tmp_path / "unrelated"
+    other.mkdir()
+    subprocess.run(["git", "-C", str(other), "init", "-q"], check=True)
+    assert other.resolve() != root.resolve()
+
+    code = _reproduce_from(other, doc["cfg"])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    assert f"repository: {root}, found by walking up from {doc['cfg']}" in out.splitlines(), out
+    assert calls == [("uv", "sync", "--locked", str(root))]
+
+
+def test_a_config_outside_every_repository_is_e_git_no_repo_and_mints_no_code(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The existing code for this walk-up failing, caught BY CODE and
+    re-reported through the collector — `validate._check_data` and
+    `study._refuse_if_in_repo` are the two shipped sites that catch it the
+    same way. Nothing is minted: Decision 14's table has thirteen codes and a
+    fourteenth for a walk-up that already has one would be a second answer.
+
+    The sync seam is stubbed and asserted UNREACHED, which is the half that
+    says the refusal happened before the expensive step rather than after it.
+    """
+    calls = _stub_sync(monkeypatch)
+    doc = _a_run(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    cfg = outside / "config.yaml"
+    cfg.write_text(doc["cfg"].read_text())
+    assert not (outside / ".git").exists()
+
+    code = _reproduce_from(tmp_path / "cwd2", cfg)
+    captured = capsys.readouterr()
+    assert code == EXIT_WRONG, captured.err
+    assert "E-GIT-NO-REPO" in captured.err
+    assert calls == []
+    assert any(line.startswith("code_hash: not verified") for line in captured.out.splitlines()), (
+        captured.out
+    )
+
+
+def test_the_config_form_reports_the_repositorys_lockfile_and_says_nothing_ranks_it(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Ruling AA in this form: neither source is preferred SILENTLY, and here
+    there is only one source and no authority at all. Both branches are armed,
+    because *testing the refusal and never the honouring* would leave the
+    present-lockfile branch unexercised — and the digest is computed in the
+    test rather than written as a literal."""
+    _stub_sync(monkeypatch)
+    doc = _a_run(tmp_path)
+    root: Path = doc["root"]
+    (root / "uv.lock").unlink(missing_ok=True)
+
+    assert _reproduce_from(tmp_path / "cwd_a", doc["cfg"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert f"uv.lock: {root} holds none" in out, out
+    assert "no `uv_lock_hash` either" in out, out
+
+    (root / "uv.lock").write_bytes(_A_LOCKFILE)
+    digest = "sha256:" + hashlib.sha256(_A_LOCKFILE).hexdigest()
+    assert _reproduce_from(tmp_path / "cwd_b", doc["cfg"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert f"its digest is {digest}" in out, out
+    assert "nothing is ranked here" in out, out

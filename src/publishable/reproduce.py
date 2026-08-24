@@ -1028,6 +1028,28 @@ def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], i
     class at all — the path on which no user top level did anything useful
     anyway.
     """
+    raw_config = operand.doc.get("config")
+    doc: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+    return env_and_required_env(doc, dest, c, origin="the recorded commit")
+
+
+def env_and_required_env(
+    doc: dict[str, Any], dest: Path, c: Collector, *, origin: str
+) -> tuple[list[str], int | None]:
+    """The body of step 6, over a config document and a tree — whichever form
+    supplied them. `prepare_env` above passes the record's embedded `config` and
+    the checkout; the config-operand form passes the config file's own parsed
+    document and the repository it sits in.
+
+    Extracted rather than reimplemented, because the config form needs exactly
+    this and *the sibling that already got it right is the first place to look*
+    — a second `.env` writer and a second `get_template` window would be two
+    answers to one question, and the containment above is the half a copy loses.
+
+    `origin` is the only thing the two callers differ on, and it is a phrase
+    rather than a flag: the tree is *the recorded commit* in the record form and
+    *the repository* in the config form, and only the sentence changes.
+    """
     lines: list[str] = []
 
     example = dest / ".env.example"
@@ -1038,12 +1060,8 @@ def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], i
         dot_env.write_bytes(example.read_bytes())
         lines.append(f".env: written from {example} — it carries NAMES, so fill in the values")
     else:
-        lines.append(
-            f".env: not written — the recorded commit carries no `.env.example` at {example}"
-        )
+        lines.append(f".env: not written — {origin} carries no `.env.example` at {example}")
 
-    raw_config = operand.doc.get("config")
-    doc: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
     raw_name = doc.get("experiment_type")
     name = raw_name if isinstance(raw_name, str) else ""
     entrypoint = doc.get("entrypoint")
@@ -1237,6 +1255,126 @@ def write_expectation(operand: Record, dest: Path, c: Collector) -> tuple[list[s
 
 
 # --------------------------------------------------------------------------
+# The config-operand form. Design Decision 13.
+# --------------------------------------------------------------------------
+
+
+_NOT_VERIFIED = (
+    "code_hash: not verified — a config names no commit and no recorded digest, so the "
+    "tree this would hash is the tree NOW, not the tree a run used",
+    "input_manifest: not verified — a config records no manifest; `run` below builds one "
+    "from whatever `data.input_dir` you set and compares it to nothing",
+    "apparatus: not verified — a config records no facts, so no `apparatus.expected.json` "
+    "is written and the next `run`'s first probe has nothing to be checked against",
+)
+"""The three things this form did not verify, each named rather than omitted.
+
+§ Reproducing on another device's own sentence for the config form is that it
+*"cannot verify a `code_hash` and says so, rather than reporting a match it
+never made"*, and `diff`'s `not comparable` rows are the shipped precedent for
+the other two — the wording here is deliberately close to
+`diff._NOT_COMPARABLE_REASONS`' without being shared, because those strings are
+row cells in a fixed-width table and these are transcript lines.
+
+**Printed FIRST**, before anything this form does do. They stand in for steps
+1-3 and for step 5's verification, which is where a reader of the numbered list
+would look for them; putting them at the end would make the transcript read as
+though the sync and the `.env` copy had verified something.
+
+A fourth absence travels with the lockfile line below rather than here, because
+it is about the environment step this form DOES run.
+"""
+
+
+def reproduce_config(operand: ConfigOperand, c: Collector) -> tuple[list[str], int | None]:
+    """§ Reproducing on another device's steps 4 onward, in place. Decision 13.
+
+    Returns `(transcript lines, exit code or None)` — the same contract every
+    other step function here uses.
+
+    **Nothing is created outside the repository the config sits in.** No
+    destination is derived and nothing is cloned, so
+    `E-REPRODUCE-DEST-EXISTS`, `E-REPRODUCE-DEST-IN-REPO` and
+    `E-REPRODUCE-NO-REMOTE` are **unreachable from this form** — stated that
+    way, and not as *cannot happen*: they are live refusals of the record form
+    reached through `prepare_checkout`, which this function does not call. The
+    same is true of `E-REPRODUCE-EXPECTED-EXISTS`: a config records no facts,
+    so no expectation is written and `write_expectation` is never called.
+
+    **The repository is found by walking up from the CONFIG PATH**, never from
+    the working directory — `CLAUDE.md` § Invariants, and the same walk-up
+    `validate` already performs for `data.input_dir`. `find_repo_root` RAISES
+    `E-GIT-NO-REPO` rather than returning `None`, so it is caught **by code**
+    here, the way `validate._check_data` and `study._refuse_if_in_repo` catch
+    it, and re-reported through this collector rather than raised into `main`,
+    whose handler applies no redaction pass. No code is minted for it: a config
+    outside every repository has no environment to restore, and
+    `E-GIT-NO-REPO` is the existing code for exactly that walk-up failing.
+
+    **Decision 3's ranking degenerates here, and the transcript says so rather
+    than reusing it silently.** That ranking is *the recorded `uv_lock_hash` is
+    the authority, the run directory's byte copy is the preferred carrier, the
+    committed lockfile is used only when it matches* — and a config records no
+    `uv_lock_hash` and has no byte copy beside it, so **there is no authority
+    and nothing to rank**. What is left is the repository's own lockfile, which
+    `uv sync --locked` reads for itself. That absence is a printed fact, on
+    Ruling AA's own terms: neither source is preferred silently.
+    """
+    lines: list[str] = list(_NOT_VERIFIED)
+
+    try:
+        repo = find_repo_root(operand.path.parent)
+    except ContractError as exc:
+        if exc.code != "E-GIT-NO-REPO":
+            raise
+        c.error(
+            "E-GIT-NO-REPO",
+            str(operand.path),
+            f"is not inside a git repository, so there is no project to restore: "
+            f"`reproduce` given a config prepares the checkout it is already standing "
+            f"in, and {exc}",
+        )
+        return (lines, EXIT_WRONG)
+
+    lines.append(f"repository: {repo}, found by walking up from {operand.path}")
+
+    lockfile = repo / "uv.lock"
+    if lockfile.is_file():
+        lines.append(
+            f"uv.lock: {lockfile} is the environment `uv sync --locked` will hold you to — "
+            f"its digest is {_sha256_of(lockfile)}, and a config records none to check it "
+            f"against, so nothing is ranked here"
+        )
+    else:
+        lines.append(
+            f"uv.lock: {repo} holds none, so `uv sync --locked` has nothing to be locked to "
+            f"— a config records no `uv_lock_hash` either, so there is no second source to "
+            f"fall back on"
+        )
+
+    sync = _uv_sync(repo)
+    if sync.returncode != 0:
+        c.error(
+            "E-IO-FAILED",
+            str(repo),
+            f"`uv sync --locked` failed: {sync.stderr.strip() or sync.stdout.strip()}",
+        )
+        return (lines, EXIT_EXTERNAL)
+    lines.append("uv sync: --locked, against the repository's own lockfile")
+
+    try:
+        doc = yaml.safe_load(operand.path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        c.error("E-IO-FAILED", str(operand.path), f"could not be read as YAML: {exc}")
+        return (lines, EXIT_WRONG)
+    more, code = env_and_required_env(
+        doc if isinstance(doc, dict) else {}, repo, c, origin="the repository"
+    )
+    lines.extend(more)
+    return (lines, code)
+
+
+# --------------------------------------------------------------------------
 # The command. `docs/reference.md` § Reproducing on another device, steps 1-7.
 # --------------------------------------------------------------------------
 
@@ -1279,11 +1417,13 @@ def command_reproduce(path: Path) -> int:
         print(c.render(), file=sys.stderr)
         return EXIT_WRONG
     if isinstance(operand, ConfigOperand):
-        # SEAM, deliberately loud. Design Decision 13's config form is plan
-        # task 12, the next commit; a silent fall-through returning `EXIT_OK`
-        # for an operand this command ACCEPTS is the shape that would ship a
-        # command doing nothing and reporting success.
-        raise NotImplementedError("the config-operand form is plan task 12; see design Decision 13")
+        config_lines, config_code = reproduce_config(operand, c)
+        if config_lines:
+            print("\n".join(config_lines))
+        if config_code is not None:
+            print(c.render(), file=sys.stderr)
+            return config_code
+        return EXIT_OK
 
     prepared = prepare_checkout(operand, c, cwd=Path.cwd())
     if isinstance(prepared, Refused):
