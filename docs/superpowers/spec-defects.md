@@ -9907,3 +9907,76 @@ scoping expires; the failure mode here is narrower than that** — the claim was
 never true, and it reads as true because *recomputed from the artifact* is what a reader expects an
 aggregate phase to do. **Grep for the code before building on a sentence about it**: one grep for
 `units.parquet` in `cli.py`'s phase 8 answers it.
+
+## OPEN — `tests/test_freeze.py`'s two claims with nothing behind them: a helper that took a `code` and never read it, and a test whose name promises a redaction it never asserts — **Owner: unassigned, with the reason (no remaining slice owns `freeze`'s test surface)**
+
+**Filed 2026-08-24 by H9b's whole-branch fix round; the first half is CLOSED in the same commit, the
+second is not.** Both are H8b's (`60f5d61`, *"H8b task 4: freeze.py — the refusal gate, template
+resolution, credential pre-check"*), a closed slice, and this branch added no use of either.
+
+**Half one, closed here.** `_assert_refused(result, code, exit_code, ledger_before, run_dir)` never read
+`code`. Measured, both arms of the discriminating pair scoped to `tests/test_freeze.py` with
+`freeze._refuse` mutated to emit a constant `"E-BOGUS-MUTATION"` instead of the code it is handed:
+with the shipped helper **5 failed, 37 passed** — not one of the twenty arms; with the helper reading
+stderr **25 failed, 17 passed**. So **twenty tests asserted *that* a refusal happened and its exit code
+and its untouched ledger, and never *which* refusal it was.** (The count is twenty, not the twenty-one
+the review reported: `grep -c "_assert_refused(result" tests/test_freeze.py` counts the `def` line,
+whose first parameter is `result`.) The helper now reads the code off stderr — the only place it is
+observable, `_Refused` carrying the exit code alone — and returns stderr for callers whose message is
+the point. **What the fail-open was hiding is recorded in the same round** and is the reason this entry
+exists at all rather than being a test-hygiene note: **four of the twenty had been passing a code the
+code never printed since H9b minted `E-FREEZE-CONFIG-EDITED`**, whose gate (c2) sits before template
+resolution (e) and the plan cross-check (h) while `covered_config` covers everything but `metadata` and
+the two host paths — so every fixture that edited the run directory's `config.yaml` copy to reach a
+later gate stopped at (c2) instead, and `E-TEMPLATE-UNKNOWN`, `E-TEMPLATE-INSTALLED-UNSUPPORTED` and
+`E-FREEZE-PLAN-MISMATCH` silently lost their coverage. `_edit_config_yaml` now re-records
+`identity.json`'s `parameters_hash` beside the edit, which is the state each of those fixtures means.
+
+**Half two, OPEN.** `test_gate_e_a_load_fault_reuses_E_TEMPLATE_LOAD_and_carries_credentials` — its name
+and its docstring (*"the template that DID load cleanly still has its declared credential redacted in
+the finding"*) promise a redaction, and the body asserts the code, the exit code and the ledger only.
+The fixture declares `F_CRED_TOKEN=shh` through a parameter value's `requires_env`, so the property is
+reachable: assert that `shh` does not appear in the rendered finding and that the redaction marker does,
+and pin it with a mutation that narrows `partial_templates`' credential read. **Not fixed here**: the
+mutation belongs in a closed slice's production surface and this is a fix round on the commit before a
+merge. **Owner: unassigned, with the reason** — no remaining slice (H9c `reproduce`, H9d
+`demo`/`docs`/`list-templates`, H3c-3's remaining 14) has `freeze` or its tests as its surface.
+
+**The shape was swept for and does not exist elsewhere.** An `ast` walk over every `FunctionDef` in
+`tests/**` and `src/**` whose parameters include a name containing `code`, checking whether that name is
+ever loaded in the body: **one hit in `tests/`** (this helper, before the fix) and **zero in `src/`**.
+The sweep was proven able to fail by running it against the unfixed helper first, and it is an `ast`
+walk rather than a grep because a wrapped signature defeats a line-oriented one.
+
+## OPEN — `_dispatch`'s branch order is documented as load-bearing and is constrained by no test — **Owner: unassigned, with the reason (no remaining slice owns `_dispatch`'s ordering)**
+
+**Filed 2026-08-24 by H9b's whole-branch fix round (review Minor 4).** `cli._dispatch` handles every
+built command before consulting `NOT_BUILT_COMMANDS`, and its two-token lookup
+(`f"{command} {rest[0]}"`) before its one-token one. H9b's plan (§ Corrections, correction 12) called
+that order load-bearing for `publishable resume new`, and the shipped comment said *"Safe only because
+of this function's branch ORDER"* — **measured, mutation M6 hoisted both `NOT_BUILT_COMMANDS` lookups
+above the built branches and the FULL unfiltered suite returned 3132 passed, 0 failed**, twice (the
+implementer's run and the reviewer's). The order is unpinned because the mapping holds four keys
+(`demo`, `docs`, `list-templates`, `reproduce`), none containing a space and none with a built branch,
+so no fixture can separate the two orderings. The false claim is deleted rather than rewritten; what is
+filed is the gap it was standing in for. **The next slice that adds a two-token unbuilt name, or builds
+one of those four, inherits this**: at that moment the order becomes real, and a test must exist before
+it does. What *is* bound today is membership, not order — `test_reference_cli_tables_match_what_the_cli_does`
+binds the `NOT BUILT` rows to the mapping's keys in both directions. **Owner: unassigned, with the
+reason** — no remaining slice names the dispatcher's ordering as its surface; H9c and H9d each build one
+of those four names and whichever runs first should close this rather than re-derive it.
+
+## OPEN — two comments in `report.py`'s and `test_report.py`'s surface assert that H8c task 10's bundle render "does not exist yet", and it shipped — **Owner: unassigned, with the reason (H8c is closed)**
+
+**Filed 2026-08-24 by H9b's whole-branch fix round**, found by the sweep Minor 2 required
+(`grep -rn "not dispatched\|does not exist yet\|owns building it" src/ tests/`, every hit attributed).
+`report.py`'s single-run draft refusal carries *"That flagging arm is task 10's, over code that does not
+exist yet"*, and `tests/test_report.py` carries *"a bundle render does not exist yet, so it cannot be
+pinned here; task 10's own brief owns building it"*. Both are false at HEAD: H8c task 10 built the
+bundle render and its draft flag — `report.py`'s own member-identity helper implements it
+(*"a bundle FLAGS a draft member rather than refusing the whole render"*), one file above the comment
+denying it exists. Nothing behavioural is wrong; this is the *"a sentence went false under its own
+slice's later change"* shape, in a **closed** slice, which is why it is filed rather than fixed on this
+branch — H9b's own two instances of it are corrected in this round. **Owner: unassigned, with the
+reason** — no remaining slice (H9c, H9d, H3c-3's remaining 14) has `report` as its surface. The remedy
+is deletion, not rewriting.
