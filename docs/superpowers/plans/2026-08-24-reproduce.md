@@ -842,3 +842,56 @@ repeated. **No fifth number.** Quote the table or name the dependency; never a s
   spec or a scoping by **appending**, never by editing.
 
 **Must not touch:** `spec-defects.md` (task 14), any guard-pin arm, `src/`.
+
+---
+
+## Corrections 26–29, appended 2026-08-24 before dispatch — two mechanisms, one fixture recipe, one count
+
+The design's own [§ Appendix](../specs/2026-08-24-reproduce-design.md) carries these with their full
+measurements. They are repeated here because **a correction that reaches only the design reaches no
+implementer**, and each names the task section it amends.
+
+26. **Fixture D was not constructible, and a rewritten history is caught at the CHECKOUT rather than by
+    the hash — amends tasks 3 and 4.** A commit SHA is a hash over its own tree, so a different tree
+    cannot live at the same SHA; measured, an amend produced a new SHA (`fcc45b7…` → `ff45afe…`) and left
+    the original's tree untouched, so the recorded SHA still checks out to the recorded bytes and the
+    comparison **passes**. **Task 4's Fixture D becomes two arms**: **D1**, the record's `code_hash` set
+    to the pre-H6a figure computed in the test by `hashes.code_hash(root, None)` over a tree holding a
+    git-ignored file under `src/` (`bdf2ce9` against `0cc6ddd`); and **D2**, a `code_hash` edited to an
+    arbitrary digest. **Task 3 gains a thirteenth code**, `E-REPRODUCE-COMMIT-UNREACHABLE` at exit
+    **`5`**, for a recorded commit the remote no longer holds — measured: after an amend,
+    `git clone --no-local` of a bare intermediate does not carry the old object and
+    `git checkout --detach <recorded-sha>` fails `fatal: unable to read tree`. Its message names the
+    recorded commit and says the remote does not hold it.
+    **And a fixture trap you must design around:** `git clone` of a **local path** hardlinks the whole
+    object database, **unreachable objects included**, so Fixture A's local-path remote **cannot
+    reproduce that state** — the checkout succeeded in the measurement. The recipe needs a bare
+    intermediate cloned with **`--no-local`**. A fixture built the obvious way passes while testing the
+    opposite state. **`reproduce` itself passes no `--no-local`**: that would break the legitimate
+    local-remote case and slow every clone. The flag belongs to the fixture.
+27. **Task 9's mechanism is `record(incoming)` THEN `changed(incoming)` on the seeded object, and the
+    design's *"asked only for `changed`"* is false of the shipped class.** `Observations.changed`'s
+    `assert` rests on a caller contract its own docstring states — *"`record` runs before `changed` for
+    the same `facts`"* — which holds for a run's own object and **not** for one seeded from a foreign
+    record. Measured on a seeded object, `changed` **alone** raises `AssertionError` for three cases: an
+    extra incoming fact, a condition the expectation does not carry, and — **the one that matters** —
+    **`null → value`**, which § Reproducing on another device requires to **pass** and calls *"more
+    evidence rather than less"*. With `record(incoming)` first, **which is what `Observer` itself does**,
+    all eight measured cases are right and there is still no new comparison function. **Task 9's mutation
+    list gains a sibling: drop the `record` call and keep the `changed` call**, caught by Fixture P arm 2,
+    which becomes the arm separating an `AssertionError` from a pass. Fixture Q's `total_probes` claim is
+    unchanged — the seeded object's counts are its own and reach no record.
+28. **Task 5's "reachable beside the operand" is a filesystem probe, and the docstring must say so.** The
+    test is `(<operand>.parent / "environment" / "uv.lock").is_file()` — a probe for a file, not a
+    structural fact about the operand. Correct for both measured forms, and **stated because a bundle
+    placed inside a run directory would take the run-directory branch**. What makes it safe is the digest
+    check: `E-REPRODUCE-LOCKFILE-EDITED` fires when the copy's sha256 does not match the record's
+    `uv_lock_hash`, so a foreign copy is refused rather than used. **Write the reason, not just the
+    probe** — that is the difference between a proxy and a guarded one.
+29. **The count is thirteen, and it carries its noun — amends task 15.** Twelve `E-REPRODUCE-*` codes and
+    one `E-APPARATUS-*` code: **thirteen codes, thirteen § Errors rows**, one row per code covering every
+    site that raises *or* reports it. Anywhere this plan or the design says *twelve*, read **thirteen**.
+    The § Executability verdict does not move and **no fifth number** is minted: a count of refusals says
+    nothing about whether any of the nine configs can reach one, and none can. **Still no exit code is
+    minted** — `5` gains a second reader here rather than a first, since the lockfile task already reads
+    it for `uv sync`.

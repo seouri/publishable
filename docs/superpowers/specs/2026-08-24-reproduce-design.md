@@ -837,3 +837,107 @@ tasks to hit a number is the failure mode that prediction is about.
 **Batch 5 is the behaviour change**, and it is reviewed against a real command rather than against
 the suite — the split this project has taken three times (H8b Decision 7, H7d Part B, H9a batch 2).
 Batch 3 is the slice's centre of gravity and is where its charter is discharged.
+
+---
+
+## Appendix — corrections appended 2026-08-24, before dispatch
+
+Appended rather than edited, so the dated measurements in §§ 0–11 stay as they were made. Four items;
+two of them change a mechanism and one changes a count, so **every task section they touch carries the
+same correction appended in the plan** — a ruling that lives only in a design is one an implementer
+re-derives.
+
+### C1 — Fixture D is **not constructible as written**, a rewritten history is caught at the **checkout** rather than by the hash, and a thirteenth code follows
+
+**The recipe was impossible.** § 9's Fixture D said *"the original SHA force-updated onto the amended
+tree, so `git.commit` still resolves and holds different bytes."* **A commit SHA is a hash over its own
+tree, parents, message and metadata**, so a different tree cannot live at the same SHA; `git update-ref`
+moves a ref, not an object. Measured: amending the fixture commit produced a **new** SHA
+(`fcc45b7…` → `ff45afe…`) and left the original's tree untouched, so checking the recorded SHA out gives
+the recorded bytes and the comparison **passes**. `E-REPRODUCE-CODE-HASH` would have shipped with no
+fixture that reaches it.
+
+**Fixture D becomes two constructible arms, and neither is a rewritten history:**
+
+- **D1 — the H6a boundary, which is the case Ruling Z exists for.** The record's `code_hash` is set to
+  the **pre-H6a** figure, computed in the test by `hashes.code_hash(root, None)` over the same tree that
+  holds a git-ignored file under `src/` — measured at `bdf2ce9` against the post-H6a `0cc6ddd` (§ 0.3).
+  Both literals computed by calling, never hard-coded. This arm is also what pins Decision 2's
+  enumeration, because it is a difference with **no** wrongdoing behind it.
+- **D2 — a tampered record.** `code_hash` edited to an arbitrary digest. The plain case, and the one that
+  proves the comparison reads the record rather than its own recomputation.
+
+**And the finding underneath it: § Reproducing on another device's step 3 is wrong about *where* a
+rewritten history is caught.** A force-pushed history makes the recorded commit **unreachable**, so the
+failure lands at the **checkout** — task 3 — and never reaches the hash comparison at all. Measured:
+after an amend, `git clone --no-local` of the intermediate bare repo does not carry the old object
+(`git cat-file -t` fails) and `git checkout --detach <recorded-sha>` fails
+`fatal: unable to read tree`. So a **thirteenth** code is minted, `E-REPRODUCE-COMMIT-UNREACHABLE` at
+exit **`5`** — the clone-and-checkout half of code `5`'s documented meaning, whose message names the
+recorded commit and says the remote does not hold it. **That is the honest home for step 3's claim**, and
+Decision 2's enumeration keeps *"a rewritten or force-pushed history"* as a candidate cause only for the
+narrower case where the SHA still resolves and the tree differs — which, per the paragraph above, means a
+record whose `code_hash` no longer matches its own commit.
+
+**A trap for the fixture author, measured, in a currency this repo has not paid in yet.** `git clone` of
+a **local path** hardlinks the whole object database, **unreachable objects included** — so a fixture
+built on a local-path remote (which § 9's Fixture A is, deliberately, so nothing reaches the network)
+**cannot reproduce the unreachable-commit state at all**: the checkout succeeded in the measurement
+above. The recipe needs a bare intermediate cloned with **`--no-local`**, and a fixture built the obvious
+way would pass while testing the opposite state. *A fixture whose numbers agree with the bug*, in git's
+currency rather than in arithmetic. **`reproduce` itself passes no `--no-local`** — that would break the
+legitimate local-remote case and slow every clone; the flag belongs to the fixture, not to the command.
+
+### C2 — Decision 4's mechanism is `record(incoming)` **then** `changed(incoming)`; calling `changed` alone on a seeded `Observations` raises `AssertionError` on three cases, one of which the document says must pass
+
+**Decision 4 said "asked only for `changed`". That is false of the shipped class**, and the measurement
+is the whole correction. `Observations.changed`'s `assert` rests on a caller contract its own docstring
+states — *"`record` runs before `changed` for the same `facts`"* — which holds for a run's own object and
+**does not hold for an object seeded from a foreign record**, where `record` saw the *recorded* facts and
+`changed` sees the *incoming* ones. Measured on a seeded object, `changed` alone:
+
+| Case | `changed` alone | `record(incoming)` then `changed(incoming)` |
+|---|---|---|
+| a moved value | `('a', 'x', 'w')` — correct | `('a', 'x', 'w')` — correct |
+| **`null → value`** | **`AssertionError`** | `None` — **passes**, as § Reproducing requires |
+| `value → null` | `None` | `None` |
+| the incoming probe lacks an expected fact | `None` | `None` |
+| **an extra incoming fact** | **`AssertionError`** | `None` |
+| **a condition the expectation does not carry** | **`AssertionError`** | `None` |
+| per-condition scoping (`01` expects `p`, sees `x`) | `('a', 'p', 'x')` | `('a', 'p', 'x')` — correct |
+| a constant `nan` | `None` | `None` |
+
+**`null → value` asserting is the one that matters**: it is the exact asymmetry § Reproducing on another
+device calls *"more evidence rather than less"*, so the naive mechanism breaks the sentence Decision 4
+exists to make structurally true. With `record(incoming)` first — **which is what `Observer` itself
+does**, and is the contract the assert names — every one of the eight cases is right, and still with **no
+new comparison function**. Decision 4's conclusion stands; its mechanism is corrected to the two-call
+form, and § 10's *"compare with `!=` instead of `Observations.changed`"* mutation gains a sibling:
+**drop the `record` call and keep the `changed` call**, caught by Fixture P arm 2, which becomes the arm
+that separates an `AssertionError` from a pass.
+
+**§ 6's disclosure is unchanged**: the second object is still never asked for `facts_document`,
+`unobserved` or `warn_unanswered`, so Fixture Q's claim about `total_probes` holds exactly as written —
+the seeded object's counts are its own and reach no record.
+
+### C3 — Ruling AA's two forms are told apart by a **filesystem probe**, and the design says so rather than implying a structural test
+
+Decision 3 step 2 reads *"the byte copy is reachable — `environment/uv.lock` beside the operand."* Made
+explicit: the test is `(<operand>.parent / "environment" / "uv.lock").is_file()`, and it is a **probe for
+a file**, not a structural fact about the operand. It is correct for both measured forms — a run
+directory holds `environment/`, a bundle holds only `study.yaml` and its members — and it is stated
+because a bundle placed *inside* a run directory would take the run-directory branch and compare a
+digest that belongs to a different run. **The digest check is what makes that safe**:
+`E-REPRODUCE-LOCKFILE-EDITED` fires when the copy's sha256 does not match the record's `uv_lock_hash`,
+so a foreign `environment/uv.lock` is refused rather than used. That is why the probe is acceptable, and
+naming the reason is the difference between a proxy and a guarded one.
+
+### C4 — the count moves, and every figure carries its noun
+
+C1 mints one more code. The slice mints **twelve `E-REPRODUCE-*` codes and one `E-APPARATUS-*` code —
+thirteen codes, thirteen § Errors rows, one row per code covering every site that raises *or* reports
+it.** Decision 14's table gains `E-REPRODUCE-COMMIT-UNREACHABLE` at exit `5`, and § 7's *"twelve codes
+are minted and none is retired"* reads **thirteen**; the § Executability verdict — **no row moves, no
+fifth number** — is untouched, because a count of refusals says nothing about whether any of the nine
+configs can reach one, and none can. **Still no exit code is minted**: `5` gains a second reader here
+rather than a first, since Decision 3 step 5 already reads it for `uv sync`.
