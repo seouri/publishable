@@ -24915,10 +24915,14 @@ def test_h9b_a_resume_through_an_unmoved_apparatus_completes(
 
     A run that crashed before ever probing is a separate claim and is not
     this fixture: an absent or empty baseline mints no refusal (Decision 11),
-    and `freeze`'s `E-FREEZE-LEDGER-MISSING` must not be inherited by copy —
-    every other resume test in this file drives a project with no probe at
-    all, which is that case, so it is pinned by thirty of them rather than
-    by an arm here.
+    and `freeze`'s `E-FREEZE-LEDGER-MISSING` must not be inherited by copy.
+    Every other resuming test in this file drives a project that declares no
+    probe, which IS that case — grepped rather than counted: over this
+    file's H9b region `experiment_type=` appears once (this fixture's
+    `h9b_resume_assay`) and `apparatus_probe` appears once (this fixture's
+    own template), so every other resume runs against `generic`, whose
+    `apparatus_probe` is `None`, and reaches `replay_ledger` with no ledger
+    at all.
     """
     facts = tmp_path / "apparatus_facts.json"
     control = tmp_path / "crash_control"
