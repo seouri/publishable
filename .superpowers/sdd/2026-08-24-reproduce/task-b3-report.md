@@ -390,6 +390,13 @@ Two **defects found and fixed**, both pre-existing:
   § Reproducing's own sentence and § CLI reference's `Does` cell. Rewritten to say what each operand
   gets and that it stops either way.
 
+One framing corrected after the first cut, on review: the appended paragraph originally called both
+of its items *narrowings*. **Plan correction 1 says the document's *"the only git operation"* is about
+what the USER typed and that the design keeps that reading** — so that sentence is not wrong, and
+framing the two-invocation count as a correction of it would have been correcting a true claim. The
+paragraph now reads *"one narrowing and one addition"*, and the addition says in as many words that it
+corrects nothing.
+
 One hit checked and **left alone, deliberately**: `reference.md` § Warnings core reports'
 `W-ENV-UNLOCKED` row, *"`reproduce` will not be able to restore it"* — that clause is **guard-pin
 arm F**, editor NONE, and it is now true rather than aspirational (`E-REPRODUCE-UNLOCKED` ships).
@@ -489,8 +496,26 @@ Reported as hits, attributed. **Not a count.**
 | `E-FREEZE-*`/`E-RESUME-*` live in § Errors `validate` reports | `grep -n 'E-FREEZE-\|E-RESUME-' docs/reference.md` | every row is in that section's table; **none** is in § Errors core raises |
 | the three column-count hits are pre-existing | ran the checker against `git show HEAD:docs/reference.md` | the same three rows, at 625/1821/3753 |
 | the `.env` line's asserted substring survives generalizing the origin phrase | `grep -n 'env.example' tests/test_reproduce.py` | `:1677` asserts `"carries no \`.env.example\`"`, which the parameterized message preserves verbatim |
+| **`prepare_env`'s three-value return has exactly two unpackers** | `grep -rn 'prepare_env' tests/ src/ docs/` | `src/publishable/reproduce.py:1526` (the new caller) and `tests/test_reproduce.py:1642` (the helper). The fifteen `_prepare_env(...)` call sites all go through that helper; `reproduce.py:931` is the `def`, `:1042`/`:1476`/`:1490` and `test_reproduce.py:1701`/`:1859`/`:1920`/`:1921` are prose, `test_reproduce.py:36` is the import, and `spec-defects.md:6901` names it in a filing. **No third unpacker exists** |
 
 ## 11. Concerns
+
+0. **ESCALATION — this is the one item that needs a controller ruling, and it is the headline of this
+   report rather than one concern among many. `reference.md` § Reproducing on another device's step 2
+   still states something false** — *"the destination is derived, so it can't collide with an existing
+   checkout"* — with the correction four lines below it. A document that says a thing and unsays it
+   four lines later is worse than one that says it right, and shipping that was not a choice this task
+   was entitled to make on its own. **Two options, both priced:**
+   **(a) Authorize an edit to `_H5A_ARM_D_REFERENCE_LINES`' step-2 entry.** The replacement text is
+   written out verbatim in § 2 above. **No literal moves** — the run ID
+   `my-study_run_2026-08-06T14-02-11Z_8e21ab3` is byte-identical in it — so the arm's own stated
+   property (*"the worked example's own numbers, as raw text"*) does not move; what moves is the
+   whole-line capture, which is incidental to what the arm protects. Cost: one guard-pin arm edited by
+   a task its docstring does not name, which is the thing this project's rule exists to prevent.
+   **(b) Keep the correction-paragraph form as shipped.** Cost: `reference.md` carries a false
+   normative sentence with its correction below it, permanently.
+   **This task took (b) provisionally, because self-authorizing (a) is the one move the dispatch
+   forbids outright.** It is stated here so the choice is made by whoever can make it.
 
 1. **H5a arm D / H6b arm R is the live blocker, and it is a real one.** Correction 13's narrowing of
    § Reproducing step 2 is **not in that sentence**; it is in a paragraph below it, and the sentence

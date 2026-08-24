@@ -4224,16 +4224,16 @@ In order, it:
 6. Copies the tracked `.env.example` to `.env` when there isn't one already — an existing `.env` is never overwritten — and lists the `required_env` variables that need values. **That list is built only for a template this command can construct**: core's `generic`, and a project-local [`templates/**`](#templates-where-parameters-are-defined) inside the checkout it just made. For a **plugin-provided** template it cannot be: `uv sync` installed that plugin into the *checkout's* environment, not into the one `reproduce` is running in, so nothing here can import it. In that case `reproduce` names the template and its plugin and **defers to the `validate` line it is about to print** — `validate`, run in the prepared checkout, reads `required_env` itself, in the interpreter where the plugin exists. No name is reported as set or unset either way: this process's environment is not the one the run will happen in, and a verdict here would be a claim about a future process.
 7. Prints exactly what's left to do, then stops.
 
-**Two narrowings to step 2, stated here rather than folded into its own sentence, so that what
-replaces what stays legible. First: *"it can't collide with an existing checkout"* is not true, and
-derived is not the same as unique.** A second `reproduce` of the same record derives the same name; rather than overwrite a
+**One narrowing to step 2 and one addition, stated here rather than folded into its own sentence,
+so that what replaces what stays legible. The narrowing: *"it can't collide with an existing
+checkout"* is not true, and derived is not the same as unique.** A second `reproduce` of the same record derives the same name; rather than overwrite a
 checkout you may already have edited, it refuses — `E-REPRODUCE-DEST-EXISTS`, naming the directory —
 and it refuses a destination resolving inside a git repository too (`E-REPRODUCE-DEST-IN-REPO`), for
 the reason [`input_dir`/`output_dir` may never](#the-one-config-file). What *is* true is the second
 half: the destination is derived, so you never name it, and it is created under the directory you are
-standing in. **Second: *"the only git operation"* is one invocation as the user sees it and two as
-git does** — a clone and a detached checkout, each passing `-c core.autocrlf=false` so the tree is
-materialized the way the recorded hash expects. A recorded commit the remote no longer holds — what a
+standing in. **The addition, which corrects nothing: *"the only git operation"* is right about what
+you typed, and the count underneath it is two** — a clone and a detached checkout, each passing
+`-c core.autocrlf=false` so the tree is materialized the way the recorded hash expects. A recorded commit the remote no longer holds — what a
 rewritten or force-pushed history actually leaves behind — fails at that checkout, as
 `E-REPRODUCE-COMMIT-UNREACHABLE`, rather than surviving to be caught by a hash. And a record whose
 `provenance.git.remote` is `null`, which is every run of a project that never added one, has nothing
