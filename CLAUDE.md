@@ -242,7 +242,9 @@ run directory's byte copy, and a config has neither — so the form prints the r
 and its digest **and the absence of anything to rank it against**, a fourth honest absence beside the
 three not-verified lines. **`E-GIT-NO-REPO` was reused rather than a fourteenth code minted** for a
 config outside every repository, which makes it a **seventh** path to that code and a **third** site
-catching it by code — and its row's closing sentence, *"a config outside every repository prints
+catching it by code — **and the gate then found an eighth**, `prepare_checkout`'s walk-up from the derived
+destination's parent, where a raise IS the ordinary case, so the exception path is the pass branch and the
+quiet return is the refusal; the row had been widened six → seven and still undercounted — and its row's closing sentence, *"a config outside every repository prints
 `✓ config valid` and refuses only at `run`"*, went false in the same edit and was corrected in it.
 And **`E-IO-FAILED` has no § Errors row at all** — it lives as one sentence in § Exit codes saying it
 *"exits `1`"*, which is now false at three sites; the sentence was widened to name every site rather
