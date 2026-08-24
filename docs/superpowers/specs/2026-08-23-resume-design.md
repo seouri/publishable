@@ -1006,3 +1006,40 @@ visibly out of order; an arm naming a task that cannot legally edit it invites t
 to stop on a false blocker or to self-authorize on the grounds that the name must be a typo. **Batch 1 did
 neither** — it wrote clauses naming the task descriptively **and** stating the discrepancy, which is the
 third option and the right one.
+
+## Correction, 2026-08-23, from batch 4 (task 18) — the disclosure checked item by item against the shipped code, and three items are corrected by appending
+
+**Appended rather than edited, because § Is this additive? is the enumeration a reviewer reads and a
+wrong one is worse than none.** Every item below was checked against the code at the batch's own
+commits, not against the plan.
+
+**Item 1's subject is wrong: `resume` does NOT write `identity.json`.** The item reads *"`run`, `draft`
+and `resume` write a new run-start artifact."* `run` and `draft` do; a resume **reads** it and writes
+nothing — the write sits inside `_execute_prepared`'s `if resumed is None:` block, with every other
+run-start artifact, precisely because *"settled before the first execution and never touched again"*
+would be false of a file a second attempt rewrote, and because `identity.json` is the file the resume
+just compared itself against. The item should read **`run` and `draft`**. Items 2, 3, 4, 6 and the
+appended A2 were each re-checked and stand as written.
+
+**Item 5's last row is right about the exit code and now names a different identifier.** All four
+invocation shapes were measured through the real console script after the dispatch landed, and every
+one matched: `resume`, `resume a b` and `resume --json` print `` `resume` takes exactly one path and no
+flags`` at exit 2, and `resume new` is exit **2 → 1** with `resume`'s own refusal for a path that is
+not a run directory — the row's own claim, derived by reading, confirmed by running. **Task 16 then
+moved which refusal that is**, in the same batch: a `resume` path that is not a directory reuses the
+shipped `E-IO-FAILED` (Decision 17's third not-minted code), so the printed identifier is
+`E-IO-FAILED` where at task 15's commit it was `E-RESUME-NO-IDENTITY`. Both are exit 1 and both are
+*"`resume`'s own refusal for a path that is not a run directory"*; the identifier is recorded here so
+the next reader does not have to re-measure it.
+
+**An eighth item, and it is a behaviour of a command this slice ships rather than of one it inherits.**
+A resume stopped by an apparatus fact that **moved** while the run was down now writes the run record
+— `status: failed`, the reconstituted executions aggregated, `provenance.apparatus` naming the ledger
+that holds the moving observation — and exits `4`. Task 13 made that state reachable and measured the
+loss it created (exit non-zero, no `run.yaml`, repeated at every later resume); task 16 closed it. It
+belongs in this enumeration because it is the one place `_execute_prepared`'s own control flow moved:
+the *"with NO results, nothing was paid for"* early return now asks whether a **prior** attempt
+completed anything. For `run` and `draft` the condition is unchanged, `resumed` being `None`. The
+sibling case — an apparatus that has become **unreachable** — deliberately keeps today's behaviour
+(exit `5`, no record) and is filed in `spec-defects.md` with the terminality of `run.yaml` as the
+reason.
