@@ -66,3 +66,55 @@ clause**, changed no assertion, and **stated the discrepancy** rather than stopp
 self-authorizing on the grounds that the name must be a slip. **That third option is the right one**, and
 the design's parenthetical — which named a task that legally cannot edit those arms — is corrected by
 appending.
+
+## Batches 5–8 and the whole-branch gate
+
+Commits `1253a3b`–`afc6a05` (tasks 10–13), `04cad73` (**the lock**), `8963071` (**`resume` flips to
+built**), `d9b82c6`, `160887d`, `10ba559`, `6ddd882`; reviews `bd2b4de` (**tasks 10–18 PASS**, gate
+**HOLD** on four Majors), fix round `b19f1e1` / `4efa280` / `a8bf7a6`. Suite **3132 passed, 1 skipped, 2
+xfailed** against `main`'s 3019 — **+113 collected, attributed file by file, zero tests removed.**
+
+**A crash-and-resume produces the record an uninterrupted run would**, verified through the installed
+console script against a straight-through control: `run.yaml` **98 leaves, key order identical, ZERO value
+differences**, hashes equal **unnormalized**, four ledger lines each. The one clause: the crash left the
+interrupted triple no ledger line, so `attempts` is 1 on both sides — **`attempts` reaches 2 only for a
+re-executed triple**, which is a disclosed item with its own pin.
+
+**The lock's race was re-run against the SHIPPED code and the criterion itself was the finding.** The
+design's own probe criterion — *"two winners per trial"* — **flags the correct protocol**, because a winner
+releases the lock when its run ends; the violation is **two holders at one time**. And **without a stagger
+the token-less control violates nothing**, so an unstaggered control cannot fail at all. With those two
+corrections: detector self-test **60/60**, token-less control **0/60 unstaggered and 60/60 staggered**,
+shipped protocol **0/60 and 0/120** with the stagger inside the real window. **A control that cannot fail
+is not a control** — and here the criterion, not the harness, was the thing that could not fail.
+
+**The record loss is closed at exit 4, and the exit code was derived rather than chosen.** § Exit codes
+gives `1` to a changed fact *"caught before the first execution ran, which leaves nothing to mark `failed`
+at all"* — **false once there are prior results** — and `5` is the retry class; `4` follows from
+`run_status`'s shipped fold and is the same answer H7d Part B gives a mid-plan move with at least one
+result. **No code minted.** A resume whose apparatus moved now writes `run.yaml` carrying the status and
+the moving observation, which is H7d Part B's own rule — *a stop must be legible from the artifacts* —
+applied to the one surface that had been discarding them.
+
+**Major 3 is the gate's best find in four slices, because closing it uncovered a coverage loss nobody
+suspected.** `tests/test_freeze.py`'s `_assert_refused` **never read its `code` argument**: renaming a code
+to a bogus string left that file at 42 passed. Twenty arms asserted *that* a refusal happened, never
+*which*. Fixing the helper turned **5 failed** into **25 failed** — and **four of the twenty had been
+stopping at `E-FREEZE-CONFIG-EDITED`, a gate this very branch minted**, which precedes the others, so
+`E-TEMPLATE-UNKNOWN`, `E-TEMPLATE-INSTALLED-UNSUPPORTED` and `E-FREEZE-PLAN-MISMATCH` had **no coverage at
+all.** **A helper that ignores an argument does not merely weaken its callers — it hides what they stopped
+testing**, and the fix was zero tests added or removed. An `ast` sweep for the shape (a parameter whose
+name contains *code*, never loaded) found one more hit in `tests/` and none in `src/`.
+
+**Two Majors were sentences denying what their own file had just built.** `E-RESUME-LEDGER-UNREADABLE`'s
+row said *"Three faults, one code"* and **denied the fourth site by name** — re-derived by grep as four —
+and `command_resume`'s docstring said *"Decision 13 is NOT implemented here"*, *"`resume` is not
+dispatched"*, *"the containment does not exist yet"* and *"Task 16 owns building it"*, **all four false at
+HEAD and contradicted by the same docstring's closing sentence, eighteen lines above the containment
+itself.** Deleted, not rewritten. **That is the fourth consecutive slice in which a sentence went false
+under its own slice's later change.**
+
+**And two brief-supplied figures did not survive grepping** — *"21 call sites"* is **20** (the review's
+grep counted the `def` line) and *"thirteen codes … every one of the fourteen"* is **fourteen codes,
+fifteen minted, fifteen rows**, which only became legible once **each figure carried its noun.** A count
+without a noun is not a claim anyone can check, which is why two of them disagreed for a whole slice.
