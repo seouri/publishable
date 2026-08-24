@@ -358,3 +358,27 @@ wrong and the shipped table is `READERS`), and `run_status(` in `src/publishable
 editor, arm A's `xfail` task, fixture C's `attempts: 2`, fixture D's unbuildability, mutation 9.1's
 stated catcher, the brief's `_READERS`, and arm A's
 sorted-leaf normalization being blind to the mapping key order its own docstring names.
+
+## Corrections, 2026-08-23, from batches 3-4's review
+
+**Three things above are wrong or incomplete, and one of them repeats batch 1's Major exactly.**
+
+**One — arm C's failability is claimed by the wrong mutation.** Mutation 5.2 leaves arm C **green**, and
+arm C is absent from 5.1's fifteen failures. The mutation that fails it is **deleting
+`"recorded_columns"` from the ledger write**, which fails arm C first and alone in a filtered run, and
+`15 failed, 3064 passed` over the full suite. **An arm whose assertion moved needs the mutation that fails
+IT** — this is the second consecutive batch to cite the nearest mutation to hand instead.
+
+**Two — mutation 5.1's reported `2994 passed` does not reconcile.** It sums to 3062 of 3083 collected
+items; the measured figure is **3016**, which sums exactly. That is the eleventh miscount in this slice
+family, and the first that a reader could have caught with arithmetic alone.
+
+**Three — *"a refusal costs nothing"* is false where it matters.** `command_resume` compares hashes after
+`_prepare_run`, and `_prepare_run` runs a **resolver's user code** first. Nothing executes and no lock is
+taken, which is what the deviation was justified on, but a resolver's quota may already be spent. The
+deviation stands; the sentence does not.
+
+**Also corrected:** mutation counts 6.1, 8.1, 8.3 and 9.2 are **per-commit and unlabelled**, and all four
+bite harder at HEAD; `resumed.baseline` has **no reader** (zero hits), correctly deferred to task 13 but
+absent from the site list above; and the *"reachable only from core's own API"* statement is **false** and
+now filed — see `spec-defects.md`'s entry on `_declared_attributes` reading only the first unit.
