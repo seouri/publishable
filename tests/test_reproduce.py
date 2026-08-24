@@ -9,6 +9,7 @@ re-inventing the scaffold-and-commit dance is how a fixture drifts from what
 
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from tests.test_cli import run_a_project
 import publishable.reproduce as reproduce_module
 from publishable.cli import main
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
+from publishable.generators.experiment import generate_experiment
 from publishable.hashes import code_hash, code_hash_of, hashed_files, parameters_hash
 from publishable.provenance import unignored_under_hashed_trees
 from publishable.reproduce import (
@@ -29,6 +31,7 @@ from publishable.reproduce import (
     classify_operand,
     destination_for,
     prepare_checkout,
+    prepare_env,
     restore_environment,
     verify_code_hash,
     write_config,
@@ -1585,3 +1588,427 @@ def test_a_name_that_escapes_the_checkout_is_refused_and_writes_nothing(tmp_path
     assert [f.code for f in c.findings] == ["E-IO-FAILED"], seen
     assert "resolves outside" in seen
     assert not outside.exists()
+
+
+# ==========================================================================
+# Step 6 — `.env` and `required_env`. Design Decision 12, task 8.
+# Fixture R is the credential positive control.
+# ==========================================================================
+
+
+def _prepare_env(record: dict, dest: Path, operand_path: Path | None = None):
+    c = Collector()
+    lines, code = prepare_env(
+        Record(record, operand_path or Path("/nonexistent/run.yaml")), dest, c
+    )
+    seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
+    return lines, code, c, seen
+
+
+def test_dot_env_is_written_from_the_tracked_example(tmp_path: Path):
+    """`.env.example` is TRACKED (correction 15), so the clone holds it — and
+    that is asserted rather than assumed, because the whole step rests on it."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    assert (dest / ".env.example").is_file(), "the clone must carry the tracked example"
+    assert not (dest / ".env").exists()
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    assert (dest / ".env").read_bytes() == (dest / ".env.example").read_bytes()
+    assert any(line.startswith(".env: written from") for line in lines), lines
+
+
+def test_an_existing_dot_env_is_never_overwritten_and_the_line_says_so(tmp_path: Path):
+    """The honouring AND the refusal, in one arm: the file's own bytes are
+    asserted unchanged, which a line-only assertion could not see."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    (dest / ".env").write_text("H9C_ALREADY=mine\n")
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    assert (dest / ".env").read_text() == "H9C_ALREADY=mine\n"
+    assert any("already exists and was NOT overwritten" in line for line in lines), lines
+
+
+def test_a_checkout_with_no_example_says_that_instead(tmp_path: Path):
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    (dest / ".env.example").unlink()
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    assert not (dest / ".env").exists()
+    assert any("carries no `.env.example`" in line for line in lines), lines
+
+
+def test_a_core_template_declaring_no_required_env_says_none(tmp_path: Path):
+    """Template `generic` resolves in THIS interpreter — it is core's — so the
+    list is buildable and the answer is `none`. The negative control for the
+    two branches below: without it, *"a list was printed"* and *"nothing was
+    resolved"* would be indistinguishable."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    assert "required_env: template `generic` declares none" in lines, lines
+
+
+# --- Fixture R: a project-local template, its credential, and the window. ---
+#
+# The checkout these arms are handed is a REAL `publishable new` scaffold —
+# `.env.example`, `src/<pkg>/`, `templates/` and a real config, written by the
+# generators rather than by hand — and the record is built from that project's
+# OWN config file. `prepare_env` reads exactly three fields out of a record
+# (`config.experiment_type`, `config.entrypoint`, `config.plugin`), and a
+# scaffold whose template RAISES at import cannot be `run` at all, so there is
+# no `run.yaml` to take them from: `validate` refuses first, which is the very
+# fault these arms are about. Stated rather than left as an oddity.
+
+_R_RAISING_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9C_R_TOKEN"], "m2": ["H9C_R_TOKEN"]},
+        ),
+    }
+
+
+# AFTER the decorator on purpose: a class body finishes running before
+# `@register_template` sees it, so the class is fully formed and its
+# `requires_env` is readable off `PartialLoadError.partial_templates` even
+# though the file is refused wholesale. That is what gives the redaction a
+# declared name to match.
+raise RuntimeError(
+    "the assay could not reach its vault with " + os.environ["H9C_R_TOKEN"]
+)
+"""
+
+_R_INSERTING_TEMPLATE = """\
+import sys
+
+from publishable import BaseTemplate, Param, register_template
+
+# An ordinary vendoring idiom. It is here to show what it does NOT do: this
+# entry is visible during `exec_module` and gone afterwards, because
+# `templates.discovery._import_file` snapshots `sys.path` and restores it
+# wholesale around every template file it executes. See
+# `test_a_templates_own_sys_path_insert_does_not_survive_discovery`.
+sys.path.insert(0, "/h9c/vendored")
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["H9C_R_TOKEN"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+_R_SRC_IMPORTING_TEMPLATE = """\
+from cohort_pilot.h9c_marker import MARKER
+
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = [MARKER]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+_R_RAISING_AND_INSERTING_TEMPLATE = """\
+import os
+import sys
+
+from publishable import BaseTemplate, Param, register_template
+
+sys.path.insert(0, "/h9c/vendored")
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9C_R_TOKEN"], "m2": ["H9C_R_TOKEN"]},
+        ),
+    }
+
+
+raise RuntimeError(
+    "the assay could not reach its vault with " + os.environ["H9C_R_TOKEN"]
+)
+"""
+
+_R_TOKEN = "sk-h9c-task8-do-not-print"
+
+
+def _fixture_r(tmp_path: Path, template: str) -> dict:
+    """A scaffolded project standing in for the checkout. See the note above.
+
+    **`run_a_project` cannot build this one, and the reason is the fixture's
+    own claim.** That helper writes `_local_template` BEFORE it calls
+    `generate_experiment`, and `generate_experiment` resolves the template
+    through the same registry — so a `templates/*.py` that raises at import
+    raises inside the FIXTURE, before anything under test runs. Caught by
+    running it. The scaffold and the config are still the real generators'
+    output; only the order changes, with the raising file written after the
+    config exists.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "index.csv").write_text(
+        "patient_id,cohort,arm\n" + "\n".join(f"p{i},a,x" for i in range(1, 11)) + "\n"
+    )
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "cred_assay.py").write_text(template)
+    config = yaml.safe_load(cfg.read_text())
+    config["experiment_type"] = "cred_assay"
+    config["parameters"] = {"instrument.model": "m1"}
+    config["metadata"]["description"] = "a Fixture R checkout"
+    config["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg.write_text(yaml.safe_dump(config, sort_keys=False))
+    return {"dest": root, "cfg": cfg, "record": {"config": config}}
+
+
+@pytest.fixture
+def _r_sys_path():
+    """Restore `sys.path` around every Fixture R arm — a template that inserts
+    an entry is user code, and this suite must not carry its leak forward."""
+    before = list(sys.path)
+    yield
+    sys.path[:] = before
+
+
+def test_fixture_r_a_template_raising_at_import_is_a_redacted_diagnostic(
+    tmp_path: Path, monkeypatch, _r_sys_path
+):
+    """**`report`'s own shipped leak, reproduced against `reproduce`.** The
+    credential is declared through `Param(requires_env=)` and **set in the
+    environment**, so the redaction has a real value to match — an undeclared
+    one would pass vacuously, which is why the fixture asserts the raw message
+    carries the token before asserting the rendered one does not.
+
+    Mutation: copy Decision 12's calls without the enclosing `try`. The
+    exception then escapes `prepare_env` and this arm fails on the raise. What
+    an escape *costs* is plan correction 21, measured by H9b rather than
+    re-measured here: `main`'s `except PublishableError` handler uses no
+    `Collector` and prints `{exc}` verbatim. It cannot be re-measured through
+    `reproduce` at this commit, because nothing dispatches the command yet —
+    handed to the dispatch task, and stated rather than claimed.
+    """
+    monkeypatch.setenv("H9C_R_TOKEN", _R_TOKEN)
+    fx = _fixture_r(tmp_path, _R_RAISING_TEMPLATE)
+    lines, code, c, seen = _prepare_env(fx["record"], fx["dest"])
+    assert code == EXIT_WRONG, seen
+    assert [f.code for f in c.findings] == ["E-TEMPLATE-LOAD"], seen
+    # The fixture must actually carry the value it redacts.
+    assert _R_TOKEN in "\n".join(f.message for f in c.findings)
+    rendered = c.render()
+    assert _R_TOKEN not in rendered, rendered
+    assert "<redacted:H9C_R_TOKEN>" in rendered, rendered
+    # Step 6's first half still ran and still reported — a refusal in the
+    # second half does not silently swallow the first.
+    assert any(line.startswith(".env: written from") for line in lines), lines
+
+
+def test_fixture_r_the_positive_control_validate_over_the_identical_project(
+    tmp_path: Path, monkeypatch, capsys, _r_sys_path
+):
+    """The control that caught the original: `validate` over the identical
+    project printing `<redacted:…>`. It reaches `main` — the surface a leak
+    would land on — and it is what makes the arm above a comparison rather
+    than a claim about one function."""
+    monkeypatch.setenv("H9C_R_TOKEN", _R_TOKEN)
+    fx = _fixture_r(tmp_path, _R_RAISING_TEMPLATE)
+    capsys.readouterr()
+    assert main(["validate", str(fx["cfg"])]) == EXIT_WRONG
+    out = capsys.readouterr()
+    both = out.out + out.err
+    assert "E-TEMPLATE-LOAD" in both, both
+    assert _R_TOKEN not in both, both
+    assert "<redacted:H9C_R_TOKEN>" in both, both
+
+
+def test_fixture_r_a_local_templates_required_env_is_listed(tmp_path: Path, _r_sys_path):
+    """A project-local template DOES resolve in this interpreter, so its
+    `required_env` is listed — the honouring half of Decision 12's narrowing,
+    without which the two deferral branches below would be the only thing
+    tested."""
+    fx = _fixture_r(tmp_path, _R_INSERTING_TEMPLATE)
+    lines, code, c, seen = _prepare_env(fx["record"], fx["dest"])
+    assert code is None, seen
+    assert (
+        "required_env: template `cred_assay` declares H9C_R_TOKEN — each needs a value "
+        "in `.env` or in the shell" in lines
+    ), lines
+
+
+def test_a_templates_own_sys_path_insert_does_not_survive_discovery(tmp_path: Path, _r_sys_path):
+    """**The prescribed `pop(0)` mutation is BLIND at this call site, and this
+    arm is the measurement that says why.**
+
+    `templates.discovery._import_file` snapshots `sys.path` and restores it
+    **wholesale** (`sys.path[:] = before_path`) around every `templates/*.py`
+    it executes. So a template's own `sys.path.insert(0, …)` is visible during
+    `exec_module` and gone afterwards, and by the time `prepare_env`'s
+    `finally` runs, `sys.path[0]` **is** `prepare_env`'s own entry — a `pop(0)`
+    removes exactly what `remove(src_entry)` removes. Measured, both by a
+    throwaway probe printing `sys.path[:3]` at three points and by this arm.
+
+    The three arms that replace that mutation are the two below and
+    `test_the_window_is_load_bearing_*`: the insert is load-bearing, the
+    restoration is total on both paths, and the purge is load-bearing. Each of
+    those can fail; this one cannot be made to.
+    """
+    fx = _fixture_r(tmp_path, _R_INSERTING_TEMPLATE)
+    before = list(sys.path)
+    lines, code, c, seen = _prepare_env(fx["record"], fx["dest"])
+    assert code is None, seen
+    # The template really did insert — the resolution succeeded, so its top
+    # level ran — and the entry is nevertheless gone.
+    assert any("declares H9C_R_TOKEN" in line for line in lines), lines
+    assert "/h9c/vendored" not in sys.path
+    assert sys.path == before
+
+
+def test_the_window_is_load_bearing_a_template_may_import_from_the_checkouts_src(
+    tmp_path: Path, _r_sys_path
+):
+    """**The arm that makes the `sys.path` window non-decorative.** A
+    project-local template importing its own project's package at module scope
+    resolves only because `<dest>/src` is on the path — `discover_local`
+    imports templates by path and puts `<root>/src` on `sys.path` nowhere. With
+    the insert removed this arm fails: the import raises
+    `ModuleNotFoundError`, `E-TEMPLATE-LOAD` is reported and no `required_env`
+    line is printed at all.
+
+    The observable is the transcript line rather than the absence of an
+    exception, because a control asserting only absences passes identically if
+    nothing ran: the imported module supplies the very name the line prints.
+    """
+    fx = _fixture_r(tmp_path, _R_SRC_IMPORTING_TEMPLATE)
+    (fx["dest"] / "src" / "cohort_pilot" / "h9c_marker.py").write_text('MARKER = "H9C_FROM_SRC"\n')
+    before = list(sys.path)
+    lines, code, c, seen = _prepare_env(fx["record"], fx["dest"])
+    assert code is None, seen
+    assert any("declares H9C_FROM_SRC" in line for line in lines), seen
+    assert sys.path == before
+
+
+def test_the_root_package_purge_is_load_bearing_across_two_checkouts(tmp_path: Path, _r_sys_path):
+    """The purge, armed. Two checkouts, **the same package name** — `publishable
+    new` derives it from the experiment name, so `cohort_pilot` is both — whose
+    templates import `cohort_pilot.h9c_marker` for two different values.
+
+    `_import_file`'s own `sys.modules` restore does not cover this: it
+    un-imports only entries `_is_local` places under `templates/`, and a module
+    imported out of `<dest>/src` is not one. Without the purge the second
+    checkout's template is served the first's module and this arm reads
+    `H9C_FIRST` where it must read `H9C_SECOND`.
+    """
+    first = _fixture_r(tmp_path / "one", _R_SRC_IMPORTING_TEMPLATE)
+    (first["dest"] / "src" / "cohort_pilot" / "h9c_marker.py").write_text('MARKER = "H9C_FIRST"\n')
+    second = _fixture_r(tmp_path / "two", _R_SRC_IMPORTING_TEMPLATE)
+    (second["dest"] / "src" / "cohort_pilot" / "h9c_marker.py").write_text(
+        'MARKER = "H9C_SECOND"\n'
+    )
+
+    lines, code, c, seen = _prepare_env(first["record"], first["dest"])
+    assert code is None, seen
+    assert any("declares H9C_FIRST" in line for line in lines), seen
+
+    lines, code, c, seen = _prepare_env(second["record"], second["dest"])
+    assert code is None, seen
+    assert any("declares H9C_SECOND" in line for line in lines), seen
+    assert not any("H9C_FIRST" in line for line in lines), lines
+
+
+def test_the_sys_path_entry_is_removed_on_the_failure_path_too(
+    tmp_path: Path, monkeypatch, _r_sys_path
+):
+    """The restoration is pinned on the FAILURE path — the half a `finally`
+    buys and a trailing `sys.path.remove` would not. The template both inserts
+    and raises, so a build restoring only on success leaks here."""
+    monkeypatch.setenv("H9C_R_TOKEN", _R_TOKEN)
+    fx = _fixture_r(tmp_path, _R_RAISING_AND_INSERTING_TEMPLATE)
+    src_entry = str(fx["dest"] / "src")
+    lines, code, c, seen = _prepare_env(fx["record"], fx["dest"])
+    assert code == EXIT_WRONG, seen
+    assert src_entry not in sys.path, sys.path[:5]
+    assert _R_TOKEN not in c.render(), c.render()
+
+
+def test_an_installed_template_names_its_plugin_and_defers_to_validate(
+    installed, registries, tmp_path: Path
+):
+    """Correction 8, measured: `get_template` returns `None` for an installed
+    template — the claim carries `cls=None` — and the plugin is installed in
+    the CHECKOUT's environment by `uv sync`, not in this one. So the list is
+    unbuildable in-process and the transcript names the template and its
+    plugin instead. **This is the document narrowing task 13 owes prose for.**
+
+    The template name is genuinely claimed by an installed distribution here,
+    and `get_template` returning `None` for it is asserted directly, so the
+    branch is reached for the documented reason rather than because the name
+    was unknown — which the arm below is the control for.
+    """
+    installed("dist-h9c-r", "1.0", {"publishable.templates": {"llm_assay": "h9c_r_mod:Assay"}})
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    from publishable.templates.registry import get_template as _get
+    from publishable.templates.registry import template_provenance as _prov
+
+    assert _get("llm_assay", dest) is None
+    assert _prov("llm_assay", dest) == "installed"
+
+    fx["record"]["config"]["experiment_type"] = "llm_assay"
+    fx["record"]["config"]["plugin"] = "someuser/publishable-llm@v1.2.0"
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    deferred = [line for line in lines if line.startswith("required_env:")]
+    assert len(deferred) == 1, lines
+    assert "someuser/publishable-llm@v1.2.0" in deferred[0]
+    assert "`validate` below reads its `required_env`" in deferred[0]
+
+
+def test_a_name_no_template_claims_is_reported_as_such_rather_than_as_a_plugin(
+    tmp_path: Path,
+):
+    """The control for the arm above: an unknown name and an installed name
+    both make `get_template` return `None`, so a build branching on that alone
+    would call every unknown name a plugin. `template_provenance` is what tells
+    them apart, and this is the arm that proves it is consulted."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    fx["record"]["config"]["experiment_type"] = "no_such_template"
+    lines, code, c, seen = _prepare_env(fx["record"], dest)
+    assert code is None, seen
+    assert "required_env: no template registers `no_such_template` in this interpreter, so "
+    assert any("no template registers `no_such_template`" in line for line in lines), lines
+    assert not any("plugin" in line for line in lines), lines

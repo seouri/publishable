@@ -18,6 +18,7 @@ the five verdicts and the grounds each rests on.
 
 import hashlib
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import indent
@@ -26,10 +27,13 @@ from typing import Any
 import yaml
 
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
-from publishable.errors import ContractError
+from publishable.errors import ContractError, PublishableError
 from publishable.hashes import code_hash_of, hashed_files, parameters_hash
 from publishable.lineage import read_record_file
 from publishable.provenance import find_repo_root, unignored_under_hashed_trees
+from publishable.secrets import credential_values
+from publishable.templates.registry import get_template, template_provenance
+from publishable.validate import declared_credential_names_for
 
 
 @dataclass(frozen=True)
@@ -915,4 +919,198 @@ def write_config(operand: Record, dest: Path, c: Collector) -> tuple[list[str], 
         "`config` is the parsed mapping. They still live in "
         + (comments_live if comments_live else "no file reachable from this operand")
     )
+    return (lines, None)
+
+
+# --------------------------------------------------------------------------
+# Step 6, narrowed: `.env` and `required_env`. Design Decision 12.
+# --------------------------------------------------------------------------
+
+
+def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+    """§ Reproducing on another device's step 6, in its narrowed form.
+    Decision 12. Returns `(transcript lines, exit code or None)`.
+
+    **`.env` is written from `.env.example` only when it does not exist.**
+    `.env.example` is **tracked** (plan correction 15) — `scaffold.py` writes
+    it and the scaffold's `.gitignore` opens with `.env`, not with the example —
+    so the clone already holds it, and "copies `.env.example`" means
+    `cp .env.example .env`, which is § The generated README's own setup line.
+    An existing `.env` is never overwritten and the transcript says which of the
+    three happened. The write is safe because `secrets.missing_env` treats an
+    **empty** value as missing and a bare key parses to `None` and is skipped
+    (plan correction 16), so a blank `.env` cannot turn a missing credential
+    into a present one.
+
+    **`required_env` is listed only for a template THIS interpreter can
+    construct, and that is a document narrowing.** Plan correction 8, measured:
+    `templates.registry.get_template` returns `None` for an installed
+    template — `_claims` attaches `cls=None` to an entry-point claim and
+    `_merged` keeps only claims with a class — and a plugin is not installed in
+    `reproduce`'s interpreter at all, since `uv sync` installed it into the
+    **clone's**. So for a plugin-provided template the list is unbuildable
+    in-process, and this names the template and its plugin and **defers to the
+    `validate` line the closing transcript already prints**: `validate` in the
+    prepared checkout reads `required_env` itself (H7c gave it that reader) in
+    the interpreter where the plugin exists. The reader is one step later and in
+    the right place, which beats a subprocess this command would have to invent.
+    **§ Reproducing on another device's step 6 must say so; task 13 owns the
+    prose and this function is the measurement it rests on.**
+
+    **Which names are listed, and which are not.** `required_env` only. The
+    `Param(requires_env=)` names are per-choice and conditional, and `validate`
+    in the checkout resolves them against the config's own values — so listing
+    them here would be a second, weaker answer to a question the next command
+    answers properly. They **are** collected for redaction below, which is a
+    different use: redaction asks *what values did core read*, not *what must
+    the reader supply*.
+
+    **No name is reported as set or unset.** `missing_env` answers about *this*
+    process's environment, and the run happens in another one; a verdict here
+    would be a claim about a future process. The names are listed and the
+    reader is pointed at `validate`, which asks the question where it can be
+    answered.
+
+    **Resolving a project-local template imports user code, and the
+    containment is copied WHERE IT SITS.** The sibling that already got this
+    right is `report.render_with_override` together with
+    `command_report`'s guard around `get_template`, and `report`'s shipped
+    credential leak came from lifting `freeze`'s calls without the `try` they
+    sit inside. So:
+
+    - the **whole** resolution — the `sys.modules` purge, the `sys.path`
+      insert, the `get_template` call and the restoration — sits inside one
+      `except BaseException` that reports through `c`, whose `credentials` is
+      populated from the raised error's own `partial_templates` (a class body
+      finishes running before `@register_template` sees it, so a file that
+      raises *after* declaring one leaves that class fully formed and readable
+      for its declarations). A template raising at import therefore becomes a
+      **redacted** diagnostic instead of reaching `main`'s un-redacted printer
+      (plan correction 21).
+    - the `sys.path` entry is removed **by identity**, never `pop(0)`, and the
+      restoration is in a `finally` so it is pinned on the **failure** path as
+      well as the success one. `load_experiment` and `render_with_override` are
+      the two sibling sites that fixed this exposure.
+      **The identity-versus-position distinction is NOT exhibitable at THIS
+      call site, and that is measured rather than assumed.**
+      `templates.discovery._import_file` snapshots `sys.path` and restores it
+      **wholesale** (`sys.path[:] = before_path`) around every `templates/*.py`
+      it executes — measured with a template doing its own
+      `sys.path.insert(0, "/h9c/vendored")`: the entry is visible during
+      `exec_module` and gone afterwards, so when the `finally` below runs
+      `sys.path[0]` **is** this function's own entry and a `pop(0)` removes
+      exactly what `remove` would. The two branches cannot differ, so the
+      prescribed mutation is blind and its replacements are three arms that can
+      fail: the window is load-bearing (a template importing from the
+      checkout's own `src/`), `sys.path` is byte-identical afterwards on both
+      the success and the failure path, and the purge below is load-bearing.
+      The identity form is kept anyway, because that snapshot is another
+      module's promise rather than this function's, and it costs nothing.
+    - the window is opened at all because `reproduce` resolves a template in a
+      **foreign checkout**: a `templates/*.py` there may import its own
+      project's package, and `discover_local` imports by path without putting
+      `<root>/src` on `sys.path` itself. Measured: with the insert removed such
+      a template raises `ModuleNotFoundError` and the whole resolution is
+      refused.
+    - the root package is purged first, and it is load-bearing here for a
+      reason `_import_file`'s own restore does **not** cover: that restore
+      un-imports only the entries `_is_local` places under `templates/`, so a
+      module a template imported out of `<dest>/src` stays in `sys.modules` —
+      and two checkouts in one process can declare the same package name
+      (`publishable new` derives it from the experiment name). Without the
+      purge, the second checkout's template is served the first's module.
+
+    **`get_template` is called once on the ordinary path.** A second registry
+    call re-imports every `templates/*.py`, executing every user top level
+    twice, which is the cost `registry._claims`' own docstring names. So
+    `template_provenance` is consulted **only** when the first call resolved no
+    class at all — the path on which no user top level did anything useful
+    anyway.
+    """
+    lines: list[str] = []
+
+    example = dest / ".env.example"
+    dot_env = dest / ".env"
+    if dot_env.exists():
+        lines.append(f".env: {dot_env} already exists and was NOT overwritten")
+    elif example.is_file():
+        dot_env.write_bytes(example.read_bytes())
+        lines.append(f".env: written from {example} — it carries NAMES, so fill in the values")
+    else:
+        lines.append(
+            f".env: not written — the recorded commit carries no `.env.example` at {example}"
+        )
+
+    raw_config = operand.doc.get("config")
+    doc: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+    raw_name = doc.get("experiment_type")
+    name = raw_name if isinstance(raw_name, str) else ""
+    entrypoint = doc.get("entrypoint")
+    root_pkg = ""
+    if isinstance(entrypoint, str) and entrypoint:
+        root_pkg = entrypoint.partition(":")[0].split(".", 1)[0]
+    src_entry = str(dest / "src")
+
+    try:
+        if root_pkg:
+            for cached in [
+                module
+                for module in sys.modules
+                if module == root_pkg or module.startswith(root_pkg + ".")
+            ]:
+                del sys.modules[cached]
+        sys.path.insert(0, src_entry)
+        try:
+            template = get_template(name, dest)
+        finally:
+            # By IDENTITY, never `pop(0)` — see the docstring. `if` rather than
+            # an unguarded `remove` because a template that removed our entry
+            # itself must not turn this cleanup into a second exception.
+            if src_entry in sys.path:
+                sys.path.remove(src_entry)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        code = exc.code if isinstance(exc, PublishableError) else "E-TEMPLATE-LOAD"
+        partial = getattr(exc, "partial_templates", None) or []
+        declared: list[str] = []
+        for cls in partial:
+            declared.extend(declared_credential_names_for(doc, cls))
+        # MERGED, not replaced: whatever the caller already told this collector
+        # to look for stays covered.
+        c.credentials = {**c.credentials, **credential_values(declared)}
+        c.error(
+            code,
+            str(dest),
+            f"the checkout's template `{name}` could not be resolved: {exc}",
+        )
+        return (lines, EXIT_WRONG)
+
+    if template is not None:
+        required = getattr(template, "required_env", None)
+        required = list(required) if isinstance(required, list) else []
+        if required:
+            lines.append(
+                f"required_env: template `{name}` declares "
+                + ", ".join(str(each) for each in required)
+                + " — each needs a value in `.env` or in the shell"
+            )
+        else:
+            lines.append(f"required_env: template `{name}` declares none")
+        return (lines, None)
+
+    provenance = template_provenance(name, dest)
+    if provenance == "installed":
+        plugin = doc.get("plugin")
+        lines.append(
+            f"required_env: template `{name}` comes from "
+            + (f"plugin {plugin}" if plugin else "an installed plugin")
+            + ", which is installed in the CHECKOUT's environment and not in this one — "
+            "`validate` below reads its `required_env` where the plugin exists"
+        )
+    else:
+        lines.append(
+            f"required_env: no template registers `{name}` in this interpreter, so none is "
+            "listed — `validate` below is what reports that"
+        )
     return (lines, None)
