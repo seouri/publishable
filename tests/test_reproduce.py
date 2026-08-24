@@ -17,7 +17,7 @@ from tests.test_cli import run_a_project
 import publishable.reproduce as reproduce_module
 from publishable.cli import main
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
-from publishable.hashes import code_hash_of, hashed_files
+from publishable.hashes import code_hash, code_hash_of, hashed_files
 from publishable.provenance import unignored_under_hashed_trees
 from publishable.reproduce import (
     _CLONE_CONFIG,
@@ -28,6 +28,7 @@ from publishable.reproduce import (
     classify_operand,
     destination_for,
     prepare_checkout,
+    verify_code_hash,
 )
 from publishable.study import study_add, study_new
 
@@ -739,3 +740,222 @@ def test_a_remote_that_cannot_be_cloned_is_e_io_failed_at_exit_five(tmp_path: Pa
     assert isinstance(prepared, Refused)
     assert prepared.exit_code == EXIT_EXTERNAL
     assert [f.code for f in c.findings] == ["E-IO-FAILED"]
+
+
+# ==========================================================================
+# `code_hash` in the checkout — Fixtures C (the match), D1, D2, and the draft
+# arm on Fixture B. Design Decisions 2 and 10, Ruling Z.
+# ==========================================================================
+
+
+def _verify(record: dict, dest: Path, credentials: dict[str, str] | None = None):
+    c = Collector(credentials=dict(credentials or {}))
+    lines, code = verify_code_hash(Record(record, dest / "run.yaml"), dest, c)
+    # What a reader sees is the diagnostic AND the transcript lines: the file
+    # list and the candidate causes are lines rather than one nine-line
+    # diagnostic message, because `Collector.render` indents exactly one
+    # continuation line per finding. Every arm below asserts on the two
+    # together, which is the text that actually reaches a terminal.
+    seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
+    return lines, code, c, seen
+
+
+def _prepared_checkout(tmp_path: Path, fx: dict) -> Path:
+    prepared, c = _prepare(fx["record"], tmp_path / "cwd")
+    assert isinstance(prepared, Checkout), c.render()
+    return prepared.dest
+
+
+def _ignored_file_under_src(dest: Path) -> Path:
+    """Drop an untracked, git-ignored file under `src/**` into a checkout, and
+    assert git really excludes it.
+
+    The scaffold's own `.gitignore` opens with `.env`, which is the rule § 0.3
+    used. **A TRACKED file cannot serve here**, measured: `git check-ignore`
+    without `--no-index` — which is what `unignored_under_hashed_trees` runs —
+    reports nothing for a tracked path, so a force-added ignored file is
+    included by BOTH predicates and the two branches could not differ.
+    """
+    pkg = next(p for p in (dest / "src").iterdir() if p.is_dir())
+    victim = pkg / ".env"
+    victim.write_text("H9C_TASK4=1\n")
+    candidates = [rel for rel, _ in hashed_files(dest, None)]
+    assert victim.relative_to(dest).as_posix() in candidates
+    kept = unignored_under_hashed_trees(dest, candidates)
+    assert victim.relative_to(dest).as_posix() not in kept, (
+        "git does not exclude this file, so the two predicates agree and the arm is blind"
+    )
+    return victim
+
+
+def test_fixture_c_a_matching_code_hash_prints_one_line_with_the_file_count(tmp_path: Path):
+    """Fixture C's own reported fact. The count is read off the same predicate
+    the production code uses rather than hard-coded — a commit SHA and
+    everything derived from it cannot be a stable literal."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    expected = len(hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands)))
+    assert expected > 0
+
+    lines, code, c, seen = _verify(fx["record"], dest)
+    assert code is None
+    assert c.findings == []
+    assert lines == [
+        f"code_hash: matches the record over {expected} files ({fx['record']['code_hash']})"
+    ]
+
+
+def test_the_git_aware_predicate_is_what_is_compared_not_every_file_in_the_trees(
+    tmp_path: Path,
+):
+    """The `include=None` mutation, and the fixture that separates the two
+    readings — with the design's own claim about it CORRECTED.
+
+    The design says a *Fixture C arm carrying a git-ignored file under `src/`*
+    separates them. Measured, that cannot happen in a clone at all: a fresh
+    clone holds only TRACKED files, and `git check-ignore` (without
+    `--no-index`, which is what core runs) never reports a tracked path as
+    ignored — so end to end the two predicates agree on every checkout
+    `reproduce` can produce, and the mutation would be blind. The divergence is
+    therefore built where it is reachable: the ignored file is dropped into the
+    checkout before the comparison, which is exactly the state a later
+    `reproduce` step could create.
+
+    Both branches are computed here, so the arm cannot agree with the bug: the
+    git-aware digest and the every-file digest are asserted DIFFERENT before
+    either is compared against the record.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    _ignored_file_under_src(dest)
+
+    git_aware = code_hash_of(
+        hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands))
+    )
+    every_file = code_hash_of(hashed_files(dest, None))
+    assert git_aware != every_file
+    assert git_aware == fx["record"]["code_hash"]
+
+    lines, code, c, seen = _verify(fx["record"], dest)
+    assert code is None, seen
+    assert c.findings == []
+
+
+def test_fixture_d1_a_pre_redefinition_code_hash_is_refused_with_the_candidate_set(
+    tmp_path: Path,
+):
+    """Fixture D1 (plan correction 26). The record's `code_hash` is the
+    EVERY-FILE figure — what a record written before the redefinition of which
+    files are hashed would carry — computed in the test by calling
+    `code_hash(root, None)`, never transcribed.
+
+    **Fixture D as the design wrote it was not constructible**: a commit SHA is
+    a hash over its own tree, so a different tree cannot live at the same SHA;
+    an amend produces a new SHA and leaves the original's tree untouched, so
+    the recorded SHA still checks out to the recorded bytes and the comparison
+    PASSES. A rewritten history is caught at the checkout instead, which is its
+    own arm above.
+
+    Ruling Z is what this arm pins: the output names WHICH input moved and
+    enumerates the causes it cannot separate, and asserts that no sentence
+    picks one.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    _ignored_file_under_src(dest)
+    pre = code_hash(dest, None)
+    assert pre != fx["record"]["code_hash"]
+
+    record = dict(fx["record"])
+    record["code_hash"] = pre
+
+    lines, code, c, seen = _verify(record, dest)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-CODE-HASH"]
+    assert (
+        pre in seen
+        and code_hash_of(
+            hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands))
+        )
+        in seen
+    )
+    assert str(dest) in seen
+    assert dest.is_dir(), "the checkout must be kept"
+
+    # The candidate set is present, and NO sentence picks one of its members.
+    for clause in (
+        "cannot tell these apart",
+        "rewritten or force-pushed",
+        "predates the redefinition",
+        "materialized the tree differently",
+        "`core.autocrlf`",
+        "`.gitattributes`",
+    ):
+        assert clause in seen, clause
+    # The single-cause wording, asserted ABSENT. An assertion on the code alone
+    # would pass under both wordings, which is what makes this half the arm.
+    for verdict in (
+        "this is a rewritten or force-pushed history",
+        "the history was rewritten",
+        "because the history was force-pushed",
+    ):
+        assert verdict not in seen, verdict
+
+
+def test_fixture_d2_an_arbitrary_edited_code_hash_is_refused_the_same_way(tmp_path: Path):
+    """Fixture D2 (plan correction 26): a `code_hash` edited to an arbitrary
+    digest. Distinct from D1 in what it rules out — D1's figure is one a real
+    record could genuinely carry, so an implementation special-casing "looks
+    like a pre-redefinition digest" would still have to answer this one, and
+    the two arms together show the refusal is about the COMPARISON rather than
+    about recognizing a shape."""
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    record = dict(fx["record"])
+    record["code_hash"] = "sha256:" + "0" * 64
+
+    lines, code, c, seen = _verify(record, dest)
+    assert code == EXIT_WRONG
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-CODE-HASH"]
+    assert "sha256:" + "0" * 64 in seen
+    assert "cannot tell these apart" in seen
+    assert dest.is_dir()
+    # The file LIST, not only the count: every hashed path appears.
+    for rel, _ in hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands)):
+        assert rel in seen, rel
+
+
+def test_a_draft_record_declines_the_verification_rather_than_failing_it(tmp_path: Path):
+    """Decision 10's draft arm, on Fixture B. Two halves, and the second is
+    what separates *declines* from *refuses*: no finding is collected AND the
+    returned exit code is `None`, so the caller continues to the closing
+    transcript at exit `0`.
+
+    The record's `code_hash` is left DELIBERATELY WRONG here. A draft arm whose
+    hash happened to match would pass whether the draft branch existed or not —
+    a fixture whose numbers agree with the bug.
+    """
+    fx = _fixture_a(tmp_path)
+    dest = _prepared_checkout(tmp_path, fx)
+    record = dict(fx["record"])
+    record["draft"] = True
+    record["code_hash"] = "sha256:" + "1" * 64
+
+    lines, code, c, seen = _verify(record, dest)
+    assert code is None
+    assert c.findings == []
+    assert any("this record is a draft" in line for line in lines), lines
+    assert any("not verified" in line for line in lines), lines
+    assert "cannot tell these apart" not in seen
+
+
+def test_a_non_draft_record_is_not_given_the_draft_line(tmp_path: Path):
+    """The negative control for the draft branch: `draft: false` is what every
+    real record carries, and an arm asserting only the draft path would pass if
+    the branch had swallowed both."""
+    fx = _fixture_a(tmp_path)
+    assert fx["record"]["draft"] is False
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _verify(fx["record"], dest)
+    assert code is None
+    assert "draft" not in seen

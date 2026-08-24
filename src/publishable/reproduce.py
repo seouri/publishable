@@ -25,8 +25,9 @@ import yaml
 
 from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
+from publishable.hashes import code_hash_of, hashed_files
 from publishable.lineage import read_record_file
-from publishable.provenance import find_repo_root
+from publishable.provenance import find_repo_root, unignored_under_hashed_trees
 
 
 @dataclass(frozen=True)
@@ -417,3 +418,92 @@ def prepare_checkout(operand: Record, c: Collector, *, cwd: Path) -> Prepared:
         return Refused(EXIT_EXTERNAL)
 
     return Checkout(dest)
+
+
+# --------------------------------------------------------------------------
+# `code_hash` in the checkout. Design Decisions 2 and 10, Ruling Z.
+# --------------------------------------------------------------------------
+
+
+_CODE_HASH_CAUSES = (
+    "`reproduce` cannot tell these apart, and does not guess between them:",
+    "  - the code at that commit really is different: a rewritten or force-pushed",
+    "    history;",
+    "  - the record predates the redefinition of WHICH files are hashed. No key in",
+    "    `run.yaml` can date a record — `schema_version` was deliberately not bumped —",
+    "    and `uv_lock_hash` is the only carrier, which a scaffolded project does not",
+    "    have at all;",
+    "  - this machine's git materialized the tree differently: `core.autocrlf`, which",
+    "    the clone neutralizes, or a tracked `.gitattributes`, which it may not.",
+)
+"""The closed candidate set, and it is a set rather than a verdict.
+
+**Ruling Z.** § Reproducing on another device says a `code_hash` mismatch
+catches *"a rewritten or force-pushed history"*. That is measured false three
+ways — across the redefinition of which files are hashed, under an ambient
+`core.autocrlf`, and under a tracked `.gitattributes` — so printing it would be
+a cause invented from a symptom. **Naming a closed candidate set is not a
+verdict; picking one is**, and nothing here asserts a single cause.
+
+**No marker is minted** to tell the first case from the second: H6a's Ruling C
+refused a definition marker, and the scoping's § 12 lists it under what H9 may
+not fold in. The honest consequence is that the two stay indistinguishable, and
+saying so is the deliverable.
+"""
+
+
+def verify_code_hash(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+    """Recompute `code_hash` over the checkout and compare. Decisions 2 and 10.
+
+    The predicate is **exactly** `command_run`'s, in the pair form — `hashed_files`
+    then `code_hash_of` — rather than `code_hash(root, include)`, because Decision
+    2 prints the file COUNT and the file LIST and only the pair form hands them
+    back. That is what `code_hash_of` was extracted for.
+
+    Returns `(transcript lines, exit code or None)`. A refusal's one-line
+    summary goes into `c` and the file list and the candidate causes go into the
+    lines, because `Collector.render` indents one continuation line per finding
+    and a nine-line message rendered through it would be unreadable. What a
+    reader sees is the two together, and that is what the arms assert on.
+
+    **The checkout is KEPT on a refusal.** The deliverable of `reproduce` is a
+    prepared checkout, and a stop that discards its own artifacts is the fault
+    H9b closed at exit `4` — *a stop must be legible from the artifacts*.
+
+    **A `draft` record declines the verification rather than failing it**
+    (Decision 10). The record says the tree was never reachable from any
+    commit, so the comparison has no operand worth reporting a verdict on.
+    This is the ONE cause `reproduce` names, and it is named because the record
+    names it — the same posture § Reproducing already takes for the config
+    form, which *"cannot verify a `code_hash` and says so, rather than
+    reporting a match it never made."*
+    """
+    record = operand.doc
+    recorded = record.get("code_hash")
+
+    if record.get("draft"):
+        return (
+            [
+                "code_hash: this record is a draft: its code was not committed, so "
+                "`code_hash` is not verified",
+                f"           the checkout is at {dest}",
+            ],
+            None,
+        )
+
+    pairs = hashed_files(dest, lambda cands: unignored_under_hashed_trees(dest, cands))
+    computed = code_hash_of(pairs)
+
+    if computed == recorded:
+        return ([f"code_hash: matches the record over {len(pairs)} files ({computed})"], None)
+
+    c.error(
+        "E-REPRODUCE-CODE-HASH",
+        str(dest),
+        f"does not reproduce the recorded code_hash: the record says {recorded}, this "
+        f"checkout hashes {computed} over {len(pairs)} files. The checkout is kept",
+    )
+    lines = [f"code_hash: the {len(pairs)} files folded were:"]
+    lines += [f"  {rel}" for rel, _ in pairs]
+    lines += list(_CODE_HASH_CAUSES)
+    return (lines, EXIT_WRONG)
