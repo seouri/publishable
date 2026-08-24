@@ -2163,3 +2163,31 @@ fact that moved while the run was down now **writes the run record** — `status
 where it previously wrote none, so a run whose executions were already paid for is publishable rather
 than stranded. It is reachable only for a config declaring an `apparatus_probe`, which none of these
 nine does, which is why the table does not move.
+
+### Correction, dated 2026-08-24, against the H9b whole-branch review at commit `bd2b4de` — the refusal count above wears the wrong noun twice
+
+**The entry above says H9b mints "thirteen `E-RESUME-*` codes plus `E-FREEZE-CONFIG-EDITED`" and calls
+their total "the fourteen". Both figures are wrong, and they are wrong in different ways.** Derived from
+the emit sites rather than adjusted:
+
+- `grep -rho 'E-RESUME-[A-Z-]*' src/publishable/*.py | sort -u | wc -l` → **14**. Eleven appear as a
+  literal `code="E-RESUME-…"`; the other three (`E-RESUME-CODE-MOVED`, `-PARAMS-MOVED`,
+  `-LOCKFILE-MOVED`) are raised through a loop variable over a three-tuple list, which is why a grep for
+  the literal keyword form under-counts by exactly three and is the likeliest origin of "thirteen".
+- `E-FREEZE-CONFIG-EDITED` is new on this branch too (`git show main:src/publishable/freeze.py` holds
+  zero occurrences), so the **total minted is 15**.
+- Rows: 14 `| ... | E-RESUME-… |` rows plus one for `E-FREEZE-CONFIG-EDITED` in `reference.md`
+  § Errors `validate` reports — **15 rows, one per code**, which is what that table's rule requires.
+
+**So: fourteen `E-RESUME-*` codes, fifteen codes minted in total, fifteen rows.** Every figure here
+carries its noun on purpose — the failure this corrects is not an arithmetic slip but a count that
+answered no consistent question, the shape this section already carries two corrections for.
+**The entry's other count sentence is right and must not be "fixed" to match**: *"refuses fourteen named
+ways"* is a claim about the `E-RESUME-*` family alone, which is fourteen, and `resume` is the command it
+describes — `E-FREEZE-CONFIG-EDITED` is `freeze`'s refusal, reachable from a command `resume` never runs.
+
+**Nothing else in the entry moves.** No row of the four-row table changes, **no fifth number is minted**,
+and the *"unblocks ZERO configs"* verdict is untouched: a miscount of how many refusals exist says
+nothing about whether any of these nine configs can reach one, and none can — `resume` and `freeze` both
+need a run directory an operator already has. The design's own Decision 17 is the origin of both wrong
+figures and carries its own appended correction.

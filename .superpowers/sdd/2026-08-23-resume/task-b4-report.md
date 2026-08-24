@@ -491,3 +491,40 @@ Corrected by **appending** to the design (§ Correction, 2026-08-23, from batch 
    touched; my two new arms assert on stderr instead.
 4. **The unreachable-apparatus half of the record loss is filed, not closed**, with the terminality of
    `run.yaml` as the reason. A reviewer who disagrees should argue against that paragraph.
+
+---
+
+## Corrections appended 2026-08-24 by the whole-branch fix round, against `bd2b4de`
+
+**Appended, not edited — a batch report records what was measured when it was written.** Three items,
+each a claim of this report that a later reader would trust.
+
+**1. The amendment's item (a) was reported closed and was not (whole-branch review, Major 1).** This
+report says *"the ledger row names all three (… the amendment's item (a), closed)"*, and its § Errors
+paragraph says *"Fifteen rows written, one per code, each covering every fault its code is raised for."*
+`E-RESUME-LEDGER-UNREADABLE` has **four** emit sites — `lineage.py`'s three (not JSON, not an object,
+missing one of the five keys) and `cli.py`'s inside `_reconstitute` (a **completed** line with no
+`returned` or no `recorded_columns` key) — and the row not only counted three, it **denied the fourth by
+name**: *"a ledger written by an earlier build reads clean here"*, which is precisely the state the
+fourth site refuses. **Three** was carried from the brief's own wording rather than derived from
+`grep -rn 'code="E-RESUME-LEDGER-UNREADABLE"' src/publishable/`. The row now names four faults and
+scopes the five-key required set to the ledger reader, with the reconstitution check named beside it.
+`lineage.py`'s docstring and `tests/test_lineage.py`'s *"Three faults, one code"* are **correct and
+untouched** — both are scoped to that one reader. The fourth site itself was always pinned
+(`tests/test_cli.py`'s stale-build arm asserts the code), which is why nothing behavioural moved.
+
+**2. Concern 2 undersells the coverage: the takeover has TWO end-to-end pins, not one.** *"The
+end-to-end pin is arm G"* omits arm A, which drives `main(["resume", …])` against a crashed directory
+holding a real stale lock — a bare `return` at the top of `take_over_dead_lock` fails **21** tests on a
+full run, 19 unit tests plus arm G **and arm A**. The concern's substance stands unchanged: none of the
+twelve `_h9b_resume` callers is in that list. The sentence carrying the same omission inside
+`_h9b_resume`'s own docstring is corrected in the code.
+
+**3. Concern 3's "ten shipped gate tests" is TWENTY, and the review's "21" is a miscount of the same
+number.** `grep -c "_assert_refused(result" tests/test_freeze.py` returns 21 because the `def` line's
+first parameter is `result`; the call sites are **20**, in 20 distinct test functions. The
+discriminating measurement, both arms scoped to `tests/test_freeze.py` with `freeze._refuse` emitting a
+constant code: **5 failed / 37 passed** with the shipped code-blind helper, **25 failed / 17 passed**
+with the helper reading stderr — so exactly the 20 arms were asserting *that* and never *which*. The
+helper now reads the code, and what the fail-open was hiding is in the fix round's own report: four of
+the 20 had been stopped at `E-FREEZE-CONFIG-EDITED`, the gate **this batch minted**, since task 16.

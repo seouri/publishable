@@ -1051,3 +1051,34 @@ with *no* results must not touch, and that case is unchanged. The
 sibling case — an apparatus that has become **unreachable** — deliberately keeps today's behaviour
 (exit `5`, no record) and is filed in `spec-defects.md` with the terminality of `run.yaml` as the
 reason.
+
+## Correction, 2026-08-24, from the whole-branch fix round — Decision 17's counts, and the earlier correction's own sibling claim
+
+**Appended, never edited: a design records what was decided when it was written.** Two items, both
+counts, both re-derived from the code rather than adjusted.
+
+**(1) Decision 17's prose contradicts its own table, and its heading is ambiguous between two nouns.**
+The prose says *"Thirteen `E-RESUME-*` codes plus `E-FREEZE-CONFIG-EDITED`"*; **the table directly
+below it lists fourteen `E-RESUME-*` rows** plus that one, and the code agrees with the table:
+`grep -rho 'E-RESUME-[A-Z-]*' src/publishable/*.py | sort -u` → **14**, of which eleven are a literal
+`code="E-RESUME-…"` and three (`-CODE-MOVED`, `-PARAMS-MOVED`, `-LOCKFILE-MOVED`) are raised through a
+loop variable — the under-count a keyword-form grep produces, and the likeliest origin of "thirteen".
+The correct figures, each with its noun attached: **fourteen `E-RESUME-*` codes; fifteen codes minted
+in total; fifteen § Errors rows, one per code.** The heading's *"fourteen codes are minted"* is right
+for the `E-RESUME-*` family and wrong as a total, and *"Cost if wrong: fourteen rows in the wrong
+table"* is fifteen rows. **The evidence is the decision's own table** — it was right all along, which
+is what makes this a carried count rather than a wrong decision, and the figure reached
+`docs/feasibility-llm-growth-studies.md` § Executability, the one section required to be dated and
+re-derived, where it now carries its own appended correction. Nothing about what `resume` refuses
+changes.
+
+**(2) The batch-1 correction above repeats its own fault one row over: arm C's authorized editor is
+plan task 5, not task 6.** That correction fixes arms B and D ("their editor is plan task 3") and
+asserts *"the two sibling parentheticals (arm C → task 6, arm E → task 15) are correct"*. The plan gives
+arm C to **task 5** — its § Task 5 section reads *"You are the SOLE AUTHORIZED EDITOR of guard-pin arm
+C"* — and `git log -S '"recorded_columns",' -- tests/test_cli.py` returns `d4e0afd` *"H9b task 5"*, so
+the edit was properly authorized by the plan and it is the design's parenthetical, and then the
+correction to it, that name the wrong task. **Arm E → task 15 is correct** (plan § Task 15 holds that
+sentence), so the sibling claim is half right, which is how it survived. The general shape, and it is
+why this is appended rather than shrugged at: **a correction is a claim too**, and the row beside the
+one being fixed is where the next instance of the same fault is.

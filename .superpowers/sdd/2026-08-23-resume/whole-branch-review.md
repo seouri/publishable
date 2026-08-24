@@ -175,3 +175,161 @@ their derivations rather than banked as silence.
 
 **Close the four Majors and this merges.** None requires code that changes behaviour: three are
 deletions or widenings of prose, and one is a filing.
+
+---
+
+# Fix round, 2026-08-24 — every finding closed, and one of them was hiding a coverage loss
+
+Run against this review and [`task-b4-review.md`](task-b4-review.md) at `bd2b4de`. Commits
+`b19f1e1` (Majors 1–2, Minors 1, 2, 4, 5), `4efa280` (Major 3 and the filings), the commit carrying this section
+(Major 4, Minor 3, Minor 6 and this section).
+
+**Gates:** `uv run ruff check .` all checks passed; `ruff format .` 93 files unchanged; `mypy` no
+issues in 52 source files; **`uv run pytest` → 3132 passed, 1 skipped, 2 xfailed** — **identical to
+this review's own baseline**, zero tests added or removed, which is the whole no-regression claim
+stated as a number.
+
+**Why no behavioural re-verification was run, and why that is the stronger answer.** The entire
+`src/` diff of this round is *two docstring deletions, one comment, and one message string* —
+`git diff main...HEAD` over `src/` for this round shows no executable line changed at all, so the
+crash-and-resume round trip, the 60×5 lock race and the exit-4 apparatus stop are reached by
+byte-identical code. The one production string is `RunLock`'s `E-RUN-LOCKED` message, and **no test
+asserts its wording**: `grep -rn 'E-RUN-LOCKED' tests/` → 11 hits, every one on the identifier;
+`grep -rn 'assumed dead\|is held' tests/` → three hits, all unrelated prose (`test_run_identity.py`'s
+barrier comment, `test_stats.py`, `test_coercion.py`). Arm G asserts *exactly one `E-RUN-LOCKED`*, the
+code and not the sentence.
+
+## The four Majors
+
+| # | Status | What closed it |
+|---|---|---|
+| 1 | **CLOSED** | The row names **four** faults, re-derived by `grep -rn 'code="E-RESUME-LEDGER-UNREADABLE"' src/publishable/` (three in `lineage.py`, one in `cli.py`'s `_reconstitute`), and the *"reads clean here"* clause is gone. The five-key required set is now scoped to the ledger reader with the reconstitution check named beside it, which is the review's own second option |
+| 2 | **CLOSED** | The paragraph is **deleted**, not rewritten — the docstring's opening two paragraphs already state Decision 13 correctly, so nothing was lost and nothing was invented. The self-referential closing sentence went with it; `_resume_prepared`'s own docstring carries that fact where it is true |
+| 3 | **CLOSED**, and it was hiding a real coverage loss | The helper reads the code off stderr. **Twenty** arms were blind, not 21 — see below. Filed in `spec-defects.md` with the reproduction, and its second half (the credential test) filed OPEN rather than repaired |
+| 4 | **CLOSED** | A dated correction appended to § Executability, one to design Decision 17, one to plan correction 23. **Fourteen `E-RESUME-*` codes, fifteen codes minted, fifteen rows** — each figure carrying its noun |
+
+### Major 1 — what was checked besides the row
+
+The table's **scope sentence** admits these rows unchanged (*"these are the codes a **command**
+reports, and a code raised at load can be in both"*), so no placement moves. `lineage.py`'s docstring
+and `tests/test_lineage.py:957`'s *"Three faults, one code"* are **correct and deliberately untouched**
+— both are scoped to `read_execution_ledger`, which really does have three. Removed-string sweep for
+*"Three faults, one code"* and *"reads clean here"* over the four documents, `CLAUDE.md`, the
+feasibility analysis, `src/`, `tests/`, `docs/superpowers/` and `.superpowers/`, **every hit
+attributed**: the only live-prose hit is that test docstring; every other is a development-record file
+quoting the defect, which is not retro-edited. The fourth emit site was **already pinned**
+(`tests/test_cli.py`'s stale-build arm asserts the code and the message) — the row was the only thing
+wrong, which is why nothing behavioural moved.
+
+### Major 3 — the count is 20, and four of them were testing the wrong gate
+
+**The review's 21 is a miscount of the same number**, and it is the fault three of the four Majors
+are about: `grep -c "_assert_refused(result" tests/test_freeze.py` returns 21 because the definition
+line's first parameter is `result`. There are **20 call sites in 20 distinct test functions**
+(enumerated by walking the file's `def` boundaries, each one carrying `capsys` already).
+
+The discriminating pair, both arms scoped to `tests/test_freeze.py`, `freeze._refuse` mutated to emit
+a constant `"E-BOGUS-MUTATION"` — the single funnel, confirmed by reading all 20 call sites (lines
+137–448, every refusal in `_precheck` returns through it; `command_freeze`'s two other `c.error` sites
+are on a path `_assert_refused` never sees):
+
+| Helper | Result |
+|---|---|
+| shipped, code-blind | **5 failed, 37 passed** — not one of the twenty arms |
+| reading stderr | **25 failed, 17 passed** — all twenty, plus the same five |
+
+FULL unfiltered run under that mutation with the fix in place: **25 failed, 3107 passed, 1 skipped,
+2 xfailed**. Both mutations reverted by copying the saved file back and verified **by re-running**
+(42 passed in that file; 3132 overall at the end).
+
+**And this is the finding rather than a fixture repair.** Four of the twenty had been passing a code
+the code never printed — since **this branch** minted `E-FREEZE-CONFIG-EDITED`. Gate (c2) sits before
+template resolution (e) and the plan cross-check (h), and `covered_config` covers everything but
+`metadata` and the two host paths, so **any** edit to the run directory's `config.yaml` copy moves
+`parameters_hash` and stops at (c2): `test_gate_e_unknown_template_reuses_the_shipped_code`,
+`test_gate_e_installed_only_template_reuses_the_shipped_code` and both
+`test_gate_h_*_is_plan_mismatch` were exercising (c2), so `E-TEMPLATE-UNKNOWN`,
+`E-TEMPLATE-INSTALLED-UNSUPPORTED` and `E-FREEZE-PLAN-MISMATCH` had **no coverage at all** and nothing
+could say so. `_edit_config_yaml` now re-records `identity.json`'s `parameters_hash` beside the edit —
+the state each of those fixtures means, a copy the run really started under with the fault somewhere
+later — and (c2) keeps its own coverage in the two tests that edit `config.yaml` directly and leave
+`identity.json` alone, one of which already asserts `E-FREEZE-PLAN-MISMATCH` is **not** what fires.
+**No test was added**: the ordering assertion the four were accidentally making already exists there.
+
+Two tests that read stderr themselves now take the helper's return value rather than a second, drained
+`readouterr` — the one shape the fix broke, and it broke loudly.
+
+### Major 4 — both counts derived, no fifth number
+
+- `grep -rho 'E-RESUME-[A-Z-]*' src/publishable/*.py | sort -u | wc -l` → **14**. Eleven are a literal
+  `code="E-RESUME-…"`; three (`-CODE-MOVED`, `-PARAMS-MOVED`, `-LOCKFILE-MOVED`) are raised through a
+  loop variable over a three-tuple list — **the under-count a keyword-form grep produces, and the
+  likeliest origin of "thirteen"**.
+- `E-FREEZE-CONFIG-EDITED` is new on this branch (`git show main:src/publishable/freeze.py` → zero
+  occurrences): **15 codes minted**.
+- **15 rows**, 14 `E-RESUME-*` plus that one, in § Errors `validate` reports.
+
+Appended in three places, never retro-edited: the feasibility analysis' § Executability (dated
+2026-08-24, against `bd2b4de`), design Decision 17 (**its own table is the evidence** — it listed
+fourteen all along), and the plan as correction 23. **The entry's other count sentence is right and is
+named as such** so the correction does not create the next reader's contradiction: *"refuses fourteen
+named ways"* is the `E-RESUME-*` family alone, and `resume` is the command it describes. **No row of
+the four-row table moves and no fifth number is minted.**
+
+## The six Minors
+
+| # | Status | What closed it |
+|---|---|---|
+| 1 | **CLOSED** | `RunLock`'s message carries § One execution at a time's own qualification. No test asserts the wording (greps above) |
+| 2 | **CLOSED** | Both stale clauses deleted. The sweep `grep -rn "not dispatched\|does not exist yet\|owns building it" src/ tests/` now returns **five** hits, every one attributed: `units.py`, `validate.py` (genuine unbuilt surfaces) and **`report.py` + `test_report.py` ×2, which are FALSE at HEAD** — H8c's, filed OPEN, deliberately not fixed on this branch |
+| 3 | **CLOSED** | Appended to the design: **arm C's editor is plan task 5**, not task 6 — the plan's § Task 5 holds the sole-editor sentence and `git log -S '"recorded_columns",'` returns `d4e0afd` *"H9b task 5"*. Arm E → task 15 **is** correct (plan § Task 15), which is how the half-right claim survived |
+| 4 | **CLOSED** | The *"Safe only because of this function's branch ORDER"* claim is **deleted** and the gap **filed** with an owner that is a fact. The replacement states the measurement (M6 blind on a full run) and points at the filing rather than re-deriving `NOT_BUILT_COMMANDS`' contents, which would go stale the moment someone adds a two-token unbuilt name — which is what the filing is for |
+| 5 | **CLOSED by widening** | The row now names all **nine** shapes; the per-axis *"records axis X as T, not a mapping"* arm and the holdout-partition arm were the two it did not |
+| 6 | **CLOSED** | One appended block on the batch-4 report covering three items: item (a) was **not** closed (Major 1), the takeover has **two** end-to-end pins (arm A as well as arm G — a bare `return` in `take_over_dead_lock` fails 21 tests including arm A), and *"ten shipped gate tests"* is **20**, with the review's 21 named as the same miscount. The arm A/G omission is also corrected in `_h9b_resume`'s own docstring, where the same sentence lived — *sweep for the claim, not for the file it was first noticed in* |
+
+## Both `*.md` passes, re-run
+
+**Mechanical**, my own script over `README.md`, `docs/design-principles.md`,
+`docs/experimental-designs.md`, `docs/reference.md`, `docs/feasibility-llm-growth-studies.md` and
+`CLAUDE.md`, fenced blocks skipped, inline code and escaped `\|` masked before any table arithmetic:
+**0 problems.** Every check proven able to fail by appending to **every** file in the list:
+
+| Probe | Problems reported |
+|---|---|
+| `## The documents` (duplicate anchor) | 1 (only `CLAUDE.md` holds that heading — it fired where it could) |
+| a line ending in a space | 6 |
+| a tab-indented line | 6 |
+| `a 3 x 5 grid` | 6 |
+| `## An en–dash heading` | 6 |
+| `[nope](docs/no-such-file-xyz.md)` | 6 |
+| `[nope](#no-such-anchor-xyz)` | 6 |
+| a 3-cell row under a 2-cell header | 6 |
+| `\|  \|  \|` under a 2-cell header | 6 |
+
+Two of those probes reported **0** on the first attempt and both were the *checker's* fault, not the
+documents': a bare row appended at EOF became its own header, and `|  |  |` matched the
+separator-row pattern. Fixed, re-probed, and recorded here because *a mutation whose two branches
+cannot differ is a claim too* — a green mechanical pass over a checker with two dead arms is worth
+nothing.
+
+**Cross-document.** `README.md`, `docs/design-principles.md` and `docs/experimental-designs.md` are
+untouched by this round. The `reference.md` diff is **exactly two table rows**, both prose-only: no
+config field, no code, no enum comment, no `run.yaml` key, nothing declared-versus-derived. The worked
+example's literals were re-counted after the edit and are unchanged — `[0.488, 0.661]`,
+`[0.517, 0.683]`, `[0.347, 0.477]`, `[−0.007, 0.059]`, `[−0.213, −0.125]`, `8e21`, `1a2b`, `3d8a`,
+`6b1f`, `2f5c8d0` all present at their previous counts. § The one config file does not move.
+
+## The one thing left open, said plainly
+
+**Nothing from this review is open.** Three things are **filed** rather than fixed, each with an owner
+that is a fact and a reason, and none of them is a finding of this review:
+
+1. `test_gate_e_a_load_fault_..._carries_credentials` promises a redaction no assertion makes — H8b's,
+   and pinning it needs a mutation in a closed slice's production surface on the commit before a merge.
+2. `_dispatch`'s branch order is unpinned (Minor 4's residue, which is what the Minor asked for).
+3. Two H8c comments denying that a shipped bundle render exists.
+
+**Not a count of zero disagreements**: every claim this round repeats was grepped, and two of the
+briefs' own figures did not survive it — the review's *"21 call sites"* is 20, and its *"fourteen
+codes and fifteen rows"* needed the nouns attached before either figure meant anything. Both are named
+above with the derivation rather than quietly corrected.
