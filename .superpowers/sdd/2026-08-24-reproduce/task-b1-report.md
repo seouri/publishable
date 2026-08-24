@@ -341,11 +341,31 @@ stated.
 
 ## 7. Every added assertion, and the mutation that fails IT
 
-No existing assertion was moved or edited in any of the six tasks. `git diff --stat` for
-tasks 2–6 touches only `src/publishable/reproduce.py`, `tests/test_reproduce.py`,
-`docs/design-principles.md` and `docs/superpowers/spec-defects.md`; task 1 touches only
-`tests/test_cli.py`, by appending. So there is no weakened-pin question to answer: every
-figure below is **new**.
+No existing assertion was moved or edited in any of the six tasks, and that is
+**measured, not inferred** — the first draft of this paragraph asserted it from memory,
+which is the *claim about other tests stated as established fact* shape:
+
+```
+$ git diff --stat 6ff19de..HEAD
+ .../sdd/2026-08-24-reproduce/task-b1-report.md     |  398 ++++++
+ docs/design-principles.md                          |    2 +-
+ docs/superpowers/spec-defects.md                   |   24 +-
+ src/publishable/reproduce.py                       |  688 ++++++++++
+ tests/test_cli.py                                  |  251 ++++
+ tests/test_reproduce.py                            | 1343 ++++++++++++++++++++
+ 6 files changed, 2703 insertions(+), 3 deletions(-)
+
+$ git diff 6ff19de..HEAD -- tests/test_cli.py | grep -E '^-[^-]'
+(no output)
+```
+
+`tests/test_cli.py` is **append-only**: zero removed lines, so no pre-existing assertion
+moved. The three deletions are all in `docs/`: one replaced line in
+`design-principles.md` (§ Design goals' `uv` bullet) and two in `spec-defects.md` (the
+struck heading and its table row). Two of my **own** new arms were corrected mid-task
+before being committed — arm F's stdout source and arm E's tree map — and both by their
+own controls, which is why neither shows as a deletion. So there is no weakened-pin
+question to answer: every figure below is **new**.
 
 | Added arm | Mutation that fails it, and only it |
 |---|---|
@@ -383,10 +403,24 @@ absences would pass if nothing ran, so every one of them asserts something posit
 
 1. **§ Errors owes a row for a failed clone and a failed `uv sync`.** Both report
    `E-IO-FAILED` at exit `5` and Decision 14's table anticipates neither. Task 14/15.
-2. **Task 11 must keep arm E passing**, and the arm's fixture was built so that it will
-   really exercise the command. When it lands, re-read arm E's docstring: it asserts that
-   `reproduce` writes nothing outside its destination, and tasks 7 and 8 write **into** the
-   checkout, which is inside the destination and therefore invisible to the arm by design.
+2. **Task 11 must keep arm E passing, and this was VERIFIED rather than reasoned about.**
+   A throwaway probe (written, run, deleted — not a pin) drove
+   `classify_operand → prepare_checkout → verify_code_hash → restore_environment` in
+   sequence against arm E's own fixture, from the same scratch cwd, for **both** operands.
+   Measured: the clone happens, the checkout happens, `code_hash` reports
+   `matches the record over 6 files`, `restore_environment` refuses
+   `E-REPRODUCE-UNLOCKED` at exit `1` with the checkout kept — and all three tree maps stay
+   byte-identical, ADDED/REMOVED/CHANGED empty, for the record operand and the bundle
+   member alike. So arm E holds at task 11, including the case where the operand is a
+   bundle member and the bundle directory is one of the snapshotted trees.
+
+   **But it is a warning rather than a reassurance.** Tasks 7 and 8 write into the
+   *checkout*, which is inside the destination and so invisible to the arm by design —
+   and task 7's write-back is the dangerous one: Decision 11 verifies the written config
+   with `parameters_hash`, and if that write is ever sited relative to the **operand**
+   rather than the destination, arm E is the only thing standing between it and a silently
+   modified run directory. Its editor is NONE, so a failure there is a finding to report,
+   not an assertion to relax.
 3. **The leading `git -c core.autocrlf=false` is unarmed by any hash on this git version.**
    Arm 3 asserts it structurally. A future slice tempted to drop it should read § 4.1
    rather than conclude from a green suite that it does nothing.
