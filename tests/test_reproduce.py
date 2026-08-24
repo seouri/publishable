@@ -1635,7 +1635,11 @@ def test_a_name_that_escapes_the_checkout_is_refused_and_writes_nothing(tmp_path
 
 def _prepare_env(record: dict, dest: Path, operand_path: Path | None = None):
     c = Collector()
-    lines, code = prepare_env(
+    # `prepare_env` returns the `required_env` NAMES as a third value since
+    # task 13 — the closing transcript's `.env` row needs them and a second
+    # `get_template` call would re-import every `templates/*.py`. Unpacked
+    # here so no arm below moved.
+    lines, code, _required = prepare_env(
         Record(record, operand_path or Path("/nonexistent/run.yaml")), dest, c
     )
     seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
@@ -2401,3 +2405,158 @@ def test_the_config_form_reports_the_repositorys_lockfile_and_says_nothing_ranks
     out = capsys.readouterr().out
     assert f"its digest is {digest}" in out, out
     assert "nothing is ranked here" in out, out
+
+
+# ==========================================================================
+# Fixture F and the closing transcript — the whole command, end to end
+# (design § Reproducing step 7, plan task 13).
+# ==========================================================================
+
+
+def test_fixture_f_the_bundle_member_form_end_to_end(tmp_path: Path, monkeypatch, capsys):
+    """Fixture F, and **the arm that makes Ruling Y's cost-if-wrong a test
+    rather than a sentence**: a user with a bundle and no run directory can
+    reproduce from it.
+
+    Three claims the record form cannot make:
+
+    - **the clone happened**, which needs `provenance.git.remote` to survive
+      `study add`'s redaction — asserted on the member's own document first,
+      so a failure says which half broke, and then on the destination's real
+      `HEAD` against the recorded commit;
+    - **`environment/uv.lock` was NOT reached**, because a bundle has no
+      `environment/` at all — asserted on the filesystem AND on the transcript
+      line that says so;
+    - **the lockfile line names the RECORDED digest**, read out of the member's
+      own record rather than written as a literal.
+
+    Whole lines are asserted, never bare substrings: `assert "draft" in out`
+    once passed because a member was named `draft_run`, and a `run` tag's pin
+    once passed on a bundle header's `##` heading.
+    """
+    calls = _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path, committed_lock=_A_LOCKFILE, working_lock=_A_LOCKFILE)
+    member = _bundle_member(tmp_path, fx)
+    copied = yaml.safe_load(member.read_text())
+    recorded_digest = copied["provenance"]["environment"]["uv_lock_hash"]
+    assert copied["provenance"]["git"]["remote"] == str(fx["bare"]), (
+        "the remote must survive `study add`'s redaction, or this form cannot clone"
+    )
+
+    cwd = tmp_path / "on_another_device"
+    code = _reproduce_from(cwd, member)
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert code == EXIT_OK, out
+
+    dest = cwd / f"{fx['bare'].name.removesuffix('.git')}_{copied['run_id']}"
+    assert dest.is_dir(), sorted(p.name for p in cwd.iterdir())
+    head = subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    )
+    assert head.stdout.strip() == copied["provenance"]["git"]["commit"]
+
+    assert not (member.parent / "environment").exists()
+    assert f"uv.lock: the run's own copy is not reachable from {member}" in lines, out
+    assert (
+        f"uv.lock: the commit's own copy matches the recorded {recorded_digest}, "
+        "so it is what the environment is restored from"
+    ) in lines, out
+    assert calls == [("uv", "sync", "--locked", str(dest))]
+
+
+def _closing_triple(lines: list[str]) -> list[str]:
+    """The three `uv run publishable …` lines, in the order they were printed.
+
+    Returned as a LIST rather than a set, because the order is the property
+    under test: `validate` reads, `dry-run` expands, `run` executes, and any
+    other order advises a reader to pay for a run before checking it.
+    """
+    return [line for line in lines if line.startswith("  uv run publishable ")]
+
+
+def test_the_closing_transcript_is_the_document_s_own_block(tmp_path: Path, monkeypatch, capsys):
+    """§ Reproducing on another device's fenced block, assembled.
+
+    The three commands are asserted as an ORDERED TRIPLE of whole lines — the
+    mutation is *print them in the wrong order*, which no membership assertion
+    and no substring assertion can fail.
+    """
+    _stub_sync(monkeypatch)
+    fx = _fixture_a(tmp_path)
+
+    cwd = tmp_path / "device"
+    code = _reproduce_from(cwd, fx["record_path"])
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert code == EXIT_OK, out
+
+    name = fx["record"]["config"]["metadata"]["name"]
+    rel = f"configs/{name}/config.yaml"
+    dest = cwd / f"{fx['bare'].name.removesuffix('.git')}_{fx['record']['run_id']}"
+
+    assert f"Prepared {dest.name}/" in lines, out
+    assert "Before running, edit:" in lines, out
+    assert f"  {rel}   data.input_dir, data.output_dir" in lines, out
+    assert "Then:" in lines, out
+    assert f"  cd {dest.name}" in lines, out
+    assert _closing_triple(lines) == [
+        f"  uv run publishable validate {rel}",
+        f"  uv run publishable dry-run  {rel}",
+        f"  uv run publishable run      {rel}",
+    ], out
+    # The `cd` precedes the three, or the commands run in the wrong tree.
+    assert lines.index(f"  cd {dest.name}") < lines.index(f"  uv run publishable validate {rel}")
+
+
+def test_the_config_form_gets_the_same_three_commands_and_no_cd(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Decision 13's *"the same closing instructions"*, and the two halves that
+    differ: nothing was prepared and there is nowhere to `cd` to, so neither
+    line is printed. Both the presences and the two absences are asserted —
+    an absence-only control passes identically if nothing ran."""
+    _stub_sync(monkeypatch)
+    doc = _a_run(tmp_path)
+    rel = str(doc["cfg"].resolve().relative_to(Path(doc["root"]).resolve()))
+
+    assert _reproduce_from(tmp_path / "cwd_cfg", doc["cfg"]) == EXIT_OK
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert _closing_triple(lines) == [
+        f"  uv run publishable validate {rel}",
+        f"  uv run publishable dry-run  {rel}",
+        f"  uv run publishable run      {rel}",
+    ], out
+    assert not any(line.startswith("Prepared ") for line in lines), out
+    assert not any(line.startswith("  cd ") for line in lines), out
+
+
+def test_the_apparatus_block_is_printed_when_the_record_carries_facts(
+    tmp_path: Path, monkeypatch, capsys, installed, registries
+):
+    """Fixture O's project, driven through the whole command. The mutation is
+    *omit the apparatus block when `provenance.apparatus` is non-null*, so the
+    block's own header line and one fact row are both asserted, and the
+    `apparatus.expected.json` really written is compared against the record's
+    own facts rather than against a literal."""
+    _stub_sync(monkeypatch)
+    fx = _fixture_o(tmp_path, installed)
+    facts = fx["record"]["provenance"]["apparatus"]["facts"]
+    assert facts, "the fixture must really carry facts, or this arm tests nothing"
+
+    cwd = tmp_path / "device_o"
+    assert _reproduce_from(cwd, fx["record_path"]) == EXIT_OK
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    dest = cwd / f"{fx['bare'].name.removesuffix('.git')}_{fx['record']['run_id']}"
+    name = fx["record"]["config"]["metadata"]["name"]
+
+    assert "This run measured through an apparatus. Reproducing it needs:" in lines, out
+    written = json.loads((dest / "configs" / name / "apparatus.expected.json").read_text())
+    assert written == facts
+    condition, entry = next(iter(facts.items()))
+    fact, value = next(iter(entry.items()))
+    assert any(
+        line.startswith(f"  {condition}") and line.endswith(f"{fact}  {value}") for line in lines
+    ), out

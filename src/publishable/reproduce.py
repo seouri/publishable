@@ -928,7 +928,9 @@ def write_config(operand: Record, dest: Path, c: Collector) -> tuple[list[str], 
 # --------------------------------------------------------------------------
 
 
-def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+def prepare_env(
+    operand: Record, dest: Path, c: Collector
+) -> tuple[list[str], int | None, list[str]]:
     """§ Reproducing on another device's step 6, in its narrowed form.
     Decision 12. Returns `(transcript lines, exit code or None)`.
 
@@ -1035,7 +1037,7 @@ def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], i
 
 def env_and_required_env(
     doc: dict[str, Any], dest: Path, c: Collector, *, origin: str
-) -> tuple[list[str], int | None]:
+) -> tuple[list[str], int | None, list[str]]:
     """The body of step 6, over a config document and a tree — whichever form
     supplied them. `prepare_env` above passes the record's embedded `config` and
     the checkout; the config-operand form passes the config file's own parsed
@@ -1103,7 +1105,7 @@ def env_and_required_env(
             str(dest),
             f"the checkout's template `{name}` could not be resolved: {exc}",
         )
-        return (lines, EXIT_WRONG)
+        return (lines, EXIT_WRONG, [])
 
     if template is not None:
         required = getattr(template, "required_env", None)
@@ -1116,7 +1118,7 @@ def env_and_required_env(
             )
         else:
             lines.append(f"required_env: template `{name}` declares none")
-        return (lines, None)
+        return (lines, None, [str(each) for each in required])
 
     provenance = template_provenance(name, dest)
     if provenance == "installed":
@@ -1132,7 +1134,7 @@ def env_and_required_env(
             f"required_env: no template registers `{name}` in this interpreter, so none is "
             "listed — `validate` below is what reports that"
         )
-    return (lines, None)
+    return (lines, None, [])
 
 
 # --------------------------------------------------------------------------
@@ -1255,6 +1257,69 @@ def write_expectation(operand: Record, dest: Path, c: Collector) -> tuple[list[s
 
 
 # --------------------------------------------------------------------------
+# The closing transcript. `docs/reference.md` § Reproducing, step 7.
+# --------------------------------------------------------------------------
+
+
+_CLOSING_COMMANDS = ("validate", "dry-run", "run")
+"""The three commands, in the order § Reproducing on another device prints
+them, and that order is the claim: `validate` reads without executing,
+`dry-run` expands the plan without executing, `run` executes. Printing them in
+any other order would advise a reader to pay for a run before checking it.
+
+The column width is `len("validate")`, which is what produces the document's
+own `dry-run  ` and `run      ` spacing — computed from the longest name rather
+than written as three literals, so adding a fourth command cannot leave two
+spellings of the alignment.
+"""
+
+
+def closing_transcript(
+    *,
+    prepared: Path | None,
+    config_rel: str,
+    required: list[str],
+    edit_note: str,
+) -> list[str]:
+    """§ Reproducing on another device's step 7, verbatim to its own spacing.
+
+    **`reproduce` stops rather than running**, because both remaining inputs
+    need a person: core has no mechanism to transmit a secret and it will not
+    fetch data. So this is the last thing the command prints, and it is
+    instructions rather than actions.
+
+    `prepared` is the derived destination in the record form and **`None`** in
+    the config form, which prepared nothing and has nowhere to `cd` to — so
+    that form gets neither the `Prepared …/` header nor the `cd` line. Both
+    forms get the same three commands, which is Decision 13's *"the same
+    closing instructions"*.
+
+    **The `.env` row appears only when the template declares `required_env`.**
+    § Reproducing says so in as many words — *"the transcript above lists only
+    the paths because `generic` declares no `required_env`, and an experiment
+    whose template does gets a `.env` line beside them"* — and the two rows are
+    aligned against the longer of the two labels rather than against a literal
+    width, so a long config path cannot run into its own note.
+    """
+    width = len(max(_CLOSING_COMMANDS, key=len))
+    rows: list[tuple[str, str]] = [(config_rel, edit_note)]
+    if required:
+        rows.append((".env", ", ".join(required) + " — each needs a value"))
+    label_width = max(len(label) for label, _ in rows)
+
+    lines = [""]
+    if prepared is not None:
+        lines += [f"Prepared {prepared.name}/", ""]
+    lines.append("Before running, edit:")
+    lines += [f"  {label.ljust(label_width)}   {note}" for label, note in rows]
+    lines += ["", "Then:"]
+    if prepared is not None:
+        lines.append(f"  cd {prepared.name}")
+    lines += [f"  uv run publishable {cmd.ljust(width)} {config_rel}" for cmd in _CLOSING_COMMANDS]
+    return lines
+
+
+# --------------------------------------------------------------------------
 # The config-operand form. Design Decision 13.
 # --------------------------------------------------------------------------
 
@@ -1367,11 +1432,32 @@ def reproduce_config(operand: ConfigOperand, c: Collector) -> tuple[list[str], i
     except (OSError, yaml.YAMLError) as exc:
         c.error("E-IO-FAILED", str(operand.path), f"could not be read as YAML: {exc}")
         return (lines, EXIT_WRONG)
-    more, code = env_and_required_env(
+    more, code, required = env_and_required_env(
         doc if isinstance(doc, dict) else {}, repo, c, origin="the repository"
     )
     lines.extend(more)
-    return (lines, code)
+    if code is not None:
+        return (lines, code)
+
+    try:
+        config_rel = str(operand.path.resolve().relative_to(repo.resolve()))
+    except ValueError:
+        # A config reachable from the repository only through a symlink. The
+        # absolute path is still a path the user can type, which is what the
+        # closing block is for.
+        config_rel = str(operand.path)
+    lines.extend(
+        closing_transcript(
+            prepared=None,
+            config_rel=config_rel,
+            required=required,
+            edit_note=(
+                "data.input_dir, data.output_dir — this form wrote no config, so these "
+                "are the values it already carried"
+            ),
+        )
+    )
+    return (lines, None)
 
 
 # --------------------------------------------------------------------------
@@ -1418,11 +1504,10 @@ def command_reproduce(path: Path) -> int:
         return EXIT_WRONG
     if isinstance(operand, ConfigOperand):
         config_lines, config_code = reproduce_config(operand, c)
+        if config_code is not None:
+            return _stop(config_lines, c, config_code)
         if config_lines:
             print("\n".join(config_lines))
-        if config_code is not None:
-            print(c.render(), file=sys.stderr)
-            return config_code
         return EXIT_OK
 
     prepared = prepare_checkout(operand, c, cwd=Path.cwd())
@@ -1432,21 +1517,49 @@ def command_reproduce(path: Path) -> int:
     dest = prepared.dest
 
     lines: list[str] = []
-    for step in (
-        verify_code_hash,
-        restore_environment,
-        write_config,
-        write_expectation,
-        prepare_env,
-    ):
+    for step in (verify_code_hash, restore_environment, write_config, write_expectation):
         more, code = step(operand, dest, c)
         lines.extend(more)
         if code is not None:
-            if lines:
-                print("\n".join(lines))
-            print(c.render(), file=sys.stderr)
-            return code
+            return _stop(lines, c, code)
+
+    more, code, required = prepare_env(operand, dest, c)
+    lines.extend(more)
+    if code is not None:
+        return _stop(lines, c, code)
+
+    # `write_config` above already resolved and wrote into this directory, so
+    # this call is the same pure derivation over the same record. It is called
+    # again rather than threaded through the loop's uniform `(lines, code)`
+    # contract, and its `None` branch is HANDLED rather than argued away — a
+    # comment claiming a guarantee the code does not provide is this repo's
+    # most-repeated habit.
+    config_dir = config_dir_in(operand, dest, c)
+    if config_dir is None:
+        return _stop(lines, c, EXIT_WRONG)
+    lines.extend(
+        closing_transcript(
+            prepared=dest,
+            config_rel=str(config_dir.relative_to(dest) / "config.yaml"),
+            required=required,
+            edit_note="data.input_dir, data.output_dir",
+        )
+    )
 
     if lines:
         print("\n".join(lines))
     return EXIT_OK
+
+
+def _stop(lines: list[str], c: Collector, code: int) -> int:
+    """Print what the reader learned before the refusal, then the refusal.
+
+    The transcript goes to stdout and the diagnostic to stderr, which is the
+    split every other command here uses; the earlier lines are printed at all
+    because a clone that happened and a `code_hash` that matched are facts
+    about the failure rather than noise before it.
+    """
+    if lines:
+        print("\n".join(lines))
+    print(c.render(), file=sys.stderr)
+    return code
