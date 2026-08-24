@@ -8,6 +8,7 @@ re-inventing the scaffold-and-commit dance is how a fixture drifts from what
 """
 
 import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from publishable.reproduce import (
     ConfigOperand,
     Record,
     Refused,
+    _expectation_block,
     classify_operand,
     destination_for,
     prepare_checkout,
@@ -35,6 +37,7 @@ from publishable.reproduce import (
     restore_environment,
     verify_code_hash,
     write_config,
+    write_expectation,
 )
 from publishable.study import study_add, study_new
 
@@ -293,6 +296,8 @@ def _fixture_a(
     working_lock: bytes | None = _A_LOCKFILE,
     committed_lock: bytes | None = None,
     edit_pyproject: bool = False,
+    run_kwargs: dict | None = None,
+    committed_files: dict[str, str] | None = None,
 ) -> dict:
     """Fixture A: a real repository, a real remote, and a record that carries it.
 
@@ -313,8 +318,40 @@ def _fixture_a(
     `git status --porcelain -- src templates` — and neither does an untracked
     `uv.lock` at the repository root, which is § 0.1's measured shape exactly.
     """
-    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=10,
+        **(run_kwargs or {}),
+    )
     root = doc["root"]
+    if committed_files is not None:
+        # Committed at the recorded commit, the same point and for the same
+        # reason `committed_lock` below is: the bare remote is made after this,
+        # so its HEAD is this commit and the second run records it. Used by
+        # Fixture O arm 2, whose refusal is only reachable through a COMMITTED
+        # `apparatus.expected.json` — `configs/` is outside `HASHED_TREES`, so
+        # nothing here moves `code_hash`.
+        for rel, text in committed_files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "committed files",
+            ],
+            check=True,
+        )
     if committed_lock is not None:
         # COMMITTED at the recorded commit, which is what makes the clone carry
         # one — the bare remote below is made after this, so its HEAD is this
@@ -2012,3 +2049,203 @@ def test_a_name_no_template_claims_is_reported_as_such_rather_than_as_a_plugin(
     assert "required_env: no template registers `no_such_template` in this interpreter, so "
     assert any("no template registers `no_such_template`" in line for line in lines), lines
     assert not any("plugin" in line for line in lines), lines
+
+
+# ==========================================================================
+# Fixture O — the apparatus expectation, written. Decision 4 (Ruling BB),
+# first half; task 10.
+# ==========================================================================
+
+
+_O_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9c_o_assay")
+class H9cOAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    apparatus_probe = "h9c_o_probe"
+    apparatus_facts = ["model_revision"]
+    parameter_spec = {
+        "instrument.model": Param(str, default="m1", choices=["m1", "m2"]),
+    }
+"""
+
+_O_PROBE_MODULE = """\
+from publishable import Apparatus, register_probe
+
+
+@register_probe("h9c_o_probe")
+def probe(cfg):
+    return Apparatus(facts={"model_revision": "rev-" + cfg.parameters.instrument.model})
+"""
+
+
+def _fixture_o(tmp_path: Path, installed, *, committed_files: dict[str, str] | None = None) -> dict:
+    """Fixture A, run through a **real installed probe distribution** and a
+    project-local template, so `provenance.apparatus.facts` is real.
+
+    **Two conditions with DIFFERENT facts**, which is the fixture's own claim:
+    one condition cannot tell a per-condition write from a flattened one, and
+    the arm below asserts mapping for mapping.
+    """
+    site = installed(
+        "dist-h9c-o", "1.0", {"publishable.probes": {"h9c_o_probe": "h9c_o_mod:probe"}}
+    )
+    (site / "h9c_o_mod.py").write_text(_O_PROBE_MODULE)
+    # Nothing restores `sys.modules` between tests — see the same pop in
+    # `tests/test_cli.py`'s `_h9c_p_project`, where the reason is measured.
+    sys.modules.pop("h9c_o_mod", None)
+    fx = _fixture_a(
+        tmp_path,
+        committed_files=committed_files,
+        run_kwargs={
+            "experiment_type": "h9c_o_assay",
+            "parameters": {"instrument.model": "m1"},
+            "sweep": {"grid": {"instrument.model": ["m1", "m2"]}},
+            "_local_template": _O_TEMPLATE,
+        },
+    )
+    facts = fx["record"]["provenance"]["apparatus"]["facts"]
+    assert len(facts) == 2, facts
+    values = [entry["model_revision"] for entry in facts.values()]
+    assert values[0] != values[1], facts
+    return fx
+
+
+def _write_expectation(fx: dict, dest: Path, operand_path: Path | None = None):
+    c = Collector()
+    operand = Record(fx["record"], operand_path or fx["record_path"])
+    lines, code = write_expectation(operand, dest, c)
+    seen = "\n".join(lines) + ("\n" + c.render() if c.findings else "")
+    return lines, code, c, seen
+
+
+def test_fixture_o_arm_1_the_recorded_facts_are_written_mapping_for_mapping(
+    tmp_path: Path, installed, registries
+):
+    """The file's parsed content equals the record's `facts` **mapping for
+    mapping** — not a count, not a key list, and not a flattened union, which
+    the two-condition fixture is what makes distinguishable.
+
+    The printed block is asserted too, since a file written and never announced
+    is half the deliverable: § Reproducing on another device says the apparatus
+    *"may take a person days to arrange — or be impossible once a provider has
+    retired a revision"*, which is why it is named in the output rather than
+    only recorded.
+    """
+    fx = _fixture_o(tmp_path, installed)
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_expectation(fx, dest)
+    assert code is None, seen
+    assert not c.findings, seen
+
+    target = dest / "configs" / "cohort-pilot" / "apparatus.expected.json"
+    assert target.is_file()
+    written = json.loads(target.read_text())
+    recorded = fx["record"]["provenance"]["apparatus"]["facts"]
+    assert written == recorded
+    # Mapping for mapping, stated separately from `==` so a failure names the
+    # condition rather than printing two dicts.
+    assert sorted(written) == sorted(recorded)
+    for key in recorded:
+        assert written[key] == recorded[key], key
+
+    header = "This run measured through an apparatus. Reproducing it needs:"
+    assert header in lines, lines
+    body = lines[lines.index(header) + 1 :]
+    assert len(body) == 2, body
+    for key, entry in recorded.items():
+        assert any(key in row and entry["model_revision"] in row for row in body), (key, body)
+
+
+def test_the_expectation_block_reproduces_the_documents_own_example(tmp_path: Path):
+    """§ Reproducing on another device carries this block verbatim, including
+    its column spacing and the blank continuation column. Asserted against the
+    document's own data so the widths are a property of the formatter rather
+    than of whatever the fixture happened to produce."""
+    facts = {
+        "llm_deployment": {
+            "model_revision": "gpt-5.5-2026-06-11",
+            "api_version": "2026-05-01",
+        }
+    }
+    assert _expectation_block(facts) == [
+        "This run measured through an apparatus. Reproducing it needs:",
+        "  llm_deployment   model_revision  gpt-5.5-2026-06-11",
+        "                   api_version     2026-05-01",
+    ]
+
+
+def test_fixture_o_arm_2_an_existing_expectation_is_refused_not_overwritten(
+    tmp_path: Path, installed, registries
+):
+    """**The only route to this state, and it is stated because an unreachable
+    refusal is a filing rather than a pass.** A second `reproduce` into the same
+    destination cannot reach here — Decision 9 refuses an existing destination
+    first — so the reachable shape is a **committed**
+    `configs/<name>/apparatus.expected.json`, which the fresh clone then already
+    holds. `configs/` is outside `HASHED_TREES`, so committing it moves no
+    `code_hash`; the fixture asserts that the checkout's `code_hash` still
+    matches, which is what makes the claim a measurement.
+
+    The file's bytes are asserted UNCHANGED, which a code-only assertion could
+    not see — *testing the refusal, never the honouring*, in its other
+    direction.
+    """
+    mine = '{\n  "edited": {"model_revision": "my-own-endpoint"}\n}\n'
+    fx = _fixture_o(
+        tmp_path,
+        installed,
+        committed_files={"configs/cohort-pilot/apparatus.expected.json": mine},
+    )
+    dest = _prepared_checkout(tmp_path, fx)
+    target = dest / "configs" / "cohort-pilot" / "apparatus.expected.json"
+    assert target.is_file(), "the committed file must travel with the clone"
+    assert _checkout_code_hash(dest) == fx["record"]["code_hash"]
+
+    lines, code, c, seen = _write_expectation(fx, dest)
+    assert code == EXIT_WRONG, seen
+    assert [f.code for f in c.findings] == ["E-REPRODUCE-EXPECTED-EXISTS"], seen
+    # NOT overwritten.
+    assert target.read_text() == mine
+
+
+def test_a_record_with_no_apparatus_writes_nothing_and_says_so(tmp_path: Path):
+    """Template `generic` declares no probe, so `provenance.apparatus` is
+    `null` — the whole block — and that is every run in this suite and the
+    worked example both. Nothing is written, the absence is stated, and the
+    directory is checked so *"wrote nothing"* is a fact rather than a reading
+    of the transcript."""
+    fx = _fixture_a(tmp_path)
+    assert fx["record"]["provenance"]["apparatus"] is None
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_expectation(fx, dest)
+    assert code is None, seen
+    assert not c.findings, seen
+    assert not (dest / "configs" / "cohort-pilot" / "apparatus.expected.json").exists()
+    assert lines == ["apparatus: this run measured through none; no expectation is written"]
+
+
+def test_the_bundle_form_writes_the_expectation_from_the_members_own_record(
+    tmp_path: Path, installed, registries
+):
+    """`provenance.apparatus` survives `study add` — `_redact` reaches
+    `data.input_dir`/`output_dir`, `git.repo_root`, `environment.hostname` and
+    `provenance.input_manifest`, and no key under `apparatus` — so the bundle
+    form writes the same file. Asserted rather than assumed, because Ruling Y's
+    cost-if-wrong is exactly a step that works in one form and not the other."""
+    fx = _fixture_o(tmp_path, installed)
+    member = _bundle_member(tmp_path, fx)
+    copied = yaml.safe_load(member.read_text())
+    assert (
+        copied["provenance"]["apparatus"]["facts"]
+        == (fx["record"]["provenance"]["apparatus"]["facts"])
+    )
+    dest = _prepared_checkout(tmp_path, fx)
+    lines, code, c, seen = _write_expectation(
+        {"record": copied, "record_path": member}, dest, operand_path=member
+    )
+    assert code is None, seen
+    target = dest / "configs" / "cohort-pilot" / "apparatus.expected.json"
+    assert json.loads(target.read_text()) == copied["provenance"]["apparatus"]["facts"]

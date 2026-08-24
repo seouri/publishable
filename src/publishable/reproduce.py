@@ -17,6 +17,7 @@ the five verdicts and the grounds each rests on.
 """
 
 import hashlib
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1113,4 +1114,123 @@ def prepare_env(operand: Record, dest: Path, c: Collector) -> tuple[list[str], i
             f"required_env: no template registers `{name}` in this interpreter, so none is "
             "listed — `validate` below is what reports that"
         )
+    return (lines, None)
+
+
+# --------------------------------------------------------------------------
+# The apparatus expectation. Design Decision 4 (Ruling BB), first half.
+# --------------------------------------------------------------------------
+
+
+EXPECTED_FILENAME = "apparatus.expected.json"
+
+
+def _expectation_block(facts: dict[str, Any]) -> list[str]:
+    """The block § Reproducing on another device already specifies, reproduced
+    to its own spacing:
+
+    ```
+    This run measured through an apparatus. Reproducing it needs:
+      llm_deployment   model_revision  gpt-5.5-2026-06-11
+                       api_version     2026-05-01
+    ```
+
+    The condition key is printed **once**, on its first fact's row, which is
+    what makes the block readable when a run has several conditions — and the
+    continuation rows are blank in that column rather than repeating it. Column
+    widths are computed from the data: the condition column is
+    `max(len(key)) + 1` and the fact column `max(len(fact))`, joined by two
+    spaces at each seam, which reproduces the document's own example exactly
+    rather than approximating it.
+    """
+    if not facts:
+        return []
+    width_condition = max(len(key) for key in facts) + 1
+    width_fact = max((len(fact) for entry in facts.values() for fact in entry), default=0)
+    lines = ["This run measured through an apparatus. Reproducing it needs:"]
+    for key, entry in facts.items():
+        first = True
+        for fact, value in entry.items():
+            head = key if first else ""
+            lines.append(f"  {head.ljust(width_condition)}  {fact.ljust(width_fact)}  {value}")
+            first = False
+    return lines
+
+
+def write_expectation(operand: Record, dest: Path, c: Collector) -> tuple[list[str], int | None]:
+    """Write `configs/<name>/apparatus.expected.json` and print the block.
+    Decision 4's first half (Ruling BB). Returns `(lines, exit code or None)`.
+
+    **`reproduce` probes nothing, compares nothing and refuses nothing on
+    apparatus grounds.** It is not one of the four places a probe runs, exactly
+    as `diff` is not, and the reason is the same: it has no config resolved
+    against a plugin it does not have — `uv sync` has only just installed that
+    plugin into the **clone's** environment, not into this one. The comparison
+    happens at the next `run`'s first probe, through
+    `apparatus.expectation_from` and the shipped gate (task 9). On another
+    device the apparatus **will** differ — a GPU model, a hostname, an OS — and
+    that is expected rather than exceptional, which is Ruling BB entire.
+
+    **The recorded `facts` mapping, verbatim**, condition key to fact mapping.
+    Nothing is projected, renamed or re-ordered: the file's whole job is to be
+    the recorded observation, and it is written with `json.dump(..., indent=2)`
+    so a reader can edit it — which § Reproducing on another device explicitly
+    invites, and calls the point of naming the file.
+
+    **Written once, never rewritten.** An existing one is
+    `E-REPRODUCE-EXPECTED-EXISTS` rather than a replacement, because replacing
+    it would discard a human decision: core cannot tell a legitimately
+    equivalent deployment from a substituted one, so the file is the reader's
+    to change. **The reachable route to that state is a COMMITTED expectation
+    file**, not a second `reproduce` into the same destination — Decision 9
+    refuses an existing destination before this function is ever called, so a
+    second run of the command cannot reach here. `configs/` is outside
+    `HASHED_TREES`, so a committed one changes no `code_hash`, and a reader who
+    edited the file and committed it is exactly the person this refusal exists
+    for. Stated because *an unreachable refusal is a filing, not a pass*.
+
+    **`provenance.apparatus` gains no key naming the expectation.** H6a Ruling
+    C's refusal of a definition marker is the precedent: the reproduction's
+    record carries what it **observed**, and a key naming what it was compared
+    against would be a second source of truth for a comparison the checkout's
+    own file already holds. Pinned by H9c Fixture Q, which compares a run with
+    the file against a control run without it.
+    """
+    apparatus_block = (operand.doc.get("provenance") or {}).get("apparatus")
+    if not isinstance(apparatus_block, dict):
+        # A run with no declared probe records `apparatus: null` — the whole
+        # block — which is every run of template `generic` and the worked
+        # example both. Nothing to write, and it is said rather than passed
+        # over in silence.
+        return (["apparatus: this run measured through none; no expectation is written"], None)
+
+    facts = apparatus_block.get("facts")
+    if not isinstance(facts, dict):
+        c.error(
+            "E-IO-FAILED",
+            str(operand.path),
+            "records an `apparatus` block whose `facts` is not a mapping of condition "
+            "key to fact mapping, so no expectation can be written from it",
+        )
+        return ([], EXIT_WRONG)
+
+    config_dir = config_dir_in(operand, dest, c)
+    if config_dir is None:
+        return ([], EXIT_WRONG)
+    target = config_dir / EXPECTED_FILENAME
+    if target.exists():
+        c.error(
+            "E-REPRODUCE-EXPECTED-EXISTS",
+            str(target),
+            "already exists in the checkout, and `reproduce` writes this file once and "
+            "never rewrites it — it is a file you may edit, so replacing it would "
+            "discard a decision core cannot make for you. Move or delete it and "
+            "reproduce into a fresh destination",
+        )
+        return ([], EXIT_WRONG)
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(facts, indent=2) + "\n", encoding="utf-8")
+    lines = [f"{EXPECTED_FILENAME}: written to {target}", ""]
+    lines += _expectation_block(facts)
     return (lines, None)
