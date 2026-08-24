@@ -589,6 +589,11 @@ zero and all six were wrong.
 10. **The scoping's § 6.2 lists four drifts in the scaffolded README beyond the missing region; there
     is a fifth** — the `templates` region, which § Templates needs and § The generated README's own
     fenced example declares nowhere. Decision 9 writes it.
+11. **README's v0.x notice goes false the moment this slice lands.** It reads *"not every command
+    described here dispatches yet … the rest say so when you invoke them"*, and after task 13 every
+    row of all three `Status` tables reads `built` (M26 is the starting state). Not filed; new here.
+    Corrected by task 12, which is README's editor.
+
 
 ---
 
@@ -662,9 +667,13 @@ rather than implied.
 | `discover_local`, `render_with_override`, `load_experiment` | the **loader** changes (Decision 10); the resolved class does not. Pinned by a mutation that a *stale* answer fails and a *fresh* one passes |
 | `publishable demo`, `docs`, `list-templates` | `2` → dispatch. **Three exit-code changes**, each from the specified-but-unbuilt diagnostic to real behaviour |
 
-**No exit code and no `E-` code is minted outside `docs`' five** (Decision 3). `demo`, `list-templates`
-and `docs` all reach `1` for a refusal, `0` otherwise; `E-GIT-NO-REPO` gains two readers rather than a
-sibling (Decision 4).
+**No exit code is minted, and the only `E-` codes minted are `docs`' five** (Decision 3). `demo`,
+`list-templates` and `docs` all reach `1` for a refusal, `0` otherwise; `E-GIT-NO-REPO` gains two
+readers rather than a sibling (Decision 4). **The five get § Errors rows, one row per code covering
+every emit site, each placed by its table's own scope sentence** — `docs` **raises** them, so which of
+the two tables that is gets read rather than assumed. They are task 14's, named there explicitly,
+because a code minted in one task and documented in another is how a row comes to undercount its own
+emit sites — the shape that has produced a whole-branch Major on five sub-slices.
 
 ---
 
@@ -708,7 +717,7 @@ updating them is exactly how a repeated table stops being repeated.
 |---|---|---|---|
 | **A** | `test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text[DESIGN_PRINCIPLES]` and `[REFERENCE]` — the worked example's own numbers as raw text. **Cite, do not re-capture** | **NONE** | unchanged. A passing arm after task 12 **is** the proof that `cohort-pilot`'s numbers did not move |
 | **B** | `test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text[README]` — the same scan over README | **task 12** (Ruling DD authorizes it; **see the procedure below — the tuple may not be specified as a literal in advance**) | § 8.1 |
-| **C** | A whole-file `sha256` of `README.md`, `docs/design-principles.md`, `docs/experimental-designs.md` and `docs/reference.md`, captured at batch 1 | **NONE** for `design-principles.md` and `experimental-designs.md`; **task 12** for the other two | `design-principles.md` and `experimental-designs.md` **must be byte-identical at merge**. If either moves, that is a finding |
+| **C** | A whole-file `sha256` of `docs/design-principles.md` and `docs/experimental-designs.md`, captured at batch 1. **`README.md` and `docs/reference.md` are deliberately NOT in this arm** — § 8.2 | **NONE** | Both files **byte-identical at merge**. If either moves, that is a finding, not a hash to refresh |
 | **D** | A `{path → sha256}` map of a `publishable new` project's whole tree **except `README.md`**, before and after Decision 16's move | **NONE** | unchanged. Decision 16 moves *where* the bytes are read from; the bytes produced are identical, and this arm is what says so |
 | **E** | `test_diff.py`'s H8c arm D — the three worked `diff` blocks. **Cite, do not re-capture** | **NONE** | unchanged |
 | **F** | The current `cli.NOT_BUILT_COMMANDS` key set, as a literal `{"demo", "docs", "list-templates"}`, plus the shipped `assert ("list-templates", "NOT BUILT") in tables["Command"]` H9c task 11 added | **task 13** | `NOT_BUILT_COMMANDS == {}`, and the three marked-row assertions replaced by the companion Decision 12 specifies |
@@ -743,6 +752,22 @@ transcript.
    example's* numbers; `correlation_pilot`'s are pinned by fixture A instead (§ 9), which asserts them
    against a real `demo` run rather than against a literal list.
 
+### 8.2 Why `README.md` and `reference.md` carry no whole-file hash arm
+
+An earlier cut of arm C hashed all four documents with **task 12** named as editor for `README.md` and
+`reference.md`. **That arm could not have stayed green**, and the contradiction is worth recording
+rather than quietly dropping: **task 14 is required to edit `reference.md`** — § Operation commands,
+§ Creation commands, § What `demo` walks you through, § Randomness, § Package layout, § The generated
+README, § Generators, and five new § Errors rows — and **task 12 is required to edit `README.md`**
+twice over (the transcript and the v0.x notice, § 3 finding 11). A whole-file hash over a file two
+tasks must edit is a pin that reports *an edit happened*, which is not a claim worth making, and an
+implementer meeting it red has to guess whether it is a finding.
+
+**What actually needs protecting in those two files is already pinned by content, not by a hash.** Arm
+A's `REFERENCE` parametrization holds every `reference.md` line carrying a worked-example literal; arm
+B holds README's; arm E holds the three worked `diff` blocks. **Those are the claims**; a whole-file
+digest over the same files would be the *same list pinned twice* fault wearing a different unit.
+
 ---
 
 ## 9. Fixtures as claims
@@ -760,13 +785,30 @@ transcript.
   file is byte-identical everywhere. **The rounding to six decimals is deliberate**: it makes the CSV
   the artifact of record, so every downstream number is computed from bytes rather than from a float
   repr.
-- **What is NOT platform-stable, and what task 11 must therefore measure**: the reported statistics pass
-  through SciPy's `pearsonr`/`spearmanr`/`kendalltau` and through core's percentile bootstrap. **Task 11
-  computes every literal by running, and reports, for each of the six reported values, its distance
-  from the nearest rounding boundary at the printed precision.** A margin below `1e-6` is a finding and
-  the printed precision is reduced until every margin clears it — because a value sitting on a
-  `.0005` boundary is one libm ulp away from printing differently, and a transcript that flips on a
-  different machine is worse than one that was never claimed to be real.
+- **SciPy is reachable, and that was checked rather than assumed.** `pearsonr`/`spearmanr`/
+  `kendalltau` live in SciPy, and `demo`'s generated template imports them. `publishable`'s own
+  `pyproject.toml` declares `scipy>=1.11` as a **runtime** dependency, and a scaffolded project depends
+  on `publishable`, so a machine that can run `publishable demo` has SciPy transitively — which is also
+  why Decision 10's in-process dispatch matters here: `demo` runs in the interpreter that already holds
+  it, rather than in a subprocess against an environment `uv lock` cannot resolve (Decision 15).
+- **What is NOT platform-stable, and what task 11 must therefore measure.** Two different quantities,
+  and one check does not cover both.
+  - **The point estimates** pass through SciPy on a fixed table. **Task 11 reports, for each printed
+    value, its distance from the nearest rounding boundary at the printed precision.** A margin below
+    `1e-6` is a finding, and the printed precision is reduced until every margin clears it: a value
+    sitting on a `.0005` boundary is one libm ulp from printing differently, and a transcript that
+    flips on someone else's machine is worse than one never claimed to be real.
+  - **The interval bounds are ORDER STATISTICS, not interpolations** — `stats.interval_at` returns
+    `pool[lo]`, `pool[hi]` at two fixed integer ranks off a sorted pool, with no interpolation. So the
+    boundary-margin check is necessary and **not sufficient**: a bound moves by the *gap between
+    adjacent draws* if two draws swap rank, which is orders of magnitude larger than an ulp. The draw
+    **composition** is safe — the resampled indices come from a generator seeded off the design digest,
+    so the same units are drawn everywhere — and only each draw's *statistic* can differ in its last
+    ulps across SciPy versions. **So task 11 additionally reports, for each selected rank, the gap
+    between that draw and each of its neighbours in the sorted pool.** A gap below `1e-12` means a rank
+    swap is reachable and the interval may not be quoted at that precision. If any bound fails, README
+    quotes the point estimates and the delta exactly and **describes** the intervals rather than
+    quoting them — which is a smaller claim, honestly made.
 - **The 12 failures are a claim too.** `step03_analyze` skips twelve named keys, so those units are
   handed to a recording execution and neither recorded nor skipped-by-`io.skip` — which is what
   `runner._units_failed_anywhere` counts as `failed` (M15). The expected attrition is

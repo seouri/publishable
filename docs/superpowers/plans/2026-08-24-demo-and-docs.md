@@ -35,7 +35,7 @@ the list whole anyway.
 
 ## § Corrections against the code
 
-**Thirty, each measured at `8413c16`, each with the method named. A brief-supplied figure that
+**Thirty-three, each measured at `8413c16`, each with the method named. A brief-supplied figure that
 disagrees with one of these is wrong; grep before you trust either.**
 
 1. **`GenericTemplate` declares no `aggregate`.** Read all 26 lines of
@@ -125,6 +125,20 @@ disagrees with one of these is wrong; grep before you trust either.**
 30. **`main`'s `except PublishableError` handler uses no `Collector`**, so anything raised into it is
     printed **without the redaction pass** (H9b correction C3). Every refusal `docs` and
     `list-templates` decide is printed through their own `Collector`, never raised into `main`.
+31. **SciPy is reachable from a scaffolded project, checked rather than assumed.**
+    `publishable`'s own `pyproject.toml` declares `scipy>=1.11` as a **runtime** dependency, and a
+    scaffolded project depends on `publishable` — so `demo`'s generated template may import
+    `pearsonr`/`spearmanr`/`kendalltau`. Decision 10's in-process dispatch is part of why: `demo` runs
+    in the interpreter that already holds it, not against an environment `uv lock` cannot resolve
+    (correction 15).
+32. **A percentile interval's bounds are ORDER STATISTICS, not interpolations.**
+    `stats.interval_at` returns `pool[lo]`, `pool[hi]` at two fixed integer ranks off a sorted pool
+    (`_percentile_ranks`), with no interpolation and an `assert` that the pool is sorted. So a
+    rounding-boundary margin check is **necessary and not sufficient** for an interval bound: a bound
+    moves by the *gap between adjacent draws* if two draws swap rank.
+33. **README's v0.x notice goes false the moment this slice lands** — *"not every command described
+    here dispatches yet … the rest say so when you invoke them"*, with every `Status` cell reading
+    `built` after task 13.
 
 ---
 
@@ -143,9 +157,13 @@ a document. **You are the only task in batch 1, and no later task may capture a 
 - **Arm B** — the `[README]` parametrization of the same test. **Do not edit it.** Record that its sole
   authorized editor is **task 12** and that its post-edit state is the **procedure** in design § 8.1 —
   **not a literal tuple**. Copy that procedure verbatim into your report.
-- **Arm C** — **build this.** A whole-file `sha256` of `README.md`, `docs/design-principles.md`,
-  `docs/experimental-designs.md`, `docs/reference.md`, asserted as four literals. Editors: **NONE** for
-  `design-principles.md` and `experimental-designs.md`; **task 12** for the other two.
+- **Arm C** — **build this.** A whole-file `sha256` of `docs/design-principles.md` and
+  `docs/experimental-designs.md`, asserted as two literals. Editor **NONE** — both must be
+  byte-identical at merge, and a red arm is a finding rather than a hash to refresh. **`README.md` and
+  `docs/reference.md` are deliberately NOT in this arm**, and design § 8.2 says why: task 12 must edit
+  README twice and task 14 must edit `reference.md` in eight sections, so a whole-file digest over
+  either would report only *an edit happened*. What needs protecting in those two is pinned by
+  **content** — arms A, B and E — not by a digest.
 - **Arm D** — **build this.** A `{relative path → sha256}` map of a `publishable new` project's whole
   tree **except `README.md`**, built by running `scaffold_project` into `tmp_path`. Editor **NONE**.
   Its job is Decision 16: after the constants move into `readme_templates/`, every other scaffolded
@@ -157,8 +175,8 @@ a document. **You are the only task in batch 1, and no later task may capture a 
 - **Arm G** — *cite, do not re-capture*, per correction 29. Editor **NONE**.
 
 **Mutations required, each full-suite:** change one digit of a `cohort-pilot` interval in
-`docs/reference.md` (arm A) and in `README.md` (arms B and C); append a blank line to
-`docs/design-principles.md` (arm C's NONE half); change one byte of `scaffold.CITATION` (arm D); add a
+`docs/reference.md` (arm A) and in `README.md` (arm B); append a blank line to
+`docs/design-principles.md` and to `docs/experimental-designs.md` (arm C, both halves); change one byte of `scaffold.CITATION` (arm D); add a
 fourth key to `NOT_BUILT_COMMANDS` (arm F).
 
 **Must not touch:** `src/` except to mutate and revert; any existing test assertion; the four documents
@@ -459,10 +477,22 @@ is suppressed and no lockfile is fabricated.
 report a **recorded** column's or drop the line. Say in your report which you did and why. **Do not
 report a derived metric's.**
 
-**Every literal you print is computed by running**, and your report gives, for each of the six reported
-values, **its distance from the nearest rounding boundary at the printed precision**. A margin below
-`1e-6` is a finding: reduce the printed precision until every margin clears it, and say so. A value one
-libm ulp from a boundary is a transcript that flips on someone else's machine.
+**Every literal you print is computed by running, and TWO different stability checks are owed, because
+one does not cover both quantities** (corrections 31, 32).
+
+- **Point estimates and the delta.** Report each value's **distance from the nearest rounding boundary
+  at the printed precision**. A margin below `1e-6` is a finding: reduce the printed precision until
+  every margin clears it, and say so. A value one libm ulp from a boundary is a transcript that flips
+  on someone else's machine.
+- **Interval bounds.** Correction 32: they are **order statistics** — `pool[lo]`, `pool[hi]` at fixed
+  integer ranks — so a boundary margin says nothing about a **rank swap**, which moves a bound by the
+  gap between adjacent draws. The draw *composition* is safe (indices come from a generator seeded off
+  the design digest); only each draw's statistic can move in its last ulps across SciPy versions.
+  **Report, for each selected rank, the gap between that draw and each of its neighbours in the sorted
+  pool.** A gap below `1e-12` means a rank swap is reachable and the interval may not be quoted at that
+  precision. **If any bound fails, README quotes the point estimates and the delta exactly and
+  DESCRIBES the intervals rather than quoting them** — a smaller claim, honestly made. Say which you
+  did.
 
 **Mutations:** design § 10 rows 12, 13, 14, 15. Row 14's assertion needs a **whole-tree snapshot**, not
 a check for an absent `mkdir` call.
@@ -473,8 +503,8 @@ a check for an absent `mkdir` call.
 
 ## Task 12
 
-**Binding corrections: 6, 7, 28, 29. You are guard-pin arms B and C's sole authorized editor, for the
-README and `reference.md` halves only.**
+**Binding corrections: 6, 7, 28, 29, 33. You are guard-pin arm B's sole authorized editor. You are
+named on NO other arm — arm C's editor is NONE and it does not cover README.**
 
 **README's `demo` transcript becomes what `demo` prints.** Take task 11's measured values.
 
@@ -490,6 +520,12 @@ Edits:
   beneath them to `demo`, in the block itself.
 - § What `demo` walks you through's stop-4 cell and README's execution count: both counts, per
   correction 7.
+- **README's v0.x notice** (correction 33). It reads *"not every command described here dispatches yet
+  … the rest say so when you invoke them"*, and after task 13 every `Status` cell in all three tables
+  reads `built`. **Prefer deleting the false clause to rewriting it** — a rewrite invents, a deletion
+  cannot — and leave the rest of the notice (the settled design, the shifting interfaces, the feedback
+  invitation) exactly as it is. Coordinate the wording with task 13 in batch 6's review if the
+  retirement's own sentence overlaps.
 
 **Arm B's post-edit state is PROCEDURAL, and a literal tuple destroys the arm** (correction 28, design
 § 8.1). Follow it exactly:
@@ -506,10 +542,12 @@ Edits:
 5. **Do not extend `_H5A_ARM_D_LITERALS`** with the demo's numbers. Arm B pins the worked example's;
    task 11's fixture pins `correlation_pilot`'s against a real run.
 
-**Arm A's `DESIGN_PRINCIPLES` and `REFERENCE` parametrizations, and arm C's `design-principles.md` and
-`experimental-designs.md` hashes, have editor NONE.** If any goes red you have moved a
-`cohort-pilot` number. Correction 29 names the two neighbouring pins that are **not** collisions —
-attribute them in your report rather than editing them.
+**Arm A's `DESIGN_PRINCIPLES` and `REFERENCE` parametrizations have editor NONE, and so does the whole
+of arm C** — which covers `design-principles.md` and `experimental-designs.md` only, and neither
+README nor `reference.md` (design § 8.2). If arm A goes red you have moved a
+`cohort-pilot` number; if arm C goes red you have edited a document no task in this slice may touch.
+Correction 29 names the two neighbouring pins that are **not** collisions — attribute them in your
+report rather than editing them.
 
 **Must not touch:** `src/`; the guard-pin arms you are not named on.
 
@@ -555,9 +593,10 @@ sub-slices** — check each table's own **scope sentence**, not only its cells.
 
 ## Task 14
 
-**Binding corrections: 1, 2, 3, 5, 8, 9, 10, 11, 12, 16, 19, 20, 24, 29. And you are named on no
-guard-pin arm — arm C's `reference.md` half belongs to task 12, so anything you write into
-`reference.md` must leave arm C green, and if it does not, say so rather than editing it.**
+**Binding corrections: 1, 2, 3, 5, 8, 9, 10, 11, 12, 16, 19, 20, 21, 24, 29. You are named on NO
+guard-pin arm.** You edit `reference.md` in eight sections and that is expected — **no arm hashes it**
+(design § 8.2). **Arm A's `REFERENCE` parametrization must stay green**: it holds every `reference.md`
+line carrying a worked-example literal, so if it fires you have moved a `cohort-pilot` number.
 
 **The four documents, `CLAUDE.md`, `spec-defects.md`, both consistency passes, and § Executability.**
 
@@ -578,6 +617,12 @@ Document edits:
 - § The generated README: brought to what task 3 writes, including the `templates` region it declared
   nowhere.
 - § Generators: `generate experiment`'s two `NOT BUILT` halves and `generate template`'s one are gone.
+- **§ Errors: five new rows, one per `E-DOCS-*` code** (`-REGION-UNBALANCED`, `-REGION-DUPLICATE`,
+  `-REGION-UNKNOWN`, `-NO-REGIONS`, `-NO-README`). **One row per code covering EVERY emit site**, and
+  **placed by each table's own scope sentence** — `docs` **raises** these, so read which of the two
+  tables that is rather than assuming, and read the sentence rather than the cells. This is the exact
+  shape that has produced a whole-branch Major on five sub-slices; it is named here rather than left to
+  fall between you and task 13.
 - `CLAUDE.md` § Invariants: the creation-command enumeration gains **`demo`**, with the clause Decision
   11 owes — *`reproduce` derives its destination from the record; `demo` has no record to derive from*
   — so the two documented answers about `--into` are one rule, not two.
