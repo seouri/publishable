@@ -167,7 +167,16 @@ if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
-OPERATION_COMMANDS = {"validate", "dry-run", "run", "draft", "resume", "freeze", "report"}
+OPERATION_COMMANDS = {
+    "validate",
+    "dry-run",
+    "run",
+    "draft",
+    "resume",
+    "reproduce",
+    "freeze",
+    "report",
+}
 
 # The specified-but-unbuilt surface, in one place. Every name here is a command
 # `docs/reference.md` § CLI reference describes and this build does not execute;
@@ -181,7 +190,6 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
     "docs": "Operation commands",
     "list-templates": "Operation commands",
-    "reproduce": "Reproducing on another device",
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
@@ -5535,6 +5543,7 @@ def _dispatch(command: str, rest: list[str]) -> int:
         # cycle of its own.
         from publishable.freeze import command_freeze
         from publishable.report import command_report
+        from publishable.reproduce import command_reproduce
 
         handlers: dict[str, Callable[[Path], int]] = {
             "validate": command_validate,
@@ -5553,6 +5562,21 @@ def _dispatch(command: str, rest: list[str]) -> int:
             # and the order is filed as unpinned in
             # `docs/superpowers/spec-defects.md`.
             "resume": command_resume,
+            # `reproduce` joins the same one-path arm for the same reason, and
+            # its function-local import is `command_freeze`'s: `reproduce.py`
+            # imports `validate.declared_credential_names_for` at module scope
+            # and `cli.py` imports `validate` at module scope, so a module-scope
+            # import here would put a third module on that chain for no gain.
+            # `publishable reproduce new` dispatches into `command_reproduce`
+            # with `new` as its path rather than printing the unbuilt
+            # diagnostic — `new` is a single token, so the arity arm accepts it
+            # and the two-token `NOT_BUILT_COMMANDS` lookup never happens. That
+            # is item 5 of the design's disclosure, MEASURED through the real
+            # console script and pinned below rather than predicted, and it does
+            # NOT rest on this function's branch order (which is filed as
+            # unpinned in `docs/superpowers/spec-defects.md`): the arms assert
+            # the code and the identifier, never which branch answered.
+            "reproduce": command_reproduce,
             "freeze": command_freeze,
             "report": command_report,
         }

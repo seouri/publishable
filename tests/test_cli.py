@@ -9596,7 +9596,16 @@ def test_reference_cli_tables_are_parsed_at_all():
     # The `set(NOT_BUILT_COMMANDS)` equalities below are SELF-MAINTAINING and
     # were not edited.
     assert ("resume", "built") in tables["Command"]
-    assert ("reproduce", "NOT BUILT") in tables["Command"]
+    # H9c guard-pin arm B, EDITED by its sole authorized editor, H9c plan task
+    # 11, to the post-edit state written in advance in the design's § The guard
+    # pin and in batch 1's report: `("reproduce", "built")`, PLUS a
+    # `("list-templates", "NOT BUILT")` row-presence line so the table keeps a
+    # marked probe of an unbuilt row (plan correction 20 — flipping the one
+    # marked probe without adding another deletes the coverage the comment
+    # above names). The `set(NOT_BUILT_COMMANDS)` equalities below are
+    # SELF-MAINTAINING and were not edited.
+    assert ("reproduce", "built") in tables["Command"]
+    assert ("list-templates", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -26176,3 +26185,81 @@ def test_h9c_fixture_q_the_reproductions_own_record_counts_only_its_own_probes(
         == control_record["provenance"]["apparatus"]["facts"]
     )
     assert "expected" not in json.dumps(record["provenance"]["apparatus"])
+
+
+# ===========================================================================
+# H9c plan task 11 — `reproduce` dispatched. `reproduce` joins
+# `OPERATION_COMMANDS`'s existing one-path arity arm and leaves
+# `NOT_BUILT_COMMANDS`. The four arms below are ADDITIONS (plan correction 17:
+# `OPERATION_COMMANDS` has no shared count literal, so the arity arm is
+# per-command and `resume`'s three plus its `resume new` pin are the shipped
+# precedent rather than coverage this can lean on).
+#
+# All four shapes were MEASURED through the REAL console script
+# (`uv run --directory <repo> publishable …`, driven from a scratch directory
+# OUTSIDE this repository, which was empty before and after), and every one
+# matched the design's disclosure item 5:
+#
+#   reproduce            → exit 2, "`reproduce` takes exactly one path and no flags"
+#   reproduce a b        → exit 2, the same line
+#   reproduce --json     → exit 2, the same line
+#   reproduce new        → exit 1, "  error   E-IO-FAILED          new
+#                          could not be read as YAML: [Errno 2] No such file or
+#                          directory: 'new'"
+#
+# The last is disclosure item 5's own claim — exit `2` → `1`, and the
+# identifier is new — and it is the shape H9a got wrong three ways for
+# `draft new`, so it is pinned rather than only disclosed.
+#
+# Nothing below rests on `_dispatch`'s branch order (plan correction 18): that
+# order is filed as unpinned, and hoisting the `NOT_BUILT_COMMANDS` lookups
+# above the built branches leaves the suite green. Each arm asserts the
+# OUTCOME — the exit code and the identifier — never which branch produced it.
+# ===========================================================================
+
+_REPRODUCE_ARITY_MESSAGE = "`reproduce` takes exactly one path and no flags"
+
+
+def test_h9c_reproduce_with_no_path_is_an_invocation_error(capsys):
+    assert main(["reproduce"]) == EXIT_INVOCATION
+    assert _REPRODUCE_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9c_reproduce_with_two_paths_is_an_invocation_error(capsys):
+    assert main(["reproduce", "a", "b"]) == EXIT_INVOCATION
+    assert _REPRODUCE_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9c_reproduce_with_a_flag_is_an_invocation_error(capsys):
+    """The arm the `len` half alone cannot cover: `--json` is one argument, so
+    a mutation replacing the condition with a bare `len(rest) != 1` fails this
+    while passing the two above. Ruling Y's *no flags* is the rule being kept,
+    and `design-principles.md` § Everything is in the file is where it comes
+    from."""
+    assert main(["reproduce", "--json"]) == EXIT_INVOCATION
+    assert _REPRODUCE_ARITY_MESSAGE in capsys.readouterr().err
+
+
+def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(capsys):
+    """Disclosure item 5, measured through the console script and pinned here.
+
+    `"new"` is a single token, so `rest == ["new"]` never trips the arity arm
+    and the two-token `NOT_BUILT_COMMANDS` lookup for `"reproduce new"` never
+    happens — the call dispatches into `command_reproduce` with `new` as its
+    path and gets `classify_operand`'s refusal for a path that cannot be read.
+
+    Asserted on the exit code AND on the identifier, because they are different
+    claims: a mutation dropping `reproduce` from `OPERATION_COMMANDS` while
+    leaving the handler in place would print `unknown command` at
+    `EXIT_INVOCATION`, and one that left the name in `NOT_BUILT_COMMANDS` would
+    print the roadmap notice at the same code. Both absences are asserted."""
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "reproduce" not in NOT_BUILT_COMMANDS
+    assert "reproduce new" not in NOT_BUILT_COMMANDS
+    code = main(["reproduce", "new"])
+    err = capsys.readouterr().err
+    assert code == EXIT_WRONG, err
+    assert "is specified but not built" not in err
+    assert "unknown command" not in err
+    assert "E-IO-FAILED" in err

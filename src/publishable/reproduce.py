@@ -27,7 +27,7 @@ from typing import Any
 
 import yaml
 
-from publishable.diagnostics import EXIT_EXTERNAL, EXIT_WRONG, Collector
+from publishable.diagnostics import EXIT_EXTERNAL, EXIT_OK, EXIT_WRONG, Collector
 from publishable.errors import ContractError, PublishableError
 from publishable.hashes import code_hash_of, hashed_files, parameters_hash
 from publishable.lineage import read_record_file
@@ -1234,3 +1234,79 @@ def write_expectation(operand: Record, dest: Path, c: Collector) -> tuple[list[s
     lines = [f"{EXPECTED_FILENAME}: written to {target}", ""]
     lines += _expectation_block(facts)
     return (lines, None)
+
+
+# --------------------------------------------------------------------------
+# The command. `docs/reference.md` § Reproducing on another device, steps 1-7.
+# --------------------------------------------------------------------------
+
+
+def command_reproduce(path: Path) -> int:
+    """`reproduce`, end to end. Ruling Y: one path, no flags, no target device.
+
+    The seven steps § Reproducing on another device numbers map onto the
+    functions above in that document's own order: steps 1 and 2 are
+    `prepare_checkout` (the remote, the derived destination, the clone and the
+    detached checkout), step 3 is `verify_code_hash`, step 4 is
+    `restore_environment`, step 5 is `write_config` and then `write_expectation`,
+    and step 6 is `prepare_env`. Step 7 — the closing transcript — is plan task
+    13's, one commit later.
+
+    **Every step reports the same way**, which is what makes this loop possible
+    at all: `(transcript lines, exit code or None)`. The lines are what the
+    reader is told; the code is a refusal already appended to `c`. On a refusal
+    the lines gathered so far are still printed, because the earlier steps'
+    findings are how a reader understands the one that stopped — a clone that
+    happened and a `code_hash` that matched are facts about the failure, not
+    noise before it.
+
+    **One `Collector`, credential-bearing, and nothing is raised into `main`.**
+    `main`'s `except PublishableError` handler applies no redaction pass
+    (measured by H9b, plan correction 21), so a refusal raised out of here
+    would reach a reader un-redacted. `prepare_env` is the step that learns
+    credential values — a project-local template it imports may raise carrying
+    one — and it MERGES them into this collector rather than replacing them,
+    so redaction covers whatever any step told the collector to look for.
+
+    **The working directory is read exactly once, here.** Decision 9 derives
+    the destination relative to where the user is standing; `Path.cwd()` at the
+    one call site keeps that a property of the invocation rather than of any
+    function below.
+    """
+    c = Collector()
+    operand = classify_operand(path, c)
+    if operand is None:
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+    if isinstance(operand, ConfigOperand):
+        # SEAM, deliberately loud. Design Decision 13's config form is plan
+        # task 12, the next commit; a silent fall-through returning `EXIT_OK`
+        # for an operand this command ACCEPTS is the shape that would ship a
+        # command doing nothing and reporting success.
+        raise NotImplementedError("the config-operand form is plan task 12; see design Decision 13")
+
+    prepared = prepare_checkout(operand, c, cwd=Path.cwd())
+    if isinstance(prepared, Refused):
+        print(c.render(), file=sys.stderr)
+        return prepared.exit_code
+    dest = prepared.dest
+
+    lines: list[str] = []
+    for step in (
+        verify_code_hash,
+        restore_environment,
+        write_config,
+        write_expectation,
+        prepare_env,
+    ):
+        more, code = step(operand, dest, c)
+        lines.extend(more)
+        if code is not None:
+            if lines:
+                print("\n".join(lines))
+            print(c.render(), file=sys.stderr)
+            return code
+
+    if lines:
+        print("\n".join(lines))
+    return EXIT_OK
