@@ -2108,3 +2108,58 @@ actually proceeds into command_draft rather than being refused for arity … _pr
 1–4 of the table above count — none of the four disclosed changes reads a `data` or `statistics` block,
 and this correction is to the description of change (3), not to its consequence — so **no figure in the
 table above moves and no fifth number is minted.**
+
+### Measured on 2026-08-23 against commit `d9b82c6` — after H9b
+
+**H9b builds `resume`.** The command dispatches; it compares the three identity figures and the input
+manifest against what the run recorded in a new run-start artifact (`identity.json`), reads
+`sweep.yaml`'s plan, `allocation.json`'s memberships and `apparatus/probes.jsonl`'s baseline back
+rather than re-deriving any of them, reconstitutes a full result for every triple it skips, may take
+over a lock whose holder is provably dead, and refuses fourteen named ways. `run` and `draft` gain one
+artifact (`identity.json`), `executions.jsonl`'s line gains two keys (`returned`,
+`recorded_columns`), `dry-run` prints one more fixed file, `run.yaml`'s `attempts` becomes a count of
+ledger records, and `freeze` gains one refusal (`E-FREEZE-CONFIG-EDITED`).
+
+**It unblocks ZERO configs, and the four rows are derived rather than repeated:**
+
+- **Row 1, transplantable configs validating with zero errors — 8 of 8.** `resume` runs at no
+  `validate` and from no step, and every behaviour change above is either a new artifact nothing in
+  these configs reads or a path only a crashed run directory reaches, so `validate`'s answer for these
+  configs is byte-identical.
+- **Row 2, blocked on `io.reuse_from` — 0.** Untouched. `resume` reads no upstream it does not inherit
+  from `run`, through the same `_prepare_run` call.
+- **Row 3, meet the `report_by`-under-`resample` gap — 7.** A construction chosen inside
+  `summarize_step`, in phase 8, which a resumed run reaches through the identical function `run` does
+  — and H9b's own reconstitution exists precisely so that phase 8 sees the same results either way.
+- **Row 4, free of every core-side dependency this analysis can name — 1.** `resume` requires a
+  crashed run directory, which is a property of an operator's history rather than of a config; none of
+  the nine declares an `apparatus_probe`, a `study`, a `fold` or a group axis, so none of them can
+  reach the apparatus baseline replay, the takeover, or the allocation reader either.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The block above is byte-identical to the H9a entry's, extracted rather than retyped**, by the same
+two independent methods that entry describes — a programmatic walk that finds the last
+`| Figure | Count | Visible to` header and reads forward while the line starts with `|`, and a fixed
+six-line slice from the same index — `diff`-ed to empty, six lines each. That is why its cells still
+name **H8a** rather than this slice: updating them is exactly how a repeated table stops being
+repeated. **No fifth number is minted, and no single figure is quoted for this analysis'
+executability** — quote the table, or name the dependency.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** H9b mints thirteen `E-RESUME-*`
+codes plus `E-FREEZE-CONFIG-EDITED` and retires none, and every one of the fourteen is reachable only
+from `resume` or `freeze` — neither of which any of these nine invokes, both of which need a run
+directory an operator already has. Two codes that existed and were undocumented (`E-RUN-LOCKED`,
+`E-RUN-ID-EXHAUSTED`) gain § Errors rows; that is a documentation change and fires nothing. `resume`
+also becomes the first reader of exit codes `3`, `4` and `5` and **no exit code is minted**.
+
+**One behaviour change worth naming even though it moves no row**: a resume stopped by an apparatus
+fact that moved while the run was down now **writes the run record** — `status: failed`, at exit `4` —
+where it previously wrote none, so a run whose executions were already paid for is publishable rather
+than stranded. It is reachable only for a config declaring an `apparatus_probe`, which none of these
+nine does, which is why the table does not move.

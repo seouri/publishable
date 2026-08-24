@@ -2970,12 +2970,11 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     and (H9b) `resume` are three entries into ONE execution path rather than
     three copies of it.
 
-    The thirty-five names are read off `prepared` in one unpack block rather
-    than as attribute accesses scattered through the body, so that the body
-    itself is byte-identical to what `command_run` held -- which is the only
-    mechanical check a reviewer has on a 1495-line move. `c` is the one field
-    not unpacked: no statement below reads it (see `Prepared`), and a local
-    nothing reads is an `F841`.
+    The names are read off `prepared` in one unpack block rather than as
+    attribute accesses scattered through the body, which is what made the
+    original move of this 1,495-line body out of `command_run` mechanically
+    checkable. `c` is the one field not unpacked: no statement below reads it
+    (see `Prepared`), and a local nothing reads is an `F841`.
 
     `draft` is accepted here and reaches `assemble_run_yaml` in task 3, which
     owns the `draft` command, its fixture Q and the mutation that catches the
@@ -2985,12 +2984,14 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     `resumed` is `None` for `run` and `draft`, and every line below behaves as
     it did before it existed (H9b Decision 14: one execution path, not a
     third copy of it). It is accepted at THIS signature and deliberately not
-    threaded through the unpack block above — `Prepared`'s thirty-six names
-    are read into locals in one block precisely so that this 1,495-line body
-    stays byte-identical to what `command_run` held, which is the only
-    mechanical check a reviewer has on the move (plan § Corrections against
-    the code, correction 19). What reads it is the handful of phase-6 sites
-    and the `execute_plan` call, and nothing else.
+    threaded through the unpack block above (plan § Corrections against the
+    code, correction 19): what reads it is the handful of phase-6 sites, the
+    `execute_plan` call, and the run-start containment that publishes a record
+    for a resume whose apparatus moved — and nothing else. The
+    byte-identical-to-`command_run` claim this paragraph used to make is
+    deleted rather than restated: it stopped being true when the `resumed`
+    branches landed, and a weaker version of it would be a sentence nobody can
+    check.
     """
     config_path = prepared.config_path
     doc = prepared.doc

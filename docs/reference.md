@@ -23,7 +23,7 @@ Complete reference for `publishable`. For the rationale behind these choices, se
 **What a run produces**
 - [Run identity](#run-identity) — the output tree
 - [The two files](#the-two-files) — `config.yaml` and `run.yaml`
-- [The other files a run writes](#the-other-files-a-run-writes) — `sweep.yaml`, `allocation.json`, manifests, unit tables
+- [The other files a run writes](#the-other-files-a-run-writes) — `sweep.yaml`, `allocation.json`, `identity.json`, manifests, unit tables
 - [Three hashes](#three-hashes) — code, parameters, data, and what `auto` derives from
 - [Lineage between runs](#lineage-between-runs)
 
@@ -845,6 +845,10 @@ A `scope: "summary"` step that raises is *not* one of these — every condition 
 
 **`partial` is a reportable status, and that's the point of separating it from `failed`.** A run whose executions all ran and three of which failed has results worth reading, with the attrition recorded per execution and per condition; `report` renders it with the failures shown rather than refusing. What it is not is `completed`, so a `study add` of one is visible as what it is.
 
+**A [resumed](#resuming) run's status is over the whole plan, not over the attempt** — which is why a resume that completes every triple it had left can still be `partial`. The reconstituted executions are in the same list the status is computed from, so a failure the *previous* attempt recorded folds into this attempt's answer exactly as one of its own would; the alternative would let a run report `completed` while a failure it never re-ran sits in its own record. `attempts` is where the two attempts are told apart, and it is a **count of ledger records** rather than a figure written beside them: a triple that completed the first time stays at `1` however many resumes the run goes through, and one that ran twice reads `2`.
+
+**A resume stopped by a fact that moved while the run was down still writes the record**, `status: failed`, at exit [`4`](#exit-codes-and-diagnostics). The stop is the same one a mid-run change produces and for the same reason — the executions on either side were measured through two different apparatus states — and the record is kept for the same reason too: the work was already paid for, and a stop that discarded it would be worse than the change it protects against. The moving observation itself is in the [probe ledger](#the-apparatus-core-can-only-observe) the record names, and `provenance.apparatus.facts` carries the values the results were measured *through*. **Writing it ends the run**, so a second `resume` of that directory is refused (`E-RESUME-RUN-ENDED`) — which is the right trade only because a moved fact cannot move back. An apparatus that has become *unreachable* is the opposite case, and there a resume writes nothing and exits `5`, the class you retry.
+
 **All three are terminal, which is what [`resume`](#resuming) distinguishes itself against.** `run.yaml` is written when the plan ends, once, and never modified — so a run directory holding one is a run that finished, and `resume` refuses it rather than re-executing the triples it recorded as failed. What `resume` is for is the case with *no* terminal status at all: a scheduler, a node eviction, a `^C`. That's also why it takes a run directory rather than a `run.yaml` — at the moment it's needed, there isn't one. To retry failed executions after a `partial`, run again: a fresh `run_<id>/` is the mechanism, and patching a record a collaborator may already hold is not.
 
 Results go here rather than back into the config for four compounding reasons: writing into a git-tracked file dirties the tree; writing into a file whose hash was taken at run start makes that hash unanswerable; overwriting previous results contradicts append-only; and one `results` block can't hold many runs. Immutable-after-write `run.yaml` fixes all four, and embedding the config keeps "one self-sufficient file to report" intact.
@@ -858,6 +862,7 @@ Results go here rather than back into the config for four compounding reasons: w
 ├── run_2026-08-06T14-02-11Z_8e21ab3/     # <timestamp>_<short code_hash>
 │   ├── run.yaml
 │   ├── config.yaml
+│   ├── identity.json
 │   ├── manifest/input.json
 │   ├── environment/{uv.lock,pyproject.toml,repo_root.txt}
 │   ├── sweep.yaml
@@ -884,7 +889,9 @@ Including the short `code_hash` in the run ID means a directory listing already 
 
 **The parallelism worth having is inside a step, and it's yours.** A repeat-scoped step making 440 metered requests is where the wall-clock actually goes, and core neither helps nor hinders: issue them concurrently, and [`io.record`](#units-the-thing-being-measured) and [`io.append`](#steps-and-artifacts) are append-only and safe to call as each returns. What core declines to do is run *your pipeline* twice at once, which is the thing that would make the provenance ambiguous. Scheduling a fleet of runs is a scheduler's job, and [this isn't one](../README.md#is-this-for-you).
 
-**A run holds its directory while it executes.** `run_<id>/lock` records the host, pid, and start time, and is removed when [`run.yaml` is written](#what-status-means-and-when-a-run-keeps-going). `run`, `draft`, and `resume` each take it and each release it — a resumed attempt holds the directory exactly as the first one did, which is what "the invocation that takes it releases it" means when two invocations share a run. `dry-run` takes none: it prints paths and creates nothing, so running one against a live run is as ordinary as reading the ledger. (It resolves no run *id* either — the timestamp and hash prefix in a real run's directory name exist only once [`allocate_run_dir`](#run-identity) claims one, so the paths it prints hold the literal placeholder `run_.../`.) The lock is what makes `resume` safe: resuming a directory another process is executing would put two writers on one append-only tree, so `resume` refuses a directory whose lock is held. A lock left behind by a killed process is reported rather than assumed dead — core can't tell a crashed run from a live one on another node, and guessing wrong is the one guess that corrupts a run instead of merely delaying it.
+**A run holds its directory while it executes.** `run_<id>/lock` records exactly three keys — the host, the pid, and the start time — and is removed when [`run.yaml` is written](#what-status-means-and-when-a-run-keeps-going). `run`, `draft`, and `resume` each take it and each release it — a resumed attempt holds the directory exactly as the first one did, which is what "the invocation that takes it releases it" means when two invocations share a run. `dry-run` takes none: it prints paths and creates nothing, so running one against a live run is as ordinary as reading the ledger. (It resolves no run *id* either — the timestamp and hash prefix in a real run's directory name exist only once [`allocate_run_dir`](#run-identity) claims one, so the paths it prints hold the literal placeholder `run_.../`.) The lock is what makes `resume` safe: resuming a directory another process is executing would put two writers on one append-only tree, so `resume` refuses a directory whose lock is held.
+
+**A lock left behind by a killed process is reported rather than assumed dead — for `run` and `draft`, and for every case a liveness test cannot answer.** Neither of those two ever meets it (each claims its directory with a `mkdir`, so a lock cannot pre-exist a directory it just created), and `resume` is the one command that can: it [takes over a lock whose holder is provably gone](#resuming) and reports every other state, `E-RUN-LOCKED`. *Provably gone* is one verdict from one test — `os.kill(pid, 0)` raising `ProcessLookupError` for a pid recorded against this machine's own hostname — and a lock recorded on another node is therefore always reported, because core can't see another machine's process table, and guessing wrong there is the one guess that corrupts a run instead of merely delaying it. **The start time is read by a reader, never by the test**: it is what makes a refusal legible (*held since 2026-08-06T14:02:11Z by pid 41271 on this host*), and a rule that judged liveness by age would answer the question with a stopwatch — so a recycled pid reads as *alive* and refuses, which is the conservative direction.
 
 Like `latest`, the lock is bookkeeping rather than an artifact, so creating and removing it within one invocation isn't the deletion append-only forbids. A finished run directory holds no trace of it, which is right: what's worth keeping about when a run held its directory is each execution's `started_at`, and that's in the record.
 
@@ -894,7 +901,7 @@ Like `latest`, the lock is bookkeeping rather than an artifact, so creating and 
 
 ## The other files a run writes
 
-`run.yaml` is the deliverable, and the rest of the run directory is read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each file below is therefore a contract rather than a log. All of them are append-only, which is not the same as written-once: `sweep.yaml`, `allocation.json`, `config.yaml` and `environment/repo_root.txt` are settled before the first execution and never touched again, while the ledger and the per-unit tables grow as the run goes. Neither kind is ever rewritten.
+`run.yaml` is the deliverable, and the rest of the run directory is read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each file below is therefore a contract rather than a log. All of them are append-only, which is not the same as written-once: `sweep.yaml`, `allocation.json`, `config.yaml`, `environment/repo_root.txt` and `identity.json` are settled before the first execution and never touched again, while the ledger and the per-unit tables grow as the run goes. Neither kind is ever rewritten.
 
 ### `config.yaml` and `environment/repo_root.txt` — what a mid-run command reads instead of `run.yaml`
 
@@ -902,7 +909,27 @@ Written at run start, beside `environment/pyproject.toml`. `config.yaml` is a **
 
 `config.yaml` is what such a command loads in `run.yaml`'s place; a run directory started by a build that predates this pair cannot be frozen (`E-FREEZE-NO-CONFIG`). `environment/repo_root.txt` exists because a **project-local** template — where `apparatus_probe` is declared — resolves only through discovery by path, and that discovery needs the repo root; without it, `freeze` could resolve a core template but never the project's own.
 
-Together the pair holds exactly the two facts a mid-run command cannot otherwise obtain and cannot compute: the config as it was, and the repo it came from. Everything else such a command might want is either computable from those two (`parameters_hash` over the copied config) or is a **recorded** figure belonging to `run.yaml` alone — `code_hash` at run start is not recoverable from a tree that has since moved, which is why `freeze` does not compare code.
+Together with [`identity.json`](#identityjson--the-claims-a-run-makes-before-it-executes) the three hold exactly the facts a mid-run command cannot otherwise obtain and cannot compute: `config.yaml` supplies the config as it was, `environment/repo_root.txt` the repo it came from, and `identity.json` the three identity figures the run started under — of which `code_hash` is the one a mid-run command could never recover for itself, since a tree that has since moved no longer holds it. What is computable is not recorded twice: `parameters_hash` over the copied config is how [`freeze`](#cli-reference) notices that copy was edited (`E-FREEZE-CONFIG-EDITED`), by comparing what it computes against what `identity.json` recorded.
+
+### `identity.json` — the claims a run makes before it executes
+
+Written at run start, inside the lock, beside `config.yaml` and before `sweep.yaml`. Five keys, and every one of them is something a second entry into the run must compare against rather than recompute from scratch:
+
+```json
+{
+  "code_hash": "sha256:...",
+  "parameters_hash": "sha256:...",
+  "uv_lock_hash": "sha256:...",
+  "config_path": "configs/cohort-pilot/config.yaml",
+  "draft": false
+}
+```
+
+The three digests are the same figures [`run.yaml` records](#the-two-files) and are elided here rather than repeated, so that the run record stays the one place a reader compares them against.
+
+It exists because [`resume`](#resuming) compares recorded against recomputed and **a crashed run directory holds no `run.yaml`** to read the recorded side from: `run.yaml` is written once, when the plan ends. `code_hash` is not recoverable from a crashed directory at all; `parameters_hash` and `uv_lock_hash` are recomputable, which is exactly the point — the recorded figure is what makes an *edit* detectable. `config_path` is repo-relative and POSIX-separated, and is checked for containment under `environment/repo_root.txt`'s root when it is read: a path out of a file that is then used is the one shape that rule exists for, and it is containment only — a forward separator is legal, an absolute path and a `..` escape are not. `draft` travels because [a resumed draft stays a draft](#draft-runs).
+
+**`input_manifest_hash` is deliberately absent, and its absence is the rule rather than an omission**: [`manifest/input.json`](#manifestinputjson--what-was-read) is itself the durable operand a resume compares against, so a digest of it here would be a figure with no reader. A run directory written by a build that predates this file cannot be resumed (`E-RESUME-NO-IDENTITY`) and can still be [frozen](#cli-reference), which is why `freeze` treats an absent one as *nothing to compare* rather than as a fault.
 
 ### `sweep.yaml` — the resolved plan
 
@@ -955,12 +982,16 @@ All of it is there so a reader never re-derives a design, and so `reproduce` reg
 One record appended as each execution finishes, and the file [`resume`](#resuming) reads to know what not to redo. It exists because `run.yaml` is written when the plan ends: an interrupted run has no `run.yaml` at all, so the record of what completed has to be durable before there is one.
 
 ```json
-{"condition": 1, "repeat": "seed17", "step": "step03_analyze", "status": "completed",
- "started_at": "2026-08-06T14:03:27Z", "wall_seconds": 903.1, "attempt": 1,
- "n": {"resolved": 240, "completed": 231, "failed": 9}}
+{"step": "step03_analyze", "scope": "repeat", "condition": 1, "repeat": "seed17",
+ "status": "completed", "started_at": "2026-08-06T14:03:27Z", "wall_seconds": 903.1,
+ "error": null, "recorded_columns": ["pred", "status"], "returned": {}}
 ```
 
-`run.yaml`'s `execution` block is this file folded into the scope nesting, which is why the two never disagree: one is the log, the other is the same facts arranged for a reader. A resumed attempt appends its own record for the triple it re-executes rather than amending the earlier one — that's where the `attempts` count in `run.yaml` comes from, and why an execution that ran three times leaves three records and one summary.
+Ten keys, and the last three are what make the line enough to resume from rather than only enough to read. `error` is the failure message or `null`. `recorded_columns` is the union of the names this execution *recorded*, `unit` excluded and sorted — **an empty list is a claim, not an absence**: a step that returned only scalars records nothing and writes no `units.parquet`, and a reader that could not tell *recorded nothing* from *the table is gone* would have to choose between refusing a legitimate run and resuming a corrupted one. `returned` is the flat mapping the step handed back, expanded exactly as `run.yaml`'s own summary block expands it, so the two records cannot disagree about an [`Estimate`](#the-importable-surface) — empty above because the worked example's `step03_analyze` *records* per-unit rows and returns no scalar of its own, the correlation being [derived by the template's `aggregate`](#templates-where-parameters-are-defined).
+
+**These lines are Python-`json` compatible rather than strict JSON, and that is a decision.** A step may return a non-finite float — core passes `nan` and `inf` through and `run.yaml` records them — so the ledger keeps the encoder's own `NaN`/`Infinity` spelling, which is not valid RFC 8259 but round-trips exactly through the reader that wrote it. Refusing to encode one would fail a *completed* execution over a value the record accepts, and writing `null` instead would make a resumed run's `per_repeat` differ from a straight-through one and lose the difference between `nan` and a genuinely absent value.
+
+`run.yaml`'s `execution` block is this file folded into the scope nesting, which is why the two never disagree: one is the log, the other is the same facts arranged for a reader — and since [`attempts`](#what-status-means-and-when-a-run-keeps-going) is now *counted* from these lines rather than written beside them, the two cannot drift on that figure either. A resumed attempt appends its own record for the triple it re-executes rather than amending the earlier one, which is why an execution that ran three times leaves three records and one summary.
 
 ### `allocation.json` — who went where
 
@@ -1306,17 +1337,25 @@ uv run publishable resume /secure/results/cohort-pilot/latest
 
 It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. The marks are [`executions.jsonl`](#executionsjsonl--what-has-happened-so-far) in the run directory rather than `run.yaml`, and they have to be: [`run.yaml` is written once, when the plan ends](#what-status-means-and-when-a-run-keeps-going), so a run that was interrupted doesn't have one — core appends each execution's record as it finishes, and assembles `run.yaml` from those at the end. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
 
-`resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed.
+`resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed. Each comparison has one recorded operand and one recomputed one, and each has its own code: [`identity.json`](#identityjson--the-claims-a-run-makes-before-it-executes) holds the three figures the run started under, `resume` recomputes them from the tree and the project's config, and a disagreement is `E-RESUME-CODE-MOVED`, `E-RESUME-PARAMS-MOVED` or `E-RESUME-LOCKFILE-MOVED` — the lockfile in **either** direction, `null` included, since a lockfile added or removed is a different environment either way. The inputs are compared the same way against the recorded [`manifest/input.json`](#manifestinputjson--what-was-read) rather than against a fresh manifest of themselves (`E-RESUME-INPUT-MOVED`), and the recorded manifest is what the rest of the run then uses, so `run.yaml`'s `input_manifest_hash` stays the first attempt's figure.
 
-**A [`draft`](#draft-runs) is therefore rarely resumable, and that follows rather than being a separate rule.** A draft's `code_hash` is taken from the working tree, so any edit between the crash and the resume moves it and `resume` declines. That is the correct answer — the executions already recorded came from code that no longer exists — and the remedy is the ordinary one: run again, into a fresh `run_<id>/`. Iterating on code and resuming a long run are different activities, and `draft` is named for the first.
+**A run directory with no `identity.json` is refused by name rather than guessed at**, `E-RESUME-NO-IDENTITY`: the comparison has no operand, and the run id's own 7-hex `code_hash` prefix is not a substitute — it says nothing about `parameters` or the lockfile, so a comparison covering one figure of three would read as three. The remedy is the ordinary one, a fresh `run_<id>/`. A directory whose `environment/repo_root.txt` or whose recorded `config_path` cannot be resolved is `E-RESUME-NO-CONFIG` for the same reason: `resume` re-enters the phases the run executed, and it cannot do that without the config the run was started from. **It re-reads the project's config, never the run directory's copy** — which is why an edit to *that* copy is [`freeze`'s](#cli-reference) `E-FREEZE-CONFIG-EDITED` and not a `resume` refusal at all.
+
+**A [`draft`](#draft-runs) is therefore rarely resumable, and that follows rather than being a separate rule.** A draft's `code_hash` is taken from the working tree, so any edit between the crash and the resume moves it and `resume` declines — `E-RESUME-CODE-MOVED`, the same code any other moved tree earns. What a resumed draft never does is stop being one: `identity.json` records `draft`, and that recorded flag is what both relaxes the dirty gate for the second attempt and writes `draft: true` into the record — a resumed draft that recorded `draft: false` would be citable. That is the correct answer — the executions already recorded came from code that no longer exists — and the remedy is the ordinary one: run again, into a fresh `run_<id>/`. Iterating on code and resuming a long run are different activities, and `draft` is named for the first.
+
+**`resume` may take over a lock whose holder is provably gone, and that is a property of the command rather than a flag on it.** The commonest crash leaves `lock` behind, so a rule that reported every leftover lock would make the ordinary case unresumable; a `--force` is forbidden by [everything being in the file](design-principles.md#everything-is-in-the-file), and so is a `--force`-shaped environment variable. The route is the command name: `resume` is by definition a re-entry after the first attempt stopped. The protocol is three steps and one claim, and the order is the whole of its correctness — an exclusive `lock.takeover` token is created first, so that the decision and the removal happen inside a mutex; the holder is judged **only** inside it; and the lock itself is then taken the ordinary way, whose exclusive create stays the only claim in the system. **A holder is provably gone only when `os.kill(pid, 0)` raises `ProcessLookupError` for a pid recorded against this machine's own hostname.** Every other state holds the lock and refuses `E-RUN-LOCKED` — a lock that will not parse, one missing or mistyping `host` or `pid`, one recorded on **another node** (core cannot see another machine's process table), a `kill` that succeeds, and a `kill` refused by permission, which means the pid exists and belongs to someone else. Six states of seven refuse, and the asymmetry is deliberate: a refusal costs one command, and a wrong takeover puts two writers on one append-only tree.
+
+**The recorded start time is a diagnostic and is deliberately not consulted.** An age threshold would answer *is this holder alive?* with a stopwatch, and a pid recycled under a long-running holder would then read as dead — so `resume` refuses a recycled pid rather than guessing, which is the conservative direction and the reason the field is read by a reader and not by the test.
+
+**One residual, stated rather than hidden.** A takeover killed outright inside its own two-syscall window leaves `lock.takeover` behind, and every later `resume` then refuses until that file is removed by hand — which the refusal's message says. That window holds no user code, which is why nothing else is put inside it.
 
 **It takes the execution order from `sweep.yaml` rather than re-deriving it.** Under [`order: randomized`](#sweeps-and-repeats) a re-derivation would usually agree, since the shuffle is seeded from the design digest — but "usually" is the problem. The realized order is a fact about what happened, and a fact should not be re-computable to a different answer; that's the same reason [`allocation.json`](#allocation-within-subjects-or-between-subjects) is read rather than re-drawn. Reading it also keeps `run.yaml`'s record of the order true after a resume, which a fresh shuffle would quietly falsify.
 
 Under a [`batch`](#a-batch-says-when-not-what) level reading the execution order rather than re-deriving it is load-bearing rather than tidy. Batches are positions in time, so resume finishes the interrupted batch before opening the next one; a resume free to pick its own order could start batch 4 while batch 3 still had executions outstanding, and the separation the design declared would be gone from the middle of the run.
 
-**`allocation.json`'s "read rather than re-drawn" rule has no reader in this build.** `cli.py` has no `resume` command, so nothing calls `build_allocation_document` a second time against an existing `allocation.json`, and no test exercises the path. "Read rather than re-drawn" is the contract a future `resume` must honour, not behavior this build has or tests — `resume` itself is one of the commands a later slice still owes.
+**`allocation.json` is read rather than re-drawn, and the reader is the one this rule exists for.** `resume` loads the recorded partitions and applies them onto what this tree resolved — the arm memberships and the holdout split both — rather than calling the draw a second time. A record that cannot be applied is `E-RESUME-ALLOCATION-STALE`: an axis or a level this config does not resolve, a disagreement about whether a holdout exists, or a membership that is not exactly the roster's keys in both directions, since a roster that *lost* a unit leaves the record naming one that no longer exists and a roster that *gained* one leaves that unit in no arm at all.
 
-**That gap stopped being harmless once arms are drawn.** While `by_attribute` was the only method core executed, a `resume` that re-derived the allocation would have re-read the same column of the same roster and got the same partition back, so the missing reader cost nothing but tidiness. A [drawn axis](#allocation-within-subjects-or-between-subjects) leaves no column: a second draw is a second allocation. `assign.<axis>.seed` makes it likely to agree — the seed is derived from the design digest, the axis name and the roster, all three unchanged by a resume — but "likely" is the wrong property for the record of which patient was in which arm, and a roster that resolved one unit differently would move it. So the rule is now load-bearing where it used to be housekeeping, and the command that must honour it still does not exist.
+**The rule became load-bearing once arms are drawn.** While `by_attribute` was the only method core executed, a `resume` that re-derived the allocation would have re-read the same column of the same roster and got the same partition back, so reading versus re-deriving cost nothing but tidiness. A [drawn axis](#allocation-within-subjects-or-between-subjects) leaves no column: a second draw is a second allocation. `assign.<axis>.seed` makes it likely to agree — the seed is derived from the design digest, the axis name and the roster, all three unchanged by a resume — but "likely" is the wrong property for the record of which patient was in which arm, and a roster that resolved one unit differently would move it. Fold partitions are the exception, and deliberately: they live in [`sweep.yaml`](#sweepyaml--the-resolved-plan)'s own `partitions` block rather than in this file, and they are a pure function of the roster and the design digest.
 
 #### Skipping work *inside* an execution is the step's job
 
@@ -2550,6 +2589,8 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 ├── allocation.json                             # realized arm assignment and holdout split; present when either is declared
 ├── executions.jsonl                            # one record per finished execution — what `resume` reads
 ├── apparatus/probes.jsonl                      # one line per probe call — see "The apparatus files"
+├── identity.json                               # the three identity figures, the config's path, and `draft` —
+│                                               #   written before the first execution, so `resume` has an operand
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
 ├── shared/
@@ -3123,12 +3164,13 @@ would create 20 step directories under /secure/results/cohort-pilot/run_.../
   conditions/02_method=kendall/seed17/step03_analyze
   …                                       (the four remaining seeds, one each)
   summary/step04_compare_methods
-and 8 fixed files in that directory:
+and 9 fixed files in that directory:
   config.yaml
   environment/pyproject.toml
   environment/repo_root.txt
   environment/uv.lock
   executions.jsonl
+  identity.json
   manifest/input.json
   run.yaml
   sweep.yaml
@@ -3723,7 +3765,7 @@ These take paths and nothing else.
 | `publishable dry-run` | built | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints the step directories and the fixed files a run would write, and the unit-execution count. **Does not** list the artifact files inside those directories: their names are `io.write` arguments in step code, which core never inspects — see [design-principles.md § Greenfield only](design-principles.md#greenfield-only). Creates nothing |
 | `publishable run` | built | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
 | `publishable draft` | built | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
-| `publishable resume` | built | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory) |
+| `publishable resume` | built | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory); it may **take over** a lock whose holder is provably gone, which is the crashed case and needs no flag to say so |
 | `publishable report` | built | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
 | `publishable freeze` | built | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
 | `publishable reproduce` | NOT BUILT | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
@@ -3760,6 +3802,8 @@ Every command is scriptable, so what it returns is part of the interface:
 | `3` | **`run`, `draft`, `resume` only** — the run reached the end of its plan with failures: [`status: partial`](#what-status-means-and-when-a-run-keeps-going). There is a record, and it is worth reading |
 | `4` | **`run`, `draft`, `resume` only** — the run stopped: `status: failed`. There is a record of what happened and no result to report |
 | `5` | Something outside the machine refused — an unreachable [apparatus](#the-apparatus-core-can-only-observe), a missing credential, a clone or `uv sync` that failed |
+
+**`3`, `4` and `5` have their first `resume` reader**, and no code is minted for it: a resumed run's status is computed over the whole plan by the same function a straight-through run's is, so a resume ends `partial` at `3`, `failed` at `4`, and `5` when the [apparatus](#the-apparatus-core-can-only-observe) is unreachable, exactly as `run` does. `1` already anticipated the rest — *a `resume` whose hashes moved* is the row's own example, and it covers every one of `resume`'s own refusals, including a run directory that holds no `identity.json`. The one place worth reading twice is `1` versus `4` for a **changed apparatus fact**: `1`'s qualifying clause is *caught before the first execution ran, which leaves nothing to mark `failed` at all*, so it is the answer when the first attempt completed nothing, while a resume whose previous attempt did complete executions [publishes them and ends `failed`](#what-status-means-and-when-a-run-keeps-going) at `4`.
 
 **`partial` and `failed` get different codes because the whole point of separating them is that one is reportable.** Collapsing both into "didn't complete" would hand a script the same number for a run whose results belong in a paper and one that has none, which is exactly the judgement the two statuses exist to record. A pipeline that archives on `3` and pages on `4` is the shape this is for.
 

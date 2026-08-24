@@ -2555,6 +2555,21 @@ sequence at a point past phase 1 and neither of which exists yet — striking it
 its own third would leave two live obligations unowned, the *"whichever slice next touches X"* failure
 this file rejects by name.
 
+**AMENDED 2026-08-23 (H9b task 17): still OPEN, and a second of its three commands is discharged —
+`resume`, by construction, the same way `dry-run` was.** `resume` re-enters the sequence past phase 1
+in the sense this entry means, but it does not reach `resolve_contrasts` without `validate_config` in
+front of it: `command_resume` calls `_prepare_run` — whose phase 1 **is** `validate_config` — before it
+compares a single figure, and it reaches phase 8 only by calling `_execute_prepared`, the same function
+`run` calls. The two call sites are unchanged and `contrasts.py` is untouched. Re-read rather than
+re-derived: `grep -n "resolve_contrasts" src/publishable/cli.py` prints **eight** lines at this commit,
+of which two are the calls in `_baseline_comparisons` and `_declared_comparisons`, one is the import
+and five are prose — the same chain the 2026-08-23 amendment above walked, with `command_resume` now a
+third caller of `_prepare_run` beside `command_run` and `command_dry_run`.
+
+**Amended rather than struck**, and the reason is the one that entry already gives: the precondition
+still binds `reproduce` (H9c), which does not exist, and striking it because two of three commands
+discharged it would leave a live obligation unowned.
+
 **Reproduced before amending**, by reading the chain rather than by counting a grep.
 `grep -n "resolve_contrasts" src/publishable/cli.py` prints **eight** lines, of which two are calls
 (`cli.py:280` in `_baseline_comparisons`, `cli.py:291` in `_declared_comparisons`), one is the import
@@ -3972,7 +3987,7 @@ as its surface — H5 is `units.parquet` integrity and the reserved-column names
 and provenance, H9 is `reproduce`/`dry-run`/`draft`/`resume`/`demo`/`docs`, H3c-3 is folds inside
 cells, and none of them touches this pair of comparisons. **Owner: unassigned.**
 
-## Five undocumented run-time and creation-command `E-` codes — filed as NINE; four have since been documented (count chain in the 2026-08-23 amendment)
+## THREE undocumented run-time and creation-command `E-` codes — filed as NINE; six have since been documented (count chain in the two 2026-08-23 amendments)
 
 Found by task 7's reviews while landing the validate-time `E-` registry (see "Validate-time `E-`
 identifiers have no registry" above): comparing every raised `E-` identifier against the four
@@ -3989,9 +4004,9 @@ declaration-shape family is:
 | ~~`E-GIT-NO-REPO`~~ | `provenance.find_repo_root` | **DOCUMENTED 2026-08-23 (H6b task 5, Ruling N)** — its own § Errors core raises row, covering the one raise and all six reach paths |
 | ~~`E-GIT-NO-COMMIT`~~ | `provenance.git_provenance` | **DOCUMENTED 2026-08-23 (H6b task 5, Ruling N)** — its own § Errors core raises row, naming why it precedes `E-CODE-DIRTY` |
 | ~~`E-CODE-DIRTY`~~ | `cli.command_run`'s phase-2 gate | **DOCUMENTED 2026-08-22 (H6a batch 4, `4c79905`)** — see the 2026-08-22 appended note below |
-| `E-INPUT-CHANGED` | `cli.command_run` / `verify_manifest` | the input manifest changed since it was recorded |
-| `E-RUN-LOCKED` | `run_identity` | a run directory another process holds the lock on |
-| `E-RUN-ID-EXHAUSTED` | `run_identity` | all 26 suffixes for one commit+day already taken |
+| `E-INPUT-CHANGED` | `_prepare_run` / `verify_manifest` | the input manifest changed since it was recorded |
+| ~~`E-RUN-LOCKED`~~ | `run_identity` | **DOCUMENTED 2026-08-23 (H9b task 16, Ruling X)** — its own § Errors core raises row, covering all four sites (the lock's own claim, the takeover's two, and the report), naming `resume` as the one command it is reachable from and the liveness rule that decides it |
+| ~~`E-RUN-ID-EXHAUSTED`~~ | `run_identity` | **DOCUMENTED 2026-08-23 (H9b task 16, Ruling X)** — its own § Errors core raises row, naming `run` and `draft` only, since `resume` allocates no directory |
 | `E-PROJECT-EXISTS` | `generators.scaffold_project` | `new`'s target directory already exists and is non-empty |
 | `E-EXPERIMENT-EXISTS` | `generators.generate_experiment` | `src/<pkg>/` already exists |
 | ~~`E-EXPERIMENT-UNKNOWN`~~ | `generators.step.generate_step` | **DOCUMENTED 2026-08-21 (H8c task 16, `c794029`)** — see the 2026-08-22 appended note below |
@@ -4142,6 +4157,30 @@ convention, not a tenth code, and it must not be counted into the five.
 file list**, never over `*.md` and never with the output filtered. Can-fail control:
 `grep -c "E-PARAM-MISSING" docs/reference.md` → **1**, on the same four-file list that returns **0** for
 `E-INPUT-CHANGED`, so the sweep can find a code the document does carry.
+
+**APPENDED 2026-08-23 (H9b task 16, Ruling X): the count is THREE, and the amendment above's own
+sentence is what H9b falsified.** That paragraph reads *"H9 … reads a run's identity claim and
+re-derives it, and touches **neither the run lock's own refusals** nor a creation command's overwrite
+guard."* The first clause is false of H9b: `E-RUN-LOCKED` is `resume`'s documented refusal — § Resuming
+says so in its own text — and `resume` is the one command from which the code is reachable at all, so
+H9b took it and `E-RUN-ID-EXHAUSTED` beside it (both are raised in `run_identity.py`, and the second's
+row exists to say `resume` never reaches it). Both now carry § Errors core raises rows covering every
+site that raises **or** reports them. **The chain gains one link: five → three**, H9b task 16.
+
+**The three that remain**: `E-INPUT-CHANGED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS` — and the
+*reason* they are not H9b's is the surface rather than the count. The input-manifest path is a
+`_prepare_run`/`verify_manifest` question that `resume` **compares** rather than re-derives (H9b's own
+`E-RESUME-INPUT-MOVED` is a different code for a different comparison, and taking `E-INPUT-CHANGED`
+because the two sit near each other would be the charter growing), and `generators/`/`scaffold.py` is
+no part of `resume` at all. **Owner: unassigned, with that reason** — H9c is `reproduce`, H9d is
+`demo`/`docs`/`list-templates`, H3c-3's remaining 14 are cells.
+
+**Re-swept 2026-08-23 over the same named four-file list, and reported rather than carried**:
+`grep -c` over `README.md`, `docs/design-principles.md`, `docs/experimental-designs.md`,
+`docs/reference.md` returns **0, 0, 0, 0** for `E-INPUT-CHANGED`; **3** for `E-RUN-LOCKED`, every hit
+attributed — its new § Errors core raises row, § Resuming's takeover paragraph, and § One execution at
+a time's narrowed *reported rather than assumed dead* sentence; **1** for `E-RUN-ID-EXHAUSTED`, its new
+row; and the same `E-PARAM-MISSING` → **1** can-fail control.
 
 ## OPEN — `validate_config`'s bare `except ContractError` around `find_repo_root` is wider than its comment claims — **Owner: unassigned**
 
@@ -8286,6 +8325,17 @@ weigh against (a) rather than default to.
 test_freeze.py`) whose config-copy edit rewrote `templates/cred_assay.py` in place and intermittently
 resolved the pre-edit class.
 
+**APPENDED 2026-08-23 (H9b task 17): the two records disagree about which part of H9 owns this, and
+the later dated one wins — H9d, not H9b.** `H9-SCOPING.md` § 13's corrected H9b list puts this fix at
+H9b task 11, closing this entry and its same-second sibling; the re-owning table in this file, dated
+2026-08-23 and recorded by H9a task 13, routes both to **H9d**. The later record wins, and the
+substantive half rather than the jurisdictional one is why: **`resume` inherits no new exposure.** It
+resolves its template and its entrypoint through the same `_prepare_run` calls `run` and `draft`
+already make, so a same-second rewrite between a crash and a resume is the same hazard as one between
+two `run`s — and two of the fault's three call sites (`report.render_with_override`,
+`base_experiment.load_experiment`) are no part of `resume` at all. Recorded here so H9d's design has
+it, and so the next reader does not have to reconcile the two lists a third time.
+
 ## ~~`diff`'s `apparatus` row reports `DIFFERS` on a `null → value` transition the gate deliberately permits~~ — RULED not a divergence, 2026-08-21
 
 **Ruled by the controller, 2026-08-21: these are not two answers to one question — they are two
@@ -8347,7 +8397,7 @@ reports; it doesn't decide" (`freeze`'s own stated posture in the same section).
 **Found by:** H8b task-b6 review, Minor 11, verified by running a probe returning `None` then a real
 value across two runs and reading `diff`'s own output.
 
-## OPEN — a plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under, invisibly to every artifact on disk mid-run — **Owner: H9**
+## ~~OPEN~~ STRUCK 2026-08-23 (H9b task 16) — a plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under, invisibly to every artifact on disk mid-run — **CLOSED, and by the artifact rather than by `resume`'s comparison**
 
 `freeze`'s `E-FREEZE-PLAN-MISMATCH` check (§ Corrections against the code, correction 8) cross-checks
 the full four-tuple — `index`, `label`, `values`, `is_baseline` — that `expand(doc)` re-derives from
@@ -8378,6 +8428,17 @@ declined to build toward either answer, since building one would commit `freeze`
 `resume`'s own design might choose differently.
 
 **Found by:** H8b task 5 step 3 (named, not filed there), filed by task 12 per its own brief.
+
+**CLOSED 2026-08-23 by H9b task 16 (design Decision 15), and the entry's own open question is what
+decided it.** It asked whether `resume`'s hash comparison closes this for `freeze` or whether a
+run-start `parameters_hash` artifact is warranted independently. The answer is **both halves of the
+second**: `resume` reads the **project's** config (Decision 7) and never touches the run directory's
+copy, so its comparison cannot see this gap at all — and the artifact H9b built for `resume`'s sake,
+`identity.json`, records `parameters_hash` at run start, which is exactly the operand this entry says
+does not exist. `freeze` now computes `parameters_hash` over the copy it already loads and refuses
+`E-FREEZE-CONFIG-EDITED` on a mismatch. **An absent `identity.json` is not that fault** — a directory
+from a build that predates the artifact has nothing to compare and `freeze` behaves as before, which
+is stated in the § Errors row so the silence is not filed again.
 
 ## ~~OPEN~~ STRUCK 2026-08-23 (H9a task 13) — no build appends a `PHASE_DRY_RUN` ledger line, and § Operation commands and § The apparatus files contradict each other about whether one belongs — Owner: H9
 
@@ -9689,6 +9750,21 @@ this entry rather than re-derive the count.
 **Reproduce:** `grep -rc "command_run" src/publishable/*.py tests/*.py | grep -v ':0$'` — 22 files;
 `grep -rn "command_run" src/ tests/ | wc -l` — 195.
 
+**APPENDED 2026-08-23 (H9b task 17): re-read rather than re-derived, and the count has not moved —
+still 22 files and still 195 lines**, measured with this entry's own two commands at H9b's commit.
+H9b added a third caller of `_prepare_run` (`command_resume`) and did not add a `command_run`
+reference, which is the shape this entry asks a later slice to keep: a new entry into the sequence
+names the function it calls, not the command it resembles.
+
+**One `command_run` claim this slice made false is DELETED rather than rewritten.**
+`_execute_prepared`'s docstring said twice that its body *"stays byte-identical to what `command_run`
+held"*, offered as the reviewer's mechanical check on the original move. That stopped being true when
+H9b's `resumed` branches landed inside the body, and it is now false in a second way — task 16 added
+the branch that publishes a record for a resume whose apparatus moved. Both sentences are gone: the
+unpack block's own purpose is stated in the past tense (it is what made the move checkable), and no
+weaker version of the claim replaced it, because a weaker one would be a sentence nobody can check.
+**The 195 references are unaffected** — none of them is that claim.
+
 ## OPEN — `dry-run`'s sweep header reads as an equation that does not hold: `3 conditions × 5 repeats = 20 executions` — **Owner: unassigned, with the reason**
 
 **Filed 2026-08-23 by H9a task 12**, found by running the worked example's own shape rather than by
@@ -9807,3 +9883,27 @@ the retryable class needs a rule this slice does not have — *when may a resume
 Whoever takes it should argue against the terminality paragraph above rather than rediscover it, and
 should note that the two halves are now visibly asymmetric **in the code**, one branch apart, which is
 where a reader will find the question.
+
+## NOT A DEFECT IN THE CODE — `H9-SCOPING.md` § 4.5's *"`aggregated` survives (it is recomputed from `units.parquet`)"* is FALSE, and it is why H9b is eighteen tasks — recorded 2026-08-23 by H9b task 17
+
+**Recorded rather than corrected in place: a scoping records what was measured on its date, and
+retro-editing one destroys the evidence it exists to hold.** The claim is that a resumed run's
+aggregate phase could rebuild every skipped execution's contribution off `units.parquet`, so a resume
+would need to re-execute only what was outstanding and the aggregation would take care of itself.
+
+**Measured against the code (plan § Corrections against the code, correction 1, at `1daf3b4`).** The
+aggregate phase reads `ExecutionResult` objects, not the disk: `cli.py`'s phase 8 builds
+`recording_steps` from `{… if r.rows}`, and `collapse_repeats`, `repeats_disagreeing` and `attrition`
+all take the `results` list. Nothing in phase 8 opens `units.parquet` at all. So a resume that
+executed only the outstanding triples would aggregate over those alone, and every interval, every
+`n`, and every `repeat_spread` in the record would be computed over a fraction of the run while
+reading as the whole of it.
+
+**What it cost, and the shape worth carrying.** The design's answer is Decision 4 — a resume must
+**reconstitute a full `ExecutionResult` for every triple it skips**, which is where
+`executions.jsonl`'s two new keys (`returned`, `recorded_columns`) come from, and it is the single
+largest reason this slice came to eighteen tasks against a scoping that predicted fifteen. **A
+scoping expires; the failure mode here is narrower than that** — the claim was not stale, it was
+never true, and it reads as true because *recomputed from the artifact* is what a reader expects an
+aggregate phase to do. **Grep for the code before building on a sentence about it**: one grep for
+`units.parquet` in `cli.py`'s phase 8 answers it.
