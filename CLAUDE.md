@@ -26,8 +26,8 @@ Modules not yet built are still planned, and the slices that build them are list
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
 **Order of the slices that remain: H9c, H9d, then H3c-3's remaining
-14 — the H4, H5, H6, H7 and H8 families are all complete, H6a and H6b both having merged on
-2026-08-23, and H9a and H9b on the same day.**
+14 — the H4, H5, H6, H7 and H8 families are all complete, H6a, H6b and H9a all having merged on
+2026-08-23, and H9b on 2026-08-24.**
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -197,7 +197,7 @@ declaration order. And **six fixtures across this slice failed their own constra
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
 
-**H9b (`resume`) merged on 2026-08-23 — the second of H9's four, and NOT additive.** `resume` is a
+**H9b (`resume`) merged on 2026-08-24 — the second of H9's four, and NOT additive.** `resume` is a
 second entry into phases 6-10 of a run that stopped without writing `run.yaml`. It compares recorded
 against recomputed and the recorded side is a **new run-start artifact**: `identity.json`, five keys
 (`code_hash`, `parameters_hash`, `uv_lock_hash`, `config_path`, `draft`), written inside the lock
