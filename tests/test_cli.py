@@ -17468,7 +17468,7 @@ _H5A_ARM_D_REFERENCE_LINES = (
     "  main:        {file: main.run.yaml,        run_id: run_2026-08-06T14-02-11Z_8e21ab3}",
     "  sensitivity: {file: sensitivity.run.yaml, run_id: run_2026-08-07T09-14-03Z_8e21ab3}",
     "  ablation:    {file: ablation.run.yaml,    run_id: run_2026-08-07T16-40-12Z_8e21ab3}",
-    "2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so it can't collide with an existing checkout and doesn't need naming.",  # noqa: E501
+    "2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so you never name it — and derived is not unique, so a second `reproduce` of the same record derives the same name and refuses rather than overwriting.",  # noqa: E501
     "Prepared my-study_run_2026-08-06T14-02-11Z_8e21ab3/",
     "  cd my-study_run_2026-08-06T14-02-11Z_8e21ab3",
 )
