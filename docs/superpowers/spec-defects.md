@@ -456,7 +456,7 @@ grow a warning equivalent — task 4 added `reference.md` § Warnings core repor
 run today. `E-ENTRYPOINT-IMPORT` is in § Errors core raises. Nothing owes this entry; the
 behavioural question about a missing lockfile is the separate entry immediately below.
 
-## Whether a missing `uv.lock` should refuse the run instead of warning is unresolved
+## ~~Whether a missing `uv.lock` should refuse the run instead of warning is unresolved~~ — STRUCK 2026-08-24 (H9c task 6): CLOSED by Decisions 5 and 6
 
 `design-principles.md` § Design goals states plainly that "uv is not optional. Environments
 are captured and rebuilt through uv" — read strictly, a run with no lockfile to capture
@@ -478,6 +478,26 @@ either affirms the warning (and § Design goals gains a footnote: "not optional"
 modes** (spine § The hardening slices), which owns `reproduce` and is listed last for exactly this
 reason — it is what reads `environment/uv.lock` back, so it is the slice positioned to decide
 whether an unpinned environment is a run worth refusing.
+
+**STRUCK 2026-08-24 (H9c task 6): CLOSED, and closed by the first of the two proposed resolutions
+above rather than by a third.** `W-ENV-UNLOCKED` is **affirmed, not promoted** (design Decision 5),
+and `docs/design-principles.md` § Design goals now carries the footnote this entry itself proposed:
+*"not optional" describes `reproduce`'s obligation, not `run`'s.*
+
+**Re-measured 2026-08-24 rather than carried:** `uv lock` inside a project `publishable new`
+scaffolds still fails outright — *"Because publishable was not found in the package registry and
+your project depends on publishable, we can conclude that your project's requirements are
+unsatisfiable"* — so promoting the warning would refuse every run of every scaffolded project
+against this checkout. That constraint is a bootstrapping fact about this repository's publication
+state, not a principle, and refusing on it would block the users least able to diagnose it.
+
+**The footnote is a true sentence rather than a promise because of the other half of the decision**
+(Decision 6): `uv_lock_hash: null` is now `E-REPRODUCE-UNLOCKED` at exit `1`, after the clone, with
+the checkout kept. `reproduce` is the command that refuses, which is what `W-ENV-UNLOCKED`'s own
+shipped message already said would happen — *"`reproduce` will not be able to restore it"* — and
+that clause is pinned, on its own, by H9c guard-pin arm F.
+
+**The sibling entry below stays OPEN.** Its retirement condition is a release, not a slice.
 
 ## A scaffolded project cannot resolve a lockfile until `publishable` is published
 
@@ -9633,7 +9653,7 @@ belong to different parts.
 
 | Entry | Part it belongs to | Why the scoping missed it |
 |---|---|---|
-| Whether a missing `uv.lock` should refuse the run instead of warning is unresolved | **H9c** (`reproduce`) | Owned as *"H9 Reproduction and the other modes"* rather than by an `Owner: H9` line the § 8 pass matched |
+| ~~Whether a missing `uv.lock` should refuse the run instead of warning is unresolved~~ — STRUCK 2026-08-24 (H9c task 6) | **H9c** (`reproduce`) | Owned as *"H9 Reproduction and the other modes"* rather than by an `Owner: H9` line the § 8 pass matched. Closed by Decisions 5 and 6 |
 | `UpstreamLedger.record` copies a missing hash as `None` rather than refusing it | **H9c** | Same — `reproduce` walks a chain of ancestors, so the missing hash is its question |
 | `discover_local`'s bytecode cache can serve a STALE `templates/*.py` | **H9d** (`demo`, `docs`, `list-templates`) | Counted |
 | A plain `parameters` edit to the run-start `config.yaml` copy changes the cfg `freeze` probes under | **H9b** (`resume`) | Counted |
