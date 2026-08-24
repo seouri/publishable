@@ -308,3 +308,11 @@ resume). Behaviour unchanged, sentence narrowed in place at `a62084b`. `Observat
 `PHASES` — the two things the brief forbids touching — were not touched.
 
 **Suite unchanged by this round: 3098 passed, 1 skipped, 4 xfailed at `a62084b`.**
+
+**F. Two mechanical notes on this batch's own commits.** `.superpowers/sdd/.gitignore` was found
+clobbered to a bare `*` and was **committed in that state inside task 10's commit** (`1253a3b`) — so
+this report file was untracked and the first attempt to commit it (`afc6a05`) committed a stray
+`tests/test_cli.py` docstring correction under the report's message and nothing else. The gitignore's
+content is restored from `78bb794` and the report is committed with `git add -f` at `1305557`, per
+CLAUDE.md § The development record. No record was lost: the only file created after the clobber is this
+one.
