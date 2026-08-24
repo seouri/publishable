@@ -655,3 +655,24 @@ fields in prose**, and **versions**.
 **This is the batch with the most findings historically.** *A documents-and-codes task looks like the
 safest one to skip and is the one whose output no later batch reads*, so nothing else will find its
 errors.
+
+---
+
+## Controller ruling GG, 2026-08-24 — binding on every task that touches `base_step.py`, `demo`'s generated step, or § Randomness
+
+**`self.rng` becomes a `numpy.random.Generator`.** The grounds are in the design's appended ruling; the
+short form is that the documents say so twice, § Randomness's whole argument is written for it, **zero
+tests mention `self.rng`**, numpy is already a hard dependency, and a step calling `self.rng.normal(...)`
+— which the documents invite — **fails at exit 3 today**.
+
+**This is a behaviour change to a shipped surface. It needs:**
+- **a disclosure section**, naming what breaks (`randint`, `gauss`, `choice`'s signature) and what does not
+  (`shuffle`, `random`, `uniform`);
+- **a pin on the type itself**, since nothing has ever pinned it — and *a surface with no test is how this
+  divergence survived a shipped release*;
+- **`demo`'s generated step drawing from `self.rng`**, so the walkthrough exercises what it documents;
+- **the two `reference.md` statements checked against the new code rather than assumed correct** — they
+  were the authority for this ruling, so if either is wrong in some other detail, that is a finding.
+
+**Whichever task owns `base_step.py` owns all four.** If no task does, the batch that discovers it says so
+and stops rather than folding it in silently.
