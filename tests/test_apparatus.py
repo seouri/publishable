@@ -769,7 +769,12 @@ def test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on():
     """Plan correction 4: `E-APPARATUS-CHANGED` must NOT join
     `APPARATUS_CODES` — that frozenset is `command_run`'s containment filter
     for a probe CALL, and a changed fact never crosses it. `STOP_CODES` is
-    the separate, both-members-pinned enumeration task 3 mints."""
+    the separate, member-by-member-pinned enumeration task 3 mints.
+
+    H9c task 9 added a third member, `E-APPARATUS-UNEXPECTED`, with the
+    opposite `APPARATUS_CODES` answer and for the same reason. The function's
+    name still says *two* and is left alone deliberately — see the comment on
+    the assertion below."""
     from publishable.apparatus import APPARATUS_CODES, STOP_CODES
 
     # GUARD-PIN ARM C, edited by H9c plan task 9 — its SOLE AUTHORIZED EDITOR.

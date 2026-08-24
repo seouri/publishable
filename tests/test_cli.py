@@ -26014,6 +26014,117 @@ def test_h9c_a_mid_plan_unexpected_fact_is_exit_four_with_a_record(
     assert any(line["facts"].get("region") == "us" for line in ledger), ledger
 
 
+def test_h9c_a_resume_whose_run_start_contradicts_the_expectation_keeps_the_record(
+    tmp_path: Path, installed, registries, capsys
+):
+    """**The record-loss defect, caught by the whole-batch review and closed in
+    the same commit.** *Every execution paid for, the record lost* is this
+    repository's most expensive defect class, and H9b task 16 already fixed it
+    at this exact site for `E-APPARATUS-CHANGED`; the code task 9 adds reached
+    it again through the one branch that named a code rather than asking the
+    question.
+
+    **Measured before the fix**, on the fixture below: a crash leaving **2**
+    completed executions on disk, then a resume whose run-start round answers a
+    fact `apparatus.expected.json` contradicts — exit `1`, **no `run.yaml`**,
+    and, the fact still contradicting, every later resume the same. After: exit
+    `4` and a record. `execute_plan` already published in the MID-PLAN case, so
+    the two sites disagreed about one question rather than answering two.
+
+    **Reaching it needs a fact the resume's OWN gate does not fire on**, which
+    is what `region: null` in the first run buys: `resumed.baseline` replays
+    that `null`, so `null -> value` passes `check_changed`, and only the
+    expectation contradicts.
+
+    Mutation: narrow the run-start branch back to `exc.code ==
+    "E-APPARATUS-CHANGED"`. This arm fails on the exit code AND on the missing
+    `run.yaml`; nothing else in the suite does.
+    """
+    site = installed(
+        "dist-h9c-r", "1.0", {"publishable.probes": {"h9c_p_probe": "h9c_p_mod:probe"}}
+    )
+    (site / "h9c_p_mod.py").write_text(_H9C_P_PROBE_MODULE)
+    sys.modules.pop("h9c_p_mod", None)
+    answers = tmp_path / "answers.json"
+    unanswered = {
+        "m1": {"model_revision": "r1", "region": None},
+        "m2": {"model_revision": "r2", "region": None},
+    }
+    answers.write_text(json.dumps(unanswered))
+    os.environ["H9C_P_ANSWERS"] = str(answers)
+    control = tmp_path / "control"
+
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        experiment_type="h9c_expect_assay",
+        parameters={"instrument.model": "m1"},
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        _local_template=_H9C_P_TEMPLATE,
+        _starter_step=_H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+            "__TRIP__", str(_H9B_CRASH_TRIP)
+        ),
+    )
+    recorded = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    facts = recorded["provenance"]["apparatus"]["facts"]
+    assert all(entry["region"] is None for entry in facts.values()), facts
+    expectation = {
+        key: {"model_revision": entry["model_revision"], "region": "eu"}
+        for key, entry in facts.items()
+    }
+    (doc["cfg"].parent / "apparatus.expected.json").write_text(json.dumps(expectation, indent=2))
+
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+        env={**os.environ, "PYTHONPATH": str(site)},
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stderr)
+    control.unlink(missing_ok=True)
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    prior = (crashed / "executions.jsonl").read_text().splitlines()
+    # The fixture must actually have work to lose.
+    assert len(prior) >= 1, prior
+
+    # The apparatus now answers a value the expectation contradicts. The
+    # resume's own gate does NOT fire: `null -> value` passes it.
+    answers.write_text(
+        json.dumps(
+            {
+                "m1": {"model_revision": "r1", "region": "us"},
+                "m2": {"model_revision": "r2", "region": "us"},
+            }
+        )
+    )
+    capsys.readouterr()
+    code = main(["resume", str(crashed)])
+    out = capsys.readouterr()
+    both = out.out + out.err
+
+    assert code == EXIT_FAILED, both
+    assert "E-APPARATUS-UNEXPECTED" in both, both
+    assert "E-APPARATUS-CHANGED" not in both, both
+    # THE RECORD IS PUBLISHED, and it carries the prior attempt's work.
+    assert (crashed / "run.yaml").exists()
+    stopped = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert stopped["status"] == "failed", stopped["status"]
+    assert stopped["results"]["conditions"], stopped["results"]
+
+
 def test_h9c_fixture_q_the_reproductions_own_record_counts_only_its_own_probes(
     tmp_path: Path, installed, registries, capsys
 ):

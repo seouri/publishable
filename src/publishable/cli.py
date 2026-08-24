@@ -3427,7 +3427,37 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # opposite case (bring it back and resume again), so it keeps
             # today's behaviour and is filed in `spec-defects.md` with that
             # terminality as the reason rather than folded in here.
-            if exc.code == "E-APPARATUS-CHANGED" and resumed is not None and resumed.prior_results:
+            # **H9c task 9: `E-APPARATUS-UNEXPECTED` joins this branch, and the
+            # ground is that the two sites must ALREADY agree.** `execute_plan`
+            # maps every non-`E-APPARATUS-RAISED` `STOP_CODES` member to
+            # `stop.reason = "apparatus_changed"` for a MID-PLAN raise, so a
+            # resume whose apparatus contradicts `apparatus.expected.json`
+            # mid-plan already publishes what the prior attempt did. Only the
+            # RUN-START copy of the same question branched on the code by name,
+            # and the asymmetry cost the whole record: measured, on a crash
+            # leaving 2 completed executions on disk, a resume whose run-start
+            # round answered a fact the expectation contradicts returned exit
+            # `1` with NO `run.yaml`, and — the fact still contradicting — every
+            # later resume returned the same. *Every execution paid for, the
+            # record lost* is verbatim what H9b task 16 fixed here for the
+            # sibling code, and this is the same defect reached through the code
+            # added beside it.
+            #
+            # **No vocabulary is added and no code is minted.** `stop.reason`
+            # stays the closed set of three `run_status` documents, and it is
+            # `"apparatus_changed"` for exactly the reason `execute_plan`
+            # already uses it for this code; the reader is told which fault
+            # occurred by `stop.code`/`stop.message`, which carry
+            # `E-APPARATUS-UNEXPECTED` verbatim into the printed diagnostic. The
+            # exit code is `4` from `run_status`'s shipped fold, which is also
+            # what design Decision 4 says it should be — *"`1` before the first
+            # execution and `4` once there are results"* — so widening this is
+            # what makes the code answer the design rather than a change to it.
+            if (
+                exc.code in ("E-APPARATUS-CHANGED", "E-APPARATUS-UNEXPECTED")
+                and resumed is not None
+                and resumed.prior_results
+            ):
                 stop.reason = "apparatus_changed"
                 stop.code = exc.code
                 stop.message = str(exc)
