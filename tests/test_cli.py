@@ -24589,3 +24589,148 @@ def test_h9b_a_resume_executes_the_recorded_arms_not_a_second_draw(tmp_path: Pat
         assert {row["unit"] for row in rows} != stale[entry["condition"]]
         seen += 1
     assert seen, "no recording triple was re-executed, so nothing was measured"
+
+
+# ===========================================================================
+# H9b task 12 — the input manifest is COMPARED, not rebuilt (design Decision
+# 8). The comparison and the threading landed with task 9's entry point;
+# these are the pins, and the second one is discriminating where the
+# existing one cannot be. `E-INPUT-CHANGED` is deliberately not reused —
+# that code is phase 8's end-of-run re-verification, it answers a different
+# question, and it has no § Errors row.
+# ===========================================================================
+
+
+def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_path: Path):
+    """**The mutation this test exists for**: comparing the fresh manifest
+    against itself. `verify_manifest(input_dir, manifest)` compares the
+    directory against the manifest it is HANDED (plan § Corrections,
+    correction 2), so a resume that rebuilt one would compare now against now
+    and always come back clean.
+
+    Two branches were checked in this order: a self-comparison passes this
+    fixture, and the recorded comparison refuses it.
+
+    Every execution already recorded is over a dataset that no longer exists,
+    and § What status means says there is no honest way to report that as
+    `partial` — so this refuses before the lock, and the ledger is the same
+    length afterwards as before.
+
+    Three arms: a file whose CONTENT moved, a file that was ADDED (the arm
+    `verify_manifest`'s own `present - manifest` branch answers, and the one
+    that cannot perturb the roster), and a `manifest/input.json` that cannot
+    be read at all — one code for one remedy.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    # `run_a_project` returns no input dir of its own, so it is read off the
+    # config the run executed — the same file `_prepare_run` resolves it from.
+    input_dir = Path(yaml.safe_load(Path(doc["cfg"]).read_text())["data"]["input_dir"]).expanduser()
+    before = _h9b_ledger(crashed)
+
+    added = input_dir / "a_new_input.csv"
+    added.write_text("x\n1\n")
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+    added.unlink()
+
+    # The control: with the input dir restored, the same directory resumes.
+    # Asserted before the content arm rather than after, so a refusal that
+    # fired for an unrelated reason cannot be counted as a pass — and the
+    # lock this helper needs is put back by hand each time, since task 14's
+    # takeover does not exist yet.
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    roster = input_dir / "index.csv"
+    kept = roster.read_text()
+    # A row APPENDED rather than a column renamed: a renamed column fails
+    # unit resolution instead (`E-UNITS-ATTR-MISSING` inside `_prepare_run`,
+    # which RETURNS an exit code rather than raising), so that edit would
+    # have tested the wrong refusal — measured, it is how this arm first
+    # failed.
+    roster.write_text(kept + "p_new,a,x\n")
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
+    assert _h9b_ledger(crashed) == before
+    roster.write_text(kept)
+
+    (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+    (crashed / "manifest" / "input.json").write_text("{not json")
+    with pytest.raises(ContractError) as excinfo:
+        _h9b_resume(crashed)
+    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
+    assert "cannot be compared" in str(excinfo.value)
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path: Path):
+    """**The mutation this test exists for**: using the FRESH manifest in
+    phases 6-10. `run.yaml`'s `input_manifest_hash` must be the first
+    attempt's figure.
+
+    **Why this cannot be pinned through `command_resume`**, and it is the
+    reason this test hand-assembles a `Resumed`: `manifest_hash` covers each
+    file's `st_mtime_ns`, and the pre-lock comparison is an equality between
+    the fresh manifest and the recorded one — so on every directory a resume
+    accepts, the two hashes are equal and an assertion comparing
+    `run.yaml`'s figure against `manifest/input.json`'s digest passes under
+    both readings. The existing assertion in
+    `test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest`
+    is exactly that shape and is blind to this mutation (grepped:
+    `input_manifest_hash` appears in that test at one line, comparing against
+    `manifest_hash(recorded_manifest)` where recorded == fresh). It is left
+    in place — it asserts a claim a reader wants to see — and this test is
+    what discriminates.
+
+    The recorded manifest handed in differs from the fresh one in ONE file's
+    `mtime` and nothing else, which `manifest_hash` covers and
+    `verify_manifest` does not read under `hash_all` (it compares `sha256`
+    when one is recorded) — so phase 8 stays clean and `status` stays
+    `completed`, and the only observable difference is which manifest the
+    record was assembled from.
+    """
+    from publishable.cli import Prepared, Resumed, _execute_prepared, _prepare_run, _reconstitute
+    from publishable.lineage import attempt_counts, read_execution_ledger
+    from publishable.manifest import manifest_hash
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    (crashed / "lock").unlink()
+
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert recorded["policy"] == "hash_all"
+    assert manifest_hash(recorded) == manifest_hash(prepared.manifest)  # the two agree today
+    doctored = json.loads(json.dumps(recorded))
+    name = sorted(doctored["files"])[0]
+    doctored["files"][name]["mtime"] += 1
+    assert manifest_hash(doctored) != manifest_hash(prepared.manifest)
+
+    records = read_execution_ledger(crashed)
+    resumed = Resumed(
+        run_dir=crashed,
+        prior_results=_reconstitute(
+            prepared.plan,
+            run_dir=crashed,
+            records=records,
+            collapse=len(prepared.repeats) <= 1,
+        ),
+        attempts=attempt_counts(records),
+        baseline=None,
+        recorded_manifest=doctored,
+        execution_order=None,
+    )
+    assert _execute_prepared(prepared, draft=False, resumed=resumed) == EXIT_OK
+    run_doc = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert run_doc["provenance"]["input_manifest_hash"] == manifest_hash(doctored)
+    assert run_doc["provenance"]["input_manifest_hash"] != manifest_hash(prepared.manifest)
+    # Phase 8 asked its own question and came back clean, which is what the
+    # threading is FOR: the inputs did not move during this attempt.
+    assert run_doc["status"] == "completed"
