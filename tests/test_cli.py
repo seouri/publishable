@@ -25373,3 +25373,254 @@ def test_h9b_a_resume_refusal_is_redacted_through_its_own_collector(
     assert "E-RESUME-PLAN-MISSING" in reported
     assert token not in reported, reported
     assert "<redacted:H9B_RESUME_TOKEN>" in reported, reported
+
+
+# --------------------------------------------------------------------------
+# H9c (`reproduce`) — THE GUARD PIN, captured in batch 1 before any code moved.
+#
+# The design's § 8 table names seven arms, A–G, and a sole authorized editor
+# for each. Only E and F are BUILT here; A, B, C, D and G are CITED, because
+# re-capturing a list that is already pinned is H8a's *same list pinned twice*,
+# which a later task then edited in both places.
+#
+#   A — CITED, editor NONE: `test_h9a_arm_a_a_completed_runs_whole_run_yaml_
+#       leaf_by_leaf` (the record, leaf by leaf), `test_h9a_arm_b_runs_full_
+#       stdout_line_by_line` (the stdout), `test_h9b_arm_a_the_straight_
+#       through_golden` (the record again, through H9b's own normalizer).
+#   B — CITED, and its SOLE AUTHORIZED EDITOR IS PLAN TASK 11: the
+#       `assert ("reproduce", "NOT BUILT") in tables["Command"]` line inside
+#       `test_reference_cli_tables_are_parsed_at_all`. Post-edit state, written
+#       now: that line becomes `("reproduce", "built")` AND a new line
+#       `assert ("list-templates", "NOT BUILT") in tables["Command"]` is added,
+#       so the table keeps one marked row-presence probe (plan correction 20).
+#       The `set(NOT_BUILT_COMMANDS)` equalities beside it are self-maintaining
+#       and must not be edited.
+#   C — CITED, SOLE AUTHORIZED EDITOR PLAN TASK 9: the `STOP_CODES ==
+#       {...}` set-equality inside `tests/test_apparatus.py`'s
+#       `test_stop_codes_holds_exactly_the_two_codes_execute_plan_breaks_on`.
+#       Post-edit set, written now: `{"E-APPARATUS-RAISED",
+#       "E-APPARATUS-CHANGED", "E-APPARATUS-UNEXPECTED"}` — one member added,
+#       none removed, nothing reordered.
+#   D — CITED, editor NONE: the two `APPARATUS_CODES` membership assertions in
+#       that SAME test function. Task 9 may ADD a sibling
+#       `assert "E-APPARATUS-UNEXPECTED" not in APPARATUS_CODES` beside them;
+#       adding an assertion is not editing one. Arms C and D are co-located in
+#       one function, so task 9's authorization is scoped to the set-equality
+#       LINE plus an added sibling, and to nothing else in that body.
+#   G — CITED, editor NONE, each by name: `test_h8b_arm_b_environments_
+#       contents` (`environment/`'s contents), `test_h8a_arm_a_a_clean_run_top_
+#       level_shape_status_and_exit` and `test_h8a_arm_b_the_provenance_key_
+#       list_and_upstream_empty` (`run.yaml`'s and `provenance`'s key lists),
+#       `test_h8b_arm_a_the_run_directorys_root` (the run directory's root
+#       list, re-authorized as H9b arm B), `test_h9a_dry_run_prints_the_plan_
+#       and_creates_nothing`'s `and 8 fixed files` line (H9b arm D),
+#       `test_h8b_arm_e_the_recorded_sweep_plan` (`sweep.yaml`'s key list), and
+#       `test_h9a_arm_c_*` / `test_h9a_arm_e_*` (the exit codes and the early
+#       exits). `reproduce` adds no run-directory artifact and no `provenance`
+#       key, so none of them may move in this slice.
+# --------------------------------------------------------------------------
+
+
+def _h9c_tree_map(root: Path) -> dict[str, str]:
+    """`{root-relative posix path → sha256 of contents}`, and `"<dir>"` for a
+    directory, over everything below `root`.
+
+    **Directories are entries, not skipped**, and that is not tidiness: the
+    mutation this arm is measured by creates one EMPTY directory, and a map of
+    files alone cannot see it — measured, the first build of this helper hashed
+    files only and the prescribed mutation left the full suite at 3135 passed.
+    A stray `mkdir` outside the derived destination is exactly the harm arm E
+    exists to catch, so the directory is the entry that catches it.
+
+    `.git` is excluded, and the reason is stated rather than assumed: git's
+    object database, index and reflog are a cache git rewrites on its own
+    schedule (an index stat-cache refresh, a `gc`, a repack), so including it
+    would make this arm intermittent rather than stricter. What the arm
+    protects is the working tree — the code, the record, the bundle — which is
+    where a stray write by `reproduce` would actually land. A symlink is
+    followed by `is_file()`/`is_dir()` and needs no case of its own, because no
+    core writer produces one.
+    """
+    out: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if ".git" in path.relative_to(root).parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if path.is_dir():
+            out[rel] = "<dir>"
+        elif path.is_file():
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
+
+
+def _h9c_tree_delta(before: dict[str, str], after: dict[str, str]) -> dict[str, list[str]]:
+    """ADDED / REMOVED / CHANGED, as three sorted lists.
+
+    Three named buckets rather than one `before == after`, because a failure
+    that says *which* file appeared is a finding a reader can act on, and
+    because an assertion on the whole mapping would print two multi-hundred-
+    entry dicts side by side.
+    """
+    return {
+        "ADDED": sorted(set(after) - set(before)),
+        "REMOVED": sorted(set(before) - set(after)),
+        "CHANGED": sorted(k for k in set(before) & set(after) if before[k] != after[k]),
+    }
+
+
+def _h9c_arm_e_fixture(tmp_path: Path) -> dict[str, Any]:
+    """A real run, a real bare remote, and a bundle — the three trees arm E
+    snapshots, plus a `reproduce` that can get as deep as this build allows.
+
+    The remote is a LOCAL BARE REPO (`git clone --bare`) and never the network:
+    a fixture that reaches the network is a fixture that fails on a build
+    machine, and `git clone` treats a path and a URL identically (design
+    § 9, Fixture A). `run_a_project` scaffolds no `origin`, so the record's
+    `provenance.git.remote` is `null` (design § 0.8) and a `reproduce` against
+    it would stop at `E-REPRODUCE-NO-REMOTE` before deriving any destination —
+    which would make this arm pass by never reaching the code it guards. The
+    remote is therefore written into the record, after the run, so that once
+    task 11 dispatches the command this fixture drives destination derivation,
+    the clone, the checkout and the `code_hash` recomputation, and stops at
+    `E-REPRODUCE-UNLOCKED` (the scaffold resolves no lockfile — Decision 5's
+    bootstrapping fact) with the checkout kept.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10)
+    run_dir = doc["run_dir"]
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "--bare", "-q", str(doc["root"]), str(remote)], check=True)
+
+    record_path = run_dir / "run.yaml"
+    record = yaml.safe_load(record_path.read_text())
+    record["provenance"]["git"]["remote"] = str(remote)
+    record_path.write_text(yaml.safe_dump(record, sort_keys=False))
+
+    from publishable.study import study_add, study_new
+
+    bundle = tmp_path / "study"
+    study_new(bundle, "H9c arm E")
+    study_add(bundle, record_path, "main")
+
+    return {
+        "root": doc["root"],
+        "run_dir": run_dir,
+        "bundle": bundle,
+        "record": record_path,
+        "member": bundle / "main.run.yaml",
+    }
+
+
+@pytest.mark.parametrize("operand", ["record", "bundle_member"])
+def test_h9c_arm_e_reproduce_writes_nothing_outside_its_destination(
+    tmp_path: Path, operand: str, capsys
+):
+    """H9c guard-pin ARM E. SOLE AUTHORIZED EDITOR: NONE. A failure here is a
+    finding to report, not an assertion to edit.
+
+    **`reproduce` writes nothing outside its derived destination.** Three
+    whole-tree `{path → sha256}` maps — the run directory, the operand's own
+    tree, and the source repository — captured before and after the command,
+    with ADDED, REMOVED and CHANGED all asserted empty over each.
+
+    **Established by snapshotting, never by reading for absent `mkdir`
+    calls.** H9a's `dry-run` arm is the precedent and *if a comment says
+    nothing is created, make it create something* is the rule: a test that
+    greps production code for writes cannot see a write made through a helper,
+    and it certifies the reading rather than the behaviour.
+
+    **Today `reproduce` is `NOT BUILT`, so this arm is captured against the
+    `NOT BUILT` invocation. Plan task 11 makes it meaningful, and IT MUST KEEP
+    PASSING THEN** — that is the arm's whole job, and it is why the fixture
+    above bothers to write a real remote in: at task 11 this same call clones,
+    checks out, recomputes `code_hash` and refuses `E-REPRODUCE-UNLOCKED`, and
+    every one of those steps must leave these three trees byte-identical.
+
+    **The working directory is a fourth tree and is deliberately NOT
+    snapshotted.** Decision 9 derives the destination *relative to the working
+    directory*, so the destination is created there by design. The command is
+    driven from a scratch directory that sits outside all three snapshotted
+    trees — if it sat inside any of them, the destination would land inside a
+    snapshot and this arm would pass today and fail the moment the command was
+    built, while its docstring claimed the opposite.
+
+    **The exit code is deliberately not asserted.** It is `EXIT_INVOCATION`
+    today (the `NOT BUILT` diagnostic) and task 11 moves it, and an arm whose
+    editor is NONE must not hold a value a later task has to change. Exit
+    codes are H9a arms C and E's, and the closing-transcript task's.
+
+    Two operands, because the operand's own tree is the run directory itself
+    in the first form and a separate bundle in the second (Ruling Y), so one
+    arm cannot cover both.
+
+    Mutation (production code): `mkdir` one directory under the operand's
+    parent on the `NOT BUILT` path. Applied at `cli._dispatch`'s
+    `NOT_BUILT_COMMANDS` branch and not inside `_report_not_built`, which the
+    brief names: that helper takes a command name and a section string and
+    never sees the operand, so a `mkdir` "under the operand's parent" cannot be
+    written there at all. Both parametrizations fail and nothing else in the
+    suite does — see the report for the node ids, which is what proves this arm
+    can fail rather than a suite count.
+    """
+    fx = _h9c_arm_e_fixture(tmp_path)
+    target = fx["record"] if operand == "record" else fx["member"]
+    trees = {"run_dir": fx["run_dir"], "operand_tree": target.parent, "repo": fx["root"]}
+    before = {name: _h9c_tree_map(path) for name, path in trees.items()}
+
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    here = os.getcwd()
+    try:
+        os.chdir(cwd)
+        main(["reproduce", str(target)])
+    finally:
+        os.chdir(here)
+    capsys.readouterr()
+
+    for name, path in trees.items():
+        assert _h9c_tree_delta(before[name], _h9c_tree_map(path)) == {
+            "ADDED": [],
+            "REMOVED": [],
+            "CHANGED": [],
+        }, name
+
+
+def test_h9c_arm_f_w_env_unlocked_names_reproduce_in_its_own_message(tmp_path: Path, capsys):
+    """H9c guard-pin ARM F. SOLE AUTHORIZED EDITOR: NONE.
+
+    Decision 5 AFFIRMS `W-ENV-UNLOCKED` rather than promoting it, and Decision
+    6 is that warning's own sentence coming true — so this arm is what stops a
+    later slice quietly promoting the warning to a refusal, or rewording the
+    clause that makes `reproduce` the command which does refuse.
+
+    **Why this arm is added rather than cited.** The design's § 8 calls arm F
+    a *shipped* assertion in `tests/test_cli.py`, and grepped for
+    newline-insensitively the clause is indeed there — but only as a fragment
+    of one entry in `test_h9a_arm_b_runs_full_stdout_line_by_line`'s
+    whole-stdout list literal, where it is spelled across an implicit string
+    concatenation. That arm pins the entire transcript, so it moves whenever
+    any line of a clean run's stdout moves, and it can never say which of its
+    four entries a reader was relying on. The task 1 brief authorizes exactly
+    this case: *"if the phrase is asserted only as a substring of a longer
+    literal, add an arm that asserts that clause on its own."* The
+    discrepancy between § 8's wording and the code is reported, not papered
+    over.
+
+    The clause is asserted against the `W-ENV-UNLOCKED` diagnostic's OWN
+    rendered message — located by its header line and read from the
+    continuation beneath it — rather than against stdout as a whole, so a
+    neighbouring line that happened to contain the same words could not
+    satisfy it.
+
+    Mutation (production code): change the clause in `cli.py`'s
+    `W-ENV-UNLOCKED` message. See the report for the failing node ids.
+    """
+    doc = run_a_project(
+        tmp_path, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=10, capsys=capsys
+    )
+    out = doc["stdout"]
+    lines = out.splitlines()
+    headers = [i for i, line in enumerate(lines) if "warning W-ENV-UNLOCKED" in line]
+    assert len(headers) == 1, out
+    message = lines[headers[0] + 1].strip()
+    assert message.endswith("`reproduce` will not be able to restore it"), message
+    assert "the environment is not pinned" in message, message
