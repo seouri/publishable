@@ -83,6 +83,7 @@ from publishable.run_identity import (
     point_latest,
     read_identity,
     read_repo_root,
+    take_over_dead_lock,
 )
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import (
@@ -4787,16 +4788,14 @@ def command_resume(run_dir: Path) -> int:
     yet and must not be assumed by the task that adds the remaining
     refusals. **Task 16 owns building it**, over all fourteen codes at once.
 
-    **What else is not here yet, each owned by a named later task rather than
-    left to be discovered.** The lock takeover is task 14's — Ruling W's
-    exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
-    against this host's `gethostname()`, and the unlink — and until it lands
-    this function takes no lock of its own and `_execute_prepared`'s
-    `RunLock` refuses a directory whose crashed holder left a `lock` behind.
-    The fourteen refusals' diagnostics (task 16) are the rest. `sweep.yaml`'s
-    recorded `execution_order` and the four-tuple cross-check are step 7
-    above (task 10), `allocation.json` is step 8 (task 11), and the
-    apparatus baseline is step 9 (task 13).
+    10. the lock takeover (Ruling W, task 14): `take_over_dead_lock`'s
+        exclusive `lock.takeover` token, the `os.kill(pid, 0)` liveness test
+        against this host's `gethostname()`, and the unlink — sited last, so
+        that only phase 6's entry separates it from
+        `_execute_prepared`'s `with RunLock(run_dir)`, which is its step 4.
+
+    **What else is not here yet.** The fourteen refusals' diagnostics
+    (task 16) are the rest.
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
@@ -4860,38 +4859,54 @@ def command_resume(run_dir: Path) -> int:
         prepared = _resumed_allocation(prepared, recorded_allocation)
 
     records = read_execution_ledger(run_dir)
-    return _execute_prepared(
-        prepared,
-        draft=draft,
-        resumed=Resumed(
+    resumed = Resumed(
+        run_dir=run_dir,
+        prior_results=_reconstitute(
+            prepared.plan,
             run_dir=run_dir,
-            prior_results=_reconstitute(
-                prepared.plan,
-                run_dir=run_dir,
-                records=records,
-                collapse=len(prepared.repeats) <= 1,
-            ),
-            attempts=attempt_counts(records),
-            # The ORIGINAL run's baseline, replayed through the shipped
-            # `Observations.record` (Decision 11) under `resume`'s OWN code:
-            # `replay_ledger` defaults to `freeze`'s, which would be a lie
-            # about which command found the fault. An absent or empty ledger
-            # comes back as an empty `Observations` and mints NO refusal —
-            # `freeze`'s `E-FREEZE-LEDGER-MISSING` exists because probing
-            # then would pin a fact the run never adopted, while a run that
-            # crashed before its first probe is entitled to set one exactly
-            # as the original run's first probe would have.
-            baseline=apparatus.replay_ledger(run_dir, code="E-RESUME-PROBES-UNREADABLE"),
-            recorded_manifest=recorded_manifest,
-            # The RECORDED order, and `None` when the record says nothing was
-            # shuffled — read off `sweep.yaml`'s own `order` scalar rather
-            # than off the re-read config, because the file is what the first
-            # attempt did (Decision 9).
-            execution_order=(
-                recorded_plan.execution_order if recorded_plan.order == "randomized" else None
-            ),
+            records=records,
+            collapse=len(prepared.repeats) <= 1,
+        ),
+        attempts=attempt_counts(records),
+        # The ORIGINAL run's baseline, replayed through the shipped
+        # `Observations.record` (Decision 11) under `resume`'s OWN code:
+        # `replay_ledger` defaults to `freeze`'s, which would be a lie
+        # about which command found the fault. An absent or empty ledger
+        # comes back as an empty `Observations` and mints NO refusal —
+        # `freeze`'s `E-FREEZE-LEDGER-MISSING` exists because probing
+        # then would pin a fact the run never adopted, while a run that
+        # crashed before its first probe is entitled to set one exactly
+        # as the original run's first probe would have.
+        baseline=apparatus.replay_ledger(run_dir, code="E-RESUME-PROBES-UNREADABLE"),
+        recorded_manifest=recorded_manifest,
+        # The RECORDED order, and `None` when the record says nothing was
+        # shuffled — read off `sweep.yaml`'s own `order` scalar rather
+        # than off the re-read config, because the file is what the first
+        # attempt did (Decision 9).
+        execution_order=(
+            recorded_plan.execution_order if recorded_plan.order == "randomized" else None
         ),
     )
+    # The takeover (Ruling W, Decision 2), sited LAST — after every
+    # comparison, after `_prepare_run`, and after `Resumed` is built, which
+    # is the last file this function reads. Steps 1-3 are
+    # `take_over_dead_lock`; **step 4 is `_execute_prepared`'s own
+    # `with RunLock(run_dir)`**, whose comment already says so, and that
+    # `O_CREAT | O_EXCL` stays the only claim in the system.
+    #
+    # **Siting it here is what makes the window small enough to describe.**
+    # The design's step order reads as though the takeover comes first, and
+    # taken literally it would put the whole of `_prepare_run` — a plugin
+    # import and a resolver, which is user code — between the unlink and the
+    # claim. Nothing between this call and that `with` reads a file, runs
+    # user code, or can block: one function call and phase 6's
+    # `run_dir = resumed.run_dir`. The cost is that a directory whose holder
+    # is ALIVE is refused after phases 1-5 rather than before them, which
+    # spends validation on a refusal — and phases 1-5 execute no step,
+    # allocate nothing and take no lock, so a refusal here still touches no
+    # artifact, which is the property Decision 7 asks for.
+    take_over_dead_lock(run_dir)
+    return _execute_prepared(prepared, draft=draft, resumed=resumed)
 
 
 # `run_.../` stands in for the run directory `dry-run` never allocates: every

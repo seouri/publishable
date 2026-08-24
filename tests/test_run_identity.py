@@ -1,12 +1,15 @@
 import json
+import os
+import socket
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from publishable import ContractError
+from publishable import ContractError, run_identity
 from publishable.run_identity import (
     IDENTITY_FILE,
+    TAKEOVER_FILE,
     RunLock,
     allocate_run_dir,
     config_path_for,
@@ -14,6 +17,7 @@ from publishable.run_identity import (
     point_latest,
     read_identity,
     read_repo_root,
+    take_over_dead_lock,
 )
 
 WHEN = datetime(2026, 8, 8, 14, 2, 11, tzinfo=UTC)
@@ -383,3 +387,299 @@ def test_a_directory_named_by_a_contained_path_is_refused(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         config_path_for(run_dir, repo, _document(config_path="configs"))
     assert e.value.code == "E-RESUME-NO-CONFIG"
+
+
+# --- H9b task 14: the lock's third key and `resume`'s takeover -------------
+# Ruling W / design Decision 2. The mutual exclusion's END-TO-END pin is
+# guard-pin arm G in `tests/test_cli.py` (two `main(["resume", ...])` threads);
+# the tests below pin the protocol's own states, which arm G cannot separate
+# because it drives one directory through one verdict.
+
+
+def _dead_pid() -> int:
+    """A pid that is provably gone: a subprocess this process reaped.
+
+    Never a fabricated number — a fabricated pid makes every one of these
+    fixtures agree with a liveness test that always answers *dead*, and this
+    file has no other way to tell the two apart.
+    """
+    import subprocess
+    import sys
+
+    child = subprocess.Popen([sys.executable, "-c", ""])
+    assert child.wait(timeout=60) == 0
+    with pytest.raises(ProcessLookupError):
+        os.kill(child.pid, 0)
+    return child.pid
+
+
+def _crashed(tmp_path: Path, holder: object | str) -> Path:
+    """A run directory whose `lock` holds `holder` — a mapping is dumped, a
+    string is written raw so a non-JSON arm is reachable."""
+    run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
+    text = holder if isinstance(holder, str) else json.dumps(holder)
+    (run_dir / "lock").write_text(text)
+    return run_dir
+
+
+def test_the_lock_records_three_keys_and_the_third_is_the_start_time(tmp_path: Path):
+    """§ One execution at a time says `lock` records the host, pid and start
+    time; the payload held two keys until this task (plan § Corrections,
+    correction 9). An equality over the key set, not a containment: a fourth
+    key would be a documented field nobody wrote a sentence for."""
+    run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
+    with RunLock(run_dir):
+        holder = json.loads((run_dir / "lock").read_text())
+    assert set(holder) == {"host", "pid", "started_at"}
+    assert holder["pid"] == os.getpid()
+    assert holder["host"] == socket.gethostname()
+    # The format the rest of this project stamps a UTC instant in
+    # (`runner`'s `started_at`, `apparatus`'s `at`), parsed rather than
+    # regex-matched so a wrong offset or a local-time value fails here.
+    assert datetime.strptime(holder["started_at"], "%Y-%m-%dT%H:%M:%SZ").tzinfo is None
+
+
+def test_a_lock_with_no_started_at_and_a_dead_pid_is_taken_over(tmp_path: Path):
+    """**The structural assertion the `started_at` mutation is owed.** No
+    fixture can force a recycled pid, so the mutation *consult `started_at`
+    in the liveness test* is blind by construction; this is its replacement.
+    A liveness test that read `started_at` — an age threshold, a
+    freshness window, anything — would have to refuse a lock that has no
+    such key, and this asserts the takeover proceeds. A lock written by a
+    build that predates the third key is exactly this shape."""
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": _dead_pid()})
+    take_over_dead_lock(run_dir)
+    assert (run_dir / "lock").exists() is False
+    assert (run_dir / TAKEOVER_FILE).exists() is False
+
+
+def test_a_dead_holders_lock_is_unlinked_and_the_token_released(tmp_path: Path):
+    run_dir = _crashed(
+        tmp_path,
+        {"host": socket.gethostname(), "pid": _dead_pid(), "started_at": "2026-08-23T18:35:18Z"},
+    )
+    take_over_dead_lock(run_dir)
+    assert (run_dir / "lock").exists() is False
+    assert (run_dir / TAKEOVER_FILE).exists() is False
+    # And the ordinary claim then succeeds — the takeover removes a claim and
+    # never makes one, so step 4 is still what holds the directory.
+    with RunLock(run_dir):
+        assert (run_dir / "lock").is_file()
+
+
+def test_an_absent_lock_is_nothing_to_reclaim(tmp_path: Path):
+    """Step 2's `absent → step 4` arm. Asserted positively — the token is
+    gone AND the directory is claimable — because a control asserting only
+    that nothing raised passes identically if the function returned early
+    for the wrong reason."""
+    run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
+    take_over_dead_lock(run_dir)
+    assert (run_dir / TAKEOVER_FILE).exists() is False
+    with RunLock(run_dir):
+        assert (run_dir / "lock").is_file()
+
+
+def test_a_live_holder_is_refused_and_its_lock_survives(tmp_path: Path):
+    """Fixture F: the holder is THIS process, so `os.kill(pid, 0)` genuinely
+    succeeds. The surviving `lock` is asserted, not just the code: a
+    takeover that refused *and* unlinked would pass a code-only test and
+    lose a live run's directory."""
+    run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
+    with RunLock(run_dir):
+        with pytest.raises(ContractError) as e:
+            take_over_dead_lock(run_dir)
+        assert e.value.code == "E-RUN-LOCKED"
+        assert (run_dir / "lock").is_file()
+        assert (run_dir / TAKEOVER_FILE).exists() is False
+
+
+@pytest.mark.parametrize(
+    "holder",
+    [
+        pytest.param("not json at all {", id="unparseable"),
+        pytest.param("[1, 2]", id="a JSON array"),
+        pytest.param('"a string"', id="a JSON string"),
+        pytest.param({"pid": 1}, id="no host"),
+        pytest.param({"host": 3, "pid": 1}, id="a host of the wrong type"),
+        pytest.param({"host": "some-other-node.example"}, id="no pid"),
+        pytest.param({"host": "some-other-node.example", "pid": 1}, id="a foreign host"),
+        pytest.param({"host": "H", "pid": "41271"}, id="a pid of the wrong type"),
+        pytest.param({"host": "H", "pid": True}, id="a pid that is a bool"),
+        pytest.param({"host": "H", "pid": 0}, id="a pid of zero"),
+        pytest.param({"host": "H", "pid": -1}, id="a negative pid"),
+    ],
+)
+def test_every_undecidable_lock_is_held(tmp_path: Path, holder: object):
+    """Fixture G: each state the liveness test cannot answer refuses, and
+    the lock SURVIVES each refusal. `H` is replaced by this machine's own
+    hostname where the arm is about the pid rather than the host, so those
+    arms fail for the reason they name."""
+    if isinstance(holder, dict) and holder.get("host") == "H":
+        holder = {**holder, "host": socket.gethostname()}
+    run_dir = _crashed(tmp_path, holder)
+    before = (run_dir / "lock").read_text()
+    with pytest.raises(ContractError) as e:
+        take_over_dead_lock(run_dir)
+    assert e.value.code == "E-RUN-LOCKED"
+    assert (run_dir / "lock").read_text() == before
+    assert (run_dir / TAKEOVER_FILE).exists() is False
+
+
+def test_a_kill_that_raises_permissionerror_holds_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The pid exists and belongs to another user. Reached through a
+    monkeypatch because a foreign-uid process cannot be created here, and
+    the patch is aimed at `run_identity`'s own `os.kill` — the name the
+    liveness test calls — so a test that stopped calling it fails loudly
+    rather than passing inert."""
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": _dead_pid()})
+
+    def kill(pid: int, sig: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+    with pytest.raises(ContractError) as e:
+        take_over_dead_lock(run_dir)
+    assert e.value.code == "E-RUN-LOCKED"
+    assert (run_dir / "lock").is_file()
+
+
+def test_a_kill_that_raises_another_oserror_holds_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The `except OSError` arm below `ProcessLookupError`, which is a
+    subclass of it: an arm ordered the other way round would answer *dead*
+    for every failure and this test would still pass, so the dead arm is
+    pinned by `..._is_taken_over` above and this one pins the general
+    failure."""
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": _dead_pid()})
+
+    def kill(pid: int, sig: int) -> None:
+        raise OSError(999, "something else entirely")
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+    with pytest.raises(ContractError) as e:
+        take_over_dead_lock(run_dir)
+    assert e.value.code == "E-RUN-LOCKED"
+    assert (run_dir / "lock").is_file()
+
+
+def test_an_existing_token_refuses_and_leaves_both_files_alone(tmp_path: Path):
+    """Step 1: `FileExistsError` on the token is `E-RUN-LOCKED`, and the
+    residual is named in the message with its remedy. The `lock` must
+    survive — a refusal at the token has decided nothing about the holder —
+    and the token must NOT be removed, since this call did not create it."""
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": _dead_pid()})
+    (run_dir / TAKEOVER_FILE).write_text("")
+    with pytest.raises(ContractError) as e:
+        take_over_dead_lock(run_dir)
+    assert e.value.code == "E-RUN-LOCKED"
+    assert TAKEOVER_FILE in str(e.value)
+    assert "remove it" in str(e.value)
+    assert (run_dir / "lock").is_file()
+    assert (run_dir / TAKEOVER_FILE).is_file()
+
+
+def test_the_token_is_released_when_the_liveness_test_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The `finally` covers `BaseException`, not only the coded refusals: a
+    `KeyboardInterrupt` out of the middle of the decision must still leave
+    no residual, or one Ctrl-C would make every later `resume` refuse."""
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": _dead_pid()})
+
+    def kill(pid: int, sig: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+    with pytest.raises(KeyboardInterrupt):
+        take_over_dead_lock(run_dir)
+    assert (run_dir / TAKEOVER_FILE).exists() is False
+    assert (run_dir / "lock").is_file()
+
+
+def test_two_threads_racing_one_dead_holder_reach_one_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The protocol's mutual exclusion at the level of the two shipped
+    functions — `take_over_dead_lock` then `RunLock`, in that order, which is
+    what `command_resume` calls.
+
+    **Not a guard-pin arm** (task 1 was the only task that may create one):
+    arm G pins the same property end to end through `main(["resume", ...])`,
+    and this exists because arm G cannot run until `resume` dispatches. The
+    five-process probe against the shipped code is the discovery instrument,
+    reported in the batch report — a probe proves the moment, a test proves
+    tomorrow.
+
+    **The interleaving is asymmetric, and a symmetric one does not catch the
+    violation** — measured, not reasoned: a first version released both
+    threads together inside the liveness syscall, and deleting the token's
+    `O_EXCL` left it GREEN, because two threads that unlink before either
+    creates still meet `RunLock`'s own exclusive create and exactly one wins.
+    The violation the token exists to prevent needs a **stale verdict**: one
+    thread judging the OLD holder dead, the other then taking the lock, and
+    the first thread waking up to unlink a LIVE holder's lock and create its
+    own. So the first arrival at the liveness syscall is held there — between
+    its verdict's evidence and the lock's replacement — until the other
+    thread holds the lock.
+
+    Under the shipped protocol the second thread never reaches that syscall
+    at all: it refuses at the exclusive token, the event is never set, the
+    first arrival's wait times out, and the takeover proceeds. Under the
+    mutation both arrive, the ordering above is forced, and two holders
+    appear. The hook's own call count is asserted, so a patch aimed at a name
+    the code stopped calling fails rather than passing inert.
+    """
+    import threading
+
+    dead = _dead_pid()
+    run_dir = _crashed(tmp_path, {"host": socket.gethostname(), "pid": dead})
+    real_kill = run_identity.os.kill
+    hits: list[int] = []
+    held: list[str] = []
+    refused: list[str] = []
+    guard = threading.Lock()
+    winner_holds = threading.Event()
+
+    def kill(pid: int, sig: int) -> None:
+        if pid != dead:
+            return real_kill(pid, sig)
+        with guard:
+            hits.append(pid)
+            arrival = len(hits)
+        if arrival == 1:
+            # Held inside the liveness syscall until the other thread holds
+            # the lock — or for two seconds, which is what happens under the
+            # shipped protocol, where no other thread ever gets here.
+            winner_holds.wait(timeout=2.0)
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(run_identity.os, "kill", kill)
+
+    def contend(name: str) -> None:
+        try:
+            take_over_dead_lock(run_dir)
+            with RunLock(run_dir):
+                with guard:
+                    held.append(name)
+                winner_holds.set()
+                # Held while the other thread is awake, so a second holder
+                # overlaps this one rather than following it.
+                threading.Event().wait(0.3)
+        except ContractError as exc:
+            assert exc.code == "E-RUN-LOCKED", exc.code
+            with guard:
+                refused.append(name)
+
+    threads = [threading.Thread(target=contend, args=(f"t{i}",)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not any(thread.is_alive() for thread in threads)
+    assert hits, "the liveness hook never fired — the patch was aimed at a dead name"
+    assert len(held) == 1, (held, refused)
+    assert len(refused) == 1, (held, refused)
+    assert (run_dir / TAKEOVER_FILE).exists() is False
