@@ -1317,3 +1317,91 @@ def test_a_nonexistent_run_directory_is_E_IO_FAILED_not_E_FREEZE_NO_CONFIG(tmp_p
     assert code == EXIT_WRONG
     assert "E-IO-FAILED" in output
     assert "E-FREEZE-NO-CONFIG" not in output
+
+
+# --- H9b task 16, Fixture K: `freeze`'s own `parameters_hash` comparison ----
+# Design Decision 15. `resume`'s comparison does NOT close this one: `resume`
+# re-reads the PROJECT's config (Decision 7) and never touches the run
+# directory's copy, while the standing `spec-defects.md` filing's gap is an
+# edit to that copy — a probe measuring under parameters the run never
+# adopted. Closed here rather than deferred, because no remaining slice has
+# `freeze` as its surface.
+
+
+def test_h9b_freeze_refuses_a_config_copy_edited_since_the_run_started(
+    installed, registries, tmp_path, capsys
+):
+    """The edit is to `parameters` ONLY, and to a value the sweep does not
+    range over, so `E-FREEZE-PLAN-MISMATCH` cannot fire and the new gate is
+    the only thing that can refuse — measured by the control below, which
+    freezes the same directory clean before the edit.
+
+    Both figures are in the message: a refusal that named neither would leave
+    an operator with nothing to compare, and the recorded one is what says
+    which side moved.
+    """
+    from publishable.cli import main
+    from publishable.hashes import parameters_hash
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    recorded = json.loads((run_dir / "identity.json").read_text())["parameters_hash"]
+
+    # The control FIRST: unedited, this directory freezes at exit 0. Without
+    # it the refusal below could be firing for any reason at all.
+    assert main(["freeze", str(run_dir)]) == 0
+    capsys.readouterr()
+    # Read AFTER the control, which legitimately appended its own probe round:
+    # what the refusal must not do is append to what is there NOW.
+    before = _ledger_lines(run_dir)
+
+    config = yaml.safe_load((run_dir / "config.yaml").read_text())
+    assert config["parameters"]["instrument"]["model"] == "m1"
+    config["parameters"]["instrument"]["model"] = "m3"
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(config))
+    edited = parameters_hash(config)
+    assert edited != recorded
+
+    code = main(["freeze", str(run_dir)])
+    printed = capsys.readouterr().err
+    assert code == EXIT_WRONG
+    assert "E-FREEZE-CONFIG-EDITED" in printed, printed
+    assert recorded in printed and edited in printed
+    assert "E-FREEZE-PLAN-MISMATCH" not in printed
+    # A refusal makes no probe call and writes no ledger line — every other
+    # gate's own property, asserted here rather than assumed.
+    assert _ledger_lines(run_dir) == before
+
+
+def test_h9b_freeze_with_no_identity_json_behaves_exactly_as_before(
+    installed, registries, tmp_path, capsys
+):
+    """The negative control, and it asserts `freeze`'s FULL shipped output
+    rather than only its exit code: a run directory started by a build that
+    predates `identity.json` has nothing to compare, so the gate must be
+    silent — not merely non-fatal.
+
+    Two-sided: the same directory is frozen with the artifact present and
+    then with it removed, and the two outputs are compared. The comparison is
+    what makes this a control rather than an assertion that some output
+    appeared, and the `E-FREEZE-CONFIG-EDITED` absence is asserted on stderr,
+    the stream a refusal writes to.
+    """
+    from publishable.cli import main
+
+    doc = _fixture_p(installed, tmp_path, capsys)
+    run_dir = doc["run_dir"]
+    _mid_run(run_dir)
+    assert (run_dir / "identity.json").is_file()
+    with_artifact_code = main(["freeze", str(run_dir)])
+    with_artifact = capsys.readouterr()
+
+    (run_dir / "identity.json").unlink()
+    without_code = main(["freeze", str(run_dir)])
+    without = capsys.readouterr()
+
+    assert with_artifact_code == without_code == 0
+    assert "E-FREEZE-CONFIG-EDITED" not in without.err
+    assert without.out == with_artifact.out
+    assert without.err == with_artifact.err

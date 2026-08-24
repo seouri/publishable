@@ -700,6 +700,46 @@ def check_recorded_conditions(recorded: RecordedPlan, conditions: "Sequence[Any]
             )
 
 
+def check_recorded_order(recorded: RecordedPlan, plan: "Sequence[Any]") -> None:
+    """Cross-check the recorded `execution_order` against the plan it will be
+    applied to — `E-RESUME-PLAN-MISMATCH` when they disagree.
+
+    **This exists because `E-RUN-ORDER-MISMATCH` became reachable from a
+    FILE.** `_apply_execution_order` raises that code when a repeat-scope
+    execution has no home among the order's pairs, and its own docstring calls
+    the state unreachable — correctly, for `run` and `draft`, where the pairs
+    and the plan are built from the same `conditions`/`repeats` in one
+    function. On a resume the order is READ from `sweep.yaml` (Decision 9), so
+    a hand-edited file reaches it: the raise then happens INSIDE
+    `_execute_prepared`, after the lock is taken, and escapes to `main`'s
+    un-redacted printer under a code documented as *core's resolved state
+    disagreeing with itself*, which is not what a reader of an edited file
+    should be told.
+
+    So the same disagreement is decided here instead — before the lock, before
+    the takeover, and under the code `resume` already has for *the recorded
+    plan and this config disagree*. No code is minted, and the § Errors row
+    for `E-RESUME-PLAN-MISMATCH` covers this site beside the four-tuple one.
+
+    Set equality over the pairs, not containment: a pair the plan does not
+    hold means the record describes a different plan just as surely as a
+    missing one does, and a duplicate entry would silently execute a pair
+    twice, which is why the count is checked too. `plan` is duck-typed for
+    `check_recorded_conditions`' reason — `sweep.Execution` lives in a module
+    this one does not import.
+    """
+    planned = {(e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"}
+    recorded_pairs = list(recorded.execution_order)
+    if len(set(recorded_pairs)) != len(recorded_pairs) or set(recorded_pairs) != planned:
+        raise ContractError(
+            f"sweep.yaml records an execution_order of {len(recorded_pairs)} "
+            f"(condition, repeat) pair(s) which does not match the "
+            f"{len(planned)} pair(s) this config plans — the run directory or the "
+            "config was edited; the run cannot be continued",
+            code="E-RESUME-PLAN-MISMATCH",
+        )
+
+
 def read_allocation(run_dir: Path) -> dict[str, Any] | None:
     """`<run_dir>/allocation.json`'s recorded partitions — the file `resume`
     reads **rather than re-drawing** (H9b Decision 10, `reference.md`

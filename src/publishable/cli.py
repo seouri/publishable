@@ -52,6 +52,7 @@ from publishable.lineage import (
     UpstreamResolver,
     attempt_counts,
     check_recorded_conditions,
+    check_recorded_order,
     read_allocation,
     read_execution_ledger,
     read_sweep_plan,
@@ -3236,6 +3237,14 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 observations=None if resumed is None else resumed.baseline,
             )
 
+        # Bound BEFORE the `try` below, not inside it: the run-start round can
+        # raise, and the branch that then writes a record (H9b task 16) reads
+        # both. Two assignments, neither of which can fail, moved for that
+        # reason alone — `full_plan` is still `plan` as it stands before the
+        # resumed filter narrows it, which is what `run_status`'s `planned=`
+        # means on both entries.
+        stop = StopSignal()
+        full_plan = plan
         try:
             # The run-start round: one probe call per resolved condition,
             # before the first execution (Decision 2). `sweep.yaml` and
@@ -3249,7 +3258,6 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # `max_failed_fraction` guard. `run_status` below reads
             # `stop.reason` rather than re-deriving why the plan came up
             # short.
-            stop = StopSignal()
             # The plan `run_status` is measured against is the WHOLE plan, on
             # both entries: `full_plan` below is what `planned=` gets, and
             # `plan` is what actually executes. On a resume the two differ by
@@ -3259,7 +3267,6 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # BY CONSTRUCTION rather than relaxed (Decision 6), and its
             # docstring's claim that a short list with no recorded stop
             # reason is a core defect stays true of `resume` too.
-            full_plan = plan
             if resumed is not None:
                 already = {
                     (r.execution.step_name, r.execution.condition_index, r.execution.repeat_label)
@@ -3323,40 +3330,101 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # escaping, and `E-APPARATUS-RAISED` at run-start reaches this
             # branch through `APPARATUS_CODES` alone — so the union is now
             # load-bearing rather than cheap insurance: narrowing this filter
-            # to `APPARATUS_CODES` fails that test (measured, full suite, one
-            # failure), because the raise escapes this containment, and
-            # `main`'s own handler prints `{exc}` with no collector in scope.
+            # to `APPARATUS_CODES` fails that test (measured again at task 16,
+            # full suite), because the raise escapes this containment — and
+            # since task 16 that also loses the RECORD, not only the
+            # redaction: the branch below writes `run.yaml` for a resume whose
+            # apparatus moved, and it is inside this `except`.
             # The shipped comment's own "narrowing this filter leaves the
             # full suite unchanged" was true when it was written and is not
             # true now.
             if exc.code not in apparatus.APPARATUS_CODES and exc.code not in apparatus.STOP_CODES:
                 raise
-            probe_c = Collector()
-            # A FRESH collector: `c` was already rendered and printed above,
-            # so appending to it would re-print every earlier finding and
-            # inflate the counts line — the roster path's own shape.
-            # `credentials` reused, never recomputed: a second derivation is a
-            # second answer.
-            probe_c.credentials = credentials
-            probe_c.error(exc.code, "experiment_type", str(exc))
-            print(probe_c.render(), file=sys.stderr)
-            # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
-            # apparatus itself unreachable — is the one code in this
-            # containment's filter that earns exit 5. The four Decision 9
-            # contract refusals from `APPARATUS_CODES`
-            # (`E-APPARATUS-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`,
-            # `-RETURN`) keep `EXIT_WRONG`, and so — **measured rather than
-            # decided** — does a RESUME's run-start `E-APPARATUS-CHANGED`,
-            # which H9b task 13 made reachable here (see the corrected
-            # comment above this `try`). Whether that state deserves
-            # `EXIT_EXTERNAL` instead, and whether a resume that can never
-            # complete is a record loss worth its own refusal, is NOT settled
-            # here: H9b task 13's report routes it, and changing an exit code
-            # in the task that made the state reachable would be deciding a
-            # question by side effect.
-            if exc.code == "E-APPARATUS-RAISED":
-                return EXIT_EXTERNAL
-            return EXIT_WRONG
+            # **H9b task 16: a resume whose apparatus MOVED while the run was
+            # down publishes what the run already did.** Task 13 made this
+            # state reachable and measured the cost: the raise above returned
+            # an exit code with no `run.yaml`, and — because the fact stays
+            # moved — every later `resume` returned the same, so every
+            # completed execution stayed on disk, paid for and unpublishable.
+            # *Every execution paid for, the record lost* is the most
+            # expensive defect class in this repository's own habits list, and
+            # a stop that discards work already done is worse than the change
+            # it protects against.
+            #
+            # So this does not return: it records the stop on the shared
+            # `StopSignal` — the same three fields `execute_plan`'s own
+            # apparatus gate sets for a MID-PLAN move — and falls through with
+            # NO new results, into the one path that prints the stop, folds
+            # the reconstituted results back in, aggregates them and writes
+            # `run.yaml`. H7d Part B's precedent decides the shape: a changed
+            # fact fails the run **and the ledger keeps the moving observation
+            # so a stop is legible from the artifacts** (`_observe_one`
+            # appends before the gate, which is why the moved value is on disk
+            # even here). The record then names that ledger through
+            # `provenance.apparatus.ledger`, and `provenance.apparatus.facts`
+            # carries the ORIGINAL run's first-answered values, because those
+            # are the facts the results were measured through.
+            #
+            # **The exit code is 4, and it is neither of the two the brief
+            # named.** § Exit codes gives `1` to *"a changed apparatus fact
+            # caught before the first execution ran, which leaves nothing to
+            # mark `failed` at all"* — a qualifying clause that is exactly
+            # false here, since the prior attempt's executions are what there
+            # is to mark. `5` is the class you retry and belongs to an
+            # UNREACHABLE apparatus, not a moved fact. `4` is *"the run
+            # stopped: `status: failed`. There is a record of what happened"*,
+            # and its row already reads **`run`, `draft`, `resume` only**. The
+            # code is not chosen here at all: `run_status` maps
+            # `apparatus_changed` to `failed` and the final mapping maps
+            # `failed` to `EXIT_FAILED`, which is the same answer H7d Part B
+            # gives a mid-plan move that completed at least one execution.
+            #
+            # **The cost, stated rather than hidden**: `run.yaml` ends the
+            # run, so `E-RESUME-RUN-ENDED` refuses every later `resume` of
+            # this directory. That is correct for a MOVED fact and only for
+            # one — the apparatus cannot move back, so no later resume could
+            # ever pass the gate, and the choice is between a published
+            # partial record and none. An UNREACHABLE apparatus is the
+            # opposite case (bring it back and resume again), so it keeps
+            # today's behaviour and is filed in `spec-defects.md` with that
+            # terminality as the reason rather than folded in here.
+            if exc.code == "E-APPARATUS-CHANGED" and resumed is not None and resumed.prior_results:
+                stop.reason = "apparatus_changed"
+                stop.code = exc.code
+                stop.message = str(exc)
+                # Nothing executed this attempt. The stop block below prints
+                # the diagnostic — the same code and message, through the same
+                # fresh credential-bearing `Collector` — so printing here too
+                # would print it twice.
+                results = []
+            else:
+                probe_c = Collector()
+                # A FRESH collector: `c` was already rendered and printed above,
+                # so appending to it would re-print every earlier finding and
+                # inflate the counts line — the roster path's own shape.
+                # `credentials` reused, never recomputed: a second derivation is a
+                # second answer.
+                probe_c.credentials = credentials
+                probe_c.error(exc.code, "experiment_type", str(exc))
+                print(probe_c.render(), file=sys.stderr)
+                # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
+                # apparatus itself unreachable — is the one code in this
+                # containment's filter that earns exit 5. The four Decision 9
+                # contract refusals from `APPARATUS_CODES`
+                # (`E-APPARATUS-FACT-TYPE`, `-FACT-MISSING`, `-FACT-CREDENTIAL`,
+                # `-RETURN`) keep `EXIT_WRONG`. **A resume's run-start
+                # `E-APPARATUS-CHANGED` no longer reaches this branch when the
+                # prior attempt completed anything** — that is the record-write
+                # branch above, at exit `4` — and it still reaches it when the
+                # prior attempt completed nothing, where `1` is § Exit codes'
+                # own answer: *a changed fact caught before the first execution
+                # ran, which leaves nothing to mark `failed` at all*. An
+                # UNREACHABLE apparatus on a resume also still returns here, at
+                # `5`, deliberately: `run.yaml` would end the run, and that
+                # fault is the one an operator can undo.
+                if exc.code == "E-APPARATUS-RAISED":
+                    return EXIT_EXTERNAL
+                return EXIT_WRONG
 
         # H7d Part B task 7 (Decision 4, Decision 14): a stop is printed
         # here, before the aggregate phase, so the reason a run stopped is
@@ -3385,7 +3453,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             print(stop_c.render(), file=sys.stderr)
             # Decision 4: with NO results, nothing was paid for, and the
             # command keeps Part A's shape — no `run.yaml`, `latest`
-            # untouched. This must be sited before `assemble_run_yaml` AND
+            # untouched. **"No results" now means neither this attempt's nor a
+            # prior attempt's** (H9b task 16): on a resume the ground the
+            # sentence rests on — nothing was paid for — is false whenever
+            # `resumed.prior_results` is non-empty, and returning here is what
+            # made a moved apparatus lose every completed execution's record.
+            # For `run` and `draft` the condition is unchanged, `resumed` being
+            # `None`. This must be sited before `assemble_run_yaml` AND
             # before `point_latest` (batch 4's Major 1): both, not one.
             # Decision 4's table gives zero-results TWO different exit
             # codes, not one: `moved` is `1` (the thing you asked about is
@@ -3395,7 +3469,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # (Major 1): the run-start containment above and the final
             # mapping below are both off this path, since a zero-results
             # mid-plan stop returns right here.
-            if not results:
+            if not results and (resumed is None or not resumed.prior_results):
                 if stop.reason == "apparatus_unreachable":
                     return EXIT_EXTERNAL
                 return EXIT_WRONG
@@ -4730,10 +4804,35 @@ def command_resume(run_dir: Path) -> int:
     """`publishable resume <run_dir>` — a SECOND entry into phases 6-10 of a
     run that stopped without writing `run.yaml`.
 
-    Not dispatched yet: `resume` is still in `NOT_BUILT_COMMANDS` and plan
-    task 15 adds the branch and moves guard-pin arm E. This function is the
-    entry point, callable and tested; `main(["resume", …])` still prints the
-    unbuilt diagnostic until that task lands.
+    **This is the containment, and `_resume_prepared` below is the decision**
+    (Decision 13): every refusal `resume` itself decides is printed through
+    one FRESH credential-bearing `Collector` to stderr and returns
+    `EXIT_WRONG`, and nothing `resume` decides reaches `main`'s
+    `except PublishableError` handler, which prints `{exc}` with no collector
+    in scope and therefore no redaction.
+
+    **The shape is `_prepare_run`'s roster wrapper, copied WITH where it
+    sits** — `except BaseException`, `KeyboardInterrupt` re-raised fresh and
+    argument-less so a `KeyboardInterrupt("…secret…")` a resolver constructed
+    never reaches Python's own printer, and a fresh `Collector` whose
+    `credentials` is the set `_prepare_run` already resolved rather than a
+    second derivation of it. This repository has shipped a credential leak
+    twice by lifting such a recipe's CALLS and leaving its `try` behind
+    (`CLAUDE.md` § Answering a question with a proxy, the fifth instance), so
+    the sink below exists for one reason: the credential set is resolved
+    INSIDE the body being contained, and the handler needs it.
+
+    A non-`PublishableError` is re-raised unchanged: nothing this function
+    decides is in that class — user code is contained by `_prepare_run`'s own
+    wrapper, which returns an exit code rather than raising — so anything else
+    escaping here is a defect in core, and a traceback is the right report for
+    one.
+
+    **A path that is not a directory is `E-IO-FAILED` at exit 1**, the shipped
+    code § Exit codes already assigns to *"a `diff` operand path that doesn't
+    exist"* — the same question and the same answer, reported through a
+    `Collector` because that section says of this code *"it is not a
+    `ContractError`"*.
 
     **Order, and it is the whole of what makes a refusal safe**: everything
     below happens before `_execute_prepared` is reached, so a refusal costs
@@ -4793,8 +4892,49 @@ def command_resume(run_dir: Path) -> int:
         that only phase 6's entry separates it from
         `_execute_prepared`'s `with RunLock(run_dir)`, which is its step 4.
 
-    **What else is not here yet.** The fourteen refusals' diagnostics
-    (task 16) are the rest.
+    Every step above raises; the containment that turns each raise into a
+    redacted diagnostic is `command_resume`, which is the only caller.
+    """
+    if not run_dir.is_dir():
+        io_c = Collector()
+        io_c.error(
+            "E-IO-FAILED",
+            str(run_dir),
+            "is not a directory, so there is no run to continue — `resume` takes the "
+            "run directory a stopped run left behind",
+        )
+        print(io_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+    # The credential set `_prepare_run` resolves, handed back so the handler
+    # below can redact with it. A list rather than a return value because the
+    # body can raise BEFORE it has one — every refusal at steps 1-3 happens
+    # before any config is read, and an empty set is the honest answer there:
+    # nothing had been read that a message could carry.
+    credentials: list[dict[str, str]] = []
+    try:
+        return _resume_prepared(run_dir, credentials)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
+        if not isinstance(exc, PublishableError):
+            raise
+        resume_c = Collector()
+        resume_c.credentials = credentials[-1] if credentials else {}
+        resume_c.error(exc.code, str(run_dir), str(exc))
+        print(resume_c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+
+def _resume_prepared(run_dir: Path, credentials: list[dict[str, str]]) -> int:
+    """Everything `resume` decides, raising as it decides it.
+
+    Split from `command_resume` so that the containment above is one `try`
+    around the whole decision rather than one per refusal — fourteen codes
+    are raised from five modules (`run_identity`, `lineage`, `sweep`,
+    `apparatus`, and here), and a `Collector` call at each raise site would be
+    fourteen places for the next one to be forgotten. `credentials` is the
+    sink the handler redacts with; nothing else is passed and nothing is
+    returned but an exit code.
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
@@ -4812,6 +4952,9 @@ def command_resume(run_dir: Path) -> int:
         # repeated rather than re-derived — the swap is blind because phases
         # 1-5 never return `EXIT_OK`, and `mypy` is the enforcer).
         return prepared
+    # Handed to the containment, never re-derived there: a second derivation
+    # of a credential set is a second answer to one question.
+    credentials.append(prepared.credentials)
 
     for recorded_key, recomputed, code in (
         ("code_hash", prepared.ch, "E-RESUME-CODE-MOVED"),
@@ -4848,6 +4991,14 @@ def command_resume(run_dir: Path) -> int:
     # refusal at this point has taken no lock and touched no artifact.
     recorded_plan = read_sweep_plan(run_dir)
     check_recorded_conditions(recorded_plan, prepared.conditions)
+    if recorded_plan.order == "randomized":
+        # The recorded ORDER, checked here for the same reason the conditions
+        # are: it is applied to `prepared.plan` inside `_execute_prepared`,
+        # after the lock, where a disagreement raises `E-RUN-ORDER-MISMATCH` —
+        # a code documented as core's resolved state disagreeing with ITSELF,
+        # which on a resume it is not: the order comes from a file somebody can
+        # edit. Refused here, pre-lock, under `resume`'s own code (task 16).
+        check_recorded_order(recorded_plan, prepared.plan)
 
     # `allocation.json` read rather than re-drawn (Decision 10). After the
     # plan cross-check and still before the lock: the override rests on the

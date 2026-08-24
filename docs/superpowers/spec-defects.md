@@ -9777,3 +9777,33 @@ that pass today is a behaviour change to `run`, and the slice that owned the rec
 (H5a/H5b) is closed. **Owner: unassigned, with the reason** — no remaining slice (H9c, H9d, H3c-3's
 remaining 14) names `io.record`'s collision check as its surface. Whoever takes it should read it beside
 H5a's two residue entries; **all three are one question asked at three depths.**
+
+## OPEN — a resume stopped by an UNREACHABLE apparatus still writes no record, while one stopped by a MOVED fact now does — **Owner: unassigned, with the reason (the terminality of `run.yaml` is the reason, not the surface)**
+
+**Measured at H9b task 16, which closed the sibling half.** Task 13 made a resume's run-start apparatus
+round gate against the original run's replayed baseline, and measured the cost: a resume whose apparatus
+had **moved** while the run was down exited `1` with no `run.yaml`, and repeated identically for as long as
+the fact stayed moved — every completed execution on disk, paid for, and unpublishable. **Task 16 closed
+that**: the stop is recorded on the shared `StopSignal`, no new results are added, and the run publishes
+`status: failed` with the reconstituted executions aggregated, `provenance.apparatus` naming the ledger
+that holds the moving observation, at exit `4` (§ Exit codes' *"the run stopped: `status: failed`. There
+is a record of what happened"*, whose row already reads **`run`, `draft`, `resume` only**).
+
+**What is still open is the other stop reason.** A resume whose run-start round raises
+`E-APPARATUS-RAISED` — the apparatus unreachable — still returns `EXIT_EXTERNAL` with no `run.yaml`, so a
+resume of a directory whose instrument is down publishes nothing, exactly as before.
+
+**Why it was NOT folded in, and this is the reason rather than the surface.** Writing `run.yaml` **ends the
+run**: `resume` refuses `E-RESUME-RUN-ENDED` for a directory that holds one, and a run record is never
+modified. That is the right trade for a **moved** fact, which cannot move back — no later resume could
+ever pass the gate, so the choice is between a published partial record and none at all. An **unreachable**
+apparatus is the opposite case: the operator's next move is to bring it back and resume again, and
+publishing now would convert a recoverable state into a permanently truncated run. Deciding that trade for
+the retryable class needs a rule this slice does not have — *when may a resume declare a run over?* — and
+`5` is documented as **the class you retry**, which is the argument against ending the run on it.
+
+**Owner: unassigned, with the reason.** No remaining slice (H9c `reproduce`, H9d `demo`/`docs`/
+`list-templates`, H3c-3's remaining 14) has `resume`'s stop paths or § What status means as its surface.
+Whoever takes it should argue against the terminality paragraph above rather than rediscover it, and
+should note that the two halves are now visibly asymmetric **in the code**, one branch apart, which is
+where a reader will find the question.

@@ -23770,13 +23770,42 @@ class Step(BaseStep):
 
 def _h9b_resume(crashed: Path) -> int:
     """`command_resume` against a crashed directory whose stale `lock` this
-    helper removes — task 14's takeover, done by hand and named as such."""
+    helper removes — task 14's takeover, done by hand and named as such.
+
+    Left doing it by hand after task 14 landed, deliberately: three callers
+    below re-write a `{"host": "h", "pid": 1}` lock between arms purely to
+    satisfy this helper's assertion, and a takeover would refuse that holder
+    (a foreign host is *cannot tell*, which holds). The takeover's own end-to-
+    end pin is guard-pin arm G, through `main`.
+    """
     from publishable.cli import command_resume
 
     lock = crashed / "lock"
     assert lock.exists(), "the crash fixture must leave a lock behind"
     lock.unlink()
     return command_resume(crashed)
+
+
+def _h9b_refused(crashed: Path, capsys) -> str:
+    """A `resume` refusal, as task 16 makes it: **reported, never raised.**
+
+    Decision 13 — every refusal `resume` decides goes through one fresh
+    credential-bearing `Collector` to stderr and returns `EXIT_WRONG`, because
+    `main`'s own `PublishableError` handler prints `{exc}` with no collector in
+    scope and therefore no redaction. Every arm below used to assert
+    `pytest.raises(ContractError)`; each now asserts the exit code AND the
+    identifier on stderr, which is strictly more than the raise asserted — a
+    raise says nothing about what a user is shown.
+
+    Returns stderr so the caller can assert the code, and the message where
+    the message is the point.
+    """
+    from publishable.diagnostics import EXIT_WRONG as _EXIT_WRONG
+
+    code = _h9b_resume(crashed)
+    printed = capsys.readouterr()
+    assert code == _EXIT_WRONG, (code, printed.out, printed.err)
+    return printed.err
 
 
 def test_h9b_a_crash_and_resume_round_trip_equals_the_straight_through_golden(tmp_path: Path):
@@ -24281,7 +24310,7 @@ def test_h9b_an_as_declared_resume_keeps_the_step_major_layout(tmp_path: Path):
     assert yaml.safe_load((crashed / "sweep.yaml").read_text())["execution_order"]
 
 
-def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Path):
+def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Path, capsys):
     """The cross-check refuses BEFORE anything executes, which is what makes
     a refusal free: the ledger is the same length after the refusal as
     before, and there is no `run.yaml`.
@@ -24300,9 +24329,7 @@ def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Pat
     moved = json.loads(json.dumps(recorded))
     moved["conditions"][1]["values"]["analysis.method"] = "kendall"
     (crashed / "sweep.yaml").write_text(yaml.safe_dump(moved, sort_keys=False))
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-PLAN-MISMATCH"
+    assert "E-RESUME-PLAN-MISMATCH" in _h9b_refused(crashed, capsys)
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
 
@@ -24310,9 +24337,7 @@ def test_h9b_a_resume_refuses_a_moved_condition_before_it_executes(tmp_path: Pat
     # The lock the previous refusal never took, so the helper's own assertion
     # holds a second time.
     (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-PLAN-MISSING"
+    assert "E-RESUME-PLAN-MISSING" in _h9b_refused(crashed, capsys)
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
 
@@ -24610,7 +24635,7 @@ def test_h9b_a_resume_executes_the_recorded_arms_not_a_second_draw(tmp_path: Pat
 # ===========================================================================
 
 
-def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_path: Path):
+def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_path: Path, capsys):
     """**The mutation this test exists for**: comparing the fresh manifest
     against itself. `verify_manifest(input_dir, manifest)` compares the
     directory against the manifest it is HANDED (plan § Corrections,
@@ -24640,9 +24665,7 @@ def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_
 
     added = input_dir / "a_new_input.csv"
     added.write_text("x\n1\n")
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
+    assert "E-RESUME-INPUT-MOVED" in _h9b_refused(crashed, capsys)
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
     added.unlink()
@@ -24661,18 +24684,15 @@ def test_h9b_inputs_that_moved_between_the_crash_and_the_resume_are_refused(tmp_
     # have tested the wrong refusal — measured, it is how this arm first
     # failed.
     roster.write_text(kept + "p_new,a,x\n")
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
+    assert "E-RESUME-INPUT-MOVED" in _h9b_refused(crashed, capsys)
     assert _h9b_ledger(crashed) == before
     roster.write_text(kept)
 
     (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
     (crashed / "manifest" / "input.json").write_text("{not json")
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-INPUT-MOVED"
-    assert "cannot be compared" in str(excinfo.value)
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-INPUT-MOVED" in reported
+    assert "cannot be compared" in reported
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
 
@@ -24872,11 +24892,32 @@ def test_h9b_a_resume_gates_against_the_original_runs_first_answered_fact(
     not complete and `E-APPARATUS-CHANGED` is on the operator's screen; with
     the replay removed it completes at exit 0 with a published record.
 
-    **What this test measures rather than asserts as intended**, because it
-    is a cost this task creates: the resume's exit code, and the fact that
-    the record is now UNREACHABLE — the completed executions stay on disk,
-    every one of them paid for, and no `run.yaml` is ever written, at this or
-    any later resume. Reported and routed rather than tidied.
+    **The record loss task 13 measured here is CLOSED by task 16**, and this
+    is where the closure is pinned. Before it: exit 1, no `run.yaml`, and the
+    same answer at every later resume, so every completed execution stayed on
+    disk paid for and unpublishable — *every execution paid for, the record
+    lost*. Now the stop still fails the run and still executes nothing, and
+    the run PUBLISHES what it already did: `status: failed`, the reconstituted
+    executions aggregated, `provenance.apparatus` naming the ledger that holds
+    the moving observation, and exit **4** — § Exit codes' *"the run stopped:
+    `status: failed`. There is a record of what happened"*, whose row already
+    reads **`run`, `draft`, `resume` only**.
+
+    **Exit 4 rather than either code the brief named**, and § Exit codes is
+    the ground rather than a preference: its `1` row is *"a changed apparatus
+    fact caught before the first execution ran, which leaves nothing to mark
+    `failed` at all"* — a clause that is exactly false here, the prior
+    attempt's executions being what there is to mark — and `5` is the class
+    you retry, which an apparatus that MOVED is not. The code is not chosen at
+    the stop site at all: `run_status` maps `apparatus_changed` to `failed`
+    and the shipped final mapping maps `failed` to `EXIT_FAILED`, which is the
+    same answer H7d Part B gives a mid-plan move that completed at least one
+    execution.
+
+    **The cost is asserted too**: `run.yaml` ends the run, so the second
+    resume now refuses `E-RESUME-RUN-ENDED` instead of repeating the stop.
+    That is correct for a MOVED fact and only for one — the apparatus cannot
+    move back, so no later resume could ever pass the gate.
     """
     facts = tmp_path / "apparatus_facts.json"
     control = tmp_path / "crash_control"
@@ -24893,24 +24934,57 @@ def test_h9b_a_resume_gates_against_the_original_runs_first_answered_fact(
     code = _h9b_resume(crashed)
     output = capsys.readouterr()
     assert "E-APPARATUS-CHANGED" in (output.out + output.err)
-    # Measured, not chosen: `EXIT_WRONG`. A run-start `E-APPARATUS-CHANGED`
-    # lands in `_execute_prepared`'s probe containment, whose own comment
-    # said this state was unreachable — see that comment, corrected by this
-    # task, and the report's routed escalation. Pinned as the literal so a
-    # later slice that moves it to `EXIT_EXTERNAL` moves this assertion
-    # deliberately rather than by accident.
-    assert code == EXIT_WRONG
-    assert not (crashed / "run.yaml").exists()
-    # Nothing was lost — and nothing can be recovered either, which is the
-    # cost: the ledger and the step artifacts are exactly as the crash left
-    # them, and a second resume against the same moved apparatus refuses
-    # again rather than eventually publishing.
+    # ONE diagnostic, not two: the run-start containment records the stop on
+    # the shared `StopSignal` and the stop block prints it, so a build that
+    # printed at both sites would say it twice.
+    assert (output.out + output.err).count("E-APPARATUS-CHANGED") == 1
+    # `EXIT_FAILED`, and it follows from `status` rather than from a literal at
+    # the stop site — see the docstring for why neither `EXIT_WRONG` nor
+    # `EXIT_EXTERNAL` is the answer once there are results to mark.
+    assert code == EXIT_FAILED
+    # **The record exists**, which is the whole of the closure.
+    record = yaml.safe_load((crashed / "run.yaml").read_text())
+    assert record["status"] == "failed"
+    # And it holds what the run DID: the reconstituted executions, aggregated.
+    # Asserted through the record's own shape rather than through a count of
+    # lines, because a record that existed and held nothing would pass a
+    # count.
+    # `execution` is the per-triple block, and every entry in it is a
+    # RECONSTITUTED execution of the first attempt — nothing ran this time.
+    executed = [
+        entry
+        for condition in record["execution"]["conditions"]
+        for by_repeat in condition["steps"].values()
+        for entry in by_repeat.values()
+    ]
+    assert executed and all(entry["status"] == "completed" for entry in executed), executed
+    assert len(executed) == len([e for e in before if e["status"] == "completed"])
+    # And the per-condition results the aggregate phase built from them.
+    assert record["results"]["conditions"], record["results"]
+    # The moving observation is legible from the artifacts, H7d Part B's own
+    # rule: `provenance.apparatus.facts` carries the value the results were
+    # MEASURED through (the first attempt's `r1`, never the `r2` that stopped
+    # the run), and the ledger it names holds the moving observation, appended
+    # before the gate fired.
+    assert record["provenance"]["apparatus"]["ledger"] == "apparatus/probes.jsonl"
+    assert record["provenance"]["apparatus"]["facts"] == {
+        key: {"model_revision": "r1"} for key in record["provenance"]["apparatus"]["facts"]
+    }
+    probes = [
+        json.loads(line)
+        for line in (crashed / "apparatus" / "probes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert probes[-1]["facts"]["model_revision"] == "r2", probes[-1]
+    # Nothing this attempt executed: the ledger and the step artifacts are
+    # exactly as the crash left them, so the record published is a record of
+    # the FIRST attempt's work and not of a second round of it.
     assert _h9b_ledger(crashed) == before
     assert sorted(p for p in crashed.rglob("units.parquet")) == steps
+    # The cost: the run has ended, so a second resume refuses by name rather
+    # than repeating the stop.
     (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
-    again = _h9b_resume(crashed)
-    assert again == code
-    assert not (crashed / "run.yaml").exists()
+    assert "E-RESUME-RUN-ENDED" in _h9b_refused(crashed, capsys)
 
 
 def test_h9b_a_resume_through_an_unmoved_apparatus_completes(
@@ -24976,7 +25050,7 @@ def test_h9b_replay_ledger_carries_the_callers_code_and_freeze_keeps_its_own(tmp
     assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
 
 
-def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: Path):
+def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: Path, capsys):
     """The wiring of the code above: `command_resume` passes
     `E-RESUME-PROBES-UNREADABLE`, so a hand-edited `apparatus/probes.jsonl`
     in a crashed directory refuses under `resume`'s code rather than
@@ -24989,9 +25063,7 @@ def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: P
     before = _h9b_ledger(crashed)
     (crashed / "apparatus").mkdir(exist_ok=True)
     (crashed / "apparatus" / "probes.jsonl").write_text('{"phase": "run_start"}\n')
-    with pytest.raises(ContractError) as excinfo:
-        _h9b_resume(crashed)
-    assert excinfo.value.code == "E-RESUME-PROBES-UNREADABLE"
+    assert "E-RESUME-PROBES-UNREADABLE" in _h9b_refused(crashed, capsys)
     assert _h9b_ledger(crashed) == before
     assert not (crashed / "run.yaml").exists()
 
@@ -25014,6 +25086,15 @@ def test_h9b_a_resume_reports_a_mangled_probe_ledger_as_its_own_code(tmp_path: P
 #   resume --json     → exit 2, the same line
 #   resume new        → exit 1, "  error   E-RESUME-NO-IDENTITY new/identity.json
 #                       is absent or unreadable, …"
+#
+# Task 16 then moved that last identifier, deliberately and in the same batch:
+# a `resume` path that is not a directory is `E-IO-FAILED` (design Decision 17,
+# `diff`'s own precedent), so `resume new` now prints that code at the same
+# exit 1. Re-measured through the console script after task 16; the
+# disclosure's claim — exit 2 → 1, `resume`'s own refusal for a path that is
+# not a run directory — is unchanged in substance, and the assertion below
+# names the code the build actually prints rather than the one it printed for
+# one commit.
 #
 # The last is the shape H9a got wrong three ways for `draft new`, so it is
 # pinned below rather than only disclosed.
@@ -25063,7 +25144,7 @@ def test_h9b_resume_new_reaches_real_argument_handling_not_a_roadmap_notice(caps
     assert code == EXIT_WRONG, err
     assert "is specified but not built" not in err
     assert "unknown command" not in err
-    assert "E-RESUME-NO-IDENTITY" in err
+    assert "E-IO-FAILED" in err
 
 
 def test_h9b_resume_dispatches_into_command_resume_with_the_path_it_was_given(capsys):
@@ -25076,3 +25157,202 @@ def test_h9b_resume_dispatches_into_command_resume_with_the_path_it_was_given(ca
     assert main(["resume", "_no_such_run_dir_"]) == EXIT_WRONG
     err = capsys.readouterr().err
     assert "_no_such_run_dir_" in err
+
+
+# ===========================================================================
+# H9b task 16 — the refusals wired: one reporting mechanism (design Decision
+# 13), the three hash comparisons' own fixtures, the recorded order checked
+# pre-lock, and a path that is no directory answered with the shipped
+# `E-IO-FAILED`.
+#
+# Every refusal below is REPORTED, never raised: `_h9b_refused` asserts the
+# exit code and the identifier on stderr, which is strictly more than the
+# `pytest.raises` these arms used before this task.
+# ===========================================================================
+
+
+def test_h9b_each_recorded_hash_that_moved_is_refused_by_its_own_code(tmp_path: Path, capsys):
+    """The three identity comparisons, one arm each, each perturbing exactly
+    one key of `identity.json` and nothing else — so a build that compared the
+    wrong figure, or the same figure three times, fails the arm whose key it
+    is not reading.
+
+    The recorded figure is edited rather than the tree, deliberately: editing
+    `src/**` to move `code_hash` would ALSO make the tree dirty
+    (`E-CODE-DIRTY` inside `_prepare_run`, which returns an exit code rather
+    than raising), so that arm would test a different refusal — the same
+    wrong-refusal trap task 12's report recorded for a renamed roster column.
+
+    The lockfile arm moves `null` → a string, which is the direction this
+    project's own fixtures can produce: `run_a_project` writes no `uv.lock`
+    (`W-ENV-UNLOCKED` on every run here), so the recomputed figure is `None`
+    and § Resuming's *"in either direction, `null` included"* is what makes
+    the arm reachable at all.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    identity_path = crashed / "identity.json"
+    recorded = json.loads(identity_path.read_text())
+    before = _h9b_ledger(crashed)
+    assert recorded["uv_lock_hash"] is None, recorded
+
+    for key, value, code in (
+        ("code_hash", "sha256:" + "0" * 64, "E-RESUME-CODE-MOVED"),
+        ("parameters_hash", "sha256:" + "1" * 64, "E-RESUME-PARAMS-MOVED"),
+        ("uv_lock_hash", "sha256:" + "2" * 64, "E-RESUME-LOCKFILE-MOVED"),
+    ):
+        moved = dict(recorded)
+        moved[key] = value
+        identity_path.write_text(json.dumps(moved, indent=2))
+        reported = _h9b_refused(crashed, capsys)
+        assert code in reported, reported
+        # The message names the figure and both sides, which is what makes the
+        # refusal actionable rather than a bare mismatch.
+        assert key in reported and value in reported
+        # And nothing executed: the ledger is the length the crash left, and
+        # no record was written.
+        assert _h9b_ledger(crashed) == before
+        assert not (crashed / "run.yaml").exists()
+        # The lock the refusal never took (this file's own helper removes it).
+        (crashed / "lock").write_text(json.dumps({"host": "h", "pid": 1}))
+
+    # The control, last: restored, the same directory resumes. Without it
+    # every arm above would pass for a directory that could not be resumed at
+    # all.
+    identity_path.write_text(json.dumps(recorded, indent=2))
+    assert _h9b_resume(crashed) == EXIT_OK
+    assert (crashed / "run.yaml").exists()
+
+
+def test_h9b_an_edited_execution_order_is_refused_before_the_lock(tmp_path: Path, capsys):
+    """`E-RUN-ORDER-MISMATCH` became reachable from a FILE when the recorded
+    order became an input (Decision 9), and it is documented as *core's
+    resolved state disagreeing with itself* — raised inside
+    `_execute_prepared`, after the lock, straight into `main`'s un-redacted
+    printer. So the same disagreement is decided pre-lock under
+    `E-RESUME-PLAN-MISMATCH` instead, and this is the pin.
+
+    The edit drops one `(condition, repeat)` pair from `execution_order`,
+    which is exactly what `_apply_execution_order` counts: with the check
+    removed, this directory refuses under the OTHER code from inside the lock
+    — both branches checked in that order, which is why the assertion names
+    the code rather than only the exit.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h9b_randomized_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    recorded = yaml.safe_load((crashed / "sweep.yaml").read_text())
+    assert recorded["order"] == "randomized"
+    before = _h9b_ledger(crashed)
+
+    short = list(recorded["execution_order"])[:-1]
+    assert short != recorded["execution_order"]
+    recorded["execution_order"] = short
+    (crashed / "sweep.yaml").write_text(yaml.safe_dump(recorded, sort_keys=False))
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-PLAN-MISMATCH" in reported, reported
+    assert "E-RUN-ORDER-MISMATCH" not in reported
+    assert _h9b_ledger(crashed) == before
+    assert not (crashed / "run.yaml").exists()
+
+
+def test_h9b_a_resume_path_that_is_no_directory_is_the_shipped_io_failure(tmp_path: Path, capsys):
+    """Decision 17's third not-minted code: a `resume` path that does not
+    exist reuses `E-IO-FAILED` at exit 1, which § Exit codes already assigns
+    to *"a `diff` operand path that doesn't exist"* — the same question, and
+    `diff` is the precedent. Reported through a `Collector` because that
+    section says of this code *"it is not a `ContractError`"*.
+
+    Both shapes, since `is_dir()` answers both: an absent path and a path that
+    is a FILE — a run record passed by mistake being the plausible one, and
+    the shape `E-RESUME-NO-IDENTITY` would otherwise answer with the wrong
+    remedy.
+    """
+    from publishable.cli import command_resume
+
+    a_file = tmp_path / "run.yaml"
+    a_file.write_text("run_id: nope\n")
+    for path in (tmp_path / "no_such_dir", a_file):
+        assert command_resume(path) == EXIT_WRONG
+        err = capsys.readouterr().err
+        assert "E-IO-FAILED" in err, err
+        assert str(path) in err
+
+
+_H9B_CREDENTIAL_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("h9b_credential_assay")
+class H9bCredentialAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    parameter_spec = {
+        "instrument.model": Param(
+            str,
+            default="m1",
+            choices=["m1", "m2"],
+            requires_env={"m1": ["H9B_RESUME_TOKEN"], "m2": ["H9B_RESUME_TOKEN"]},
+        ),
+    }
+"""
+
+
+def test_h9b_a_resume_refusal_is_redacted_through_its_own_collector(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Fixture J, the credential positive control for Decision 13: a refusal
+    `resume` decides is printed through a FRESH `Collector` whose
+    `credentials` is the set `_prepare_run` resolved, so a declared credential
+    in its text prints as `<redacted:…>`. Raised into `main` instead, the same
+    text reaches a handler that prints `{exc}` with no collector in scope.
+
+    **The raise is monkeypatched, and the reason is a measured fact rather
+    than convenience**: no shipped `E-RESUME-*` message interpolates a config
+    value — grepped over `command_resume`/`_resume_prepared`, `run_identity`,
+    `lineage` and `apparatus.replay_ledger`, every one of the fourteen
+    messages is built from paths, hashes, counts and field NAMES — so a
+    credential cannot reach one of them today. The property under test is the
+    containment, not any one message: the patch is aimed at `cli.read_sweep_
+    plan`, a real raise site inside the contained body, and the credential is
+    **declared** through `Param(requires_env=)` and set in the environment, so
+    the redaction has a real value to match. An undeclared one would pass
+    vacuously.
+    """
+    token = "sk-h9b-resume-do-not-print"
+    monkeypatch.setenv("H9B_RESUME_TOKEN", token)
+    control = tmp_path / "crash_control"
+    doc = run_a_project(
+        tmp_path,
+        experiment_type="h9b_credential_assay",
+        parameters={"instrument.model": "m1"},
+        replication={
+            "repeats": [{"kind": "seed", "n": 4}],
+            "order": "as_declared",
+            "rationale": "four seeds",
+        },
+        units=20,
+        sweep={"grid": {"instrument.model": ["m1", "m2"]}},
+        _local_template=_H9B_CREDENTIAL_TEMPLATE,
+        _starter_step=(
+            _H9B_RECORDING_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+    )
+    crashed = _h9b_crash_run(doc, control)
+
+    import publishable.cli as cli_module
+
+    def raising(run_dir: Path):
+        raise ContractError(
+            f"the recorded plan cannot be read; the reader was handed {token}",
+            code="E-RESUME-PLAN-MISSING",
+        )
+
+    monkeypatch.setattr(cli_module, "read_sweep_plan", raising)
+    capsys.readouterr()
+    reported = _h9b_refused(crashed, capsys)
+    assert "E-RESUME-PLAN-MISSING" in reported
+    assert token not in reported, reported
+    assert "<redacted:H9B_RESUME_TOKEN>" in reported, reported
