@@ -26263,3 +26263,76 @@ def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(c
     assert "is specified but not built" not in err
     assert "unknown command" not in err
     assert "E-IO-FAILED" in err
+
+
+# ---------------------------------------------------------------------------
+# H9d guard pin (design § 8), captured by task 1 in batch 1, before anything
+# moved. Seven arms; three are built here and in `tests/test_scaffold.py`, and
+# four are CITED rather than re-captured, because re-capturing a list that is
+# already pinned is H8a's *same list pinned twice* fault:
+#
+#   Arm A — `test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text`'s
+#           `[DESIGN_PRINCIPLES]` and `[REFERENCE]` parametrizations, above in
+#           this file. Editor NONE.
+#   Arm B — the `[README]` parametrization of that same test. Sole authorized
+#           editor **H9d task 12**, whose post-edit state is the PROCEDURE in
+#           design § 8.1, not a literal tuple: the golden is a scan result, so
+#           a tuple written in advance would be pasted from `demo`'s output and
+#           the pin would become a transcript.
+#   Arm E — `tests/test_diff.py`'s H8c arm D, its three
+#           `test_h8c_arm_d_*_worked_diff_block_rows` tests. Editor NONE.
+#   Arm G — `tests/test_validate.py::test_the_worked_examples_intervals_in_
+#           reference_md_are_not_narrowed_by_the_null_test_work`. Editor NONE.
+#           It reads `reference.md` ONLY and its own docstring says it
+#           deliberately leaves README's `[0.347, 0.477]` unpinned, so it is
+#           NOT a collision with arm A or arm B (plan correction 29).
+#
+# Arm C is below; arm D is in `tests/test_scaffold.py`; arm F is below.
+# ---------------------------------------------------------------------------
+
+_H9D_ARM_C_DIGESTS = {
+    "docs/design-principles.md": (
+        "cf03bdf476973a74c4365f6abdd78ee76aa7754ca2062d02b9c8b785edd80171"
+    ),
+    "docs/experimental-designs.md": (
+        "e4c90c597287a0de9cdbc7cf40980fe325569797bdb7edf9df0cc61b32eccc4d"
+    ),
+}
+
+
+@pytest.mark.parametrize("relative_path", sorted(_H9D_ARM_C_DIGESTS))
+def test_h9d_arm_c_two_of_the_four_documents_are_byte_identical_at_merge(relative_path: str):
+    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** Both files must be
+    byte-identical at merge, so a red arm here is a FINDING — a hash to
+    investigate, never a hash to refresh.
+
+    `README.md` and `docs/reference.md` are deliberately NOT in this arm, and
+    design § 8.2 says why: task 12 must edit README twice and task 14 must edit
+    `reference.md` in eight sections, so a whole-file digest over either would
+    report only *an edit happened*, which is not a claim worth making and which
+    an implementer meeting it red has to guess about. What needs protecting in
+    those two files is pinned by CONTENT instead — arm A's `REFERENCE`
+    parametrization, arm B's README scan, and arm E's three `diff` blocks.
+
+    Captured at `f9434bf` by reading the whole file as bytes.
+    """
+    path = Path(__file__).resolve().parents[1] / relative_path
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == _H9D_ARM_C_DIGESTS[relative_path]
+
+
+def test_h9d_arm_f_the_not_built_command_set():
+    """H9d guard-pin arm F. **Sole authorized editor: H9d task 13**, whose
+    post-edit state is written in advance in design § 8's row F —
+    `NOT_BUILT_COMMANDS == {}`, with the three marked-row assertions replaced
+    by the companion Decision 12 specifies.
+
+    The shipped row-presence line
+    `assert ("list-templates", "NOT BUILT") in tables["Command"]`, in
+    `test_reference_cli_tables_are_parsed_at_all` above, is CITED here rather
+    than copied: it is H9c guard-pin arm B, it already asserts the document
+    side of the same fact, and a copy would be a second thing to edit when
+    task 13 flips the row.
+    """
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert set(NOT_BUILT_COMMANDS) == {"demo", "docs", "list-templates"}

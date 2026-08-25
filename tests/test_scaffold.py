@@ -1,3 +1,4 @@
+import hashlib
 import itertools
 import subprocess
 from pathlib import Path
@@ -190,3 +191,55 @@ def test_new_refuses_a_nonempty_target_but_allows_an_empty_one(tmp_path: Path):
     empty_target.mkdir()
     root = scaffold_project(empty_target)
     assert (root / "README.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# H9d guard-pin arm D (design § 8). See the header block at the end of
+# `tests/test_cli.py` for the other six arms and their editors.
+# ---------------------------------------------------------------------------
+
+_H9D_ARM_D_SCAFFOLD_DIGESTS = {
+    ".env.example": "d1855601bdc301556a2733001dd31aa15a4849f97f5dcfd72238c9aa5b071a77",
+    ".gitignore": "38678ba27aa0a359ccfb37af76639220d7dce2630fb7bcf682452514f89b74a8",
+    "CITATION.cff": "921011172129382a00da3e00e623b7956aa1fa2270aa0d8556f0654d7527386b",
+    "LICENSE": "2b548550d33cea762ba2c229c394d8512be0f86fa3ab5f65372f4b6c48fd2552",
+    "configs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "docs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pyproject.toml": "51ee00b516a6a5d71bdd7cfa0015e13699e0f61d127b5d8000edbc9a0906f08b",
+    "src/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "templates/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+}
+
+
+def test_h9d_arm_d_every_scaffolded_file_except_the_readme(tmp_path: Path):
+    """H9d guard-pin arm D. **NO AUTHORIZED EDITOR.**
+
+    A `{relative path → sha256}` map of a `publishable new` project's whole
+    tree except `README.md`, captured at `f9434bf` by running
+    `scaffold_project` into a temporary directory. Its job is Decision 16:
+    H9d task 3 moves `README`, `CITATION`, `MIT` and `GITIGNORE` out of
+    `scaffold.py`'s module globals into files under `readme_templates/`, and
+    that move changes only WHERE the bytes are read from. Every byte this map
+    covers must be identical across it, which is a claim no mutation can make
+    — the *absence* of a behaviour difference is the thing being asserted —
+    so this arm asserts it directly (design § 10, "blind in advance").
+
+    `README.md` is excluded because task 3 deliberately rewrites it (Decision
+    9), and `.git/` is excluded because `git init` plus a commit writes index
+    and object bytes that are not reproducible between two runs; the map was
+    captured twice in one session and compared before the literal was written.
+
+    The project name is fixed at `my-study` — the name `reference.md`
+    § The generated README uses — because `CITATION.cff` and `pyproject.toml`
+    both interpolate it.
+    """
+    root = scaffold_project(tmp_path / "my-study")
+    seen = {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+        and path.relative_to(root).as_posix() != "README.md"
+        and path.relative_to(root).parts[0] != ".git"
+    }
+    assert seen == _H9D_ARM_D_SCAFFOLD_DIGESTS
