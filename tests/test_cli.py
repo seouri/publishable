@@ -26383,6 +26383,159 @@ def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
     assert "Operation commands" in _cited_sections()
 
 
+# --- H3c-3 task 17 (Ruling KK): the resume re-derives the fold partitions ----
+
+
+_H3C3_KK_KEYS = [f"p{i:02d}" for i in range(12)]
+
+
+def _h3c3_kk_project(tmp_path: Path) -> dict[str, Any]:
+    """A committed `groups × fold` project with a **DRAWN** arm axis.
+
+    `random`, not `by_attribute`, and that is the whole fixture: under a read
+    axis the recorded membership and a fresh re-read coincide, so a
+    re-derivation and its absence give the same answer — the
+    correct-and-buggy-readings-coincide trap pointed the other way (design
+    § 9). No holdout: `E-DATA-HOLDOUT-FOLD` still refuses that pair (C27).
+    """
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+
+def test_h3c3_a_resumed_allocation_redraws_the_folds_inside_the_RECORDED_cells(tmp_path: Path):
+    """**Fixture F5 — Ruling KK.**
+
+    `_resumed_allocation` used to decline to override the fold partitions,
+    because *"`partition_units` is a pure function of the roster and the design
+    digest"*. Under cells it is also a function of the **cell decomposition**,
+    and the decomposition is exactly what this function overrides one call
+    later. So a resume whose recorded arms differ from the fresh draw would
+    execute against the recorded cells and evaluate folds drawn inside the
+    fresh ones.
+
+    **The guards cannot see it, and that is why this needs a fixture rather
+    than a sentence.** `_resumed_allocation` compares the axis SET, each axis's
+    level SET, and each axis's recorded key set against the roster's — in both
+    directions, and nothing about membership within a level or about roster
+    ORDER. `_h9b_swapped` moves one unit between the two arms, which changes
+    every one of those comparisons by nothing (C11 measures the same blindness
+    through a reversed roster: same keys, same levels, a different realized
+    membership and a different `units_hash`).
+
+    **The assertion is on MEMBERSHIP, not on sizes.** Both decompositions are
+    6/6 and both give three folds of four, so a size assertion passes under
+    either reading. The re-derived partitions are compared against
+    `units.partition_within_cells` called on the OVERRIDDEN axes — the same
+    single producer `_prepare_run` calls, two sources that must agree — and
+    against `prepared`'s own pre-override partitions, which must **differ**:
+    without that inequality the equality above would be satisfied by a
+    re-derivation that changed nothing.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+    from publishable.units import cells_of, partition_within_cells
+
+    doc = _h3c3_kk_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.partitions is not None and prepared.fold_members is not None
+    fresh = {label: set(keys) for label, keys in prepared.fold_members.items()}
+
+    overridden = _resumed_allocation(prepared, edited)
+
+    expected = partition_within_cells(
+        overridden.roster,
+        len(prepared.partitions),
+        overridden.digest,
+        cells_of(overridden.group_axes),
+    )
+    assert overridden.partitions is not None
+    assert [[u.key for u in part] for part in overridden.partitions] == [
+        [u.key for u in part] for part in expected
+    ]
+
+    # The discriminator: the recorded decomposition really does move the folds,
+    # so the equality above is not satisfied by "nothing changed".
+    assert overridden.fold_members is not None
+    resumed = {label: set(keys) for label, keys in overridden.fold_members.items()}
+    assert resumed != fresh
+    # ...and it moves them by MEMBERSHIP rather than by size, which is what a
+    # count assertion could never tell apart.
+    assert sorted(len(v) for v in resumed.values()) == sorted(len(v) for v in fresh.values())
+    # The whole roster is still partitioned — a re-derivation that dropped or
+    # duplicated a unit would satisfy both assertions above.
+    assert sorted(k for keys in resumed.values() for k in keys) == sorted(_H3C3_KK_KEYS)
+    # And the allocation round trip is untouched by the re-derivation, which is
+    # what guard-pin arm C asserts for a design with no fold.
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
+def test_h3c3_a_no_axis_resume_still_calls_the_producer_and_gets_the_same_folds(
+    tmp_path: Path,
+):
+    """**MU-10's replacement, and it is owed rather than optional.**
+
+    MU-10 is "add an `if group_axes` gate to the re-derivation". It is **blind**
+    to every byte-identical-partition assertion, because the no-axis arm of the
+    producer IS the identical partition — that is precisely the proof the gate
+    is a no-op — and it is blind to guard-pin arm D, which wraps `_prepare_run`
+    and never enters this function. So the only check that can tell
+    "unconditional" from "gated" is whether the producer was **called**, and
+    that is what this asserts, with arm D's own counting technique: the wrapper
+    goes on BOTH `cli`'s imported binding and `units`' own, and the assertion
+    is on the sum, so it survives either resolution.
+
+    **Called directly, and the reason is worth stating.** A no-axis, no-holdout
+    design writes no `allocation.json` at all (`build_allocation_document`
+    returns `None` when neither partition is declared), and `command_resume`
+    calls this function only when `lineage.read_allocation` returned one — so
+    the no-axis arm is unreachable through a real resume, and a gate on
+    `group_axes` would ship untested rather than wrong. That is an argument for
+    a direct call, not for leaving the arm unpinned.
+
+    The recorded document is the empty-arms shape this design would write, and
+    every guard passes on it: the axis set is empty on both sides, and neither
+    side declares a holdout.
+    """
+    from publishable import cli as cli_mod
+    from publishable import units as units_mod
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.group_axes == {}, "no group axis, so no cell structure"
+    assert prepared.partitions is not None, "a fold level, so there are partitions to replace"
+    before = [[u.key for u in part] for part in prepared.partitions]
+
+    calls: list[int] = []
+    original = cli_mod.partition_within_cells
+
+    def counting(roster, k, digest, cells, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(k)
+        return original(roster, k, digest, cells, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli_mod, "partition_within_cells", counting)
+        mp.setattr(units_mod, "partition_within_cells", counting)
+        overridden = _resumed_allocation(prepared, {"arms": {}, "seed": {}, "strata": {}})
+
+    assert calls == [5], "the producer is called once, with the recorded fold count"
+    assert overridden.partitions is not None
+    assert [[u.key for u in part] for part in overridden.partitions] == before
+    assert overridden.fold_members == prepared.fold_members
+
+
 # --- H3c-3 guard pin, arms B, C, D and E -------------------------------------
 
 

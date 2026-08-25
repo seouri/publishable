@@ -2391,6 +2391,32 @@ def _stale(detail: str) -> "ContractError":
     )
 
 
+def _fold_strata(
+    fold_level: "RepeatLevel | None", roster: "UnitList | None"
+) -> dict[str, str] | None:
+    """A `fold` level's `stratify_by` as a `{unit key: stratum}` map, or `None`
+    when the level declares none — `units.partition_within_cells`' `strata`
+    argument.
+
+    **One derivation, two callers**, and the second is the reason it is a
+    function at all: `_prepare_run` builds this map before drawing the
+    partitions, and `_resumed_allocation` re-draws them on the overridden cells
+    and needs the same map. Two spellings would be two answers to what a
+    stratum is, over one declaration.
+
+    Indexed, not `.get`-ed, and total over the roster because it has to be —
+    `units.partition_units` raises `KeyError` on a gap, by contract, and
+    `validate` guarantees the name is a declared attribute
+    (`E-REPL-FOLD-STRATIFY-UNKNOWN`), so a missing key is a core defect rather
+    than something to soften here. Stringified for `clusters_of`'s reason: a
+    stratum is a label, nothing downstream does arithmetic on it, and one type
+    keeps a hand-built roster and a table-sourced one giving the same split.
+    """
+    if fold_level is None or roster is None or not fold_level.stratify_by:
+        return None
+    return {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+
+
 def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prepared":
     """`allocation.json` **read rather than re-drawn** (H9b Decision 10): the
     arm memberships and the holdout partition `_prepare_run` just resolved are
@@ -2433,12 +2459,33 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
     legitimate resume, and the fix would then be here rather than in the
     method.
 
-    **Fold partitions are deliberately not touched here.** They are recorded
-    in `sweep.yaml`'s own `partitions` block rather than in this file, and
-    `partition_units` is a pure function of the roster and the design digest
-    — so correct and buggy readings coincide for every fixture this slice can
-    build, and a fold override would be an untested derivation. Named as
-    resolved narrowly rather than left silent.
+    **Fold partitions ARE re-derived here** (H3c-3, Ruling KK). A partition is
+    a function of the roster, the design digest **and the cell decomposition**;
+    the decomposition is what this function overrides, one call above; so the
+    partitions drawn from the fresh decomposition are stale the moment the
+    override lands. They are re-derived through `units.partition_within_cells`
+    — the **same single producer** `_prepare_run` calls, on the **overridden**
+    axes — and never by hand here, which would make this function a second
+    producer of fold membership, the fault its own docstring exists to prevent
+    a third instance of. `partition_units` itself is still not called from this
+    function.
+
+    **The gate is "a fold level exists", never "an axis exists".** With no
+    axis the producer takes its own one-cell reduction and returns the
+    byte-identical partition, so gating on `group_axes` would be a branch whose
+    no-axis arm is provably a no-op — one more thing to get wrong than a proof.
+    `prepared.partitions is None` is a different question: it means the design
+    declares no `fold` level at all, so there is no `k` to draw and nothing to
+    replace. `fold_members` follows from the partitions through
+    `replication.fold_members_for`, exactly as it does in `_prepare_run`.
+
+    **`Prepared.cells` is deliberately left as `_prepare_run` derived it.** Its
+    one reader below the override is `sweep.yaml`'s `partitions_within`, which
+    projects the AXIS NAMES out of the first populated cell — and the guards
+    above force the recorded axis set and each axis's level set to equal this
+    tree's, so the stale object and a re-derived one give that projection the
+    same answer. The decomposition the partitions are drawn inside is
+    `cells_of(axes)`, computed here from the overridden plans.
     """
     from publishable.units import arm_members
 
@@ -2501,6 +2548,25 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
             strata=tuple(recorded_holdout.get("strata") or ()),
         )
 
+    # The folds, re-drawn inside the RECORDED cells. See this function's own
+    # docstring for why this is not gated on `axes` and why it goes through the
+    # same producer `_prepare_run` calls rather than being computed here.
+    partitions = prepared.partitions
+    fold_members = prepared.fold_members
+    if partitions is not None and prepared.roster is not None:
+        partitions = partition_within_cells(
+            prepared.roster,
+            len(partitions),
+            prepared.digest,
+            cells_of(axes) if axes else {},
+            clusters=prepared.clusters,
+            strata=_fold_strata(
+                next((lv for lv in prepared.levels if lv.kind == "fold"), None),
+                prepared.roster,
+            ),
+        )
+        fold_members = fold_members_for(prepared.levels, partitions)
+
     eval_roster = _evaluation_roster(prepared.roster, holdout)
     # `_prepare_run`'s own invariant, restated on this path because this path
     # has no counterpart of it: a narrowing that returned `None` for a real
@@ -2510,6 +2576,8 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
         prepared,
         group_axes=axes,
         holdout_plan=holdout,
+        partitions=partitions,
+        fold_members=fold_members,
         eval_roster=eval_roster,
         # `None` stays `None`: whether a per-condition mapping exists at all
         # is `_prepare_run`'s decision (it gates on `selector_paths`), and a
@@ -2880,9 +2948,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
         # nothing downstream does arithmetic on it, and one type keeps a hand-built
         # roster and a table-sourced one giving the same split.
-        strata: dict[str, str] | None = None
-        if fold_level.stratify_by:
-            strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+        strata = _fold_strata(fold_level, roster)
         # Drawn INSIDE each cell when the design has one, merged index-wise
         # (`units.partition_within_cells`), and reducing to the identical single
         # whole-roster call with the bare digest when it does not — `cells` is
