@@ -253,13 +253,20 @@ CREDENTIALS_EMPTY_ROW = "| _(none yet — added as experiments declare them)_ | 
 
 
 def config_paths(repo_root: Path) -> list[Path]:
-    """Every `configs/<name>/config.yaml`, in name order.
+    """Every `configs/<name>/config.yaml`, in whatever order the filesystem
+    answers — `experiments` below is what puts them in name order.
+
+    The sort lives THERE rather than here, and deliberately: a sort applied to
+    a glob is unkillable on a filesystem whose directory order already agrees
+    with it (measured — dropping a `sorted()` here left the full suite green),
+    so the one that decides what a reader sees sits where a fixture can hand it
+    a reversed list and see the ordering restored.
 
     The experiment's NAME is its directory's, not a field read out of the file:
     `generate experiment` creates `configs/<name>/`, and the directory is what
     the `Run` column's own invocation has to name for the command to work.
     """
-    return sorted((repo_root / "configs").glob("*/config.yaml"))
+    return list((repo_root / "configs").glob("*/config.yaml"))
 
 
 def _declared_template(path: Path) -> str | None:
@@ -281,8 +288,10 @@ def _declared_template(path: Path) -> str | None:
 
 
 def experiments(repo_root: Path) -> list[tuple[str, str | None]]:
-    """`(experiment name, template name or None)` for every config, in name order."""
-    return [(path.parent.name, _declared_template(path)) for path in config_paths(repo_root)]
+    """`(experiment name, template name or None)` for every config, in NAME
+    order — the order every region body renders in, decided here."""
+    found = [(path.parent.name, _declared_template(path)) for path in config_paths(repo_root)]
+    return sorted(found, key=lambda pair: pair[0])
 
 
 def _unreadable_reason(name: str, template_name: str | None, claim: "Claim | None") -> str:
@@ -361,12 +370,49 @@ def credentials_body(repo_root: Path) -> str:
     )
 
 
+#: The `experiments` row a project with nothing to declare carries.
+EXPERIMENTS_EMPTY_ROW = "| _(none yet — add one with `publishable generate experiment`)_ | | |"
+
+
+def experiments_body(repo_root: Path) -> str:
+    """The `experiments` region: `Name | Template | Run`, one row per
+    `configs/<name>/config.yaml`, in name order.
+
+    `## Experiments` is INSIDE this region as of H9d task 3, so the heading is
+    part of the body rather than prose above it — which is what lets `docs`
+    rewrite the whole section and still write outside no region.
+
+    The `Run` cell is the invocation, not a description: `uv run publishable`
+    rather than bare `publishable`, because this README lives in a project with
+    its own environment and `reference.md` § Documentation conventions reserves
+    the bare spelling for commands run outside one. A template name the config
+    does not declare readably renders as `_(unknown)_` rather than as an empty
+    cell — this table's own copy of the rule the `credentials` one applies to a
+    whole row.
+    """
+    rows = [
+        f"| `{name}` | {f'`{template}`' if template is not None else '_(unknown)_'} | "
+        f"`uv run publishable run configs/{name}/config.yaml` |"
+        for name, template in experiments(repo_root)
+    ]
+    return "\n".join(
+        [
+            "## Experiments",
+            "",
+            "| Name | Template | Run |",
+            "|---|---|---|",
+            *(rows or [EXPERIMENTS_EMPTY_ROW]),
+        ]
+    )
+
+
 #: Region name → the function that computes its body from the repository.
 #: `refresh` reads this rather than a chain of branches, so a region with no
 #: builder is a `KeyError` at the call site rather than a region silently left
 #: alone — the silence Ruling EE refuses.
 BODY_BUILDERS: dict[str, Callable[[Path], str]] = {
     "credentials": credentials_body,
+    "experiments": experiments_body,
 }
 
 

@@ -455,18 +455,25 @@ def test_the_credentials_region_merges_two_experiments_declared_required_env(tmp
     )
 
 
-def test_the_credentials_merge_moves_no_byte_outside_its_own_region(tmp_path: Path):
+def test_the_generator_moves_no_byte_outside_the_regions_it_merges(tmp_path: Path):
     """The other half of the same write, and the one a substring assertion
-    cannot make: every byte of the README outside the `credentials` span is
-    identical to what `publishable new` wrote. Compared as whole files against
-    an independently spliced expectation, never as `in`."""
+    cannot make: every byte of the README outside the two spans `generate
+    experiment` merges is identical to what `publishable new` wrote. Compared
+    as whole files against an independently spliced expectation, never as `in`.
+
+    Both regions are named because task 5 added the second one to the same
+    call. Splicing only `credentials` here would fail on the `experiments`
+    table and hide which of the two moved.
+    """
     root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE})
     before = (root / "README.md").read_text()
     _generate(root, tmp_path, "exp-one", "alpha_assay")
     after = (root / "README.md").read_text()
 
     assert after != before
-    assert after == rewrite(before, "credentials", body_of(after, "credentials"))
+    spliced = rewrite(before, "credentials", body_of(after, "credentials"))
+    spliced = rewrite(spliced, "experiments", body_of(after, "experiments"))
+    assert after == spliced
 
 
 def test_a_project_with_no_experiments_renders_the_scaffolds_own_empty_row(tmp_path: Path):
@@ -581,6 +588,8 @@ def test_generate_experiment_survives_a_readme_it_cannot_rewrite_and_names_it(
     assert captured.err == (
         "note: README.md declares no `credentials` region, so nothing was "
         "written there — a region is never created, only rewritten\n"
+        "note: README.md declares no `experiments` region, so nothing was "
+        "written there — a region is never created, only rewritten\n"
     )
     assert config.is_file()
     assert (root / "src" / "exp_one" / "experiment.py").is_file()
@@ -606,3 +615,133 @@ def test_a_malformed_readme_is_named_by_its_code_and_still_costs_the_generator_n
     assert "E-DOCS-REGION-UNBALANCED" in err
     assert "begins and never ends" in err
     assert config.is_file()
+
+
+# ---------------------------------------------------------------------------
+# H9d task 5 — the `experiments` region body, and `generate experiment`'s row
+# merge.
+# ---------------------------------------------------------------------------
+
+
+def test_the_experiments_region_carries_its_own_heading_and_one_row_per_config(tmp_path: Path):
+    """`## Experiments` is INSIDE the region as of task 3, so the body carries
+    the heading; a row per `configs/<name>/config.yaml` in name order, with the
+    `Run` cell holding the invocation rather than a description.
+
+    Asserted as the whole body: a substring check on one row cannot see a
+    missing heading, a lost column, or a second row that should not be there.
+    """
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE, "beta": _BETA_TEMPLATE})
+    _generate(root, tmp_path, "exp-two", "beta_assay")
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+
+    body = body_of((root / "README.md").read_text(), "experiments")
+    assert body == (
+        "## Experiments\n"
+        "\n"
+        "| Name | Template | Run |\n"
+        "|---|---|---|\n"
+        "| `exp-one` | `alpha_assay` | `uv run publishable run configs/exp-one/config.yaml` |\n"
+        "| `exp-two` | `beta_assay` | `uv run publishable run configs/exp-two/config.yaml` |\n"
+    )
+
+
+def test_a_second_experiment_gains_exactly_one_row_and_moves_no_other_byte(tmp_path: Path):
+    """The plan's own mutation for this task, written as the assertion it
+    names: the region gains **exactly one** row, and every byte outside it is
+    unchanged — compared as a whole file against an independently spliced
+    expectation rather than as a substring.
+
+    "Outside" means outside the two regions this generator merges — and the
+    `credentials` one really does move here, because the second experiment's
+    template declares `SHARED_TOKEN`, which the first's already did, so that
+    variable's `Needed by` cell gains a name. Both are spliced from the
+    after-state and the whole file is then compared, so a byte moved anywhere
+    else — a heading, the Setup fence, the `Reproducing` section — fails here.
+    """
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE, "beta": _BETA_TEMPLATE})
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+    before = (root / "README.md").read_text()
+
+    _generate(root, tmp_path, "exp-two", "beta_assay")
+    after = (root / "README.md").read_text()
+
+    added = [
+        line
+        for line in body_of(after, "experiments").splitlines()
+        if line not in body_of(before, "experiments").splitlines()
+    ]
+    assert added == [
+        "| `exp-two` | `beta_assay` | `uv run publishable run configs/exp-two/config.yaml` |"
+    ]
+    assert body_of(after, "credentials") == body_of(before, "credentials").replace(
+        "| `SHARED_TOKEN` | `exp-one` |", "| `SHARED_TOKEN` | `exp-one`, `exp-two` |"
+    )
+    spliced = rewrite(before, "experiments", body_of(after, "experiments"))
+    spliced = rewrite(spliced, "credentials", body_of(after, "credentials"))
+    assert after == spliced
+
+
+def test_the_experiments_empty_state_is_the_scaffolds_own_row(tmp_path: Path):
+    """The same degeneracy the `credentials` region has: refreshing a project
+    with no experiments rewrites the scaffolded README to itself, byte for
+    byte, so the empty row is not a second literal maintained beside the
+    scaffold's."""
+    from publishable.docs import EXPERIMENTS_EMPTY_ROW, experiments_body, refresh
+
+    root = _project(tmp_path)
+    before = (root / "README.md").read_text()
+    assert EXPERIMENTS_EMPTY_ROW in body_of(before, "experiments")
+    assert experiments_body(root) + "\n" == body_of(before, "experiments")
+
+    assert refresh(root, ("experiments", "credentials")) == (["experiments", "credentials"], [])
+    assert (root / "README.md").read_text() == before
+
+
+def test_a_config_that_declares_no_readable_template_still_gets_its_row(tmp_path: Path):
+    """A row with `_(unknown)_` in the Template cell, never a dropped row: the
+    experiment exists, `configs/<name>/config.yaml` is on disk, and a table
+    that omitted it would tell a reader this project has no such experiment."""
+    from publishable.docs import experiments_body
+
+    root = _project(tmp_path)
+    (root / "configs" / "exp-blank").mkdir(parents=True)
+    (root / "configs" / "exp-blank" / "config.yaml").write_text("name: exp-blank\n")
+
+    assert (
+        "| `exp-blank` | _(unknown)_ | `uv run publishable run configs/exp-blank/config.yaml` |"
+    ) in experiments_body(root)
+
+
+def test_both_region_bodies_are_in_name_order_whatever_the_filesystem_answers(
+    tmp_path: Path, monkeypatch
+):
+    """The replacement for a mutation that was **blind**: dropping the
+    `sorted()` that used to sit on the `configs/*/config.yaml` glob left the
+    full suite green, because this machine's directory order already agrees
+    with name order. A sort a fixture cannot disagree with is a sort no
+    assertion can see.
+
+    So the ordering decision moved to `experiments()`, and this hands it a
+    REVERSED list — the one arrangement that distinguishes name order from
+    discovery order for two elements — and asserts both region bodies come out
+    in name order regardless.
+    """
+    import publishable.docs as docs_module
+
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE, "beta": _BETA_TEMPLATE})
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+    _generate(root, tmp_path, "exp-two", "beta_assay")
+
+    real = docs_module.config_paths
+    monkeypatch.setattr(docs_module, "config_paths", lambda r: list(reversed(real(r))))
+    assert [path.parent.name for path in docs_module.config_paths(root)] == [
+        "exp-two",
+        "exp-one",
+    ]
+
+    rows = [
+        line for line in docs_module.experiments_body(root).splitlines() if line.startswith("| `")
+    ]
+    assert [row.split("`")[1] for row in rows] == ["exp-one", "exp-two"]
+    assert "| `SHARED_TOKEN` | `exp-one`, `exp-two` |" in docs_module.credentials_body(root)

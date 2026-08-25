@@ -165,6 +165,6 @@ def generate_experiment(
     # command's other diagnostics, stdout being reserved for what a command
     # produces — because a merge that silently wrote nothing is
     # indistinguishable from one that worked (Ruling EE).
-    for note in merge_into_readme(repo_root, ("credentials",)):
+    for note in merge_into_readme(repo_root, ("credentials", "experiments")):
         print(note, file=sys.stderr)
     return config_path
