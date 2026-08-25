@@ -130,6 +130,11 @@ roster-wide test to catch.
 | `tests/test_cli.py` | 2 | Task 13's C9/C22 pin, both sides. |
 | `docs/superpowers/**`, `.superpowers/sdd/**` | — | The development record; exempt, and retro-editing it destroys the evidence it holds. |
 
+**The `validate` row says *"when the design's cells **resolve**"*, not *"has a cell structure"*.**
+`_resolved_cells` swallows every fault to `None`, so a declared cell structure whose own draw faults
+takes the roster bound — and the row now says so, because a row narrower or wider than its code is
+this repo's most-repeated defect class. Corrected in the follow-up commit, not in `57cfc55`.
+
 **Which table's scope sentence put each row where.** § Errors `validate` reports says *"What decides a
 row's table is whether a command **reports** it or core **raises** it"* — `_check_holdout` collects
 through a `Collector`, so the declared-`frac` bound is that row, and it gained the cell denominator.
@@ -331,6 +336,31 @@ direct call, not for leaving the arm unpinned.
 
 ---
 
+## Newly reachable: `holdout` × `arm_members`, enumerated for batch E
+
+Deleting the assert in `e01f240` and the refusal in `d22268d` made
+`holdout_plan is not None` **and** `arm_members_map is not None` reachable for the first time — not
+only in `execute_plan`, but at every downstream site that takes `eval_roster` (the holdout's test
+partition) and `arm_members_map` together. **None of these was touched by this batch**, and
+tasks 18–20's briefs were written before the combination existed, so the list is put here rather
+than assumed. Grepped over `src/`, every joint site attributed:
+
+| Site | Takes | What the combination now means there |
+|---|---|---|
+| `runner.execute_plan`'s holdout branch | `units`, `holdout_train`, `arm_members` | **Handled by task 15.** The one site the assert guarded. |
+| `runner._units_failed_anywhere` | `units`, `fold_members`, `arm_members` | `units` is now the test partition **and** arm-narrowed. A holdout's training units belong to no execution, so they can be in no arm's failure set — believed correct, untested for this pair. |
+| `runner.attrition` | the condition roster, `fold_members` | Its narrowing rule is `cli`'s, by its own docstring; fenced off this batch. |
+| `cli._cond_roster` | `eval_roster`, `arm_members_map` | Now narrows an already-holdout-narrowed roster to an arm. Three callers below. |
+| `cli._condition_beside_n` | `eval_roster`, `cond.index`, `arm_members_map` | The `beside_n` denominator becomes `arm ∩ test`. |
+| `cli._condition_report_by_levels` | `eval_roster`, `cond.index`, `arm_members_map`, `attribute` | A `report_by` stratum inside one arm's test side. |
+| `cli._condition_counts` | `eval_roster`, `cond.index`, `arm_members_map`, `fold_members` | The three-part `n` for a condition that is now both an arm and a test partition. |
+| `cli._compute_vs_baseline` / `_compute_declared_contrasts` | `roster=eval_roster` | A contrast's paired intersection is now over the test side of two different cells. |
+
+The last five all reach the roster through `_cond_roster`, which is the single narrowing authority
+its own docstring names — so the interaction has **one** place to be got wrong rather than five.
+Naming that is not testing it; **the seam is batch E's**, and this table is what makes the routing
+real.
+
 ## Concerns, for the reviewer
 
 1. **`Prepared.cells` is not replaced by `_resumed_allocation`.** Decision 5 and the brief name
@@ -350,10 +380,19 @@ direct call, not for leaving the arm unpinned.
    § Clustered units and `experimental-designs.md` § Between-subjects factorial with it. Those are
    **task 21's** by name, and task 21 has not run yet — the branch's `8862957` is a plan amendment,
    not the document sweep. Until it does, three normative sentences are false against the code.
-4. **Task 22's end-to-end `groups × holdout` run is now constructible** and was not attempted here.
-   Nothing in this batch exercises a *real* `run` that draws a holdout inside cells and hands a step
-   its own arm's train side — F4 is a direct `execute_plan` call, by Ruling II's own design. That
-   confirmation is still owed.
+4. **Task 22's end-to-end `groups × holdout` run is still owed, and one half of it is now paid.**
+   A follow-up commit adds `test_h3c3_a_real_run_with_both_partitions_records_within_and_round_trips`
+   — a real `run_a_project` of `allocation: between` + `groups` + `holdout` + seed repeats, the only
+   shape in production that ever carries `holdout.within`, and a shape **no fixture could build two
+   commits earlier**. It asserts `within == ["arm"]` beside a populated `arms` block, that each arm
+   contributes half its own units to the test side (the per-cell draw, which a roster-wide one at
+   this `frac` need not do), and — the load-bearing half — the **round trip on this shape**, which
+   guard-pin arm C asserts for the shape it can reach and cannot assert for this one:
+   `_resumed_allocation` rebuilds `HoldoutPlan` without `within` (it is not a field) and the rebuild
+   re-derives it from the overridden `group_axes`, so a disagreement would publish a hash of a
+   document no file holds. Proved able to fail: with `within` never written, it fails.
+   What is **still** owed to task 22 is a real run whose *step* reads `io.units.train` under a group
+   axis — F4 is a direct `execute_plan` call, by Ruling II's own design.
 5. **`_h9b_holdout_project`'s docstring reason has moved.** It said the two halves of
    `allocation.json` "cannot be exercised by one config on this build"; that is false as of
    `d22268d`. Updated in place to say what the fixture now exists to pin (the holdout-only document,

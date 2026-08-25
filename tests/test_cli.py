@@ -26383,6 +26383,72 @@ def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
     assert "Operation commands" in _cited_sections()
 
 
+# --- H3c-3 task 16 follow-up: the combined document, newly constructible -----
+
+
+def test_h3c3_a_real_run_with_both_partitions_records_within_and_round_trips(tmp_path: Path):
+    """**The `groups × holdout` `allocation.json`, end to end — the only shape
+    in production that ever carries `holdout.within`, and no test could build
+    it before `d22268d`.**
+
+    `_h9b_drawn_project` has drawn arms and no holdout; `_h9b_holdout_project`
+    has a drawn holdout and no axes; guard-pin arm C rides the first and F5 is
+    `groups × fold` (C27). So every existing fixture sees one half of this file.
+    The combination was refused at `validate` as `E-DATA-HOLDOUT-CELLS` until
+    task 16 retired it — `E-DATA-HOLDOUT-FOLD` forbids only the **fold**
+    pairing, so seed repeats make it legal.
+
+    **Two properties, and the second is the load-bearing one.**
+
+    First, a real run writes `within` naming the axis, **beside a populated
+    `arms` block** — asserted together, because `within` over an empty `arms`
+    would be the disclosure claiming a decomposition the file does not show.
+
+    Second, the **round trip on this shape**, which is what guard-pin arm C
+    asserts for the shape it can reach and cannot assert for this one.
+    `_resumed_allocation` rebuilds `HoldoutPlan` from `train`/`test`/`seed`/
+    `strata` and **drops `within`** — it is not a field — and the rebuild
+    re-derives it from the overridden `group_axes`. If those two ever
+    disagreed, `provenance.allocation_hash` would publish the hash of a
+    document no file holds, and a resume never rewrites `allocation.json`. The
+    recorded arms are swapped first (`_h9b_swapped`), so the equality is over a
+    document that differs from a fresh draw rather than one that agrees with it
+    by construction.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+            "holdout": {"method": "random", "frac": 0.5, "seed": 4321},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert recorded["holdout"]["within"] == ["arm"]
+    assert sorted(recorded["arms"]["arm"]) == ["control", "treatment"]
+    assert all(recorded["arms"]["arm"][level] for level in ("control", "treatment"))
+    # Drawn INSIDE each cell: each arm contributes half of its own units to the
+    # test side, which a roster-wide draw at this `frac` need not do. Sizes are
+    # the discriminator that is available here; membership is pinned at the
+    # producer by `tests/test_cli.py`'s task 13 fixtures.
+    test_side = set(recorded["holdout"]["test"])
+    for level in ("control", "treatment"):
+        arm = set(recorded["arms"]["arm"][level])
+        assert len(arm & test_side) == len(arm) // 2, level
+
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
 # --- H3c-3 task 17 (Ruling KK): the resume re-derives the fold partitions ----
 
 
