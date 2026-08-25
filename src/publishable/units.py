@@ -3010,6 +3010,111 @@ def _assign_whole_clusters_by_ratio(
     return buckets
 
 
+def partition_within_cells(
+    roster: UnitList,
+    k: int,
+    digest: str,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+    clusters: dict[str, str] | None = None,
+    strata: dict[str, str] | None = None,
+) -> list[list[Unit]]:
+    """`partition_units`, drawn **inside each cell** and merged **index-wise** —
+    partition *i* is every cell's partition *i*, concatenated in cell order.
+
+    A `fold` level runs inside every cell (`reference.md` § Group axes), so a
+    partition drawn over the whole roster hands a condition `cell ∩
+    partition_i`, whose size nothing bounded and which can come out empty while
+    the flat partition looks even. Drawing inside the cell is what makes each
+    arm's own folds the size the declaration asked for.
+
+    **The bare `digest` goes to every call**, never `digest|cell`.
+    `partition_units` builds its own `random.Random(_seed_from(digest))` per
+    call, so per-cell draws are already independent of cell order and of how
+    many cells there are — nothing is gained by mixing the label in, and a
+    per-cell digest is safe only while the no-cell path never touches it, which
+    is a guard the bare digest does not need. The reduction below is what makes
+    that concrete: a design with no cells draws the byte-identical partition it
+    drew before this function existed.
+
+    Each sub-roster is rebuilt from `roster` in **roster order**, the order
+    `clusters_of` preserves deliberately and `units_hash` pins as reproducible,
+    and each cell's `clusters`/`strata` map is the run's map **restricted to
+    that cell's keys and total over its sub-roster** — indexed, not `.get`-ed,
+    so `partition_units`' contract that a unit missing from either map is a
+    `KeyError` and a core defect survives the restriction rather than being
+    softened by it.
+
+    **Empty cells are skipped inside this loop, and that is not a bound.** A
+    cell too thin to carry `k` is refused at `validate`, by
+    `E-REPL-FOLD-K-TOO-LARGE` bounded over the thinnest cell
+    (`units.thinnest_cell`), before this runs. What the skip avoids is a cell
+    with no units at all — a level no unit resolved to, which is legal — whose
+    `partition_units` call would contribute `k` empty lists and nothing else.
+
+    **No populated cell at all reduces to the single whole-roster call**, with
+    the bare digest and byte-identically: that is `{}` (what `cli._prepare_run`
+    passes for a design with no group axis, since `cells_of` takes no roster
+    and its `cells_of({})` is one *empty* cell) and `cells_of({})` itself, both
+    reaching one rule. `cell_fold_basis` states the same rule for the same two
+    inputs; two functions in one module answering one triviality question
+    differently is exactly the drift `fold_basis`' single derivation exists to
+    prevent. A populated decomposition of a **non-empty** roster is not
+    reachable any other way — `assignment_for` over an empty roster raises
+    before a plan exists (measured), and `arms_of` raises
+    `E-DATA-ASSIGN-LEVELS` for a unit whose value names no declared level — so
+    the reduction cannot be masking a real cell structure that came out empty.
+
+    **The cells must partition the roster, and that is checked rather than
+    assumed.** A unit in no populated cell would vanish from every fold, and a
+    unit in two would be tested twice, either of which stops `fold_members`
+    being the flat `label → keys` partition every reader downstream of it
+    treats it as. `cells_of` guarantees both by construction (it intersects
+    realized `ArmPlan`s, and each unit carries exactly one level per axis), so
+    a violation here is core's resolved state disagreeing with itself —
+    `E-RUN-FOLD-UNRESOLVED`, the code `cli` and `sweep` already raise for that
+    disagreement's other two shapes. Raised rather than asserted, for
+    `_prepare_run`'s own stated reason: an `assert` disappears under
+    `python -O`, which is the wrong property for the only guard on a condition
+    nothing else detects.
+    """
+    populated = [(key, keys) for key, keys in cells.items() if keys]
+    if not populated:
+        return partition_units(roster, k, digest, clusters=clusters, strata=strata)
+    covered: set[str] = set()
+    for _, keys in populated:
+        overlap = covered & keys
+        if overlap:
+            raise ContractError(
+                f"the cell decomposition puts {sorted(overlap)[0]!r} in more than one cell, "
+                "so a fold drawn inside the cells would test that unit twice; cells are "
+                "disjoint by construction, so core's resolved state disagrees with itself",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
+        covered |= keys
+    missing = [unit.key for unit in roster if unit.key not in covered]
+    if missing:
+        raise ContractError(
+            f"the cell decomposition holds no cell for {missing[0]!r} "
+            f"({len(missing)} of {len(roster)} resolved units), so a fold drawn inside "
+            "the cells would leave those units out of every partition; every unit falls "
+            "in exactly one cell, so core's resolved state disagrees with itself",
+            code="E-RUN-FOLD-UNRESOLVED",
+        )
+    merged: list[list[Unit]] = [[] for _ in range(k)]
+    for _, keys in populated:
+        sub = UnitList([unit for unit in roster if unit.key in keys])
+        sub_clusters = None if clusters is None else {u.key: clusters[u.key] for u in sub}
+        sub_strata = None if strata is None else {u.key: strata[u.key] for u in sub}
+        for i, part in enumerate(
+            partition_units(sub, k, digest, clusters=sub_clusters, strata=sub_strata)
+        ):
+            # Index-wise, the rule `partition_units` already follows for its own
+            # strata: fold `i` means the same thing in every cell, which is what
+            # keeps the merge a partition of the roster and `fold_members` flat.
+            merged[i].extend(part)
+    return merged
+
+
 def partition_units(
     roster: UnitList,
     k: int,

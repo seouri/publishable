@@ -155,7 +155,8 @@ from publishable.units import (
     holdout_seed_for,
     index_names,
     null_test_level,
-    partition_units,
+    partition_units,  # noqa: F401 — see `partition_within_cells` below
+    partition_within_cells,
     resolve_units,
     stratum_names,
     thinnest_cell,
@@ -2863,7 +2864,29 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         strata: dict[str, str] | None = None
         if fold_level.stratify_by:
             strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
-        partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
+        # Drawn INSIDE each cell when the design has one, merged index-wise
+        # (`units.partition_within_cells`), and reducing to the identical single
+        # whole-roster call with the bare digest when it does not — `cells` is
+        # `None` for a design with no group axis, and `{}` is the input that
+        # reduction answers. `partition_units` is still what draws, from inside
+        # that function, so the count and the digest a no-axis run makes are
+        # unchanged.
+        #
+        # **`partition_units` stays imported above, unused, with a `noqa`.**
+        # H3c-3's guard-pin arm D installs a counting wrapper at BOTH
+        # `cli.partition_units` and `units.partition_units` and asserts on the
+        # sum, precisely so it survives this reroute — and it has no authorized
+        # editor in the slice, so removing the name here would break a pin that
+        # may not be repaired. The import is the pin's surface rather than a
+        # leftover, which is why it is annotated rather than deleted.
+        partitions = partition_within_cells(
+            roster,
+            fold_level.n,
+            digest,
+            cells or {},
+            clusters=clusters,
+            strata=strata,
+        )
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     swept_paths = wide_swept_paths(sweep_block)

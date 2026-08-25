@@ -36,6 +36,7 @@ from publishable.units import (
     holdout_values_fault,
     null_test_level,
     partition_units,
+    partition_within_cells,
     resolve_units,
     stratum_varies_within_cluster,
     thinnest_cell,
@@ -4863,3 +4864,199 @@ def test_a_tie_between_two_cells_goes_to_the_first_in_key_order(thin_first: bool
     basis, cell = thinnest_cell(roster, "site", cells)
     assert basis == 2
     assert cell == (("arm", order[0]),)
+
+
+# --- H3c-3 task 8: `partition_within_cells`, the per-cell draw ----------------
+#
+# **The no-populated-cell reduction below was written and pinned BEFORE the loop
+# existed**, against a placeholder body that raised `NotImplementedError` for
+# every other shape. That order is the amendment's requirement rather than a
+# preference: `cells_of({})` returns one **empty** cell and Decision 7's loop
+# skips empty cells, so a design with no group axis passed through the loop
+# would draw **zero** times and every fold would silently vanish — the
+# bit-stability oracle's exact failure mode. A reduction written after the loop
+# is a reduction chosen to make the loop's tests pass.
+
+
+def test_h3c3_no_populated_cell_draws_the_whole_roster_in_one_bare_digest_call():
+    """The trivial reduction, pinned as **bytes** against a live
+    `partition_units` call rather than as a shape.
+
+    Two inputs reach it and they are different inputs: `{}` — what
+    `cli._prepare_run` passes when `cells` is `None`, i.e. a design with no
+    group axis at all — and `cells_of({})`, whose single cell is **empty**.
+    `cell_fold_basis`' own docstring states the same rule for the same two
+    inputs, and two functions in one module answering one triviality question
+    differently is how `validate` bounds `k` against a number the run does not
+    draw against.
+
+    Asserted as the fold contents, key by key, not as sizes: the populated path
+    rebuilds each sub-roster in roster order, so what a reordering bug produces
+    is the right sizes over the wrong folds. The call is counted too — one
+    call, with the **bare** digest — which is the property guard-pin arm D
+    watches from `cli`'s side and the one MU-5 (a per-cell digest) breaks.
+    """
+    from publishable import units as units_mod
+
+    expected = [[u.key for u in part] for part in partition_units(_roster(50), 5, "d")]
+    for cells in ({}, cells_of({})):
+        calls: list[tuple[int, str]] = []
+        original = units_mod.partition_units
+
+        def counting(roster, k, digest, _calls=calls, _original=original, **kwargs):  # type: ignore[no-untyped-def]
+            _calls.append((len(list(roster)), digest))
+            return _original(roster, k, digest, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(units_mod, "partition_units", counting)
+            parts = units_mod.partition_within_cells(_roster(50), 5, "d", cells)
+        assert [[u.key for u in part] for part in parts] == expected, cells
+        assert calls == [(50, "d")], cells
+
+
+def _two_cells(
+    n_per_cell: int = 6,
+) -> tuple[UnitList, dict[tuple[tuple[str, str], ...], frozenset[str]]]:
+    """Two cells of `n_per_cell` units each, interleaved in roster order so a
+    sub-roster rebuilt in the wrong order is visible in the fold contents.
+
+    Sized so that **more than one unit competes for the same fold**: at `k = 3`
+    each cell contributes two units per fold, so a mutation that changes the
+    seed (MU-5's per-cell digest) changes *which* — with one unit per fold the
+    assignment is forced and the mutation would be silent, which is the
+    "mutation whose two branches cannot differ" trap.
+    """
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {"control": [], "treatment": []}
+    for i in range(n_per_cell):
+        for arm in ("control", "treatment"):
+            key = f"{arm[0]}{i:02d}"
+            units.append(Unit(key=key, paths=(), attributes={"arm": arm}))
+            members[arm].append(key)
+    cells = {(("arm", arm),): frozenset(keys) for arm, keys in members.items()}
+    return UnitList(units), cells
+
+
+def test_h3c3_one_cell_holding_the_whole_roster_reduces_byte_identically():
+    """The other half of the reduction, and it goes **through the loop** rather
+    than around it: a single cell holding every key rebuilds the sub-roster in
+    roster order, restricts a total map to the same total map, and draws once.
+
+    Pinned as an equality against a live `partition_units` call, so "rebuild
+    then draw" and "draw" have to agree rather than each agreeing with its own
+    copy of the answer. A size assertion would pass under a reordered
+    sub-roster, which is exactly what a roster-order bug produces.
+    """
+    roster, _ = _two_cells()
+    whole = {(("arm", "either"),): frozenset(u.key for u in roster)}
+    expected = [[u.key for u in part] for part in partition_units(roster, 3, "sha256:abc")]
+    got = partition_within_cells(roster, 3, "sha256:abc", whole)
+    assert [[u.key for u in part] for part in got] == expected
+
+
+def test_h3c3_the_per_cell_draw_uses_the_bare_digest_and_merges_index_wise():
+    """MU-5's and MU-6's catcher: the **contents** of a two-cell draw at a
+    fixed digest, computed by running rather than derived.
+
+    Two properties in one pin, because they fail differently:
+
+    - **MU-5**, a per-cell digest (`digest + str(cell)`), changes which units
+      share a fold — two units of each cell compete for each fold here, so the
+      seed is visible in the answer. Arm A cannot see this: it is a one-cell
+      case.
+    - **MU-6**, concatenating whole cells instead of merging index-wise, makes
+      fold 0 hold one cell and nothing of the other. Asserted directly: every
+      fold holds units from **both** cells, which is what keeps fold *i*
+      meaning one thing across the design.
+
+    The per-cell literals are asserted against the two live `partition_units`
+    calls the loop is supposed to make, so the merge is checked as a
+    composition rather than against a hand-copied answer.
+    """
+    roster, cells = _two_cells()
+    parts = partition_within_cells(roster, 3, "sha256:abc", cells)
+    keys = [[u.key for u in part] for part in parts]
+
+    # Every fold holds two units of each cell — MU-6's catcher, and it is a
+    # membership claim, not a count: a whole-cell concatenation gives fold 0
+    # six `c` keys and no `t` key.
+    for fold in keys:
+        assert sum(1 for key in fold if key.startswith("c")) == 2, keys
+        assert sum(1 for key in fold if key.startswith("t")) == 2, keys
+
+    # The composition, against the two calls the loop makes: each cell's
+    # sub-roster in roster order, at the BARE digest, merged index-wise.
+    per_cell = [
+        [[u.key for u in part] for part in partition_units(sub, 3, "sha256:abc")]
+        for sub in (
+            UnitList([u for u in roster if u.key in cells[(("arm", arm),)]])
+            for arm in ("control", "treatment")
+        )
+    ]
+    assert keys == [per_cell[0][i] + per_cell[1][i] for i in range(3)]
+    # And the literals themselves, so a change to `partition_units` cannot move
+    # both sides of the equality above together.
+    assert keys == [
+        ["c02", "c01", "t02", "t01"],
+        ["c05", "c04", "t05", "t04"],
+        ["c03", "c00", "t03", "t00"],
+    ]
+
+
+def test_h3c3_the_cells_maps_are_restricted_to_each_cell_and_stay_total():
+    """C26: each cell's `clusters` and `strata` map is the run's map restricted
+    to that cell's keys and **total over its sub-roster**, indexed rather than
+    `.get`-ed — so `partition_units`' stated contract that a unit missing from
+    either map is a `KeyError` and a core defect survives the restriction.
+
+    The honouring half and the refusal half, both: a clustered two-cell draw
+    keeps every cluster whole inside its own fold, and a map with a hole raises
+    `KeyError` rather than inventing a cluster of one.
+    """
+    roster, cells = _two_cells()
+    clusters = {u.key: f"{u.key[0]}{int(u.key[1:]) // 2}" for u in roster}
+    parts = partition_within_cells(roster, 3, "sha256:abc", cells, clusters=clusters)
+    assert sorted(u.key for part in parts for u in part) == sorted(u.key for u in roster)
+    for part in parts:
+        # Each cell contributes one whole cluster of two to each fold.
+        assert len(part) == 4
+    seen: dict[str, set[int]] = {}
+    for i, part in enumerate(parts):
+        for u in part:
+            seen.setdefault(clusters[u.key], set()).add(i)
+    assert all(len(folds) == 1 for folds in seen.values()), "a cluster was split"
+
+    holed = {key: value for key, value in clusters.items() if key != "t03"}
+    with pytest.raises(KeyError):
+        partition_within_cells(roster, 3, "sha256:abc", cells, clusters=holed)
+
+
+def test_h3c3_a_decomposition_that_does_not_partition_the_roster_is_a_core_defect():
+    """`cells_of` intersects realized `ArmPlan`s and every unit carries exactly
+    one level per axis, so a unit in no cell or in two is core's resolved state
+    disagreeing with itself — `E-RUN-FOLD-UNRESOLVED`, the same code `cli`
+    raises for a fold with no roster and `sweep` for partitions with no fold
+    level.
+
+    Both shapes, because they lose differently: an uncovered unit **vanishes
+    from every fold**, and a doubled one is **tested twice**. Raised rather
+    than asserted, since an `assert` disappears under `python -O`.
+    """
+    roster, cells = _two_cells()
+    short = dict(cells)
+    short[(("arm", "control"),)] = frozenset(sorted(cells[(("arm", "control"),)])[1:])
+    with pytest.raises(ContractError) as uncovered:
+        partition_within_cells(roster, 3, "sha256:abc", short)
+    assert uncovered.value.code == "E-RUN-FOLD-UNRESOLVED"
+    assert "c00" in str(uncovered.value)
+
+    doubled = dict(cells)
+    doubled[(("arm", "treatment"),)] = frozenset(cells[(("arm", "treatment"),)] | {"c00"})
+    with pytest.raises(ContractError) as twice:
+        partition_within_cells(roster, 3, "sha256:abc", doubled)
+    assert twice.value.code == "E-RUN-FOLD-UNRESOLVED"
+    assert "c00" in str(twice.value)
+    # The can-fail control: the same roster and the same `k` under the real
+    # decomposition draws without raising, so neither assertion above is
+    # passing because this shape raises for some other reason.
+    assert len(partition_within_cells(roster, 3, "sha256:abc", cells)) == 3
