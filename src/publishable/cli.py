@@ -5581,9 +5581,15 @@ def command_list_templates() -> int:
     notes: list[str] = []
     try:
         repo_root: Path | None = find_repo_root(here)
-    except ContractError as exc:
-        if exc.code != "E-GIT-NO-REPO":
-            raise
+    except ContractError:
+        # BY TYPE, testing no code, and the shape is `validate.validate_config`'s
+        # own (Decision 4): `find_repo_root` raises exactly one code, and this
+        # site wants the same answer — no repository, so no `templates/**` — for
+        # any refusal that walk-up can produce. `docs` catches BY CODE instead,
+        # and the difference is not stylistic: a README is that command's entire
+        # input, so a walk-up it cannot complete is a refusal, while here it only
+        # narrows the list. Two additions of two different kinds, which is why
+        # `E-GIT-NO-REPO`'s § Errors row cannot be repaired by changing a digit.
         repo_root = None
         notes.append(
             f"no git repository was found from {here} upwards, so no project-local "
