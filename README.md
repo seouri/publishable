@@ -23,8 +23,9 @@ publishable demo
 `demo` builds a complete worked example — synthetic data, a three-step pipeline, a parameter sweep — and then walks you through running it, one command at a time. It opens with the part you can't easily make yourself:
 
 ```
-Created ./publishable-demo/
+Created publishable-demo/
   240 synthetic units      ~/publishable-demo-data/input/
+  template                 templates/correlation.py
   experiment               src/correlation_pilot/
   config                   configs/correlation-pilot/config.yaml
 
@@ -41,10 +42,11 @@ Six stops, the middle three with the same beat: the real command, its real outpu
 Next:  publishable validate configs/correlation-pilot/config.yaml
        [Enter] to run it · q to stop here
 
-  ✓ config valid · 240 units resolved · input_dir outside the repo
+  ✓ config valid · configs/correlation-pilot/config.yaml
 
-validate reads your config and your data. It creates nothing, and reaches
-nothing off this machine.
+validate read your config and your data. It created nothing and reached
+nothing off this machine — the 240 units it resolved came from the
+index.csv outside the repo, and `input_dir` being outside is enforced.
 ```
 
 Nothing you press changes what runs — every stop is proceed-or-quit, and the config written at the first stop is the one executed at the fifth. `q` prints the remaining commands and `publishable demo` picks up where you left off. Two stops later, past `dry-run`:
@@ -53,20 +55,33 @@ Nothing you press changes what runs — every stop is proceed-or-quit, and the c
 Next:  publishable run configs/correlation-pilot/config.yaml
        [Enter] to run it · q to stop here
 
-Running 3 conditions × 5 repeats = 15 executions
-  00_baseline           method=pearson     ████████████ 5/5
-  01_method=spearman                       ████████████ 5/5
-  02_method=kendall                        ████████████ 5/5
+  warning W-ENV-UNLOCKED       environment
+          no uv.lock found at ~/publishable-demo; the environment is not
+          pinned, and `reproduce` will not be able to restore it
+1 problem (0 errors, 1 warning)
+run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
+
+W-ENV-UNLOCKED fired because this project has no uv.lock: its pyproject
+depends on `publishable`, which cannot resolve until the package is
+published, so there is nothing to pin yet. Nothing was suppressed.
+
+run printed no table — its whole output is that warning and the path to the
+record. Everything below is `demo` reading the record back:
 
   condition             r       95% CI            vs baseline (paired, 95% CI)
-  00_baseline           0.581   [0.488, 0.661]    —
-  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]
-  02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]
+  00_baseline           0.697   [0.630, 0.757]    —
+  01_method=spearman    0.666   [0.582, 0.739]    -0.031  [-0.068, -0.002]
+  02_method=kendall     0.482   [0.413, 0.550]    -0.215  [-0.240, -0.190]
 
-  intervals over 228 of 240 units (12 failed) · seed spread std 0.014
+  intervals over 228 of 240 units (12 failed) · seed spread std 0.003 of recorded `pred`
 
-run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
+  `pred` and `truth` are recorded columns, so each publishes its own
+  metric and joins the correction family beside `r` — six members, and
+  two of them nobody reads. A template that derived twenty diagnostics
+  would correct every interval in the run for numbers nobody reads.
 ```
+
+Those are the numbers `demo` computes on your machine, from the 240 rows it generated — `run` itself prints no table, no banner and no progress bar, so everything under the record's path is `demo` saying what the record means. The sweep is `3 conditions × 5 repeats = 15` repeat-scoped executions and **19 in all**: the plan also runs `step01_load_cohort` once for the whole sweep and `step02_fit_model` once per condition, and 19 is the figure `dry-run` prints. Absolute paths are elided to `~` above, and the `run.yaml` path is illustrative either way — a run ID carries the timestamp and the code hash of *your* run.
 
 That `run.yaml` is the point, and the last stop opens it and leaves you there. It carries the results *and* everything needed to regenerate them — so on any other machine:
 
@@ -76,7 +91,7 @@ publishable reproduce <path-to-run.yaml>
 
 clones the exact commit, restores the locked environment, writes the config back out, and prints what's left to fill in. Neither data nor credentials travel, so the last step is yours — and `run` then verifies the input against the recorded manifest before spending anything.
 
-> **v0.x — the design is settled, interfaces may still shift before 1.0, and not every command described here dispatches yet.** [CLI reference](docs/reference.md#cli-reference) marks which ones do; the rest say so when you invoke them. Issues and design feedback are very welcome.
+> **v0.x — the design is settled, interfaces may still shift before 1.0.** Issues and design feedback are very welcome.
 
 ---
 

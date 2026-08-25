@@ -17393,11 +17393,16 @@ _H5A_ARM_D_LITERALS = (
     "2f5c8d0",
 )
 
+# H9d task 12, guard-pin arm B: the first four entries were README's `demo`
+# transcript, and `demo` now PRODUCES that transcript (Ruling DD), so those four
+# lines carry `correlation_pilot`'s own measured numbers instead of the worked
+# example's. They left this tuple by the procedure design § 8.1 specifies: the
+# unmodified helper and the unmodified `_H5A_ARM_D_LITERALS` were re-run over the
+# edited README, the result was the pre-edit tuple minus exactly those four
+# entries, and nothing else survived or appeared. `correlation_pilot`'s numbers
+# are pinned against a real run by `tests/test_demo.py`, never as literals here —
+# a literal list of them would make this arm a transcript.
 _H5A_ARM_D_README_LINES = (
-    "  00_baseline           0.581   [0.488, 0.661]    —",
-    "  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]",
-    "  02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]",
-    "  intervals over 228 of 240 units (12 failed) · seed spread std 0.014",
     "run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml",
     "└── run_2026-08-07T09-14-03Z_8e21ab3/",
     "        step03_analyze: {r: {value: 0.607, basis: units, n: {completed: 228},",
