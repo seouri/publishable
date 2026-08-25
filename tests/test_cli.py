@@ -27270,3 +27270,235 @@ def test_h3c3_a_thin_cells_holdout_raises_naming_the_cell_on_both_sides():
         roster, block, seed=7, cells={(("arm", "control"),): cells[(("arm", "control"),)]}
     )
     assert len(ok.test) == 4
+
+
+# --- H3c-3 task 22: two real runs, and a STEP that reads `io.units.train` ----
+
+
+_H3C3_TRAIN_SEEING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        train = sorted(u.key for u in io.units.train)
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": train,
+        }})
+        for unit in io.units:
+            io.record(unit.key, {{"score": 1.0, "n_train": len(train)}})
+        return {{}}
+"""
+"""A step that **reads `io.units.train`** and writes what it was handed.
+
+This is the debt batch D's concern 4 names: task 15 proved the arm-narrowed
+training side by a **direct `execute_plan` call**, which is the only way that
+property could be reached two commits earlier, and *"an end-to-end claim nobody
+ran"* is the defect this project has found in five slices. Asserting
+`allocation.json`'s own `train` list proves what **core wrote**; it says nothing
+about what the step **saw**. So the evidence here is produced from the object
+core handed the step: `split.json` from `io.units`/`io.units.train`, and
+`n_train` recorded per unit into the per-unit table so the count survives in an
+artifact core did not write from the plan."""
+
+
+def _h3c3_split_files_by_condition(run_dir: Path) -> dict[str, list[dict[str, list[str]]]]:
+    """Every `split.json` the run wrote, grouped by the condition directory it
+    sits under.
+
+    The condition is read from the path rather than from the file, because the
+    file is what is under test: a step that wrote the wrong arm's units would
+    still label itself correctly if the label came from its own contents."""
+    out: dict[str, list[dict[str, list[str]]]] = {}
+    for path in sorted(run_dir.rglob("split.json")):
+        parts = path.relative_to(run_dir).parts
+        assert parts[0] == "conditions", parts
+        out.setdefault(parts[1], []).append(json.loads(path.read_text()))
+    return out
+
+
+def _h3c3_attrition_holds(run_dir: Path) -> list[str]:
+    """`resolved == completed + ineligible + failed`, per condition and per
+    metric block, as a list of the labels checked.
+
+    Returned rather than asserted so a caller can assert the list is non-empty:
+    an identity checked over zero blocks holds vacuously, which is the
+    *control asserting only absences* shape."""
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    checked: list[str] = []
+    for condition in run["results"]["conditions"]:
+        for step_name, step in (condition.get("aggregated") or {}).items():
+            for metric, block in step.items():
+                n = block.get("n")
+                if not isinstance(n, dict) or "resolved" not in n:
+                    continue
+                assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"], (
+                    condition["label"],
+                    step_name,
+                    metric,
+                    n,
+                )
+                checked.append(f"{condition['label']}/{step_name}/{metric}")
+    return checked
+
+
+def test_h3c3_a_real_groups_by_fold_run_draws_folds_inside_the_arms(tmp_path, monkeypatch):
+    """**End to end, through `main(["run", ...])`, outside the repository.**
+    12 units, two `by_attribute` arms of 6, `{kind: fold, k: 3}`.
+
+    Four claims, and the third is the one no artifact assertion can make:
+
+    1. `sweep.yaml` carries `partitions_within: ["arm"]` — written only when
+       `units.populated_cells` is non-empty, so its presence is the record's
+       own statement that the draw took the per-cell path rather than the
+       one-cell reduction.
+    2. **Per-cell membership is recoverable by crossing** `partitions` against
+       `allocation.json`'s `arms`: each arm's share of each fold is exactly 2,
+       which is 6 units drawn in 3 folds *inside the arm*. A roster-wide draw
+       of 12 into 3 folds of 4 need not split 2/2 by arm — it is free to put 4
+       of one arm in one fold — so the even split is the discriminator, and it
+       is asserted for **every** (arm, fold) pair rather than for one.
+    3. **The step read `io.units.train` and it was inside its own arm** — from
+       `split.json`, which the step wrote from the object core handed it. The
+       train side is asserted **non-empty and equal to `arm − test`**, not
+       merely contained: a subset assertion alone passes on `[]`, which is the
+       exact shape task 15's brief would have shipped.
+    4. The attrition identity holds per condition, over a non-empty set of
+       blocks.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H3C3_TRAIN_SEEING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = {level: set(keys) for level, keys in alloc["arms"]["arm"].items()}
+
+    # (1)
+    assert sweep["partitions_within"] == ["arm"]
+
+    # (2) — every (arm, fold) pair, not one, over UNEVEN arms.
+    partitions = [set(entry["test"]) for entry in sweep["partitions"]]
+    assert len(partitions) == 3
+    sizes = {level: len(arm) for level, arm in arms.items()}
+    assert sizes == {"control": 9, "treatment": 3}
+    for level, arm in sorted(arms.items()):
+        for i, fold in enumerate(partitions):
+            assert len(arm & fold) == sizes[level] // 3, (level, i)
+        assert set().union(*partitions) >= arm
+
+    # (3) — what the STEP saw, per condition.
+    by_condition = _h3c3_split_files_by_condition(doc["run_dir"])
+    assert len(by_condition) == 2, sorted(by_condition)
+    for condition, seen in sorted(by_condition.items()):
+        level = condition.split("=")[-1]
+        arm = arms[level]
+        assert len(seen) == 3, condition  # one per fold
+        for split in seen:
+            test, train = set(split["test"]), set(split["train"])
+            assert train, (condition, "an empty train side is not containment")
+            assert test <= arm and train <= arm, condition
+            assert train == arm - test, condition
+            assert len(test) == len(arm) // 3, condition
+
+    # (3b) — the same fact carried by the PER-UNIT TABLE rather than by a file
+    # the step wrote for this test's convenience. `n_train` is the arm's own
+    # size minus its share of the fold: 6 for `control` (9 − 3), 2 for
+    # `treatment` (3 − 1). A roster-wide train side would be 8 in both
+    # (12 − 4), which is the number these assertions rule out — and it is a
+    # single number for both arms, which is the shape of the defect.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    expected_train = {"arm=control": 6.0, "arm=treatment": 2.0}
+    for condition in run["results"]["conditions"]:
+        block = condition["aggregated"]["step01_summarize_units"]["n_train"]
+        assert block["value"] == expected_train[condition["label"]], condition["label"]
+        assert block["basis"] == "units", condition["label"]
+
+    # (4)
+    assert _h3c3_attrition_holds(doc["run_dir"])
+
+
+def test_h3c3_a_real_groups_by_holdout_run_trains_inside_the_arm(tmp_path, monkeypatch):
+    """**End to end, through `main(["run", ...])`, outside the repository** —
+    the `groups × holdout` half, a **separate fixture** from the fold one
+    because `E-DATA-HOLDOUT-FOLD` still refuses the pair (C27).
+
+    Batch D's own follow-up already pinned `allocation.json`'s `within`, the
+    per-arm test fraction and the round trip on this shape. **What it recorded
+    as still owed is paid here**: a real run whose *step* reads
+    `io.units.train` under a group axis. Task 15's F4 is a direct
+    `execute_plan` call by Ruling II's own design, so nothing until now had run
+    that path through the command.
+
+    The step's own view is the evidence, and it is compared against
+    `allocation.json`'s recorded `train` **restricted to the arm** — the two
+    are computed by different code (`runner.execute_plan`'s narrowing and this
+    test's set arithmetic over the record), so agreement is a check rather than
+    a tautology. The un-narrowed whole-roster train side is asserted **larger**
+    than what the step saw, which is what makes the narrowing visible: without
+    it, "the step saw the training units" is satisfied by the pre-slice leak.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H3C3_TRAIN_SEEING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_ROSTER,
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+            "holdout": {"method": "random", "frac": 0.5, "seed": 4321},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert alloc["holdout"]["within"] == ["arm"]
+    arms = {level: set(keys) for level, keys in alloc["arms"]["arm"].items()}
+    recorded_train = set(alloc["holdout"]["train"])
+    recorded_test = set(alloc["holdout"]["test"])
+
+    by_condition = _h3c3_split_files_by_condition(doc["run_dir"])
+    assert len(by_condition) == 2, sorted(by_condition)
+    for condition, seen in sorted(by_condition.items()):
+        level = condition.split("=")[-1]
+        arm = arms[level]
+        assert len(seen) == 2, condition  # one per seed repeat
+        for split in seen:
+            test, train = set(split["test"]), set(split["train"])
+            # Drawn inside the cell: half of THIS arm, not half of the roster.
+            assert test == arm & recorded_test, condition
+            assert len(test) == len(arm) // 2, condition
+            # The property task 15 proved by direct call, now through `run`.
+            assert train, (condition, "an empty train side is not containment")
+            assert train <= arm, condition
+            assert train == arm & recorded_train, condition
+            # …and it is genuinely NARROWER than the roster-wide train side,
+            # which is the leak this narrowing closed.
+            assert train < recorded_train, condition
+
+    # The same fact through the per-unit table: `n_train` is 3 in every arm —
+    # 6 units in the arm at `frac: 0.5`. A roster-wide train side would be 6
+    # (12 − 6), which is the number this assertion rules out.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    for condition in run["results"]["conditions"]:
+        block = condition["aggregated"]["step01_summarize_units"]["n_train"]
+        assert block["value"] == 3.0, condition["label"]
+        assert block["basis"] == "units", condition["label"]
+
+    assert _h3c3_attrition_holds(doc["run_dir"])
