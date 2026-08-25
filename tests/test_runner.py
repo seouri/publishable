@@ -2048,10 +2048,10 @@ def _h3c3_run_arm_holdout(tmp_path: Path, scope: str) -> dict[int | None, dict]:
 
     **This call could not be made before this commit** — it tripped
     `assert holdout_train is None or arm_members is None`, which task 15
-    deletes — and it cannot be made through a config either, because
-    `E-DATA-HOLDOUT-CELLS` still refuses the pair at `validate` until task 16.
-    That is the whole reason Ruling II puts the narrowing, the deletion and
-    this fixture in one commit.
+    deletes — and at that commit it could not be made through a config either,
+    because `E-DATA-HOLDOUT-CELLS` still refused the pair at `validate` until
+    task 16. That is the whole reason Ruling II puts the narrowing, the
+    deletion and this fixture in one commit.
 
     **Eight units, two arms of four, and the two arms are ASYMMETRIC in what
     they hold** — `{u0, u1, u2}` train against `{u4, u5, u6}` — so an execution

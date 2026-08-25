@@ -13108,12 +13108,27 @@ def test_a_fold_beside_a_cell_structure_is_drawn_per_cell_and_bounded_by_it(writ
     assert "E-REPL-FOLD-CELLS" not in admitted
 
 
-def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
-    """The same fault, the same check site, the other split kind: a roster-wide
-    `frac: 0.2` over 15 units gives arm `b` zero test units."""
+def test_a_holdout_beside_a_cell_structure_is_drawn_per_cell_and_bounded_by_it(
+    write_config, tmp_path
+):
+    """**`E-DATA-HOLDOUT-CELLS` is retired** (H3c-3 task 16), and this is the
+    fixture the refusal was minted at, asserting what is now true instead.
+
+    15 units, 12 in arm `a` and 3 in arm `b`, `frac: 0.2`. The refusal's own
+    ground was that a roster-wide draw gives arm `b` zero test units. The split
+    is now drawn inside each cell (`units.holdout_within_cells`) and
+    `holdout_sizes(3, 0.2) == (2, 1)` — measured — so arm `b` gets exactly one
+    test unit and the config validates clean. The retired code is asserted
+    absent from the same finding set, so a clean verdict cannot be arriving
+    from where the refusal used to.
+
+    The refusing half is `frac: 0.2` over an 18/2 split, one sibling down:
+    testing the honouring and never the refusal would leave "the bound was
+    dropped" indistinguishable from "the bound moved to the cell"."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)))
-    assert "E-DATA-HOLDOUT-CELLS" in found
+    assert "E-DATA-HOLDOUT-CELLS" not in found
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
 
 
 # --- H3c-3 task 14: `E-DATA-HOLDOUT-EMPTY` is bounded by the thinnest cell ----
@@ -13144,10 +13159,9 @@ def test_the_empty_test_partition_is_bounded_by_the_thinnest_cell_not_the_roster
     indistinguishable from the bound — the *testing the refusal and never the
     honouring* shape.
 
-    Membership rather than an exact finding set, deliberately: at this commit
-    `E-DATA-HOLDOUT-CELLS` still refuses the pair (task 16 retires it), so both
-    configs also carry that code and an `== [...]` assertion would break under
-    a task whose brief does not authorize editing this test.
+    Membership rather than an exact finding set, deliberately: this config
+    carries a cell structure, and what else `validate` may come to report about
+    one is not this test's claim.
 
     The **message** is asserted, not only the code: `where` is a two-branch
     ternary emitting one code at one path, so a code-only assertion passes
@@ -13236,73 +13250,6 @@ def test_the_empty_test_partition_message_still_names_the_roster_with_no_cells(
         "them — every metric would be over nothing. Widen `frac`, or resolve a "
         "larger roster"
     )
-
-
-def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(write_config, tmp_path):
-    """`allocation: between` and a non-empty `sweep.groups` are two spellings
-    of the same cell structure, and EITHER is enough. Without this row a check
-    reading only `sweep.groups` passes every test above.
-
-    The message is asserted, not just the code: `where` is a two-branch
-    ternary and BOTH branches emit the same code at the same path, so a
-    code-only assertion here and in its sibling below passes identically if
-    the ternary is collapsed to either branch."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
-    overrides["sweep"] = {}
-    path = write_config(overrides)
-    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "`data.units.allocation: between`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
-
-
-def test_a_group_axis_alone_triggers_the_refusal_without_between(write_config, tmp_path):
-    """The other half of the same pair: without this row a check reading only
-    `allocation` passes every test above. The message is asserted for the
-    reason its sibling above states."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
-    overrides["data.units"]["allocation"] = "within"
-    path = write_config(overrides)
-    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "a non-empty `sweep.groups`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
-
-
-def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tmp_path):
-    """The emptiness half of the `cells` predicate: `sweep.groups: []` beside
-    `holdout` (no `allocation` declared) must NOT earn `E-DATA-HOLDOUT-CELLS`.
-    All three document sites (`reference.md`'s *One split, not one cell each*
-    and both § Errors rows) specify a *non-empty* `sweep.groups` — an empty
-    list is not a cell structure, and this row is what proves the code honours
-    that word rather than just `isinstance(groups, list)`.
-
-    A `grid` axis is added so the empty `groups` doesn't leave the sweep
-    expanding to nothing on its own (which would earn its own unrelated
-    refusal and make this control roster-incidental). This is a control
-    asserting only an absence, so it cannot prove itself: its evidence is the
-    paired trigger test above (`test_a_holdout_beside_a_cell_structure_is_refused`,
-    identical roster and holdout, differing only in `sweep.groups` being
-    non-empty there and empty here)."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
-    overrides["sweep"] = {
-        "groups": [],
-        "grid": {"analysis.method": ["pearson", "spearman"]},
-    }
-    found = codes(write_config(overrides))
-    assert "E-DATA-HOLDOUT-CELLS" not in found
-
-
-def test_an_evaluation_split_without_a_cell_structure_is_not_refused(write_config, tmp_path):
-    """The control. `allocation: within`, no `sweep.groups` — the shape all
-    nine feasibility configs declare, and the shape this refusal must leave
-    alone.
-
-    A control over a check that correctly reports nothing cannot prove
-    itself; what proves this one is the pair of trigger tests above, which
-    differ from it only in the cell structure."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_holdout({"method": "random", "frac": 0.2}, attributes=["arm"])))
-    assert "E-DATA-HOLDOUT-CELLS" not in found
 
 
 _FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(

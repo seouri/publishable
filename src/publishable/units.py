@@ -1764,8 +1764,8 @@ def holdout_for(
             # than each stratum in isolation. `_stratum_groups` is handed no
             # `resolved`: a holdout's `stratify_by` admits only a unit
             # attribute, never a `sweep.groups` axis (§ Validation,
-            # *Stratification attribute exists*), and a holdout beside a group
-            # axis is refused outright as `E-DATA-HOLDOUT-CELLS`.
+            # *Stratification attribute exists*), which `validate` refuses as
+            # `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`.
             groups = _stratum_groups(list(roster), strata, "data.units.holdout.stratify_by")
             for stratum_units in groups.values():
                 if clusters is not None:
@@ -1847,8 +1847,9 @@ def holdout_within_cells(
     divides that same roster into cells. A split drawn across the cells gives
     them unequal test sizes and, once `frac` is fine enough, a cell holding
     none of its own units at all — a cell-level metric computed from nothing.
-    That combination was refused outright (`E-DATA-HOLDOUT-CELLS`) until this
-    function existed; drawing within each cell is the design that lifts it.
+    That combination was refused outright (`E-DATA-HOLDOUT-CELLS`, retired by
+    H3c-3 task 16) until this function existed; drawing within each cell is the
+    design that lifted it.
 
     **One seed per run, not per cell**, and the bare one — `partition_within_cells`'
     rule in the holdout's currency. `holdout_seed_for` is computed once over the
@@ -2084,8 +2085,8 @@ def _stratum_groups(
     `data.units.assign.holdout.stratify_by` for a holdout — a path no config
     can hold. **The tail of the "every other name" raise is caller-aware too**:
     a holdout's `stratify_by` admits only a unit attribute — no already-drawn
-    `sweep.groups` axis, since `E-DATA-HOLDOUT-CELLS` refuses a holdout beside
-    a group axis outright — so a holdout reader is sent to
+    `sweep.groups` axis, § Validation's *Stratification attribute exists* — so
+    a holdout reader is sent to
     `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` and told nothing about a forward
     declaration or a `sweep.groups` path their declaration cannot take.
     """
@@ -2103,8 +2104,7 @@ def _stratum_groups(
             raise NotImplementedError(
                 f"`{declaration}` names {name!r}, which no resolved unit carries "
                 "as an attribute — a holdout's `stratify_by` admits only a unit "
-                "attribute, never a `sweep.groups` axis (a holdout beside one is "
-                "refused outright, as `E-DATA-HOLDOUT-CELLS`), so there is no "
+                "attribute, never a `sweep.groups` axis, so there is no "
                 "forward-declared axis this could instead be naming. `validate` "
                 "refuses this as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`"
             )

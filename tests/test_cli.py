@@ -24435,12 +24435,15 @@ def _h9b_swapped(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
-    """A committed project with a DRAWN holdout and **no group axis**, which is
-    not a choice: `data.units.holdout` beside a cell structure is refused by
-    name (`E-DATA-HOLDOUT-CELLS`, H3d's, owned by H3c-3's remaining 14), so
-    the two halves of `allocation.json` cannot be exercised by one config on
-    this build. Measured — the combined fixture was written first and refused
-    at `validate`."""
+    """A committed project with a DRAWN holdout and **no group axis**.
+
+    That was not a choice when this fixture was written — `data.units.holdout`
+    beside a cell structure was refused by name (`E-DATA-HOLDOUT-CELLS`), so
+    the two halves of `allocation.json` could not be exercised by one config.
+    H3c-3 task 16 retired that refusal and the combined shape is now
+    constructible; this fixture stays as it is, because what it exists to pin
+    is the **holdout-only** document — the shape whose `holdout` block carries
+    no `within` key."""
     return run_a_project(
         tmp_path,
         roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",

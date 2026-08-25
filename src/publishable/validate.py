@@ -750,10 +750,6 @@ def validate_config(
     # `usable_cluster` is already narrowed to a non-empty string or `None`
     # above, so this call needs no guard of its own.
     _check_holdout(doc, units_decl, roster, usable_cluster, cells, c)
-    # One site for both split kinds, deliberately: see this function's own
-    # docstring for why a second site is the thing being avoided rather than a
-    # cost being paid.
-    _check_evaluation_split_cells(doc, units_decl, c)
     _check_replication(
         doc,
         template,
@@ -3562,60 +3558,6 @@ def _check_holdout(
                 "the test side zero of them — every metric would be over nothing. Widen "
                 "`frac`, or resolve a larger roster",
             )
-
-
-def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
-    """A roster-wide **holdout** beside a cell structure — refused.
-
-    A `data.units.holdout` partitions the WHOLE roster once, and
-    `data.units.allocation: between` or a non-empty `sweep.groups` divides that
-    same roster into cells. A split drawn across the cells rather than within
-    them gives them unequal test sizes and, once it is fine enough, a cell
-    holding none of its own units at all — a cell-level metric computed from
-    nothing.
-
-    **The `fold` arm is gone, and with it `E-REPL-FOLD-CELLS`.** H3c-3 draws a
-    `fold` level's partitions inside each cell
-    (`units.partition_within_cells`) and bounds `k` against the thinnest cell
-    (`units.thinnest_cell`, reported as `E-REPL-FOLD-K-TOO-LARGE`), so the
-    combination this refused is now the built behaviour rather than an
-    unsupported one. What is left is one code at one site, and when the holdout
-    is drawn per cell too this function and its call site go with it.
-
-    **Refused rather than disclosed**, while it is refused. The disclosure route
-    would be `allocation.json` recording a truthful membership whose imbalance
-    is visible only to a reader who crosses it against the arms list by hand —
-    the silently-wrong class. The repo's own precedent is to refuse the
-    COMBINATION while honouring both DECLARATIONS, and to route it:
-    `E-DATA-WEIGHT-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
-
-    Knowable from the declarations alone — no roster, no resolution — so this
-    takes neither.
-    """
-    allocation = units.get("allocation")
-    groups = (doc.get("sweep") or {}).get("groups")
-    cells = allocation == "between" or bool(isinstance(groups, list) and groups)
-    if not cells:
-        return
-    where = (
-        "`data.units.allocation: between`"
-        if allocation == "between"
-        else "a non-empty `sweep.groups`"
-    )
-    consequence = (
-        "which divides the roster into cells. One roster-wide split across "
-        "those cells gives them unequal test sizes and, once it is fine "
-        "enough, a cell holding none of its own units — a cell-level metric "
-        "computed from nothing. Drawing the split within each cell is the "
-        "design that lifts this, and it is not built: declare one or the "
-        "other, or run each arm as its own run and join them in a `study`"
-    )
-    if units.get("holdout"):
-        c.error(
-            "E-DATA-HOLDOUT-CELLS",
-            "data.units.holdout",
-            f"is declared beside {where}, {consequence}",
-        )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
