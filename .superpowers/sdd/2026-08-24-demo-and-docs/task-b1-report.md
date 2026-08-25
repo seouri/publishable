@@ -11,6 +11,7 @@ measured by running before anything moved — +4 task 1, +26 task 2, +5 task 9, 
 | 2 — the managed-region machinery | `341b491` |
 | 9 — the bytecode fix | `30aba16` |
 | 3 — the behaviour change | `0a77e19` |
+| follow-up (both from the pre-hand-off review) | see below |
 
 **Ruling GG does not bind any of these four.** It binds `base_step.py`, `demo`'s generated step and
 § Randomness. Task 9's third call site is `base_experiment.py`, a different file; `git diff --name-only
@@ -165,6 +166,11 @@ implicit f_probe f_probe
 explicit f_probe f_probe
 ```
 
+**Decision 10's CHOICE was honoured, not overruled.** Option (a) over option (b), and over
+`sys.dont_write_bytecode`, is exactly what shipped; only the *implementation* the decision proposed for
+option (a) was corrected, because it was measured to do nothing. Nothing in this batch re-litigates
+which option the slice takes.
+
 **So option (a) as literally worded is a no-op, and this is the report's main finding.** Both filings
 and design Decision 10 propose *"handing it a fresh `importlib.machinery.SourceFileLoader(module_name,
 str(path))` explicitly"* — but `spec_from_file_location` on a `.py` path **already returns exactly that
@@ -257,8 +263,10 @@ scaffolded README was **byte-identical after (a) alone**
 are read from and nothing else.
 
 **(b) `scaffold.README` becomes what § The generated README specifies.** Captured before and after by
-scaffolding into the scratchpad and diffing the bytes: **481 → 1434 bytes**, `sha256 523cfded…` →
-`228cc4b3…`. The complete diff, and there is nothing else in it:
+scaffolding into the scratchpad and diffing the bytes: **481 → 1392 bytes**, `sha256 523cfded…` →
+`e4207b5d…`. (An intermediate cut at `0a77e19` was 1434 bytes / `228cc4b3…`, with a two-column
+`Template | Parameters` header in the `templates` region; the follow-up commit below replaced it with
+the bare empty-state line, for the reason in item 4.) The complete diff, and there is nothing else in it:
 
 1. `cp .env.example .env    # then fill in the values below` added inside the `bash` Setup fence;
 2. the **`credentials` region** added, with `### Required credentials` and the documented two-column
@@ -268,8 +276,13 @@ scaffolding into the scratchpad and diffing the bytes: **481 → 1434 bytes**, `
    `Name | Template | Run` table with its `_(none yet — add one with \`publishable generate
    experiment\`)_` empty row;
 4. a **`templates` region** added — correction 17's fifth drift; the four documents declare one nowhere
-   and § Templates needs one — carrying `## Templates` and a `Template | Parameters` empty-state table
-   in the same shape as its two neighbours;
+   and § Templates needs one — carrying `## Templates` and a bare
+   `_(none yet — add one with \`publishable generate template\`)_` line. **Deliberately not a table
+   header**: § Templates renders a populated `templates` region as one *sub-section per template*
+   (`### \`<name>\``, a convention line, a five-column `parameter_spec` table), so a two-column
+   `Template | Parameters` header would declare a schema the populated form never writes — the
+   *declared vs. derived* drift — and would be a header task 6 had to delete before writing anything.
+   Pinned by `test_the_templates_regions_empty_state_is_what_a_populated_one_degenerates_to`;
 5. the **`## Reproducing a published result`** section added verbatim from the document, including the
    `uv run --with publishable publishable reproduce run.yaml` line.
 
@@ -361,3 +374,21 @@ Newline-insensitive where the claim spans lines; **file lists filtered, never sw
 3. **Fixture E depends on `os.utime` with `ns=` being honoured by the filesystem.** It is, on this
    machine and on tmpfs; on a filesystem that silently coarsened it, the three arms would pass without
    testing anything — which is why the helper asserts the mtime it set was actually kept.
+
+
+---
+
+## Follow-up commit, after the pre-hand-off review
+
+Two things, both caught by review rather than by a mutation, both cheap, one full-suite run
+(**3282 passed, 1 skipped, 2 xfailed**; +9 over `0a77e19` — 8 new round-trip parametrizations and the
+one new `templates` empty-state test).
+
+1. **The `templates` region's empty state became a bare line rather than a two-column table header** —
+   the *declared vs. derived* drift described in task 3 item 4 above. `README.md.tmpl`,
+   `_TEMPLATES_BODY` in `tests/test_scaffold.py`, and one new test naming the reason.
+2. **The round trip is now pinned on a file with NO trailing newline, and on a region whose own last
+   line is blank** — the two shapes where `rewrite`'s line-splice convention and `body_of`'s could
+   disagree. Measured before the arm was written: the identity **already held** for all four regions of
+   both shapes, so this is a pin of an existing property rather than a fix — recorded that way rather
+   than as a defect closed.

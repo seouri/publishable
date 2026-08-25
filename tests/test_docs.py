@@ -339,3 +339,33 @@ def test_read_readme_returns_the_file_and_refuses_its_absence(tmp_path: Path):
     path, text = read_readme(tmp_path)
     assert path == tmp_path / "README.md"
     assert text == _FIXTURE_C
+
+
+# ---------------------------------------------------------------------------
+# The round trip on a file with NO trailing newline — the ordinary shape of a
+# hand-edited README, and the one where a rewriter's line-splice convention
+# and a body reader's can disagree without either being obviously wrong. The
+# `templates` region is the LAST one in fixture C, so its span is the one
+# whose `lines[stop:]` tail is shortest.
+# ---------------------------------------------------------------------------
+
+_FIXTURE_C_NO_TRAILING_NEWLINE = _FIXTURE_C.rstrip("\n")
+
+_FIXTURE_C_BLANK_LAST_BODY_LINE = _FIXTURE_C.replace(
+    "The overview body, as `publishable new` wrote it.\n",
+    "The overview body, as `publishable new` wrote it.\n\n",
+)
+
+
+@pytest.mark.parametrize("name", MANAGED_REGIONS)
+@pytest.mark.parametrize(
+    "text",
+    [_FIXTURE_C_NO_TRAILING_NEWLINE, _FIXTURE_C_BLANK_LAST_BODY_LINE],
+    ids=["no-trailing-newline", "blank-last-body-line"],
+)
+def test_the_round_trip_holds_for_a_file_that_does_not_end_in_a_newline(text: str, name: str):
+    """Both shapes a splice convention can get wrong: a file whose last byte is
+    not a newline, and a region whose own last line is blank. The identity has
+    to hold for every region of both, or `docs` moves a byte on a README
+    somebody hand-edited."""
+    assert rewrite(text, name, body_of(text, name)) == text

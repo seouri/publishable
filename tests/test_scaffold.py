@@ -271,9 +271,7 @@ _EXPERIMENTS_BODY = """\
 _TEMPLATES_BODY = """\
 ## Templates
 
-| Template | Parameters |
-|---|---|
-| _(none yet — add one with `publishable generate template`)_ | |
+_(none yet — add one with `publishable generate template`)_
 """
 
 _REGION_BODIES = {
@@ -281,6 +279,28 @@ _REGION_BODIES = {
     "experiments": _EXPERIMENTS_BODY,
     "templates": _TEMPLATES_BODY,
 }
+
+
+def test_the_templates_regions_empty_state_is_what_a_populated_one_degenerates_to(
+    tmp_path: Path,
+):
+    """`reference.md` § Templates renders a populated `templates` region as one
+    **sub-section per template** — `### \u0060<name>\u0060`, a convention line, then a
+    five-column `parameter_spec` table — so the empty state is a bare line
+    under the heading rather than a table header of its own.
+
+    A two-column `Template | Parameters` header here would declare a schema
+    the populated form never writes, which is the *declared vs. derived* drift
+    the cross-document rule names, and would be a header H9d task 6 has to
+    delete before it can write anything.
+    """
+    from publishable.docs import body_of
+
+    text = (scaffold_project(tmp_path / "my-study") / "README.md").read_text()
+    body = body_of(text, "templates")
+    assert body.startswith("## Templates\n")
+    assert "|---|" not in body
+    assert "_(none yet — add one with `publishable generate template`)_" in body
 
 
 def test_the_scaffolded_readme_declares_all_four_managed_regions(tmp_path: Path):
