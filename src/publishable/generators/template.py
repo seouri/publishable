@@ -1,7 +1,9 @@
 """`generate template` — a project-local template stub. Greenfield only."""
 
+import sys
 from pathlib import Path
 
+from publishable.docs import merge_into_readme
 from publishable.errors import ContractError
 
 # The stub emits `parameter_spec`, `validate`, `aggregate`, `naming_pattern` and
@@ -10,8 +12,11 @@ from publishable.errors import ContractError
 # check trivially and would still teach its reader to set a field this generated
 # file has no other use for. `version` is omitted for a sharper reason: a
 # project-local template is never version-checked at all, so a version in this
-# file would be a string nothing reads. `field_convention` is
-# declared on the base class and read by nothing in this build; `apparatus_facts`
+# file would be a string nothing reads. `field_convention` is declared on the
+# base class and inherited; omitted here because the base's `generic` is the
+# right answer for a project-local file, and H9d task 6 gave it its first
+# reader — the `templates` region's convention line prints whatever the class
+# inherits. `apparatus_facts`
 # is read (H7d Part A projects a probe's facts onto it) but is meaningless
 # without a probe this stub does not declare;
 # `apparatus_probe` is read (`validate` checks it against the installed probes)
@@ -94,4 +99,12 @@ def generate_template(*, repo_root: Path, name: str) -> Path:
         )
     templates_dir.mkdir(parents=True, exist_ok=True)
     path.write_text(TEMPLATE_PY.format(name=name, cls=class_name(name)))
+    # Last, after the file is on disk, and raising nothing — `generate
+    # experiment`'s own ordering and for its reason: the stub is what the
+    # caller asked for, and a README this command cannot rewrite may not cost
+    # them it. The merge DISCOVERS the file just written, so the table it
+    # renders is read from `parameter_spec` rather than composed from what this
+    # generator happens to have typed into the stub.
+    for note in merge_into_readme(repo_root, ("templates",)):
+        print(note, file=sys.stderr)
     return path

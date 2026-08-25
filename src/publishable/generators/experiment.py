@@ -1,8 +1,10 @@
 """`generate experiment` — always creates, never wraps. Greenfield only."""
 
 import subprocess
+import sys
 from pathlib import Path
 
+from publishable.docs import merge_into_readme
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
@@ -155,4 +157,14 @@ def generate_experiment(
             plugin=plugin,
         )
     )
+    # The README merge runs LAST, after every file this generator creates is on
+    # disk, and it raises nothing (`merge_into_readme`): a project scaffolded
+    # before H9d declares no `credentials` region, and a README that cannot be
+    # rewritten may not cost the caller the package and the config it just
+    # asked for. What it could not update is NAMED on stderr — beside this
+    # command's other diagnostics, stdout being reserved for what a command
+    # produces — because a merge that silently wrote nothing is
+    # indistinguishable from one that worked (Ruling EE).
+    for note in merge_into_readme(repo_root, ("credentials", "experiments")):
+        print(note, file=sys.stderr)
     return config_path

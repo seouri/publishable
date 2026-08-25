@@ -9605,7 +9605,18 @@ def test_reference_cli_tables_are_parsed_at_all():
     # above names). The `set(NOT_BUILT_COMMANDS)` equalities below are
     # SELF-MAINTAINING and were not edited.
     assert ("reproduce", "built") in tables["Command"]
-    assert ("list-templates", "NOT BUILT") in tables["Command"]
+    # H9d guard-pin arm F, EDITED by its sole authorized editor, H9d task 13.
+    # H9c arm B added `("list-templates", "NOT BUILT")` here so the table kept
+    # one MARKED row-presence probe; H9d builds that command and the other two,
+    # so no row carries the marker and no such probe exists to keep. The
+    # `set(NOT_BUILT_COMMANDS)` equalities below are self-maintaining and were
+    # not edited: they now assert the empty set against the empty mapping from
+    # both ends, which is the direction that catches a marker reappearing in one
+    # place only. `test_the_not_built_machinery_is_retained_with_no_row_marked`
+    # carries the claim this line used to carry.
+    assert ("list-templates", "built") in tables["Command"]
+    assert ("demo", "built") in tables["Command"]
+    assert ("docs", "built") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -17393,11 +17404,16 @@ _H5A_ARM_D_LITERALS = (
     "2f5c8d0",
 )
 
+# H9d task 12, guard-pin arm B: the first four entries were README's `demo`
+# transcript, and `demo` now PRODUCES that transcript (Ruling DD), so those four
+# lines carry `correlation_pilot`'s own measured numbers instead of the worked
+# example's. They left this tuple by the procedure design § 8.1 specifies: the
+# unmodified helper and the unmodified `_H5A_ARM_D_LITERALS` were re-run over the
+# edited README, the result was the pre-edit tuple minus exactly those four
+# entries, and nothing else survived or appeared. `correlation_pilot`'s numbers
+# are pinned against a real run by `tests/test_demo.py`, never as literals here —
+# a literal list of them would make this arm a transcript.
 _H5A_ARM_D_README_LINES = (
-    "  00_baseline           0.581   [0.488, 0.661]    —",
-    "  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]",
-    "  02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]",
-    "  intervals over 228 of 240 units (12 failed) · seed spread std 0.014",
     "run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml",
     "└── run_2026-08-07T09-14-03Z_8e21ab3/",
     "        step03_analyze: {r: {value: 0.607, basis: units, n: {completed: 228},",
@@ -26263,3 +26279,103 @@ def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(c
     assert "is specified but not built" not in err
     assert "unknown command" not in err
     assert "E-IO-FAILED" in err
+
+
+# ---------------------------------------------------------------------------
+# H9d guard pin (design § 8), captured by task 1 in batch 1, before anything
+# moved. Seven arms; three are built here and in `tests/test_scaffold.py`, and
+# four are CITED rather than re-captured, because re-capturing a list that is
+# already pinned is H8a's *same list pinned twice* fault:
+#
+#   Arm A — `test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text`'s
+#           `[DESIGN_PRINCIPLES]` and `[REFERENCE]` parametrizations, above in
+#           this file. Editor NONE.
+#   Arm B — the `[README]` parametrization of that same test. Sole authorized
+#           editor **H9d task 12**, whose post-edit state is the PROCEDURE in
+#           design § 8.1, not a literal tuple: the golden is a scan result, so
+#           a tuple written in advance would be pasted from `demo`'s output and
+#           the pin would become a transcript.
+#   Arm E — `tests/test_diff.py`'s H8c arm D, its three
+#           `test_h8c_arm_d_*_worked_diff_block_rows` tests. Editor NONE.
+#   Arm G — `tests/test_validate.py::test_the_worked_examples_intervals_in_
+#           reference_md_are_not_narrowed_by_the_null_test_work`. Editor NONE.
+#           It reads `reference.md` ONLY and its own docstring says it
+#           deliberately leaves README's `[0.347, 0.477]` unpinned, so it is
+#           NOT a collision with arm A or arm B (plan correction 29).
+#
+# Arm C is below; arm D is in `tests/test_scaffold.py`; arm F is below.
+# ---------------------------------------------------------------------------
+
+_H9D_ARM_C_DIGESTS = {
+    "docs/design-principles.md": (
+        "cf03bdf476973a74c4365f6abdd78ee76aa7754ca2062d02b9c8b785edd80171"
+    ),
+    "docs/experimental-designs.md": (
+        "e4c90c597287a0de9cdbc7cf40980fe325569797bdb7edf9df0cc61b32eccc4d"
+    ),
+}
+
+
+@pytest.mark.parametrize("relative_path", sorted(_H9D_ARM_C_DIGESTS))
+def test_h9d_arm_c_two_of_the_four_documents_are_byte_identical_at_merge(relative_path: str):
+    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** Both files must be
+    byte-identical at merge, so a red arm here is a FINDING — a hash to
+    investigate, never a hash to refresh.
+
+    `README.md` and `docs/reference.md` are deliberately NOT in this arm, and
+    design § 8.2 says why: task 12 must edit README twice and task 14 must edit
+    `reference.md` in eight sections, so a whole-file digest over either would
+    report only *an edit happened*, which is not a claim worth making and which
+    an implementer meeting it red has to guess about. What needs protecting in
+    those two files is pinned by CONTENT instead — arm A's `REFERENCE`
+    parametrization, arm B's README scan, and arm E's three `diff` blocks.
+
+    Captured at `f9434bf` by reading the whole file as bytes.
+    """
+    path = Path(__file__).resolve().parents[1] / relative_path
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == _H9D_ARM_C_DIGESTS[relative_path]
+
+
+def test_h9d_arm_f_the_not_built_command_set():
+    """H9d guard-pin arm F. **Sole authorized editor: H9d task 13**, whose
+    post-edit state is written in advance in design § 8's row F —
+    `NOT_BUILT_COMMANDS == {}`, with the three marked-row assertions replaced
+    by the companion Decision 12 specifies.
+
+    The shipped row-presence line
+    `assert ("list-templates", "NOT BUILT") in tables["Command"]`, in
+    `test_reference_cli_tables_are_parsed_at_all` above, is CITED here rather
+    than copied: it is H9c guard-pin arm B, it already asserts the document
+    side of the same fact, and a copy would be a second thing to edit when
+    task 13 flips the row.
+    """
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert NOT_BUILT_COMMANDS == {}
+
+
+def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
+    """Decision 12's companion, and BOTH claims are here so they cannot drift.
+
+    Emptying `NOT_BUILT_COMMANDS` makes `_report_not_built` unreachable from
+    dispatch, which makes `test_reference_cli_tables_match_what_the_cli_does`'
+    `if status == "NOT BUILT"` branch DEAD — the mutation that would have
+    caught a broken diagnostic no longer has an input. The machinery stays
+    anyway (deleting it means re-arguing *specified and unbuilt* against
+    *unknown command* the next time a command is specified ahead of its
+    build), so the formatting half is exercised by calling the helper
+    directly, with a name and a § heading `docs/reference.md` really carries.
+    """
+    from publishable.cli import NOT_BUILT_COMMANDS, _report_not_built
+    from publishable.diagnostics import EXIT_INVOCATION
+
+    assert NOT_BUILT_COMMANDS == {}, "no row carries the marker today"
+    assert _report_not_built("frobnicate", "Operation commands") == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`publishable frobnicate` is specified but not built in this version — "
+        "see docs/reference.md § Operation commands\n"
+    )
+    # The cited heading is a real one, checked the way the binding test checks
+    # it rather than by eye — a diagnostic citing a section this document does
+    # not have sends a reader nowhere.
+    assert "Operation commands" in _cited_sections()

@@ -25,9 +25,12 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H9d, then H3c-3's remaining
-14 — the H4, H5, H6, H7 and H8 families are all complete, H6a, H6b and H9a all having merged on
-2026-08-23, and H9b and H9c both on 2026-08-24.**
+**Order of the slices that remain: H3c-3's remaining 14, and nothing else — the H4, H5, H6, H7, H8
+and H9 families are all complete.** H6a, H6b and H9a merged on 2026-08-23, H9b, H9c and H9d on
+2026-08-24. **The command surface is finished**: every row of `reference.md` § CLI reference reads
+`built`, and the one remaining slice's surface is `units.py` and `stats.py` rather than a command — which
+means **anything left open in a command has no later slice that would naturally reach it**, and the
+`spec-defects.md` entries owned by *unassigned* are now the whole of that list.
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -196,6 +199,37 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H9d (`demo`, `docs`, `list-templates`) merged on 2026-08-24 — the last of H9's four, and the last of
+the command surface.** `demo` walks the whole arc and **prints what it actually prints**: `run`'s stdout is
+its warning block plus `run.yaml → <path>`, and README's transcript had described a results table, progress
+bars and a banner that **no command produces** — along with a `dry-run` count of 15 where the real answer
+is 19 and a `validate` line that was fiction outright. `docs` gained the **region parser that existed
+nowhere in `src/`**, with a missing or malformed region a **named refusal** rather than a silence, because
+*a command that silently rewrites nothing looks identical to one that worked*. `list-templates` was found
+**orphaned**: its only chartered home was H7, which closed without it, and the one live routing was a
+design sentence saying *"H9's list"* — **a command orphaned by a closed family is found by re-reading the
+charter against the code, not by waiting for someone to notice.** It retires no refusal and **unblocks
+zero configs.**
+
+Five things worth carrying. **The plan carried THIRTY-THREE corrections against the code, the most of any
+in this project**, and the largest cluster was a documented walkthrough describing output that does not
+exist — which is the *documented rule with no code behind it* defect landing on **the one page a new user
+reads first.** **A guard pin whose golden is a SCAN RESULT rather than a literal list can be edited without
+becoming a transcript**: arm D's post-edit state was specified **procedurally** — re-scan with the
+unmodified helper, expect the pre-edit tuple minus exactly four named entries, and *any other survivor is a
+finding, not a literal to refresh* — and both the batch and the gate ran it. **A ruling's escape clause
+firing is not a ruling ignored**: ruling GG required `self.rng` to become a `numpy.random.Generator`
+because two normative sentences said so and **zero tests mentioned it**, and when no task turned out to own
+`base_step.py` the batch **filed the change and made the documents true of the code instead** — which is
+the honest interim, and the gate then caught that **one of the four sentences was still false**, so the
+seed claim was corrected and **`random.Random(0)` shared by every non-repeat execution** was filed.
+**`E-GIT-NO-REPO`'s row has now been widened and then undercounted in three consecutive slices** — six →
+seven → eight → **ten (two uncaught, four by code, four by type)** — which is why it now states the
+**breakdown rather than a total**: a number is a claim nobody can check, an enumeration is one anybody can.
+And **a design can prescribe an implementation that is a measured no-op**: its bytecode remedy handed
+`spec_from_file_location` an explicit `SourceFileLoader`, which is what it already returns, so the batch
+shipped the substance and said so rather than shipping a change that looks correct and does nothing.
 
 **H9c (`reproduce`) merged on 2026-08-24 — the third of H9's four.** `reproduce` takes one path and
 **does not resolve a target device**: *"reproducing on another device"* names where the user is, not an
@@ -823,7 +857,7 @@ Two things stay untracked because git already holds them: task briefs (extracted
 
 These are load-bearing across all four documents; contradicting one in a single section creates a real inconsistency, not a wording nit.
 
-- **Operation commands take paths and nothing else.** No parameter flags, no selectors, no behavior-changing env vars. Modes get their own command names (`dry-run`, `draft`, `resume`) rather than `--dry-run`/`--allow-dirty`. Only creation commands (`new`, `plugin new`, `generate`/`init`, `study new|add`) take arguments beyond a path. (`design-principles.md` § Everything is in the file)
+- **Operation commands take paths and nothing else.** No parameter flags, no selectors, no behavior-changing env vars. Modes get their own command names (`dry-run`, `draft`, `resume`) rather than `--dry-run`/`--allow-dirty`. Only creation commands (`new`, `plugin new`, `generate`/`init`, `study new|add`, `demo`) take arguments beyond a path — `demo`'s is `[--into DIR]`, and it is one rule with `reproduce`'s refusal of the same flag rather than two: **`reproduce` derives its destination from the record, and `demo` has no record to derive from.** (`design-principles.md` § Everything is in the file)
 - **Three hashes, split on purpose.** `code_hash` covers `src/**` and `templates/**` only — the code your repo supplies, a plugin's being pinned by `uv.lock` instead — separate from `parameters_hash` and `input_manifest_hash`. That split is what makes "same code, different parameters" provable across unrelated commits — unrelated meaning outside the two hashed trees, since another experiment's package is inside them.
 - **`input_dir`/`output_dir` may never resolve inside the git repo**, checked at generate, at validate, and by every command that executes (`run`, `draft`, `resume`). Which repo is decided by a walk-up from the path the command was given, not from the working directory.
 - **Condition vs. repeat.** A condition is a difference being measured; a repeat is a difference being averaged over. Statistics aggregate *within* a condition and compare *across* conditions — never the reverse.
@@ -859,7 +893,7 @@ every session.
 | Reading a mutation's **silence** as confirmation | A mutation that changes nothing is evidence about the **tests**, not about the code. Twice in one slice a task emptied a payload, watched the suite stay green, and concluded the payload was unreachable — while a discriminating test was available both times and a reviewer built it. "No mutation reaches this" and "no mutation *can* reach this" are different claims, and only the second justifies leaving a thing unpinned |
 | Reporting **zero disagreements** with the code | **Six consecutive slices' reports claimed it and all six were wrong** — and every one hid in a claim about **other tests or other rows**, never in the implementer's own reasoning about its own code: a docstring asserting *"no existing test asserts this"* when one did, a § Errors row asserted that did not exist, a fixture named that was absent, a brief's *"no fixture can reach it"* that a bare call falsified. **Brief-supplied prose is where zero hides**, because it reads as established rather than as a claim. The check is mechanical and catches all six: **before writing "no existing test asserts X", or repeating any claim a brief makes about the code, grep for it.** Report what you grepped, not a count |
 | Inferring "this path does not run" from "this config is refused" | **`validate` collects rather than aborting**, so a refusal elsewhere never makes a later check unreachable. Two independent readers — a plan author and an implementer — both recorded a mutation as blind on that reasoning, and a reviewer disproved it by building the fixture. Ask what `validate` *reports*, in full, rather than whether it refuses |
-| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.field_convention` is declarable today on a class that ships, and nothing reads it. (`required_env` was this row's example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader. `field_convention` is now the sole remaining example, owned by nobody — `EXIT_EXTERNAL` was the same fault outside `BaseTemplate` until H7d Part B task 8 gave it its reader, and that clause is kept deliberately: it is the row's own evidence that it retires entries as readers land) |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect. **This row now has NO live example, and the way it ran out is the point.** (`required_env` was its example until H7c gave it a reader at `validate`; `apparatus_probe` was the next until H7b Part A's `_check_probe` gave it a metadata-name reader — not an executed probe; `apparatus_facts` was the next until H7d Part A's `check_facts` gave it a reader; **`field_convention` was the last until H9d's `docs.template_details` printed it**. `EXIT_EXTERNAL` was the same fault outside `BaseTemplate` until H7d Part B task 8 gave it its reader. Every clause is kept deliberately: **the row's evidence is its own attrition**, and it retires an entry each time a reader lands. Keep the rule and add the next example when one appears — **an empty example list is not a reason to delete a row that took five slices to empty**, and a declarable field with no reader is exactly what this project keeps producing) |
 
 ### Writing checks that can fail
 

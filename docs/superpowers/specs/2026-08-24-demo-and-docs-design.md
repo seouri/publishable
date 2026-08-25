@@ -905,3 +905,35 @@ here, in advance, and each is owed a replacement.
 **Batch 3 is the behaviour change.** It is the only batch that moves a shipped command's output, and
 guard-pin arm D is what bounds it: every scaffolded file except `README.md` must be byte-identical
 across it.
+
+---
+
+## Controller ruling GG, 2026-08-24 — `self.rng` becomes a `numpy.random.Generator`; the CODE follows the documents here
+
+**Corrections 3, 4 and 5 found a divergence the slice cannot walk past**: `reference.md` states in a table
+row *and* in prose that `self.rng` is a **`numpy.random.Generator`**, while `base_step.py` builds a
+**`random.Random`** — and a step calling `self.rng.normal(...)`, which the documents invite, **fails its
+execution at exit 3, measured.**
+
+**The code changes, not the document.** `CLAUDE.md` § Repository status sets the default — *"Where it
+cannot follow them, the document changes first"* — so the question is whether the code **can** follow, and
+here it can:
+
+- **The documents are coherent and the code is the odd one out.** § Randomness's whole surrounding
+  argument is written for a modern Generator: the legacy global `RandomState`, `numpy.random.default_rng`,
+  the concurrency note, and `derive_seed`'s role beside it. Changing the sentence would mean rewriting the
+  section's argument, not fixing a word.
+- **Nothing pins the current type.** **Zero tests in `tests/` mention `self.rng`** (correction 5) — so this
+  surface has shipped without ever being exercised, which is the *unbuilt reader of a shipped surface*
+  defect wearing its other face.
+- **numpy is already a hard runtime dependency**, so nothing is added to the install.
+- **A research tool whose per-execution stream cannot draw a normal is a defect in the tool**, and the
+  person who meets it is a new user following the documented example on their first step.
+
+**Cost if wrong, and it is real:** a project already written against `random.Random` methods that
+`Generator` does not carry — `randint`, `gauss`, `choice`'s different signature — breaks at the call.
+`shuffle`, `random` and `uniform` survive. The exposure is bounded by this being v0.x and greenfield-only,
+with every project created by `init` — **but this is a behaviour change to a shipped surface and it gets a
+disclosure section of its own**, on H5b's, H6a's, H9a's and H9b's precedent. **`demo`'s own generated step
+must draw from `self.rng`**, so the walkthrough exercises the thing the walkthrough documents, and the
+gap that made this possible — a surface with no test at all — closes with it.

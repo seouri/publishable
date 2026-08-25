@@ -2265,3 +2265,64 @@ measured through the real console script rather than predicted. And a `run` or `
 contradicts an expectation file **keeps its record**: a resume whose run-start round contradicts it,
 with a prior attempt's executions already on disk, exits `4` with a `run.yaml` rather than `1` with
 none. Both are reachable only outside these nine, which is why the table does not move.
+
+### Measured on 2026-08-25 against commit `ebe58ca` — after H9d
+
+**H9d builds `demo`, `docs` and `list-templates` — the last three commands the CLI reference marked
+`NOT BUILT`, and with them the whole command surface.** `demo` writes 240 synthetic units outside
+the repository it creates, scaffolds a project-local template, three steps and a config, commits so
+the tree is clean, and then walks the six stops: it prints each command exactly as you would type
+it, runs it in-process, and says what its output meant, ending by printing — not running — the
+`reproduce` invocation. `docs` rewrites every managed README region a repository declares and names
+the ones it did not find, refusing five shapes by their own codes. `list-templates` prints every
+claim the registry answers, with a parameter spec wherever a class exists, and without importing an
+installed package. `NOT_BUILT_COMMANDS` is empty and every `Status` cell in all three tables reads
+`built`.
+
+**It retires no refusal and unblocks ZERO configs, and the four rows are derived rather than
+repeated.** Derived per row:
+
+- **Row 1, transplantable configs validating with zero errors — 8 of 8.** None of the three commands
+  runs at `validate` or is invoked from a step: `grep -n "validate_config" src/publishable/docs.py
+  src/publishable/demo.py` returns no hits, and `demo` calls `validate` only as a stop of its own
+  walk, over a config it wrote itself. The one behaviour change to a shipped command is what
+  `publishable new` writes into a **README** — two regions added and one section moved inside its
+  region — which no `validate` check reads; the scaffold constants moving into `readme_templates/`
+  as files changes where bytes are read from and not what they are, pinned byte-for-byte by a
+  whole-tree hash of a scaffolded project. The fresh-source loader changes a **loader**, not a
+  resolution: the class `validate` gets for a given file is the same class, freshly compiled.
+- **Row 2, blocked on `io.reuse_from` — 0.** Untouched. None of the three reads an upstream or walks
+  a lineage chain: `grep -n "reuse_from\|read_upstream" src/publishable/demo.py
+  src/publishable/docs.py` returns no hits.
+- **Row 3, meet the `report_by`-under-`resample` gap — 7.** Untouched, and still unowned. It is a
+  construction inside `summarize_step`; no command this slice builds enters that phase, and `demo`'s
+  own config declares no `report_by` at all.
+- **Row 4, free of every core-side dependency this analysis can name — 1.** `demo` scaffolds its own
+  project and its own data and accepts no config of anyone else's; `docs` and `list-templates` read
+  no config at all. So none can add a dependency to this row or remove one.
+
+None of the nine declares a `study`, a `fold`, a group axis or an `apparatus_probe`, and every one
+validates against `generic` — so the project-local template `demo` writes is reachable from none of
+them either.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The block above is byte-identical to the H9c entry's, extracted rather than retyped**, by the same
+two independent methods the H8a, H9a, H9b and H9c entries describe — a programmatic walk that finds
+the last `| Figure | Count | Visible to` header and reads forward while the line starts with `|`, and
+a fixed six-line slice from the same index — `diff`-ed to empty, six lines each. Its cells still name
+**H8a**, because updating them is exactly how a repeated table stops being repeated. **No fifth
+number is minted, and no single figure is quoted for this analysis' executability** — quote the
+table, or name the dependency.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** Five `E-DOCS-*` codes are minted
+and all five are reachable only from `docs`, a command none of these nine invokes and which reads no
+config. No exit code is minted. Three exit codes **move**, each from the specified-but-unbuilt
+diagnostic to real behaviour — `publishable demo`, `publishable docs` and `publishable list-templates`
+stop printing *"specified but not built"* at exit `2` — and all three are reachable only outside
+these nine, which is why the table does not move.

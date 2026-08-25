@@ -8,12 +8,12 @@ import a cycle; this module imports only `base_step` and `errors`, so both can r
 it. No new module means no divergence from `reference.md` § Package layout.
 """
 
-import importlib
 import sys
 from pathlib import Path
 
 from publishable.base_step import BaseStep
 from publishable.errors import ContractError
+from publishable.sourceimport import import_module_fresh
 
 
 class BaseExperiment:
@@ -40,7 +40,14 @@ def load_experiment(repo_root: Path, entrypoint: str) -> BaseExperiment:
     src_entry = str(repo_root / "src")
     sys.path.insert(0, src_entry)
     try:
-        module = importlib.import_module(module_name)
+        # `import_module_fresh`, not `importlib.import_module`, for the reason
+        # `sourceimport` documents: the ordinary loader validates its
+        # `__pycache__` entry against the source's `(mtime, size)`, so an
+        # entrypoint or step file rewritten at the same size inside one
+        # wall-clock second is silently served from the previous compile.
+        # `ModuleNotFoundError` is an `ImportError`, so the `except` below is
+        # unchanged.
+        module = import_module_fresh(module_name)
         cls = getattr(module, attr)
     except (ImportError, AttributeError) as exc:
         raise ContractError(

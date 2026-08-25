@@ -16,7 +16,7 @@ from pathlib import Path
 
 from publishable.errors import ContractError
 from publishable.plugins import GROUPS
-from publishable.scaffold import CITATION, GITIGNORE, MIT
+from publishable.scaffold import read_scaffold
 
 PYPROJECT = """\
 [project]
@@ -197,9 +197,11 @@ def scaffold_plugin(root: Path, license_name: str = "MIT") -> Path:
         PYPROJECT.format(name=name, entry_points="\n".join(tables))
     )
     (root / "README.md").write_text(README.format(name=name, stem=stem))
-    (root / "CITATION.cff").write_text(CITATION.format(name=name))
-    (root / "LICENSE").write_text(MIT if license_name == "MIT" else f"{license_name}\n")
-    (root / ".gitignore").write_text(GITIGNORE)
+    (root / "CITATION.cff").write_text(read_scaffold("CITATION.cff.tmpl").format(name=name))
+    (root / "LICENSE").write_text(
+        read_scaffold("LICENSE.mit.tmpl") if license_name == "MIT" else f"{license_name}\n"
+    )
+    (root / ".gitignore").write_text(read_scaffold("gitignore.tmpl"))
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / f"test_{stem}.py").write_text(TEST_PY.format(stem=stem))
     (root / "examples" / stem).mkdir(parents=True, exist_ok=True)

@@ -186,11 +186,24 @@ OPERATION_COMMANDS = {
 # the rows marked `NOT BUILT` there are exactly the keys here, and every unmarked
 # row is a command this module really dispatches. Cited by section, never by line
 # number — `docs/reference.md` moves under every edit above the citation.
-NOT_BUILT_COMMANDS: dict[str, str] = {
-    "demo": "What `demo` walks you through",
-    "docs": "Operation commands",
-    "list-templates": "Operation commands",
-}
+# The commands `docs/reference.md` § Operation commands gives the argument
+# *(none)*. They walk up from `Path.cwd()` — the exception `E-GIT-NO-REPO`'s own
+# § Errors row already documents for the creation commands, reused rather than
+# restated (Ruling FF) — and they take no flag either, `design-principles.md`
+# § Everything is in the file admitting none anywhere.
+ZERO_ARGUMENT_COMMANDS = {"docs", "list-templates"}
+
+# EMPTY as of H9d, and deliberately kept rather than deleted: `demo`, `docs` and
+# `list-templates` were its last three keys and all three dispatch now. The
+# distinction it draws — *specified and unbuilt* against *unknown command* — is
+# argued at length in `docs/reference.md` § Creation commands, and a future
+# command specified before it is built would otherwise have to re-argue it.
+# `_report_not_built` therefore has no reachable dispatch today; the companion
+# `test_the_not_built_machinery_is_retained_with_no_row_marked` asserts BOTH that
+# this mapping is empty and that the helper still formats the documented
+# diagnostic, so the formatting half stays killable while the dispatch half has
+# no input.
+NOT_BUILT_COMMANDS: dict[str, str] = {}
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
 # four and this build materializes all four (H8c task 15 built `report`,
@@ -5525,6 +5538,88 @@ def command_dry_run(config_path: Path) -> int:
     return EXIT_OK
 
 
+def command_list_templates() -> int:
+    """`publishable list-templates` — every template name this build knows,
+    with its provenance, its provider, and its full parameter spec where one is
+    readable.
+
+    **It takes no path** and walks up from `Path.cwd()`, which is the exception
+    `E-GIT-NO-REPO`'s own § Errors row already documents for the creation
+    commands, reused rather than restated (Ruling FF).
+
+    **A missing repository is caught BY TYPE**, leaving `repo_root=None`
+    exactly as `validate.validate_config` does, and the absence is **printed**:
+    core's `generic` and every installed claim are answerable without a
+    repository, and only `templates/**` discovery is skipped — so a shorter
+    list with no explanation would be the *silently skipped* fault this repo
+    already has a filing about.
+
+    **It prints every CLAIM, and a parameter spec only where a class exists.**
+    An installed claim's class is `None` by construction (correction 21): the
+    entry-point scan reads package metadata and imports nothing, which is the
+    invariant *"`validate` resolves a name without importing the package"*.
+    Printing its spec would mean importing the package here, making this the
+    one surface in the build that loads what every other one refuses to load —
+    and resolving, for a listing, a name a config naming it is refused for. So
+    it prints the provider and one line saying the spec is not readable in this
+    build, citing `E-TEMPLATE-INSTALLED-UNSUPPORTED`.
+
+    **Ruling FF rejects `H9-SCOPING.md` § 7.2's own preferred answer** —
+    narrowing this to the installed set and never a project-local template.
+    A project-local template is the case `docs/reference.md` § Templates says
+    path discovery exists for, and the case `docs`' own `templates` region
+    needs.
+
+    **`E-TEMPLATE-COLLISION` is not caught**, and neither is `E-TEMPLATE-LOAD`:
+    both reach `main`, which is the same answer `validate` gives. The command
+    whose job is enumerating names is the wrong place to invent a tolerant
+    enumeration — a name two providers claim has no listing that is not a lie
+    about one of them.
+
+    The renderer is `docs.template_details`, the one the `templates` region
+    reads, rather than a second one: two renderings of one `parameter_spec` are
+    two literals that drift.
+    """
+    from publishable.docs import template_details
+    from publishable.templates.registry import _claims
+
+    here = Path.cwd()
+    notes: list[str] = []
+    try:
+        repo_root: Path | None = find_repo_root(here)
+    except ContractError:
+        # BY TYPE, testing no code, and the shape is `validate.validate_config`'s
+        # own (Decision 4): `find_repo_root` raises exactly one code, and this
+        # site wants the same answer — no repository, so no `templates/**` — for
+        # any refusal that walk-up can produce. `docs` catches BY CODE instead,
+        # and the difference is not stylistic: a README is that command's entire
+        # input, so a walk-up it cannot complete is a refusal, while here it only
+        # narrows the list. Two additions of two different kinds, which is why
+        # `E-GIT-NO-REPO`'s § Errors row cannot be repaired by changing a digit.
+        repo_root = None
+        notes.append(
+            f"no git repository was found from {here} upwards, so no project-local "
+            "`templates/` was searched — the names below are core's own and any "
+            "installed plugin's"
+        )
+
+    claims = _claims(repo_root)
+    lines = list(notes)
+    if notes:
+        lines.append("")
+    for name in sorted(claims):
+        claim = claims[name]
+        lines.append(f"### `{name}`")
+        lines.append("")
+        if claim.cls is not None:
+            lines.append(f"{claim.provenance} · provider `{claim.provider}`")
+            lines.append("")
+        lines.extend(template_details(claim))
+        lines.append("")
+    print("\n".join(lines).rstrip("\n"))
+    return EXIT_OK
+
+
 def _dispatch(command: str, rest: list[str]) -> int:
     if command in OPERATION_COMMANDS:
         if len(rest) != 1 or rest[0].startswith("-"):
@@ -5595,6 +5690,47 @@ def _dispatch(command: str, rest: list[str]) -> int:
         from publishable.diff import command_diff
 
         return command_diff(Path(rest[0]), Path(rest[1]))
+    if command in ZERO_ARGUMENT_COMMANDS:
+        # The arity rule these two carry is *takes nothing*, so ONE check
+        # covers both halves `docs/reference.md` § Operation commands states —
+        # no path, and no flag either, a flag being an argument. `diff`'s arm
+        # argues why this is its own arm rather than a widening of the
+        # one-path one: a different arity rule, not a second enforcer of the
+        # same one.
+        if rest:
+            print(f"`{command}` takes no arguments and no flags", file=sys.stderr)
+            return EXIT_INVOCATION
+        # Function-local, `command_freeze`'s own reason: `docs.py` is imported
+        # by both generators at module scope and `cli.py` imports them, so a
+        # module-scope import here would put this module on that chain for no
+        # gain — `_dispatch` runs once per invocation, not once per import.
+        from publishable.docs import command_docs
+
+        zero_argument: dict[str, Callable[[], int]] = {
+            "docs": command_docs,
+            "list-templates": command_list_templates,
+        }
+        return zero_argument[command]()
+    if command == "demo":
+        # A creation command, so it takes what is needed to bring something into
+        # existence and nothing else: `docs/reference.md` § Creation commands
+        # gives it *(none)* and `[--into DIR]`. `--into` is legal here and
+        # refused by `reproduce` for a reason the two documents now state once:
+        # `reproduce` derives its destination from the record, and `demo` has no
+        # record to derive from.
+        into: Path | None = None
+        if rest:
+            if len(rest) != 2 or rest[0] != "--into" or rest[1].startswith("-"):
+                print("`demo` takes nothing, or `--into DIR`", file=sys.stderr)
+                return EXIT_INVOCATION
+            into = Path(rest[1])
+        # Function-local, `command_freeze`'s own reason: `demo.py` imports
+        # `scaffold` and `materialize` at module scope and runs the other
+        # commands through this module's own `main`, so a module-scope import
+        # here would close a cycle.
+        from publishable.demo import command_demo
+
+        return command_demo(into)
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION

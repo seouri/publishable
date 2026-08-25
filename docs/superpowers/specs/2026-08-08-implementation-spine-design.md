@@ -351,6 +351,21 @@ deliverable**, not as a discovery.
 **What this does not change.** The dependency that put H3a before H3b before H3c is untouched, and all four
 have landed. The reorder applies only to what remains.
 
+**AMENDMENT, 2026-08-25 (Ruling CC, H9d): `list-templates` is H9d's, and the H9 row above is NOT
+edited in place.** The command was specified in `reference.md` § Operation commands and carried by
+`cli.NOT_BUILT_COMMANDS`, and it belonged to no slice's charter: it reads the template registry, which
+is H7's surface, and H7 merged complete without it. H9d builds it, alongside `demo` and `docs`.
+
+**How it was found is the part worth carrying: by re-reading the charter against the code, not by
+waiting for someone to notice.** Four H7 scopings said *"it is still H7's"* — each was right on the day
+it was written, and **none of them re-owned the command when H7 merged**, because a scoping records what
+was measured on its date and nothing re-reads it afterwards. A command orphaned by a closed family is
+invisible to every instrument this project has except one: enumerating what the code still declares
+unbuilt and asking, for each, which live slice owns it. That enumeration is cheap and it is the only
+thing that finds this class of gap. **The row above is left as it was written**, because a spec records
+what was decided when it was written and retro-editing it destroys the evidence; the correction is
+appended, and it says what it replaces.
+
 ### H3 decomposes into four slices
 
 **AMENDMENT, 2026-08-12, from `docs/superpowers/H3-SCOPING.md`.** The row above originally

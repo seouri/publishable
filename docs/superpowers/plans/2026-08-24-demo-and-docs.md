@@ -555,6 +555,8 @@ report rather than editing them.
 
 ## Task 13
 
+> **AMENDED 2026-08-25 by the controller, from batch 4's concern 1.** `test_reference_cli_tables_match_what_the_cli_does` binds a `NOT BUILT` row to the unbuilt diagnostic for **every** invocation of the name, wrong-arity ones included — so while a dict key exists, a wrong-arity invocation **defers** to `_report_not_built`. Both halves are pinned. **You must delete the two commented lines AND the two `…_defers…` tests together**: deleting either alone leaves the branch red or the pin lying.
+
 **Binding corrections: 25, 26, 27. You are guard-pin arm F's sole authorized editor.**
 
 **The `NOT BUILT` retirement, and the `E-GIT-NO-REPO` row.**
@@ -592,6 +594,8 @@ sub-slices** — check each table's own **scope sentence**, not only its cells.
 ---
 
 ## Task 14
+
+> **AMENDED 2026-08-25 by the controller, from batch 4's concern 5.** **`E-GIT-NO-REPO`'s enumeration is TEN paths — two uncaught, four by code, four by type — re-derived by READING, and the design's own phrase ("three uncaught-or-by-code additions") does not parse against the code.** That row has now been widened and then undercounted in **three consecutive slices**: six → seven, seven → eight, eight → ten. **State the breakdown, not the total**, and confirm by grep after enumerating by reading — the reverse order is the substitution `CLAUDE.md` § Answering a question with a proxy is about, and it is what produced all three undercounts. **Also yours**: five `E-DOCS-*` § Errors rows that exist in no document, a § Package layout row for `src/publishable/sourceimport.py`, `E-DOCS-REGION-UNKNOWN`'s wording covering **both** its senses, and § Operation commands' rows for `list-templates` and `docs` (wording is in batch 4's report).
 
 **Binding corrections: 1, 2, 3, 5, 8, 9, 10, 11, 12, 16, 19, 20, 21, 24, 29. You are named on NO
 guard-pin arm.** You edit `reference.md` in eight sections and that is expected — **no arm hashes it**
@@ -655,3 +659,24 @@ fields in prose**, and **versions**.
 **This is the batch with the most findings historically.** *A documents-and-codes task looks like the
 safest one to skip and is the one whose output no later batch reads*, so nothing else will find its
 errors.
+
+---
+
+## Controller ruling GG, 2026-08-24 — binding on every task that touches `base_step.py`, `demo`'s generated step, or § Randomness
+
+**`self.rng` becomes a `numpy.random.Generator`.** The grounds are in the design's appended ruling; the
+short form is that the documents say so twice, § Randomness's whole argument is written for it, **zero
+tests mention `self.rng`**, numpy is already a hard dependency, and a step calling `self.rng.normal(...)`
+— which the documents invite — **fails at exit 3 today**.
+
+**This is a behaviour change to a shipped surface. It needs:**
+- **a disclosure section**, naming what breaks (`randint`, `gauss`, `choice`'s signature) and what does not
+  (`shuffle`, `random`, `uniform`);
+- **a pin on the type itself**, since nothing has ever pinned it — and *a surface with no test is how this
+  divergence survived a shipped release*;
+- **`demo`'s generated step drawing from `self.rng`**, so the walkthrough exercises what it documents;
+- **the two `reference.md` statements checked against the new code rather than assumed correct** — they
+  were the authority for this ruling, so if either is wrong in some other detail, that is a finding.
+
+**Whichever task owns `base_step.py` owns all four.** If no task does, the batch that discovers it says so
+and stops rather than folding it in silently.

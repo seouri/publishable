@@ -20,6 +20,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/publishable"]
+# The shipped scaffolds (`readme_templates/*.tmpl`) are data, not modules:
+# `scaffold_project` reads them through `importlib.resources` at scaffold
+# time, so a wheel that omitted them would raise on someone else's machine
+# the first time they ran `publishable new`. Declared rather than left to
+# the default inclusion, which is a property of how the build backend is
+# configured today.
+artifacts = ["src/publishable/readme_templates/*.tmpl"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "types-pyyaml>=6.0"]
