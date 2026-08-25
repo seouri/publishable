@@ -3313,8 +3313,8 @@ def partition_units(
     than a defect — stated here because it contradicts the at-most-one above, which
     holds for an unstratified split only.
 
-    **`k` is checked against the whole roster's basis, not against each stratum's,
-    and a fold can therefore come out EMPTY — not merely short of one stratum.**
+    **`k` is checked against one basis, never against each stratum's, and a fold
+    can therefore come out EMPTY — not merely short of one stratum.**
     Each stratum fills only as many folds as it has clusters, and the merge is
     index-wise, so when every stratum has fewer than `k` the high-index folds hold
     **nothing at all**. Six units as three plus three under `{k: all,
@@ -3327,8 +3327,22 @@ def partition_units(
     document states. **A weaker earlier version of this paragraph said a fold could
     hold none of a *stratum*; that understated it.** The
     partition stays total and says so rather than dividing a cluster or dropping the
-    stratification; `reference.md` § Validation bounds `k` by the roster's basis
-    today, and a per-stratum bound is a check that does not exist yet.
+    stratification; `reference.md` § Validation bounds `k` by one basis today, and
+    a per-stratum bound is a check that does not exist.
+
+    **H3c-3 moved the basis and multiplied the lists; it did NOT add that bound.**
+    Under a cell structure `k` is bounded by the thinnest **populated** cell's
+    basis (`units.thinnest_cell`) rather than the whole roster's, and
+    `partition_within_cells` calls this function once per populated cell — so the
+    independent partition lists are now **cells × strata** where they were strata
+    alone, and the empty-high-index-fold shape above survives inside each cell
+    exactly as it did over the roster. Three strata of three units at `k = 2`
+    behave the same whether that roster is the whole one or one arm of it. The
+    per-stratum bound is **still a check that does not exist**, its denominator is
+    now one multiplier further from the number `validate` reads, and **no slice
+    follows this one** — it is recorded in `docs/superpowers/spec-defects.md` as a
+    fact rather than as a deferral. Inventing one here would still be a rule no
+    document states.
 
     The mapping must be **total over the roster**, like `clusters`: a unit missing
     from it raises `KeyError` as a core defect rather than being given a stratum of

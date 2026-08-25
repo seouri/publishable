@@ -15229,3 +15229,138 @@ def test_a_wrongly_typed_thin_cell_floor_drives_no_warning(write_config, tmp_pat
         found = codes(write_config(_h3c3_thin_config(6, 6, bad)))  # type: ignore[arg-type]
         assert "W-DATA-CELL-THIN" not in found
         assert "E-CONFIG-TYPE" in found
+
+
+# --- H3c-3 task 19: the empty cell × the per-cell fold bound -----------------
+
+
+_H3C3_EMPTY_CELL_ROSTER = (
+    "patient_id,sex,arm\n"
+    + "".join(f"m{i},m,{'control' if i < 3 else 'treatment'}\n" for i in range(6))
+    + "".join(f"f{i},f,control\n" for i in range(4))
+)
+"""Ten units over two crossed `by_attribute` axes, and `sex=f × arm=treatment`
+is a combination **no unit carries**.
+
+A single axis cannot instantiate an empty cell from a clean config —
+`units.arms_of` raises `E-DATA-ASSIGN-LEVELS` for a declared level no unit's
+value names, which `_resolved_cells`' `try` turns into `None` — so the empty
+cell has to come from an intersection. Each axis here resolves every one of its
+own declared levels; only the crossing is empty, which is legal and which no
+check refuses. Measured: `cells_of` gives 3 / 3 / 4 / **0**."""
+
+
+def _h3c3_empty_cell_config(**extra: object) -> dict:
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["sex", "arm"],
+        "allocation": "between",
+        "assign": {
+            "sex": {"method": "by_attribute"},
+            "arm": {"method": "by_attribute"},
+        },
+    }
+    doc: dict = {
+        "data.units": units,
+        "sweep": {
+            "groups": [
+                {"by": "sex", "levels": ["m", "f"]},
+                {"by": "arm", "levels": ["control", "treatment"]},
+            ]
+        },
+    }
+    doc.update(extra)  # type: ignore[arg-type]
+    return doc
+
+
+def test_an_empty_cell_does_not_bound_k_at_zero(write_config, tmp_path):
+    """**An empty cell is skipped, not counted zero** — and the brief this task
+    was written from says the opposite, so it was measured.
+
+    The brief states *"a cell that is empty makes the bound `0`, so any `k ≥ 1`
+    is refused"*. `units.thinnest_cell` explicitly skips cells holding no
+    units, so the bound here is the thinnest **populated** cell's 3, and `k: 3`
+    validates clean on the fold side. If it were 0, this config would be
+    refused and the sibling below could not distinguish which cell the bound
+    came from.
+
+    The refusing half is the sibling below, so this is not "the bound was
+    dropped" read as "the bound skipped the empty cell"."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    path = write_config(
+        _h3c3_empty_cell_config(
+            replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"}
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in codes(path)
+
+
+def test_a_k_past_the_thinnest_POPULATED_cell_is_refused_naming_that_cell(write_config, tmp_path):
+    """The refusing half of the pair above, at `k: 4` over the same roster.
+
+    The message must name a cell a reader can make thicker. `sex=m,
+    arm=control` holds 3 and is the bound; `sex=f, arm=treatment` holds none,
+    is below every bound, and is asserted **absent** from the message — a check
+    that counted the empty cell would name it here and send the reader to a
+    combination nobody can enrol into."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    path = write_config(
+        _h3c3_empty_cell_config(
+            replication={"repeats": [{"kind": "fold", "k": 4}], "order": "as_declared"}
+        )
+    )
+    message = messages_by_code(path)["E-REPL-FOLD-K-TOO-LARGE"]
+    assert "in cell sex=m, arm=control" in message
+    assert "sex=f, arm=treatment" not in message
+
+
+def test_an_empty_cell_beside_a_holdout_is_bounded_by_the_populated_cells(write_config, tmp_path):
+    """The same reading at the holdout end, which is a different code and a
+    different loop.
+
+    `holdout_sizes(3, 0.2) == (2, 1)` — measured — so the thinnest populated
+    cell splits and the config is clean. An empty cell taken as the bound would
+    give `holdout_sizes(0, 0.2) == (0, 0)` and `E-DATA-HOLDOUT-EMPTY`; C9's
+    own shape is that an empty sub-roster fails on the **train** side, so a
+    check reaching it would also print a message about the wrong side.
+
+    The can-fail half is the same design at `frac: 0.1`, where the populated
+    bound really does bite: `holdout_sizes(3, 0.1) == (3, 0)`."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    clean = _h3c3_empty_cell_config()
+    clean["data.units"] = {
+        **clean["data.units"],
+        "holdout": {"method": "random", "frac": 0.2},
+    }
+    assert "E-DATA-HOLDOUT-EMPTY" not in codes(write_config(clean))
+
+    thin = _h3c3_empty_cell_config()
+    thin["data.units"] = {**thin["data.units"], "holdout": {"method": "random", "frac": 0.1}}
+    path = write_config(thin)
+    assert "E-DATA-HOLDOUT-EMPTY" in codes(path)
+    assert "sex=f, arm=treatment" not in messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
+
+
+def test_an_empty_cell_with_no_evaluation_split_is_not_an_error_at_all(write_config, tmp_path):
+    """**Recorded where it cannot be refused.** With no `fold` level and no
+    `holdout`, an empty cell earns nothing: it is a legal design whose one
+    condition measures nobody, and no check in this build refuses it.
+
+    Two arms of the same fixture. At no declared floor the finding set is
+    **empty** — asserted by equality, so a diagnostic arriving under any
+    spelling fails here. With `limits.min_units_per_cell: 20` the only finding
+    is task 18's warning, and it names the thinnest **populated** cell rather
+    than the empty one: the warning's own remedy is enrol more units, which is
+    advice about a cell somebody is in.
+
+    Stated plainly because there is no later slice: an empty crossed cell ships
+    silent, and `spec-defects.md` records it as a fact rather than a
+    deferral."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    assert codes(write_config(_h3c3_empty_cell_config())) == set()
+
+    c = Collector()
+    validate_config(write_config(_h3c3_empty_cell_config(limits={"min_units_per_cell": 20})), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "(`sex=m, arm=control`) holds 3 of 10 resolved units" in c.findings[0].message
