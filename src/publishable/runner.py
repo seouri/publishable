@@ -536,11 +536,22 @@ def execute_plan(
 
     `holdout_train` is `data.units.holdout`'s training roster, already resolved
     by the caller (`cli.command_run`'s single-authority narrowing) — this
-    function derives nothing from it beyond wrapping it. Unlike a `fold`, a
-    holdout's split is fixed for the whole run, so when `holdout_train` is given,
-    `units` is the test partition and `io.units.train` is `holdout_train` at
-    every scope — `run`, `condition`, `repeat` and `summary` alike, not only
-    `repeat` the way a fold's `.train` is.
+    function derives nothing from it beyond **narrowing it to the arm and**
+    wrapping it. Unlike a `fold`, a holdout's split is fixed for the whole run,
+    so when `holdout_train` is given, `units` is the test partition and
+    `io.units.train` is `holdout_train` at every scope — `run`, `condition`,
+    `repeat` and `summary` alike, not only `repeat` the way a fold's `.train`
+    is.
+
+    **Narrowed to the arm at a condition-bearing execution**, exactly as
+    `units` itself is, and for the reason that narrowing exists: a holdout
+    beside a group axis is drawn inside each cell
+    (`units.holdout_within_cells`), so an arm's training units are its own
+    cell's train side and nobody else's. Composing an arm-narrowed test side
+    with a roster-wide train side would hand a step the other arm's units to
+    fit on and then evaluate it against this arm. A `run`- or `summary`-scoped
+    execution belongs to no condition and so to no arm, and keeps the whole
+    training roster — the same rule `scoped_units` follows one branch up.
 
     `credentials` is `{variable: value}` for every credential core read for a
     *declared* variable — `required_env` and the `requires_env` union. A failed
@@ -584,18 +595,22 @@ def execute_plan(
     # Two evaluation splits is two answers to "which units is this metric
     # over?", which is exactly what `validate` refuses. No config can reach this
     # at this commit: `E-DATA-HOLDOUT-FOLD` (task 6) refuses a `holdout` beside a
-    # declared `fold` level, and `E-DATA-HOLDOUT-CELLS` (task 8) refuses a
-    # holdout beside the group axis `arm_members` comes from. So this asserts
-    # something about core's own callers rather than about a config — and it is
-    # an assertion rather than silent precedence because if either refusal ever
-    # stops holding, a crash here is what makes that visible instead of a
-    # partition chosen by whichever branch happened to be written first.
+    # declared `fold` level. So this asserts something about core's own callers
+    # rather than about a config — and it is an assertion rather than silent
+    # precedence because if that refusal ever stops holding, a crash here is
+    # what makes that visible instead of a partition chosen by whichever branch
+    # happened to be written first.
+    #
+    # **There is no second assert beside this one.** A holdout beside a group
+    # axis WAS refused (`E-DATA-HOLDOUT-CELLS`), and that assert was this
+    # function's only defence against composing an arm-narrowed test side with
+    # a roster-wide train side. It is gone in the same commit that narrows the
+    # train side per arm below — the narrowing without the deletion is dead
+    # code, the deletion without the narrowing is a model trained on units it
+    # is then evaluated against, across arms, with no diagnostic.
     assert holdout_train is None or fold_members is None, (
         "a holdout and a fold repeat both narrow the roster; `validate` refuses the "
         "pair as `E-DATA-HOLDOUT-FOLD`"
-    )
-    assert holdout_train is None or arm_members is None, (
-        "a holdout beside a group axis is refused as `E-DATA-HOLDOUT-CELLS`"
     )
     # Imported HERE rather than at module level, and not as a convenience:
     # `run_record` imports this module for `ExecutionResult`, so a top-level
@@ -728,9 +743,39 @@ def execute_plan(
             # ("does not re-derive that narrowing itself, and must not"). This
             # function turns two rosters into one `UnitList`; it derives
             # neither.
+            #
+            # **The train side is narrowed to the execution's OWN arm**, the
+            # same way `scoped_units` was narrowed above and the fold branch
+            # below narrows its own complement. `holdout_train` arrives
+            # roster-wide from `cli._execute_prepared`
+            # (`UnitList([u for u in roster if u.key in set(holdout_plan.train)])`),
+            # so composing it unnarrowed beside an arm-narrowed test side hands
+            # a step the OTHER arm's units to fit on and then evaluates it
+            # against this arm — the leak `E-DATA-HOLDOUT-CELLS` stood in for
+            # until this commit.
+            #
+            # `_arm_keys` is the narrowing rather than a second expression of
+            # it: it carries the `condition_index not in arm_members` raise
+            # that says the plan and the resolved arms disagree, and a
+            # hand-written membership test here would be a second answer to
+            # "which units are in this arm". It is handed the **train** side's
+            # own keys, NOT `arm_keys` from the narrowing above: `units` is
+            # already the TEST partition when a holdout is declared, so
+            # `arm_keys` is `arm ∩ test` and intersecting the train side with
+            # it gives the empty set for every arm — measured, and the reason
+            # this fixture asserts the train side is non-empty as well as
+            # contained.
             step_units = scoped_units
             if holdout_train is not None and scoped_units is not None:
-                step_units = UnitList(list(scoped_units), train=holdout_train)
+                train_units = holdout_train
+                if arm_members is not None and execution.condition_index is not None:
+                    train_arm = _arm_keys(
+                        execution.condition_index,
+                        {u.key for u in holdout_train},
+                        arm_members,
+                    )
+                    train_units = UnitList([u for u in holdout_train if u.key in train_arm])
+                step_units = UnitList(list(scoped_units), train=train_units)
         elif execution.scope in ("run", "condition"):
             step_units = None  # no fold exists yet at these scopes
         elif execution.scope == "repeat":

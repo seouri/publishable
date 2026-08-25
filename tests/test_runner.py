@@ -2000,10 +2000,9 @@ def test_without_a_holdout_train_still_raises_at_every_scope(tmp_path, scope):
 
 def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
     """No CONFIG can reach this: `E-DATA-HOLDOUT-FOLD` refuses the pair at
-    validate time, and `E-DATA-HOLDOUT-CELLS` closes the arm interaction. So
-    the seam is exercised by calling `execute_plan` directly with both
-    arguments non-`None`, rather than by a fixture that cannot exist — naming a
-    seam is not testing it.
+    validate time. So the seam is exercised by calling `execute_plan` directly
+    with both arguments non-`None`, rather than by a fixture that cannot exist
+    — naming a seam is not testing it.
 
     An assertion rather than a silent precedence: two answers to "which units
     is this metric over?" is exactly what the refusal exists to prevent, and if
@@ -2023,30 +2022,125 @@ def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
         )
 
 
-def test_a_holdout_beside_cells_is_a_core_defect_not_a_silent_choice(tmp_path):
-    """No CONFIG can reach this either: `E-DATA-HOLDOUT-CELLS` refuses a
-    holdout beside the group axis `arm_members` comes from, at validate time.
-    So this seam is exercised the same way its fold sibling above is — calling
-    `execute_plan` directly with both `holdout_train` and `arm_members`
-    non-`None`, rather than by a fixture that cannot exist.
+# --- H3c-3 task 15 (Ruling II): the train side is narrowed to the arm --------
 
-    Passes `fold_members=None` so only the cells assertion can fire, keeping
-    the attribution structural rather than incidental — the same shape the
-    fold test above uses to attribute to its own assertion."""
-    roster = _runner_roster(10)
-    with pytest.raises(AssertionError, match="E-DATA-HOLDOUT-CELLS"):
-        execute_plan(
-            plan=_one_step_plan(scope="repeat"),
-            run_dir=tmp_path / "run",
-            input_dir=tmp_path / "in",
-            cfgs={},
-            repeats=[],
-            digest="sha256:aaa",
-            units=roster,
-            holdout_train=UnitList(list(roster)[:5]),
-            fold_members=None,
-            arm_members={0: frozenset({"u0"})},
-        )
+
+def _h3c3_arm_holdout_plan(scope: str):
+    """A two-condition plan over one recording step at `scope` — the arms are
+    condition 0 and condition 1, which is what `arm_members` is keyed by."""
+    step_cls = _load_step_from_source(_UNITS_RECORDING_STEP_SOURCE, scope=scope)
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [step_cls]
+    return build_plan(
+        P(),
+        conditions=[(0, "arm=a"), (1, "arm=b")],
+        repeat_labels=["seed17"],
+    )
+
+
+def _h3c3_run_arm_holdout(tmp_path: Path, scope: str) -> dict[int | None, dict]:
+    """`execute_plan` driven directly with BOTH `holdout_train` and
+    `arm_members`, returning each execution's `seen.json` keyed by its
+    condition index.
+
+    **This call could not be made before this commit** — it tripped
+    `assert holdout_train is None or arm_members is None`, which task 15
+    deletes — and it cannot be made through a config either, because
+    `E-DATA-HOLDOUT-CELLS` still refuses the pair at `validate` until task 16.
+    That is the whole reason Ruling II puts the narrowing, the deletion and
+    this fixture in one commit.
+
+    **Eight units, two arms of four, and the two arms are ASYMMETRIC in what
+    they hold** — `{u0, u1, u2}` train against `{u4, u5, u6}` — so an execution
+    narrowed to the wrong arm produces a different list rather than the same
+    one. A symmetric fixture would pass under MU-8.
+    """
+    roster = _runner_roster(8)
+    # The per-cell holdout: arm `a` is `u0..u3` and arm `b` is `u4..u7`, each
+    # split 3 train / 1 test, which is what `units.holdout_within_cells` draws.
+    holdout_train = UnitList([u for u in roster if u.key in {"u0", "u1", "u2", "u4", "u5", "u6"}])
+    test = UnitList([u for u in roster if u.key in {"u3", "u7"}])
+    plan = _h3c3_arm_holdout_plan(scope)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "in",
+        cfgs={
+            0: Config({"parameters": {}}),
+            1: Config({"parameters": {}}),
+            -1: Config({"parameters": {}}),
+        },
+        repeats=[Repeat("seed", "seed17", 17)],
+        digest="sha256:abc",
+        units=test,
+        holdout_train=holdout_train,
+        arm_members={
+            0: frozenset({"u0", "u1", "u2", "u3"}),
+            1: frozenset({"u4", "u5", "u6", "u7"}),
+        },
+    )
+    seen: dict[int | None, dict] = {}
+    for execution, result in zip(plan, results, strict=True):
+        assert result.status == "completed", result.error
+        step_dir = step_dir_for(run_dir, execution, collapse_repeats=True)
+        seen[execution.condition_index] = json.loads((step_dir / "seen.json").read_text())
+    return seen
+
+
+def test_h3c3_a_condition_scoped_holdout_trains_only_on_its_own_arm(tmp_path):
+    """**Fixture F4, and it is what Ruling II exists for.**
+
+    `holdout_train` arrives roster-wide from `cli._execute_prepared`, and
+    `units` arrives as the TEST partition. Before this commit
+    `execute_plan` composed the arm-narrowed test side with the roster-wide
+    train side, so condition 1's step would have fitted on `u0, u1, u2` — the
+    other arm's units — and then been evaluated against `u7`. That is a model
+    trained on units it is then evaluated against, across arms, with no
+    diagnostic.
+
+    **Both halves of every arm are asserted, and the train side is asserted
+    NON-EMPTY as well as contained.** A subset assertion alone passes on an
+    empty train list, which is exactly what the composition
+    `[u for u in holdout_train if u.key in arm_keys]` produces when `arm_keys`
+    is taken from the narrowing above — that local is `arm ∩ test`, and the
+    train side is disjoint from the test side, so every arm would come back
+    empty. Measured; it is why the narrowing here recomputes `_arm_keys` over
+    the train side's own keys.
+
+    **Condition 1 is asserted, not only condition 0.** MU-8 narrows to
+    `arm_members[0]` rather than to the execution's own arm, which is a no-op
+    at condition 0 and only condition 1 can see it.
+    """
+    seen = _h3c3_run_arm_holdout(tmp_path, "condition")
+    assert seen[0]["test"] == ["u3"]
+    assert seen[0]["train"] == ["u0", "u1", "u2"]
+    assert seen[1]["test"] == ["u7"]
+    assert seen[1]["train"] == ["u4", "u5", "u6"]
+    assert set(seen[1]["train"]) <= {"u4", "u5", "u6", "u7"}
+    assert seen[1]["train"], "a subset assertion alone passes on an empty train side"
+
+
+def test_h3c3_a_run_scoped_holdout_keeps_the_whole_training_roster(tmp_path):
+    """The control, and the half that says the narrowing did not go one branch
+    too wide.
+
+    A `run`-scoped execution belongs to no condition and so to no arm
+    (`execution.condition_index is None`), and keeps the whole training roster
+    — the same rule `scoped_units` follows for the test side one branch up. A
+    narrowing written without the `condition_index is not None` guard would
+    raise from `_arm_keys` ("the plan and the resolved arms disagree") or hand
+    back one arm's units at a scope that has no arm; either way this fails and
+    the sibling above does not.
+    """
+    seen = _h3c3_run_arm_holdout(tmp_path, "run")
+    assert seen[None]["test"] == ["u3", "u7"]
+    assert seen[None]["train"] == ["u0", "u1", "u2", "u4", "u5", "u6"]
 
 
 # --- H7d Part B task 5: `StopSignal` and the `break`, on `max_failed_fraction`'s
