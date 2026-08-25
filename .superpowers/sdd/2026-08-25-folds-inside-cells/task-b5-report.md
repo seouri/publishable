@@ -15,8 +15,10 @@
 Branch base: batch D's follow-up at `c44c34d`, whose full unfiltered suite I confirmed myself
 before editing anything: **3402 passed, 1 skipped, 2 xfailed** — the figure the dispatch gave,
 measured rather than carried. Final: **3416 passed, 1 FAILED, 1 skipped, 2 xfailed**
-(3402 + 6 + 4 + 2 + 2). `ruff check`, `ruff format --check` and `mypy` (56 source files) clean at
-every commit.
+— **3417 collected**. Derived rather than added up to the answer: 3402 → task 18 **+6** (3408) →
+task 19 **+4** (3412) → task 21 turns one **passing** test red, adding none (3411 passed, 1 failed) →
+task 22 **+2** (3413 passed) → task 23 **+3** (3416 passed). `ruff check`, `ruff format --check` and
+`mypy` (56 source files) clean at every commit.
 
 ---
 
@@ -230,8 +232,19 @@ Measured newline-insensitively over a filtered file list with a can-fail control
 
 **The controller's amendment named the `E-REPL-FOLD-CELLS` pair. There is a second pair.**
 `E-DATA-HOLDOUT-CELLS` also survives at 2 `CLAUDE.md` sites, which M15's *"reference.md-only"* hides
-for both codes equally. **Four `CLAUDE.md` sites, not two, and I took none of them.** They are in the
-H3d and H4b-1 paragraphs of the repository-status section.
+for both codes equally. **Four `CLAUDE.md` sites, not two, and I took none of them.**
+
+**They are TWO LINES, each carrying both codes, and the two are different KINDS of claim** — this
+matters because the controller's two edits are not the same edit twice:
+
+| Where | What it is |
+|---|---|
+| The **H3d** paragraph, at *"…both that and a holdout beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`"* | A **historical build claim**, now false: neither is a named refusal any more |
+| The paragraph beginning *"The cost is that H3d now precedes the cells work it was scheduled to consume"*, at *"**H3c-3 owns retrofitting the holdout to cells and retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`, both already named on H3d's branch, once drawing within a cell is built**"* | A **live ownership assignment to H3c-3**, which this slice has just discharged |
+
+That second paragraph is **one contiguous region** carrying three stale things at once: the ownership
+claim above, `E-DATA-HOLDOUT-CELLS` / `E-REPL-FOLD-CELLS`, and the phrase *"H3c-3's remaining 14"*.
+Whoever edits it should read the whole paragraph rather than the code strings.
 
 Other M15 checks, every hit attributed: `is not built` 3+1 → **0** (the third `reference.md` hit was
 inside the *Folds fit inside the cells* row itself, which is why the count is not 2+1); *One split,
@@ -250,7 +263,12 @@ factorial. Each was **honestly marked** when written and became false when the c
 
 **Mechanical**, over the four documents plus the feasibility analysis, skipping fenced blocks
 throughout: relative links, `#anchor` resolution, duplicate anchors, table column counts, empty rows,
-trailing whitespace, tabs, invisible unicode, `×`-not-`x`. **0 problems**, with a can-fail control.
+trailing whitespace, tabs, invisible unicode. **0 problems**, with a can-fail control. The
+`×`-not-`x` check is **separate and was run separately, after task 23's append** — an intermediate
+version of the checker dropped it and the "0 problems" figure above therefore does not include it;
+run on its own over the same five files it returns **0 hits**, with a can-fail control on the literal
+string `3 x 5 executions`. Recorded this way rather than folded into the number, because a report that
+claims a check its own run did not perform is the shape § 3 of this report flags.
 **Two false-positive bugs in my own checker were found and fixed before I believed its output** — an
 emphasis strip that ate `_` out of anchors (8 phantom bad anchors) and a cell splitter blind to `\|`
 (3 phantom column mismatches). Reporting the checker's own defects because a checker that reports
@@ -288,7 +306,14 @@ records `n_train` per unit so the fact also survives in the **per-unit table**, 
   condition-scoped execution; `n_train` is **6 for `control` and 2 for `treatment`**; the attrition
   identity `resolved == completed + ineligible + failed` holds over a **non-empty** set of blocks
   (returned as a list and asserted truthy, because an identity checked over zero blocks holds
-  vacuously).
+  vacuously) **over three live terms**: `_H3C3_TRAIN_SEEING_STEP` `io.skip`s `c7` and silently drops
+  `c8`, both `control`'s, so the exact tuple `(9, 7, 1, 1)` is asserted rather than the identity
+  alone — `9 == 9 + 0 + 0` is a true identity no accounting bug can falsify, and a first draft of
+  this fixture recorded every unit and asserted exactly that. **MU-ATTR** (`_counts` reporting
+  `ineligible: 0` and folding it into `failed`) fails it: `(9, 7, 0, 2)`. The **holdout** fixture's
+  roster is 6/6 and carries neither key, so its identity really does reduce to
+  `resolved == completed`, and that test's own comment says so rather than reading as the same
+  check.
 - **`groups × holdout`** — a separate fixture (C27), seed repeats, `frac: 0.5`. Each arm's test side
   is half of **that arm**; the step's train side equals `arm ∩ recorded train` and is asserted
   **strictly smaller** than the roster-wide train side, which is what makes the narrowing visible

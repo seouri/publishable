@@ -27290,6 +27290,13 @@ class Step(BaseStep):
             "train": train,
         }})
         for unit in io.units:
+            if unit.key == "c7":
+                # Ineligible, not failed — gives `arm=control` `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "c8":
+                # Neither recorded nor skipped — gives `arm=control` `failed: 1`.
+                continue
             io.record(unit.key, {{"score": 1.0, "n_train": len(train)}})
         return {{}}
 """
@@ -27303,7 +27310,18 @@ ran"* is the defect this project has found in five slices. Asserting
 about what the step **saw**. So the evidence here is produced from the object
 core handed the step: `split.json` from `io.units`/`io.units.train`, and
 `n_train` recorded per unit into the per-unit table so the count survives in an
-artifact core did not write from the plan."""
+artifact core did not write from the plan.
+
+**`c7` and `c8` exist to make the attrition identity able to fail**, on
+`_ARM_STEP`'s own precedent — one unit `io.skip`ped and one silently dropped, so
+`resolved == completed + ineligible + failed` has three live terms in the
+`arm=control` condition rather than reducing to `resolved == completed`, which no
+accounting bug could falsify. Both keys are `control`'s and both exist **only in
+the 9/3 roster**, so the holdout fixture (whose roster is 6/6, keys `c0`..`c5`)
+reaches neither branch and says so in its own docstring. `control` then loses 1
+of 9 to failure, below `limits.max_failed_fraction`'s scaffolded `0.2`, so the
+plan is not truncated; and every unit that *is* recorded still records the same
+`n_train`, so the aggregated value is unmoved."""
 
 
 def _h3c3_split_files_by_condition(run_dir: Path) -> dict[str, list[dict[str, list[str]]]]:
@@ -27433,7 +27451,15 @@ def test_h3c3_a_real_groups_by_fold_run_draws_folds_inside_the_arms(tmp_path, mo
         assert block["value"] == expected_train[condition["label"]], condition["label"]
         assert block["basis"] == "units", condition["label"]
 
-    # (4)
+    # (4) — the identity, over three LIVE terms rather than over a run in which
+    # `ineligible` and `failed` are structurally zero. `c7` is `io.skip`ped and
+    # `c8` is silently dropped, both in `control`, so an accounting bug in
+    # either term is visible here; the exact counts are asserted rather than
+    # only the identity, because `9 == 7 + 1 + 1` and `9 == 9 + 0 + 0` are both
+    # true identities and only one of them is this fixture.
+    control = next(c for c in run["results"]["conditions"] if c["label"] == "arm=control")
+    n = control["aggregated"]["step01_summarize_units"]["score"]["n"]
+    assert (n["resolved"], n["completed"], n["ineligible"], n["failed"]) == (9, 7, 1, 1), n
     assert _h3c3_attrition_holds(doc["run_dir"])
 
 
@@ -27497,6 +27523,13 @@ def test_h3c3_a_real_groups_by_holdout_run_trains_inside_the_arm(tmp_path, monke
             # which is the leak this narrowing closed.
             assert train < recorded_train, condition
 
+    # The attrition identity, and its terms here are honestly weaker than the
+    # fold fixture's: this roster is 6/6, so `_H3C3_TRAIN_SEEING_STEP`'s `c7`
+    # and `c8` branches are unreachable and the identity reduces to
+    # `resolved == completed`. Stated rather than left to look like the same
+    # check — the three-term version is asserted in the fold sibling, whose
+    # roster carries those keys.
+    #
     # The same fact through the per-unit table: `n_train` is 3 in every arm —
     # 6 units in the arm at `frac: 0.5`. A roster-wide train side would be 6
     # (12 − 6), which is the number this assertion rules out.
