@@ -2326,3 +2326,66 @@ config. No exit code is minted. Three exit codes **move**, each from the specifi
 diagnostic to real behaviour — `publishable demo`, `publishable docs` and `publishable list-templates`
 stop printing *"specified but not built"* at exit `2` — and all three are reachable only outside
 these nine, which is why the table does not move.
+
+### Measured on 2026-08-25 against commit `7ef6846` — after H3c-3
+
+**H3c-3 draws a `fold` level's partitions and a `data.units.holdout` split *inside each cell* of a
+`sweep.groups` × `allocation: between` design, retiring `E-REPL-FOLD-CELLS` and
+`E-DATA-HOLDOUT-CELLS`, and decides `limits.min_units_per_cell` as a warning,
+`W-DATA-CELL-THIN`.** It is the last slice in the project; nothing is chartered after it.
+
+**It retires two refusals, mints one warning, and unblocks ZERO configs, and the four rows are
+derived rather than repeated.** Derived per row:
+
+- **Row 1, transplantable configs validating with zero errors — 8 of 8.** Unchanged, and **neither
+  retirement is reachable**: `grep -n "groups:" docs/feasibility-llm-growth-studies.md` → two hits in
+  config blocks, **both `groups: []`**; `grep -n "allocation:"` → two config hits, **both
+  `allocation: within`**, the third being a prose sentence. `grep -n "kind: fold"` returns **nothing**
+  — no config here declares a `fold` level at all — and the one `holdout:` block sits beside that same
+  `allocation: within` and `groups: []`. Both retired codes needed a **cell structure**, which is a
+  non-empty `sweep.groups`, so no config here could reach either of them before or after.
+  `E-REPL-FOLD-K-TOO-LARGE`'s and `E-DATA-HOLDOUT-EMPTY`'s widened bounds are widened **only when
+  cells resolve**, and none do. **The new warning cannot move this row in either direction**: it is
+  gated on a cell structure none of the nine has, and the row counts **errors** — a warning never
+  changes an exit code. (`min_units_per_cell: 20` appears in three of the config blocks, which is
+  exactly the shape C16's gate exists for: without the gate every one of them would have warned.)
+- **Row 2, blocked on `io.reuse_from` — 0.** Untouched. This slice reads no upstream and walks no
+  lineage: it touches `units.py`, `replication.py`, `validate.py`, `cli.py`, `runner.py`, `sweep.py`
+  and `artifacts.py`, and `grep -rn "reuse_from\|read_upstream"` over this branch's diff returns
+  nothing. The row's parenthetical is unchanged: six configs still need the plugin body to call it.
+- **Row 3, meet the `report_by`-under-`resample` gap — 7.** Untouched, **and now permanently
+  unowned.** It is a construction inside `stats.summarize_step`; nothing here enters that phase.
+  `docs/superpowers/spec-defects.md`'s `RE-OWNED 2026-08-25` entry states its owner as `unassigned`
+  with *no slice follows* as a **fact rather than a deferral**, which is the only thing about this row
+  that H3c-3 changes and it is a change to the record, not to the count.
+- **Row 4, free of every core-side dependency this analysis can name — 1.** Unchanged: E5, and only
+  with the plugin written and installed. Nothing this slice built is a dependency any of the nine can
+  acquire or shed, since all of them are one roster under one within-subjects allocation.
+
+None of the nine declares a group axis, a `fold` level, a `cluster_by`, a `study` or an
+`apparatus_probe`, so the cell decomposition this slice threads through `validate` and `run` resolves
+to `None` for every one of them and every cell-aware check takes the roster-wide branch it took
+before.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method now ships, so this row's *parenthetical* ("unbuilt") is what went false, not the dependency: six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` gap | **7** | no — a construction chosen inside `summarize_step`; **H8a touches none of this** — it is H4 Statistics' gap, live on E1, E2, E4, E6, C1, C2, C3, and unmoved by anything this slice built |
+| Free of every core-side dependency this analysis can name | **1** | no — E5, and only with the plugin written and installed |
+
+**The block above is byte-identical to the H9d entry's, extracted rather than retyped**, by the same
+two independent methods the H8a, H9a, H9b, H9c and H9d entries describe — a programmatic walk that
+finds the last `| Figure | Count | Visible to` header and reads forward while the line starts with
+`|`, and a fixed six-line slice from the same index — compared and found equal, six lines each. Its
+cells still name **H8a**, because updating them is exactly how a repeated table stops being repeated.
+**No fifth number is minted, and no single figure is quoted for this analysis' executability** —
+quote the table, or name the dependency. **And this is the last entry this section will ever gain**,
+so a reader arriving later should read the table as final rather than as current.
+
+**What newly stops and what newly warns, for these nine: NOTHING.** Two `E-` codes are **retired**
+(`E-REPL-FOLD-CELLS`, `E-DATA-HOLDOUT-CELLS`) and neither was reachable from any of them; one `W-`
+code is **minted** (`W-DATA-CELL-THIN`) and its gate excludes all nine. No exit code is minted and
+none moves. The only behaviour change reachable from a config without a group axis is the one that
+is not a change at all: `units.partition_within_cells` reduces to the byte-identical whole-roster
+`partition_units` call it made before, which is what guard-pin arms A, B, D and E exist to hold.

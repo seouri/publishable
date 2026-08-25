@@ -27317,7 +27317,12 @@ def _h3c3_split_files_by_condition(run_dir: Path) -> dict[str, list[dict[str, li
     for path in sorted(run_dir.rglob("split.json")):
         parts = path.relative_to(run_dir).parts
         assert parts[0] == "conditions", parts
-        out.setdefault(parts[1], []).append(json.loads(path.read_text()))
+        # `sweep.condition_dir_name` is `<nn>_<label>`, so the index prefix is
+        # stripped here and the key is the label itself — the same string
+        # `run.yaml`'s conditions carry, which is what a caller crossing the
+        # two has in hand.
+        label = re.sub(r"^\d+_", "", parts[1])
+        out.setdefault(label, []).append(json.loads(path.read_text()))
     return out
 
 
@@ -27502,3 +27507,279 @@ def test_h3c3_a_real_groups_by_holdout_run_trains_inside_the_arm(tmp_path, monke
         assert block["basis"] == "units", condition["label"]
 
     assert _h3c3_attrition_holds(doc["run_dir"])
+
+
+# --- H3c-3 task 23: the resume, end to end ----------------------------------
+
+
+_H3C3_RESUME_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+_TRIP = __TRIP__
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == _TRIP:
+        os._exit(9)
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _tick()
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": sorted(u.key for u in io.units.train),
+        }})
+        for unit in io.units:
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+"""
+
+
+def _h3c3_resume_project(
+    tmp_path: Path, control: Path, *, units_extra: dict[str, Any], replication: dict[str, Any]
+) -> dict[str, Any]:
+    """A committed `groups × …` project with a **DRAWN** arm axis, run straight
+    through once with the crash control absent."""
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication=replication,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+            **units_extra,
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        _starter_step=(
+            _H3C3_RESUME_STEP.replace("__CONTROL__", repr(str(control))).replace("__TRIP__", "2")
+        ),
+    )
+
+
+def _h3c3_crash(doc: dict[str, Any], control: Path) -> Path:
+    """A second `run` of the same project, crashed mid-plan, in a subprocess.
+
+    `_h9b_crash_run`'s mechanism, copied because that helper bakes H9b's own
+    trip count and project into its assertions; the `os._exit(9)` and the
+    counter-file removal are the parts that matter and they are the parts
+    reproduced."""
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stderr)
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    assert (crashed / "run.yaml").exists() is False
+    return crashed
+
+
+def test_h3c3_the_roster_ORDER_lever_is_blocked_by_the_input_manifest_gate(tmp_path, capsys):
+    """**The risk task 23's brief states in advance, measured rather than
+    discovered.**
+
+    The brief's lever for making the second attempt's fresh draw differ from
+    the recorded one is **roster order** (C11): reorder the rows of
+    `index.csv` between attempts, which moves `units_hash`, hence
+    `assign_seed_for`, hence the draw — while `_resumed_allocation`'s
+    set-equality guards pass. The brief also says to check first whether the
+    input-manifest gate blocks it.
+
+    **It does, and here is the measurement.** `resume` compares
+    `manifest_hash(recorded)` against `manifest_hash(prepared.manifest)` and
+    refuses with `E-RESUME-INPUT-MOVED`; under `input_manifest_policy:
+    hash_all` a reordered `index.csv` is a different file content, so the gate
+    fires before `_resumed_allocation` is reached at all.
+
+    Pinned rather than left as a note, because this refusal is **correct** and
+    a later reader wondering why the resume fixture below edits
+    `allocation.json` instead needs the reason to be a fact rather than a
+    story. The can-fail half is in the same test: the *unmodified* roster
+    resumes to `EXIT_OK`.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    index = doc["root"].parent / "data" / "index.csv"
+    original = index.read_text()
+    header, *rows = original.strip().split("\n")
+    index.write_text(header + "\n" + "\n".join(reversed(rows)) + "\n")
+    capsys.readouterr()
+    code = main(["resume", str(crashed)])
+    printed = capsys.readouterr()
+    assert code != EXIT_OK, printed.out + printed.err
+    assert "E-RESUME-INPUT-MOVED" in printed.out + printed.err
+
+    # The can-fail half: restore the roster and the same resume succeeds, so
+    # the refusal above is attributable to the reordering and not to the
+    # fixture being unresumable.
+    # The can-fail half: restore the roster and the same resume succeeds, so
+    # the refusal above is attributable to the reordering and not to the
+    # fixture being unresumable. **The content is not enough** — `manifest`
+    # records `size` and `mtime_ns` beside the content hash, so a
+    # byte-identical rewrite still moves `manifest_hash`. Measured, not
+    # assumed: without the `os.utime` below this control fails with the same
+    # code, which is a second reason the roster-order lever is unavailable.
+    index.write_text(original)
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    entry = recorded["files"]["index.csv"]
+    os.utime(index, ns=(entry["mtime"], entry["mtime"]))
+    capsys.readouterr()
+    again = main(["resume", str(crashed)])
+    printed_again = capsys.readouterr()
+    assert again == EXIT_OK, printed_again.out + printed_again.err
+
+
+def test_h3c3_a_real_resume_executes_against_the_RECORDED_cells_end_to_end(tmp_path, capsys):
+    """**Ruling KK, end to end through `main(["resume", …])`** — the fixture
+    § 6.2 of the re-scoping says H9b could not build, and which task 17's F5
+    proves by direct call.
+
+    **Which lever, measured.** The brief's roster-order lever is **blocked**,
+    pinned by the sibling above: `manifest` records `size` and `mtime_ns`
+    beside the content hash, so a reordered — or even a byte-identical
+    rewritten — `index.csv` earns `E-RESUME-INPUT-MOVED` before
+    `_resumed_allocation` is reached. The lever that works is the one F5
+    already uses, `_h9b_swapped`: **edit the crashed run's own
+    `allocation.json`**, which is the artifact `resume` treats as
+    authoritative and which no hash on the resume path covers. It instantiates
+    the identical blindness — the guards compare axis sets, level sets and key
+    sets, and a swap moves none of them — through the command rather than
+    through a direct call.
+
+    **What it asserts, and why a size is the discriminator here.** The arm
+    axis is drawn with `method: random`, so the recorded arms and a fresh
+    re-draw genuinely differ; `_h9b_swapped` then makes them differ by one
+    more unit. `_prepare_run` computes `partitions` from the **fresh** cells
+    and `_resumed_allocation` replaces `group_axes` from the record — so
+    without Ruling KK's re-derivation the run executes against recorded cells
+    while `arm ∩ fold_i` is taken from partitions drawn inside different ones,
+    and those intersections are **not** the arm's own thirds. Every execution
+    that ran after the crash therefore has `|test| == 2` (6 units per arm, 3
+    folds inside the arm) only if the folds were re-derived inside the
+    recorded decomposition.
+
+    The swap is asserted to have actually moved a unit's condition, which is
+    what stops the whole test passing on an edit the run ignored.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    alloc_path = crashed / "allocation.json"
+    recorded = json.loads(alloc_path.read_text())
+    edited = _h9b_swapped(recorded)
+    alloc_path.write_text(json.dumps(edited, indent=2))
+    edited_arms = {level: set(keys) for level, keys in edited["arms"]["arm"].items()}
+    moved = set(edited_arms["control"]) - set(recorded["arms"]["arm"]["control"])
+    assert len(moved) == 1, moved
+
+    capsys.readouterr()
+    assert main(["resume", str(crashed)]) == EXIT_OK, capsys.readouterr()
+
+    # `resume` never rewrites `allocation.json`: the record it honoured is the
+    # record still on disk.
+    assert json.loads(alloc_path.read_text()) == edited
+
+    by_condition = _h3c3_split_files_by_condition(crashed)
+    assert sorted(by_condition) == ["arm=control", "arm=treatment"], sorted(by_condition)
+    seen_moved = False
+    for condition, splits in sorted(by_condition.items()):
+        arm = edited_arms[condition.split("=")[-1]]
+        for split in splits:
+            test, train = set(split["test"]), set(split["train"])
+            if test | train != arm:
+                # An execution completed BEFORE the edit, under the arms the
+                # first attempt drew. Skipped rather than asserted on: the
+                # claim is about what the resume executed.
+                continue
+            assert len(test) == 2, (condition, sorted(test))
+            assert train == arm - test, condition
+            if moved & (test | train):
+                seen_moved = True
+    assert seen_moved, "no post-edit execution saw the swapped unit in its new arm"
+
+
+def test_h3c3_a_real_resume_honours_the_RECORDED_holdout_rather_than_redrawing(tmp_path, capsys):
+    """The `groups × holdout` resume, a **separate fixture** from the fold one
+    (C27), asserting the recorded split is honoured rather than redrawn.
+
+    The lever is the same edit and for the same reason: the crashed run's own
+    `allocation.json`, whose `holdout.test`/`holdout.train` are moved by one
+    unit **within one arm**, so every guard the resume applies to the axes is
+    untouched and the sizes are unchanged. A resume that redrew the split from
+    the seed would hand the step the original membership; a resume that reads
+    the record hands it the edited one.
+
+    Asserted on what the **step** saw (`split.json`), not on the file the test
+    itself wrote — `allocation.json` agreeing with itself is a tautology.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={"holdout": {"method": "random", "frac": 0.5, "seed": 4321}},
+        replication={"repeats": [{"kind": "seed", "n": 3}], "rationale": "three seeds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    alloc_path = crashed / "allocation.json"
+    recorded = json.loads(alloc_path.read_text())
+    assert recorded["holdout"]["within"] == ["arm"]
+    control_arm = set(recorded["arms"]["arm"]["control"])
+    test_side = set(recorded["holdout"]["test"])
+    # One unit of `control` out of the test side, one in — a swap inside the
+    # arm, so no axis guard can see it and no size changes.
+    out_unit = sorted(control_arm & test_side)[0]
+    in_unit = sorted(control_arm - test_side)[0]
+    edited = json.loads(json.dumps(recorded))
+    edited["holdout"]["test"] = sorted((test_side - {out_unit}) | {in_unit})
+    edited["holdout"]["train"] = sorted(
+        (set(recorded["holdout"]["train"]) - {in_unit}) | {out_unit}
+    )
+    assert edited != recorded
+    alloc_path.write_text(json.dumps(edited, indent=2))
+
+    capsys.readouterr()
+    assert main(["resume", str(crashed)]) == EXIT_OK, capsys.readouterr()
+    assert json.loads(alloc_path.read_text()) == edited
+
+    expected_test = control_arm & set(edited["holdout"]["test"])
+    splits = _h3c3_split_files_by_condition(crashed)["arm=control"]
+    honoured = [split for split in splits if set(split["test"]) == expected_test]
+    assert honoured, [split["test"] for split in splits]
+    for split in honoured:
+        assert in_unit in split["test"]
+        assert out_unit in split["train"]
+        assert set(split["test"]) | set(split["train"]) == control_arm
