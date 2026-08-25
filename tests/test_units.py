@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from publishable import ContractError
+from publishable.replication import _fold_k
 from publishable.units import (
     DRAWN_ASSIGN_METHODS,
     HOLDOUT_METHODS_REALIZED,
@@ -5060,3 +5061,128 @@ def test_h3c3_a_decomposition_that_does_not_partition_the_roster_is_a_core_defec
     # decomposition draws without raising, so neither assertion above is
     # passing because this shape raises for some other reason.
     assert len(partition_within_cells(roster, 3, "sha256:abc", cells)) == 3
+
+
+# --- H3c-3 task 9: F1, the empty-fold fixture and its can-fail control --------
+
+
+def _f1() -> tuple[UnitList, dict[str, str], dict[str, tuple[str, ...]]]:
+    """F1, the fixture C1 corrects, **with its mapping stated rather than
+    implied**: 15 units; clusters `S1`×7 → units 0-6, `S2`×3 → 7-9, `S3`×3 →
+    10-12, `S4`×1 → 13, `S5`×1 → 14; `arm = control` for units 0-7 and
+    `treatment` for 8-14, an 8/7 split by attribute.
+
+    **Cluster `S2` therefore SPANS both arms** — unit 7 is `control`, units 8
+    and 9 are `treatment` — which is the whole of the difference between this
+    table and `H3c-3-SCOPING.md`'s `[3, 3, 1, 0, 0]`: three *whole* clusters in
+    `treatment` requires a mapping in which no cluster crosses the boundary,
+    and neither scoping's prose determines its own mapping. Here `control`
+    holds 2 clusters and `treatment` 4.
+
+    A spanning cluster is legal today (design Decision 13 files it rather than
+    refusing it) and this fixture keeps one deliberately; F2, the per-cell
+    basis fixture, deliberately has none.
+    """
+    spec = (("S1", 7), ("S2", 3), ("S3", 3), ("S4", 1), ("S5", 1))
+    units: list[Unit] = []
+    index = 0
+    for site, n in spec:
+        for _ in range(n):
+            arm = "control" if index < 8 else "treatment"
+            units.append(Unit(key=f"u{index:02d}", paths=(), attributes={"site": site, "arm": arm}))
+            index += 1
+    roster = UnitList(units)
+    clusters = {u.key: str(u.attributes["site"]) for u in roster}
+    members = {
+        arm: tuple(u.key for u in roster if u.attributes["arm"] == arm)
+        for arm in ("control", "treatment")
+    }
+    return roster, clusters, members
+
+
+def _f1_cells() -> tuple[
+    UnitList, dict[str, str], dict[tuple[tuple[str, str], ...], frozenset[str]]
+]:
+    roster, clusters, members = _f1()
+    plan = ArmPlan(
+        levels=("control", "treatment"),
+        members={arm: tuple(keys) for arm, keys in members.items()},
+        seed=None,
+        strata=(),
+    )
+    return roster, clusters, cells_of({"arm": plan})
+
+
+def _sizes(roster: UnitList, keys: frozenset[str], k: int, clusters: dict[str, str]) -> list[int]:
+    sub = UnitList([u for u in roster if u.key in keys])
+    restricted = {key: value for key, value in clusters.items() if key in keys}
+    return [len(part) for part in partition_units(sub, k, "sha256:abc", clusters=restricted)]
+
+
+def test_h3c3_the_empty_fold_table_and_its_whole_roster_control():
+    """C1's table, **recomputed here rather than read from the design**: at
+    `k = 5` over F1 the whole roster gives `[7, 3, 3, 1, 1]` — no empty fold —
+    while the same fixture partitioned inside each arm gives `[7, 1, 0, 0, 0]`
+    in `control` and `[3, 2, 1, 1, 0]` in `treatment`.
+
+    **The whole-roster row is the can-fail control.** Same fixture, same `k`,
+    same clusters, no empty fold: without it the table would show only that
+    small rosters make small folds, and every empty fold below could be an
+    artefact of 15 units rather than of the split. The cluster counts are
+    asserted beside it (2 and 4, from `S2` spanning the boundary), because they
+    are what makes `control`'s row three-quarters empty at a `k` the roster's
+    own 5 clusters carry exactly.
+
+    This is the state before the slice: `partition_units` over the whole
+    roster is what `_prepare_run` called, and a condition then saw
+    `cell ∩ partition_i` — four of `control`'s five folds holding one unit or
+    none.
+    """
+    roster, clusters, cells = _f1_cells()
+    assert [len(keys) for keys in cells.values()] == [8, 7]
+    assert [len({clusters[key] for key in keys}) for keys in cells.values()] == [2, 4]
+    assert clusters["u07"] == "S2" and clusters["u08"] == "S2", "S2 spans the arm boundary"
+
+    whole = [len(part) for part in partition_units(roster, 5, "sha256:abc", clusters=clusters)]
+    assert whole == [7, 3, 3, 1, 1]
+    assert min(whole) > 0, "the control: the roster's own draw has no empty fold at k=5"
+
+    control, treatment = cells.values()
+    assert _sizes(roster, control, 5, clusters) == [7, 1, 0, 0, 0]
+    assert _sizes(roster, treatment, 5, clusters) == [3, 2, 1, 1, 0]
+
+
+def test_h3c3_the_bound_refuses_that_k_and_the_per_cell_draw_at_the_admitted_one_is_full():
+    """The other half: the `k` that produced those empty folds is refused, and
+    at the `k` the bound admits **no cell contributes an empty fold**.
+
+    The bound is `units.thinnest_cell`'s — 2, from `control`'s two clusters,
+    against the roster's 5 — so `k: 5` is refused by
+    `E-REPL-FOLD-K-TOO-LARGE` with the cell named, and `k: 2` is not. Both
+    directions, because testing the refusal and never the honouring proves
+    nothing about the honouring: at `k = 2` the per-cell draw gives `control`
+    `[7, 1]` and `treatment` `[4, 3]`, every fold populated in every cell, and
+    the merged partition is `[11, 4]` — still a partition of all 15 units.
+
+    `[11, 4]` is deliberately **not** balanced: F1's `S1` is 7 units of one
+    indivisible cluster, so `partition_units`' own at-most-one-cluster floor
+    sets it, per cell. An empty fold is what the bound is for; an uneven one is
+    what a cluster of 7 in a roster of 15 buys.
+    """
+    roster, clusters, cells = _f1_cells()
+    basis, cell = thinnest_cell(roster, "site", cells)
+    assert (basis, cell) == (2, (("arm", "control"),))
+    assert fold_basis(roster, "site") == 5, "the roster's own count clears k=5"
+
+    with pytest.raises(ContractError) as refused:
+        _fold_k({"kind": "fold", "k": 5}, basis, "site", cell)
+    assert refused.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "arm=control" in str(refused.value)
+    assert _fold_k({"kind": "fold", "k": 2}, basis, "site", cell) == 2
+
+    control, treatment = cells.values()
+    assert _sizes(roster, control, 2, clusters) == [7, 1]
+    assert _sizes(roster, treatment, 2, clusters) == [4, 3]
+    merged = partition_within_cells(roster, 2, "sha256:abc", cells, clusters=clusters)
+    assert [len(part) for part in merged] == [11, 4]
+    assert sorted(u.key for part in merged for u in part) == sorted(u.key for u in roster)
