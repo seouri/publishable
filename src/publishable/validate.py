@@ -3528,40 +3528,29 @@ def _check_holdout(
 
 
 def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
-    """A roster-wide evaluation split beside a cell structure — refused, for
-    both split kinds, from one site.
+    """A roster-wide **holdout** beside a cell structure — refused.
 
-    **The two faults are one fault**, which is why they share a site: a
-    `data.units.holdout` and a `{kind: fold}` level each partition the WHOLE
-    roster once, and `data.units.allocation: between` or a non-empty
-    `sweep.groups` divides that same roster into cells. A partition drawn
-    across the cells rather than within them gives them unequal test sizes and,
-    once the split is fine enough, a cell holding none of its own units at all
-    — a cell-level metric computed from nothing.
+    A `data.units.holdout` partitions the WHOLE roster once, and
+    `data.units.allocation: between` or a non-empty `sweep.groups` divides that
+    same roster into cells. A split drawn across the cells rather than within
+    them gives them unequal test sizes and, once it is fine enough, a cell
+    holding none of its own units at all — a cell-level metric computed from
+    nothing.
 
-    **Two codes, one site.** `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`
-    send a reader to the declaration they actually wrote; a single code would
-    name one of the two and be wrong for the other. A second check *site* is
-    what this deliberately does not have — that is how two answers to one
-    question come to disagree.
+    **The `fold` arm is gone, and with it `E-REPL-FOLD-CELLS`.** H3c-3 draws a
+    `fold` level's partitions inside each cell
+    (`units.partition_within_cells`) and bounds `k` against the thinnest cell
+    (`units.thinnest_cell`, reported as `E-REPL-FOLD-K-TOO-LARGE`), so the
+    combination this refused is now the built behaviour rather than an
+    unsupported one. What is left is one code at one site, and when the holdout
+    is drawn per cell too this function and its call site go with it.
 
-    **Refused rather than disclosed.** The disclosure route would be
-    `allocation.json` and `sweep.yaml` recording a truthful membership whose
-    imbalance is visible only to a reader who crosses it against the arms list
-    by hand — the silently-wrong class. The repo's own precedent is to refuse
-    the COMBINATION while honouring both DECLARATIONS, and to route it:
+    **Refused rather than disclosed**, while it is refused. The disclosure route
+    would be `allocation.json` recording a truthful membership whose imbalance
+    is visible only to a reader who crosses it against the arms list by hand —
+    the silently-wrong class. The repo's own precedent is to refuse the
+    COMBINATION while honouring both DECLARATIONS, and to route it:
     `E-DATA-WEIGHT-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
-
-    **The `fold` half closes a defect that is live at this commit**, not a
-    hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
-    over the WHOLE roster, so 15 units split 12/3 by arm permit `k: 5` and
-    leave the 3-unit arm with two empty folds. Nothing else scheduled closes
-    it sooner, which is why it ships here rather than with the slice that owns
-    cells.
-
-    **The route is a design that draws within each cell**, which this build
-    does not have. `docs/superpowers/spec-defects.md` carries the entry and
-    names **H3c-3** as the owner of this refusal's retirement.
 
     Knowable from the declarations alone — no roster, no resolution — so this
     takes neither.
@@ -3589,15 +3578,6 @@ def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c:
             "E-DATA-HOLDOUT-CELLS",
             "data.units.holdout",
             f"is declared beside {where}, {consequence}",
-        )
-    repeats = (doc.get("replication") or {}).get("repeats")
-    if isinstance(repeats, list) and any(
-        isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
-    ):
-        c.error(
-            "E-REPL-FOLD-CELLS",
-            "replication.repeats",
-            f"declares a `fold` level beside {where}, {consequence}",
         )
 
 

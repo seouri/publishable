@@ -13078,17 +13078,34 @@ def _cells(units_extra: dict, *, fold: bool) -> dict:
     return out
 
 
-def test_a_fold_beside_a_cell_structure_is_refused(write_config, tmp_path):
-    """A LIVE defect at `78bb794`: this config validates clean, and `k: 5` is
-    permitted because `fold_basis` answers 15 over the whole roster while arm
-    `b` holds 3 — so arm `b` gets two folds holding none of its units.
+def test_a_fold_beside_a_cell_structure_is_drawn_per_cell_and_bounded_by_it(write_config, tmp_path):
+    """**`E-REPL-FOLD-CELLS` is retired** (H3c-3 task 10), and this is the same
+    fixture the refusal was minted at, asserting what is now true instead.
 
-    Refused rather than disclosed: `sweep.yaml`'s partitions would record the
-    membership truthfully and no reader crosses it against the arms list by
-    hand."""
+    15 units, 12 in arm `a` and 3 in arm `b`. `k: 5` was permitted before the
+    refusal existed, because `fold_basis` answered 15 over the whole roster
+    while arm `b` holds 3 — the live defect that refusal was minted for. It is
+    now refused by `E-REPL-FOLD-K-TOO-LARGE` bounded over the **thinnest cell**
+    (`units.thinnest_cell`), which names the cell rather than the roster, and
+    the retired code is asserted absent from the same finding set so the
+    refusal cannot be arriving from where it used to.
+
+    The honouring half is the second config: at `k: 3`, the largest the thin
+    cell carries, neither code is reported. Testing the refusal and never the
+    honouring would leave "every fold beside a cell structure is refused"
+    indistinguishable from the bound."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_cells({}, fold=True)))
-    assert "E-REPL-FOLD-CELLS" in found
+    path = write_config(_cells({}, fold=True))
+    found = codes(path)
+    assert "E-REPL-FOLD-CELLS" not in found
+    assert "E-REPL-FOLD-K-TOO-LARGE" in found
+    assert "in cell arm=b" in messages_by_code(path)["E-REPL-FOLD-K-TOO-LARGE"]
+
+    fits = _cells({}, fold=True)
+    fits["replication"] = {"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"}
+    admitted = codes(write_config(fits))
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in admitted
+    assert "E-REPL-FOLD-CELLS" not in admitted
 
 
 def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
@@ -13097,17 +13114,6 @@ def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)))
     assert "E-DATA-HOLDOUT-CELLS" in found
-
-
-def test_both_split_kinds_beside_a_cell_structure_report_both_codes(write_config, tmp_path):
-    """One check site, two codes — asserted together because a site that
-    returned after the first finding would pass both tests above and still
-    hide half the fault. `E-DATA-HOLDOUT-FOLD` rides along, which is correct:
-    the two declarations are also mutually exclusive with each other."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=True)))
-    assert "E-DATA-HOLDOUT-CELLS" in found
-    assert "E-REPL-FOLD-CELLS" in found
 
 
 def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(write_config, tmp_path):
@@ -13175,7 +13181,6 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(write_confi
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(write_config(_holdout({"method": "random", "frac": 0.2}, attributes=["arm"])))
     assert "E-DATA-HOLDOUT-CELLS" not in found
-    assert "E-REPL-FOLD-CELLS" not in found
 
 
 _FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
@@ -14893,11 +14898,9 @@ def test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell(write
     `fold_cell=fold_cell` from that `resolve_repeats` call — the code still
     fires and only the message loses the cell.
 
-    `E-REPL-FOLD-CELLS` is reported beside it and that is not a competing
-    answer: `validate` collects rather than aborting, so the roster-wide-split
-    refusal and the cell bound are both reported, and the bound is what tells
-    the reader `k: 3` would not have fitted even once the split is drawn per
-    cell."""
+    Task 10 has since retired `E-REPL-FOLD-CELLS`, so the bound is the only
+    thing refusing this config: when this test was written the roster-wide-split
+    refusal was reported beside it."""
     (tmp_path / "input" / "index.csv").write_text(_F2_ROSTER)
     path = write_config(
         {
@@ -14940,11 +14943,10 @@ def test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell(write
             }
         )
     )
-    assert "E-REPL-FOLD-K-TOO-LARGE" not in fits
-    # And the roster-wide bound would have permitted 5, which is what makes
-    # `k: 3`'s refusal above attributable to the cell rather than to the fold
-    # count being too large for this roster at all.
-    assert "E-REPL-FOLD-CELLS" in fits
+    # No `E-REPL-FOLD-*` code at all: the bound is the cell's basis rather than
+    # a refusal of every clustered fold beside a cell structure, and the retired
+    # `E-REPL-FOLD-CELLS` is not standing in for one either.
+    assert [code for code in fits if code.startswith("E-REPL-FOLD")] == []
 
 
 def test_the_k_all_budget_is_sized_from_the_same_cell_basis_the_bound_uses(write_config, tmp_path):

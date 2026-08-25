@@ -26679,3 +26679,107 @@ def test_h3c3_prepared_carries_the_cell_decomposition_and_none_without_an_axis(
     flat_prepared = _prepare_run(Path(flat["cfg"]), allow_dirty=False)
     assert isinstance(flat_prepared, Prepared)
     assert flat_prepared.cells is None
+
+
+# --- H3c-3 task 10: `E-REPL-FOLD-CELLS` retired, and the property it stood in
+# --- for pinned where the refusal used to sit -------------------------------
+
+
+_H3C3_ARM_9_3_ROSTER = (
+    "patient_id,arm\n"
+    + "".join(f"c{i},control\n" for i in range(9))
+    + "".join(f"t{i},treatment\n" for i in range(3))
+)
+
+
+def test_h3c3_a_fold_inside_the_cells_hands_every_arm_units_in_every_fold(tmp_path: Path):
+    """**What `E-REPL-FOLD-CELLS` was standing in for**, now that the refusal
+    is retired: every (arm, fold) pair is handed units, so no arm's
+    denominator for any fold label is zero.
+
+    The fixture is the shape that refusal was minted at — 12 units, `control`
+    9 and `treatment` 3 — with `{kind: fold, k: 3}`, the largest `k` the
+    thinnest cell admits (3 units, unclustered). The roster's own basis is 12,
+    so the roster-wide bound would have permitted `k: 12` here, and the
+    per-cell draw is what makes each arm's three folds hold 3 and 1 units
+    rather than treatment's holding 1, 1, 1 by luck or 0 by arithmetic.
+
+    Asserted through `runner._handed_keys` — the function whose answer
+    `runner.attrition` divides by — over the run's **own recorded state**:
+    `sweep.yaml`'s partitions and `allocation.json`'s arms, crossed. The
+    per-condition denominators from `run.yaml` are asserted beside it, because
+    `_handed_keys` non-empty and the recorded `resolved` count are two
+    different readers of the same property.
+
+    **The refusal half is the second run in this test**, and it is what a
+    mutation removing the cell clause from the bound fails: at `k: 5` — which
+    the roster's basis of 12 clears and the thinnest cell's 3 does not — no run
+    directory is created at all. Under the roster-wide bound that config runs,
+    and `control`'s folds 4 and 5 are drawn over nothing, which is the zero
+    denominator this test exists to keep unreachable.
+    """
+    from publishable.runner import _handed_keys
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    allocation = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    fold_members = {entry["fold"]: frozenset(entry["test"]) for entry in sweep["partitions"]}
+    assert sorted(fold_members) == ["fold01", "fold02", "fold03"]
+    arms = {level: set(keys) for level, keys in allocation["arms"]["arm"].items()}
+    assert {level: len(keys) for level, keys in arms.items()} == {"control": 9, "treatment": 3}
+
+    for level, keys in arms.items():
+        handed = {label: _handed_keys(label, set(keys), fold_members) for label in fold_members}
+        assert all(handed.values()), (level, {k: sorted(v) for k, v in handed.items()})
+        # Every unit of the arm is handed exactly once across the arm's folds:
+        # the merge is index-wise over cells, so the flat partition is still a
+        # partition of each arm as well as of the roster.
+        assert sorted(key for got in handed.values() for key in got) == sorted(keys)
+        assert sorted(len(got) for got in handed.values()) == (
+            [3, 3, 3] if level == "control" else [1, 1, 1]
+        )
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # The record's own per-fold denominators, which is the same property seen
+    # from the artifact rather than from `_handed_keys`: not one zero, in either
+    # arm, at any fold label. Under a roster-wide bound at `k: 5` this block is
+    # where the defect shows — `treatment` reports `n_units: 0` for two of the
+    # five labels, an interval computed over nothing.
+    per_repeat = [
+        cond["per_repeat"]["step01_summarize_units"] for cond in run["results"]["conditions"]
+    ]
+    assert [cond["label"] for cond in run["results"]["conditions"]] == [
+        "arm=control",
+        "arm=treatment",
+    ]
+    assert per_repeat == [
+        {"fold01": {"n_units": 3}, "fold02": {"n_units": 3}, "fold03": {"n_units": 3}},
+        {"fold01": {"n_units": 1}, "fold02": {"n_units": 1}, "fold03": {"n_units": 1}},
+    ]
+
+    # The refusal half, on the identical fixture: `k: 5` clears the roster's
+    # basis of 12 and fails the thinnest cell's 3, so `validate` refuses and no
+    # run directory exists to hold an empty fold.
+    refused = run_a_project(
+        tmp_path / "at_k_5",
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        replication={"repeats": [{"kind": "fold", "k": 5}], "rationale": "five folds"},
+        expect_exit=EXIT_WRONG,
+    )
+    assert refused["run_dir"] is None
