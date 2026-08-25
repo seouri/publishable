@@ -2492,7 +2492,7 @@ Raising rather than returning `None` is the same choice `cfg` makes: a step can 
 
 ### Randomness, and which stream a step should draw from
 
-**Core derives one seed per execution and does two separate things with it**, and only one of them reaches your code reliably. The seed is the repeat's resolved seed where there is a repeat, and a [`derive_seed`](#a-step-that-partitions-needs-a-seed-and-derive_seed-is-where-it-comes-from) of the step's own name where there isn't — so a `"condition"`-scoped fit is as seeded as a `"repeat"`-scoped one, and none of the four scopes has a hole in it.
+**Core derives one seed per execution and does two separate things with it**, and only one of them reaches your code reliably. The seed is the repeat's resolved seed where there is a repeat, and **`0` where there isn't** — so a `"condition"`-scoped fit is *seeded*, and reproducibly so, but **every non-repeat execution in a run draws from the same stream**, which is a hole of a different shape and is [recorded as a gap](superpowers/spec-defects.md) rather than described as a design.
 
 | | Is | Reaches |
 |---|---|---|
@@ -2505,7 +2505,7 @@ Raising rather than returning `None` is the same choice `cfg` makes: a step can 
 
 **A stream drawn from concurrently is order-dependent whatever kind it is.** [The parallelism worth having is inside a step](#one-execution-at-a-time-and-what-holds-the-run-directory), and a step issuing 440 requests at once cannot share one generator across them and stay repeatable — the interleaving decides who gets which draw. Give each worker its own, from a `derive_seed` named per worker — the standard library's generator has no `spawn`, so the named seed is the whole of the answer here. Core doesn't do this for you because it doesn't know how you divided the work, and a step that draws nothing concurrently shouldn't pay for the ceremony.
 
-**`self.rng` is the execution's default stream; [`derive_seed`](#a-step-that-partitions-needs-a-seed-and-derive_seed-is-where-it-comes-from) is how you get a second one** — draw from the first until you need to name the second. Where there is no repeat that means `self.rng` is exactly `random.Random(self.derive_seed("<this step>"))`, so any purpose but that one lands on a stream of its own. It sits beside `self.condition` and `self.repeat` rather than in `io` because it is a fact about this execution rather than about where its artifacts go — but unlike them it never raises, since every execution has a seed and there is no scope at which it would have nothing to hand over.
+**`self.rng` is the execution's default stream; [`derive_seed`](#a-step-that-partitions-needs-a-seed-and-derive_seed-is-where-it-comes-from) is how you get a second one** — draw from the first until you need to name the second. Where there is no repeat, `self.rng` is `random.Random(0)` — **the same stream for every such execution in the run** — so a second purpose there needs `derive_seed` more, not less: it is the only way two non-repeat steps get streams that differ. It sits beside `self.condition` and `self.repeat` rather than in `io` because it is a fact about this execution rather than about where its artifacts go — but unlike them it never raises, since every execution has a seed and there is no scope at which it would have nothing to hand over.
 
 ### A step that partitions needs a seed, and `derive_seed` is where it comes from
 

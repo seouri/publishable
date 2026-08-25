@@ -10506,3 +10506,27 @@ remaining 14 is folds and holdouts inside cells.
 
 **Severity:** Minor. It needs a long-lived process, a same-second rewrite, and a same-size one, in a
 module reached only indirectly.
+
+## OPEN — every non-repeat execution in a run draws from `random.Random(0)`, so two `condition`-scoped steps share one stream — **Owner: unassigned, no remaining slice has `runner.py`'s seed derivation as its surface**
+
+**Measured at `c2aa690` on H9d's branch, filed after the whole-branch gate found § Randomness asserting
+something else.** `runner.py` binds `seed = 0` for every execution without a repeat label, so
+`self.rng` is `random.Random(0)` — first draw `0.8444218515250481` — **identically, for every
+`run`-, `condition`- and `summary`-scoped execution in the run.**
+
+**Why this is a gap rather than a preference.** § Randomness' own argument against process-global streams
+is that *"two draws sharing a stream correlate for no reason anyone chose"* — and that is exactly what a
+non-repeat execution gets today, by default, from the accessor the same section says to draw from. The
+document had claimed the seed was `derive_seed` of the step's own name where there is no repeat, which
+would have given each step its own stream; **that claim was false of the code under both readings** (a
+design declaring no repeats gets `_seed_for(digest, 0)`, not a `derive_seed`), and H9d corrected the
+document rather than the code, because no task on that branch owned `runner.py`.
+
+**The workaround is documented and sufficient for a careful user**: `derive_seed(purpose)` mixes the
+design digest, the roster and the string, so a step that wants its own stream can build one. What is
+missing is the default being right.
+
+**Owner: unassigned, with the reason.** The one remaining slice (H3c-3's remaining 14) has folds inside
+cells as its surface — `units.py` and `stats.py` — and this is `runner.py`'s seed derivation. Whoever
+takes it should read it beside the `self.rng` type filing above: **both are the same accessor promising
+more than it delivers, and closing either without the other leaves § Randomness half true.**
