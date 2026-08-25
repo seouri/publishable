@@ -26783,3 +26783,114 @@ def test_h3c3_a_fold_inside_the_cells_hands_every_arm_units_in_every_fold(tmp_pa
         expect_exit=EXIT_WRONG,
     )
     assert refused["run_dir"] is None
+
+
+# --- H3c-3 task 11: `sweep.yaml` discloses the cells the folds were drawn in --
+
+
+_H3C3_TWO_AXIS_ROSTER = "patient_id,arm,site\n" + "".join(
+    f"u{i:02d},{arm},{site}\n"
+    for i, (arm, site) in enumerate(
+        [(a, s) for a in ("control", "treatment") for s in ("north", "south") for _ in range(3)]
+    )
+)
+
+_H3C3_TWO_AXIS_UNITS = {
+    "allocation": "between",
+    "assign": {
+        "arm": {"method": "by_attribute"},
+        "site": {"method": "by_attribute"},
+    },
+    "attributes": ["arm", "site"],
+}
+
+_H3C3_TWO_AXIS_GROUPS = {
+    "groups": [
+        {"by": "arm", "levels": ["control", "treatment"]},
+        {"by": "site", "levels": ["north", "south"]},
+    ]
+}
+
+
+def test_h3c3_partitions_within_names_the_axes_the_folds_were_drawn_inside(tmp_path: Path):
+    """**The honouring direction of the disclosure key** — guard-pin arm B is
+    the refusing one, and pins the absence for a design with no cells.
+
+    **Two axes, deliberately.** `arm` × `site` over 12 units is four cells of
+    three, and it is the smallest fixture that can tell the axis *names* apart
+    from the axis *levels* (`control`/`north` are neither `arm` nor `site`),
+    from a truncation to the first axis, and from a reversal — one axis
+    distinguishes none of the three, since its name is also the whole list, the
+    first element, and the reverse of itself.
+
+    Three assertions, and the second is what the key exists for. The
+    `partitions` entries are **unchanged** — still exactly `fold`, `test` and
+    `train`, still a partition of the whole roster — because composing `train`
+    inside the cell is the same set (C8). The flat `train` nevertheless names a
+    side **no execution ever sees**: every condition is narrowed to its cell
+    first, so what a repeat-scope step is handed is `cell ∩ train`, three
+    quarters smaller here, and the assertion below computes both and pins them
+    unequal. `partitions_within` is what tells a reader to cross `partitions`
+    against `allocation.json` to recover it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_TWO_AXIS_ROSTER,
+        units_overrides=_H3C3_TWO_AXIS_UNITS,
+        sweep=_H3C3_TWO_AXIS_GROUPS,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert sweep["partitions_within"] == ["arm", "site"]
+    assert [sorted(p) for p in sweep["partitions"]] == [["fold", "test", "train"]] * 3
+
+    allocation = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = {
+        axis: {level: frozenset(keys) for level, keys in levels.items()}
+        for axis, levels in allocation["arms"].items()
+    }
+    assert {level: len(keys) for level, keys in arms["arm"].items()} == {
+        "control": 6,
+        "treatment": 6,
+    }
+    cell = arms["arm"]["control"] & arms["site"]["north"]
+    assert len(cell) == 3
+    for entry in sweep["partitions"]:
+        flat_train = frozenset(entry["train"])
+        # The whole roster's other partitions: eight of the twelve units.
+        assert len(flat_train) == 8
+        # And the side an execution in this cell is actually handed: two.
+        assert len(cell & flat_train) == 2
+        assert cell & flat_train != flat_train
+        # Each cell contributes one unit to each fold, which is what drawing
+        # inside the cell bought and what makes the two numbers differ.
+        assert len(cell & frozenset(entry["test"])) == 1
+
+
+def test_h3c3_a_design_with_cells_and_no_fold_level_discloses_nothing(tmp_path: Path):
+    """**The key describes partitions, so with no partitions there is no key** —
+    the second half of *written only when the partitions were drawn within
+    cells*, and the half arm B cannot see (arm B has folds and no cells; this
+    has cells and no folds).
+
+    The same four-cell design, its `fold` level replaced by a `seed` level.
+    `sweep.yaml` carries neither `partitions` nor `partitions_within`, and the
+    control that the document was really read and really holds this design is
+    the `conditions` assertion: four cells, four conditions.
+    """
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_TWO_AXIS_ROSTER,
+        units_overrides=_H3C3_TWO_AXIS_UNITS,
+        sweep=_H3C3_TWO_AXIS_GROUPS,
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert "partitions" not in sweep
+    assert "partitions_within" not in sweep
+    assert [c["label"] for c in sweep["conditions"]] == [
+        "arm=control__site=north",
+        "arm=control__site=south",
+        "arm=treatment__site=north",
+        "arm=treatment__site=south",
+    ]

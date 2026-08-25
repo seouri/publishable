@@ -25,7 +25,6 @@ from publishable.units import (
     arms_of,
     assign_seed_for,
     assignment_for,
-    cell_fold_basis,
     cells_of,
     cluster_count,
     clusters_of,
@@ -4676,7 +4675,7 @@ def test_no_axes_give_one_empty_cell_and_the_caller_composes_the_roster():
     assert cells_of({}) == {(): frozenset()}
 
 
-# --- H3c-3 task 3: `cell_fold_basis`, the fold basis of the thinnest cell -----
+# --- H3c-3 task 3: `thinnest_cell`, the fold basis of the thinnest cell -------
 
 
 _F2_SPEC = {"control": {"A": 5, "B": 3}, "treatment": {"C": 4, "D": 3, "E": 1}}
@@ -4707,7 +4706,7 @@ def _f2(control_level: str, treatment_level: str) -> tuple[UnitList, dict[str, t
     return UnitList(units), {level: tuple(keys) for level, keys in members.items()}
 
 
-def test_the_cell_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
+def test_the_cell_wise_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
     """F2's four computed literals, each one produced by calling rather than
     read from the design: per-cell cluster counts 2 and 3, so the clustered
     cell basis is **2** and the unclustered one **8** — while the whole
@@ -4716,7 +4715,7 @@ def test_the_cell_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
     That gap is the point and the can-fail control at once. `{kind: fold,
     k: 3}` clears the roster bound (5 ≥ 3) and exceeds the cell bound (2 < 3),
     which is the discriminating literal a per-cell bound is built on. **The
-    refusal itself is not exercised here**: nothing consumes `cell_fold_basis`
+    refusal itself is not exercised here**: nothing consumed `thinnest_cell`
     at this task, and wiring the bound into `_fold_k`'s three
     `E-REPL-FOLD-K-TOO-LARGE` emit sites is task 7's. MU-3 (`max` for `min`) is
     run against the `== 2` assertion below, where `max` gives 3.
@@ -4729,8 +4728,8 @@ def test_the_cell_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
         len({u.attributes["site"] for u in roster if u.key in keys}) for keys in cells.values()
     ] == [2, 3]
 
-    assert cell_fold_basis(roster, "site", cells) == 2
-    assert cell_fold_basis(roster, None, cells) == 8
+    assert thinnest_cell(roster, "site", cells)[0] == 2
+    assert thinnest_cell(roster, None, cells)[0] == 8
     # The roster's own answer, which is what a caller reaching for `fold_basis`
     # under cells would get instead — and it is larger on both halves, so the
     # per-cell answer cannot be coinciding with it.
@@ -4757,7 +4756,7 @@ def test_the_minimum_holds_whichever_cell_comes_first(
     order = (thin_level, thick_level) if thin_first else (thick_level, thin_level)
     cells = {((("arm", level),)): frozenset(members[level]) for level in order}
     assert list(cells) == [(("arm", order[0]),), (("arm", order[1]),)]
-    assert cell_fold_basis(roster, "site", cells) == 2
+    assert thinnest_cell(roster, "site", cells)[0] == 2
 
 
 def test_an_empty_cell_is_skipped_rather_than_making_the_basis_zero():
@@ -4778,8 +4777,10 @@ def test_an_empty_cell_is_skipped_rather_than_making_the_basis_zero():
     }
     with_empty = dict(populated)
     with_empty[(("arm", "unresolved"),)] = frozenset()
-    assert cell_fold_basis(roster, "site", with_empty) == cell_fold_basis(roster, "site", populated)
-    assert cell_fold_basis(roster, "site", with_empty) == 2
+    assert (
+        thinnest_cell(roster, "site", with_empty)[0] == thinnest_cell(roster, "site", populated)[0]
+    )
+    assert thinnest_cell(roster, "site", with_empty)[0] == 2
 
 
 def test_a_decomposition_with_no_populated_cell_reduces_to_the_whole_roster():
@@ -4796,8 +4797,8 @@ def test_a_decomposition_with_no_populated_cell_reduces_to_the_whole_roster():
     """
     roster, _ = _f2("control", "treatment")
     for cells in (cells_of({}), {}):
-        assert cell_fold_basis(roster, "site", cells) == fold_basis(roster, "site") == 5
-        assert cell_fold_basis(roster, None, cells) == fold_basis(roster, None) == 16
+        assert thinnest_cell(roster, "site", cells)[0] == fold_basis(roster, "site") == 5
+        assert thinnest_cell(roster, None, cells)[0] == fold_basis(roster, None) == 16
 
 
 def test_a_level_the_plan_did_not_realize_is_a_core_defect():
@@ -4835,9 +4836,6 @@ def test_thinnest_cell_returns_the_cell_the_minimum_came_from(thin_first: bool):
     order = ("control", "treatment") if thin_first else ("treatment", "control")
     cells = {(("arm", level),): frozenset(members[level]) for level in order}
     assert thinnest_cell(roster, "site", cells) == (2, (("arm", "control"),))
-    # The number is `cell_fold_basis`' own, which delegates here — asserted so
-    # the two cannot drift apart under an edit to either.
-    assert cell_fold_basis(roster, "site", cells) == 2
 
 
 @pytest.mark.parametrize("thin_first", [True, False])
@@ -4886,7 +4884,7 @@ def test_h3c3_no_populated_cell_draws_the_whole_roster_in_one_bare_digest_call()
     Two inputs reach it and they are different inputs: `{}` — what
     `cli._prepare_run` passes when `cells` is `None`, i.e. a design with no
     group axis at all — and `cells_of({})`, whose single cell is **empty**.
-    `cell_fold_basis`' own docstring states the same rule for the same two
+    `thinnest_cell`' own docstring states the same rule for the same two
     inputs, and two functions in one module answering one triviality question
     differently is how `validate` bounds `k` against a number the run does not
     draw against.

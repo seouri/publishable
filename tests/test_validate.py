@@ -14836,7 +14836,7 @@ def _h3c3_thin_cell_config(write_config, min_clusters: int) -> Path:
 
 def test_the_min_clusters_denominator_is_roster_wide_not_the_thinnest_cell(write_config, tmp_path):
     """**Ruling LL, pinned: `_check_resample`'s `limits.min_clusters` call keeps
-    `units.fold_basis` and does not become `cell_fold_basis`.**
+    `units.fold_basis` and does not become the cell-wise `thinnest_cell`.**
 
     That call asks *how many independent draws does a percentile interval rest
     on* — and `statistics.resample` draws over the per-unit table, which holds
@@ -14845,7 +14845,7 @@ def test_the_min_clusters_denominator_is_roster_wide_not_the_thinnest_cell(write
     one H3c-3 task 6 threaded cells into.
 
     **The mutation this test exists for:** replace that site's `fold_basis` with
-    `cell_fold_basis(roster, cluster_by, cells)`. The thinnest cell holds 3
+    `thinnest_cell(roster, cluster_by, cells)[0]`. The thinnest cell holds 3
     clusters, below the floor of 4, so the mutant warns against a denominator no
     interval used and the first half below fails. Without this test the
     substitution is silent, and silence is evidence about the tests rather than

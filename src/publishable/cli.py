@@ -157,6 +157,7 @@ from publishable.units import (
     null_test_level,
     partition_units,  # noqa: F401 — see `partition_within_cells` below
     partition_within_cells,
+    populated_cells,
     resolve_units,
     stratum_names,
     thinnest_cell,
@@ -2084,9 +2085,8 @@ class Prepared:
     phases rendered from. **No statement in phases 6-10 reads it at this
     commit** -- every post-seam `c` is a comprehension target, and phase 9's
     `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`, so
-    `_execute_prepared` does not unpack it. **`cells` is the second field it
-    does not unpack**, for the same reason and since the same task that added
-    it; the paragraph below says so. Every other field is read in phases 6-10.
+    `_execute_prepared` does not unpack it. Every other field is read in
+    phases 6-10.
 
     **Thirty-SEVEN since H3c-3 task 4**, and the `ast` walk above is not
     re-run: it measured what `command_run` assigned before the seam and loaded
@@ -2094,12 +2094,9 @@ class Prepared:
     thirty-seventh, ADDED by that task rather than found by the walk — the
     design's cell decomposition, realized once beside `group_axes` because
     `_resumed_allocation` and `_execute_prepared` both need it and a second
-    derivation of a decomposition is a second producer of it. It is a field
-    with **no unpack line yet**: nothing in phases 6-10 reads it at this
-    commit, and `_execute_prepared`'s unpack is a block of locals, so an unread
-    one is an `F841` (measured: `uv run ruff check .` reports exactly that).
-    The unpack line lands with its first reader, the same way this branch's
-    imports land with their callers.
+    derivation of a decomposition is a second producer of it. Its reader in
+    phases 6-10 is `sweep.yaml`'s `partitions_within` (H3c-3 task 11), which
+    is written exactly when this decomposition has a populated cell.
 
     Frozen on purpose: phases 6-10 must not write back into what phases 1-5
     pinned. That is the property `resume` will rest on. `plan` is the one name
@@ -3129,6 +3126,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     lock_hash = prepared.lock_hash
     upstream_ledger = prepared.upstream_ledger
     upstream_resolver = prepared.upstream_resolver
+    cells = prepared.cells
 
     # phase 6: the run directory. `resume` re-enters an EXISTING one, which is
     # why `E-RUN-ID-EXHAUSTED` is unreachable from it — it allocates nothing.
@@ -3237,6 +3235,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # Written by the FIRST attempt only, and read back by the branch above
         # rather than re-derived (Decision 9).
         if resumed is None:
+            # `partitions_within` — the axes the folds were drawn inside, when
+            # they were. The predicate is `units.populated_cells`', the same
+            # list `partition_within_cells` loops over and reduces on, called
+            # rather than re-spelled: a second spelling here is a record
+            # claiming a draw that did not happen. The axis NAMES come from a
+            # populated cell's own key, which is what was handed to the draw,
+            # rather than from `group_axes` — every key carries the same axes
+            # in the same order, `cells_of` building them from one product.
+            populated = populated_cells(cells or {})
+            partitions_within = [axis for axis, _ in populated[0][0]] if populated else None
             (run_dir / "sweep.yaml").write_text(
                 yaml.safe_dump(
                     sweep_document(
@@ -3248,6 +3256,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                         execution_order,
                         order_seed,
                         partitions=partitions,
+                        partitions_within=partitions_within,
                         sample_seed=sample_seed_for(doc),
                     ),
                     sort_keys=False,

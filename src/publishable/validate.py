@@ -5951,7 +5951,7 @@ def _resolved_cells(
     used: the unstratified, unclustered `by_attribute`-adjacent case, whose
     *sizes* are digest-independent. A cell's **cluster count** is precisely the
     seed-dependent quantity that gating excludes, and it is the number
-    `cell_fold_basis` returns under a declared `cluster_by`. Drawing at
+    `thinnest_cell` returns under a declared `cluster_by`. Drawing at
     `"validate"` would bound `k` against a decomposition no run produces.
 
     Every fault becomes `None`, the way `_holdout_test_roster` does and for its

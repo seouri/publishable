@@ -1517,3 +1517,72 @@ def test_a_group_axis_is_total_over_a_malformed_groups_block() -> None:
     # answer an empty `grid` axis gets from `expand`.
     assert _axes({"groups": [{"by": "arm", "levels": []}]}) == [[]]
     assert expand({"sweep": {"groups": [{"by": "arm", "levels": []}]}}) == []
+
+
+def test_h3c3_merged_partitions_pair_with_the_fold_members_and_compose_train():
+    """**C13's third `E-RUN-FOLD-UNRESOLVED` site, re-read against the merge**
+    — and the identity composition beside it, which is the half that would
+    break silently.
+
+    `partition_within_cells` hands back `k` merged lists rather than `k`
+    whole-roster ones, so two claims in this function need re-confirming: that
+    `zip(fold.members, partitions, strict=True)` still pairs — it does, the
+    merge being `k` long by construction — and that `train`'s composition by
+    **object identity** (`other is not part`) still holds, since the merged
+    lists are freshly built here rather than by `partition_units`. Both are
+    asserted as behaviour: `train` is exactly the roster minus that fold's
+    `test`, for every fold, over a two-cell design.
+
+    The `strict=True` half is asserted in the other direction too — three
+    partitions against a two-member fold level raises rather than truncating,
+    which is what makes the pairing above a check rather than a coincidence of
+    this fixture's shape.
+    """
+    import pytest
+    from tests.test_replication import _u, cfg
+
+    from publishable.replication import cross_levels, resolve_repeats
+    from publishable.sweep import expand, sweep_document
+    from publishable.units import UnitList, partition_within_cells
+
+    roster = UnitList([_u(f"u{i}") for i in range(8)])
+    cells = {
+        (("arm", "control"),): frozenset(f"u{i}" for i in range(4)),
+        (("arm", "treatment"),): frozenset(f"u{i}" for i in range(4, 8)),
+    }
+    parts = partition_within_cells(roster, 2, "d", cells)
+    assert len(parts) == 2
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", fold_basis=4)
+    doc = sweep_document(
+        expand({}),
+        levels,
+        cross_levels(levels),
+        "sha256:x",
+        "as_declared",
+        [],
+        None,
+        partitions=parts,
+        partitions_within=["arm"],
+    )
+    assert doc["partitions_within"] == ["arm"]
+    all_keys = {unit.key for unit in roster}
+    for entry, part in zip(doc["partitions"], parts, strict=True):
+        assert set(entry["test"]) == {unit.key for unit in part}
+        # Each merged fold takes two units from each of the two cells, so
+        # `test` is four and `train` the other four — both distinguishable from
+        # the shared-list mutant (`merged = [[]] * k`), where every fold holds
+        # all eight and `train` composes to nothing.
+        assert len(entry["test"]) == 4
+        assert set(entry["train"]) == all_keys - set(entry["test"])
+
+    with pytest.raises(ValueError):
+        sweep_document(
+            expand({}),
+            levels,
+            cross_levels(levels),
+            "sha256:x",
+            "as_declared",
+            [],
+            None,
+            partitions=[*parts, []],
+        )

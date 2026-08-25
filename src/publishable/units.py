@@ -2657,34 +2657,35 @@ def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
     return cluster_count(roster, cluster_by) if cluster_by else len(roster)
 
 
-def cell_fold_basis(
+def thinnest_cell(
     roster: UnitList,
     cluster_by: str | None,
     cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
-) -> int:
-    """How many indivisible things a `fold` level can distribute **in the cell
-    that has fewest** — `fold_basis`' question asked of a design whose folds are
-    drawn inside its cells.
+) -> tuple[int, tuple[tuple[str, str], ...] | None]:
+    """The fold basis of the **thinnest non-empty cell**, and the cell
+    it came from — one walk, two readers, and the number `fold_basis` returns
+    asked of a design whose folds are drawn inside its cells.
 
-    **One number, not two, and not a mapping**, the return type `fold_basis`
-    has and for its reason: a `k` checked against one number while the
-    partition is drawn against another is the disagreement that single
-    derivation exists to prevent, and a per-cell mapping would hand every
-    caller the job of deciding which entry its own check meant. `fold_basis`'
-    own docstring states the rule this one inherits — *"One number, not two"*,
-    and *"every caller resolves the basis here rather than deciding for
-    itself"*. The minimum is the answer because
-    a fold level runs in **every** cell: the cell that cannot carry `k` is what
-    makes the whole declaration unaffordable, not the cell that can.
+    **One number, not a mapping**, `fold_basis`' own return shape and for its
+    reason: a `k` checked against one number while the partition is drawn
+    against another is the disagreement single derivation exists to prevent,
+    and a per-cell mapping would hand every caller the job of deciding which
+    entry its own check meant. The minimum is the answer because a fold level
+    runs in **every** cell: the cell that cannot carry `k` is what makes the
+    whole declaration unaffordable, not the cell that can. The second element
+    is the key of the cell that produced it, or `None` when there was no
+    non-empty cell to produce it and the answer fell back to the whole
+    roster's `fold_basis`.
 
     Only **non-empty** cells are counted. An empty cell has no units to
     distribute and would make every minimum zero, which is a fact about the
     decomposition rather than a bound on `k`; `cells_of` keeps empty cells
     because the count of cells is itself load-bearing, and this is the one
     place that count is not the question. An empty `cells`, or one whose cells
-    are all empty, returns `fold_basis(roster, cluster_by)` — the **one-cell
-    reduction**, which is what makes a design with no group axis fall through
-    this function unchanged rather than being branched around at the caller.
+    are all empty, falls back to `fold_basis(roster, cluster_by)` — the
+    **one-cell reduction**, which is what makes a design with no group axis
+    fall through this function unchanged rather than being branched around at
+    the caller.
 
     Each sub-roster is built from `roster` **in roster order**, the order
     `clusters_of` preserves deliberately and the one `units_hash` pins as
@@ -2697,10 +2698,10 @@ def cell_fold_basis(
     interval rest on* — and `statistics.resample` draws over the **per-unit
     table**, which holds every condition's units across every cell, so its
     answer is over the whole roster — or the holdout's test side, when one is
-    declared — and does not decompose by cell. Giving `fold_basis`
-    a `cells=None` default would make it a helper that ignores an argument at
-    one of its callers, which hides what that caller stopped testing; passing
-    it the cells there would warn against a denominator no interval used. A
+    declared — and does not decompose by cell. Giving `fold_basis` a
+    `cells=None` default would make it a helper that ignores an argument at one
+    of its callers, which hides what that caller stopped testing; passing it
+    the cells there would warn against a denominator no interval used. A
     function whose name fits one of its three callers is a proxy waiting to be
     believed.
 
@@ -2712,32 +2713,6 @@ def cell_fold_basis(
     unreadable cell makes the whole answer unresolved, which is the honest
     reading: the minimum over cells cannot be known while one of them cannot be
     counted.
-
-    **This is the one-number face; `thinnest_cell` below is the walk.** Both
-    callers that resolve a fold basis need the cell's label as well as the
-    number — `replication._fold_k`'s refusal has to name the declaration a
-    reader must change — so `validate.validate_config` and `cli._prepare_run`
-    call `thinnest_cell` and unpack both, and this function has **no production
-    caller at this commit**. It is kept, rather than folded away, for the
-    callers that want the bound and not the label: H3c-3's own remaining
-    tasks bound `E-DATA-HOLDOUT-EMPTY` and `W-DATA-CELL-THIN` over the
-    thinnest cell, and neither names it.
-    """
-    return thinnest_cell(roster, cluster_by, cells)[0]
-
-
-def thinnest_cell(
-    roster: UnitList,
-    cluster_by: str | None,
-    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
-) -> tuple[int, tuple[tuple[str, str], ...] | None]:
-    """`cell_fold_basis`' answer **and the cell it came from** — one walk, two
-    readers.
-
-    The number is exactly `cell_fold_basis`' (which delegates here, so the two
-    cannot disagree); the second element is the key of the cell that produced
-    it, or `None` when there was no non-empty cell to produce it and the answer
-    fell back to the whole roster's `fold_basis`.
 
     **Why the label travels at all.** `replication._fold_k` refuses a `k` past
     the basis and its message has to name the declaration a reader must change.
@@ -3010,6 +2985,29 @@ def _assign_whole_clusters_by_ratio(
     return buckets
 
 
+def populated_cells(
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+) -> list[tuple[tuple[tuple[str, str], ...], frozenset[str]]]:
+    """The cells that hold at least one unit, in `cells`' own key order.
+
+    **One derivation, two callers, because the two must never disagree.**
+    `partition_within_cells` loops over exactly this list and reduces to a
+    single whole-roster `partition_units` call when it is empty; `cli` writes
+    `sweep.yaml`'s `partitions_within` exactly when it is **not** empty. A
+    second spelling of the same predicate at the second site is a record that
+    can claim a draw that did not happen — the disclosure key saying the folds
+    were drawn inside the cells while the draw took the reduction, or the
+    reverse. `fold_basis`' single-derivation rule, applied to a predicate
+    rather than to a number.
+
+    Empty cells are what this drops and `cells_of` deliberately keeps: a cell
+    no unit falls in is a fact about the design, and every caller that counts
+    cells has to see it. This is the projection for the callers that draw in
+    them.
+    """
+    return [(key, keys) for key, keys in cells.items() if keys]
+
+
 def partition_within_cells(
     roster: UnitList,
     k: int,
@@ -3055,7 +3053,7 @@ def partition_within_cells(
     the bare digest and byte-identically: that is `{}` (what `cli._prepare_run`
     passes for a design with no group axis, since `cells_of` takes no roster
     and its `cells_of({})` is one *empty* cell) and `cells_of({})` itself, both
-    reaching one rule. `cell_fold_basis` states the same rule for the same two
+    reaching one rule. `thinnest_cell` states the same rule for the same two
     inputs; two functions in one module answering one triviality question
     differently is exactly the drift `fold_basis`' single derivation exists to
     prevent. A populated decomposition of a **non-empty** roster is not
@@ -3077,7 +3075,7 @@ def partition_within_cells(
     `python -O`, which is the wrong property for the only guard on a condition
     nothing else detects.
     """
-    populated = [(key, keys) for key, keys in cells.items() if keys]
+    populated = populated_cells(cells)
     if not populated:
         return partition_units(roster, k, digest, clusters=clusters, strata=strata)
     covered: set[str] = set()
