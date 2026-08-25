@@ -79,8 +79,9 @@ with a `holdout` earns `E-DATA-HOLDOUT-CELLS`. **No config that declares a cell 
 evaluation split validates today**, which is the whole of § 8's disclosure.
 
 **M7. A non-empty `sweep.groups` beside `allocation: within` is itself refused**
-(`E-DATA-ALLOCATION-WITHIN-ARMS`), and `allocation: between` with no group axis earns *Allocation
-needs arms*. **So in a config that is otherwise clean, a cell structure is exactly one thing: a
+(`E-DATA-ALLOCATION-WITHIN-ARMS`), and `allocation: between` with no group axis earns
+`E-DATA-ALLOCATION-NO-ARMS` (§ Validation's *Allocation needs arms*) — **both codes grepped in
+`validate.py`, not carried from the re-scoping's § 1.1**. **So in a config that is otherwise clean, a cell structure is exactly one thing: a
 non-empty `sweep.groups` beside `allocation: between`.** That is the gate Decision 3 uses, and it
 is why `_check_evaluation_split_cells`' two-branch message ternary has one branch only a
 doubly-refused config ever reads.
@@ -118,6 +119,20 @@ this build (warning)"*) and § The one config file's inline comment.
 computes `holdout_sizes(len(roster), frac)` and reports when the test side is zero — *the whole
 roster*, unstratified and unclustered only. The run-time raise inside `holdout_for` covers the cases
 `validate` declines. Under cells both bounds are over the wrong denominator (Decision 10).
+
+**M15. The document greps were re-run NEWLINE-INSENSITIVELY, because these files are hard-wrapped.**
+Every count in M10 and § 12 was first taken with `grep -n`, which cannot see a phrase that straddles a
+line break. Re-taken by collapsing whitespace over the four documents by name (never over `*.md`,
+which no longer means what it used to): `within each cell` → **2**, both inside § Clustered units'
+one paragraph; `is not built` → **3** in `reference.md`, **1** in `experimental-designs.md`, **0** in
+`README.md` and `design-principles.md`; `E-DATA-HOLDOUT-CELLS` → 3, `E-REPL-FOLD-CELLS` → 4, both
+`reference.md`-only; `min_units_per_cell` → 5 in `reference.md`, 1 in `experimental-designs.md`;
+*Cells are populated* → **2** and *Allocation is coherent* → **2** (each a § Validation row plus the
+§ A fixed holdout split-adjacent prose naming it); *One split, not one cell each* → **2** (its row and
+the pointer at *Folds fit inside the cells*). **No count moved and no site was added** — the two
+`within each cell` hits and the § A fixed holdout split bullet's `*within*` spelling are all inside
+sites § 10 and task 21 already name. Recorded because an undercount here would be a claim in the
+wrong direction.
 
 **M14. `spec-defects.md` mentions `H3c-3` at 56 lines**, and 57 headings begin `## OPEN`. The phrase
 *"H3c-3's remaining 14"* appears inside the *owner: unassigned* reason of a dozen of them; it goes
@@ -487,6 +502,20 @@ count when `data.units.cluster_by` is declared"*; it gains the cell clause and s
 widened then undercounted is a whole-branch Major in three consecutive slices**, so task 7 states
 the site count in its own report and the reviewer re-runs the grep.
 
+**One question task 7 must answer rather than leave asymmetric.** `E-DATA-HOLDOUT-EMPTY` has rows in
+**both** § Errors tables (Decision 10) while `E-REPL-FOLD-K-TOO-LARGE` has one, in the validate
+table, though `replication._fold_k` raises it twice. Decision 8's swallowing `try` is what could
+change that: if `validate`'s cell draw returns `None` while `_prepare_run`'s succeeds, a config
+validates clean and then meets the raise — and § Errors core raises would owe the code a row,
+**checked against THAT table's scope sentence, not the validate one**. Answer it from the code: both
+draws call the same function at the same `design_digest(doc)` over the same roster, so a fault in one
+is a fault in the other — say that, or file the path.
+
+**Cost if wrong.** A message that names no cell sends a reader to the whole roster's count when the
+fault is one arm's, which is the remedy pointing at the wrong declaration; a clause reached at two of
+three sites means the same config gets two different explanations depending on whether `k` was
+`all`.
+
 ### Decision 10 — `E-DATA-HOLDOUT-EMPTY` is bounded by the smallest cell at both its `validate` and its run-time site, and its two rows are re-derived
 
 `_check_holdout`'s `E-DATA-HOLDOUT-EMPTY` computes `holdout_sizes(len(roster), frac)` today (M13).
@@ -503,6 +532,12 @@ already rules that a zero test side *"is the caller's to refuse"*. **This is a w
 existing code, not a new one**: the remedy is unchanged (widen `frac`, or resolve a larger roster),
 and a second code would give one remedy two names. Both its rows move — § Errors `validate` reports
 and § Errors core raises — and each is checked against **its own** scope sentence.
+
+**Cost if wrong.** In the permissive direction, a thin cell's holdout raises mid-run, after
+executions are already paid for, with a message naming the roster rather than the cell — the class
+`E-CODE-EMPTY`'s siting exists to avoid. In the strict direction it is worse: a bound over the wrong
+denominator refuses a `frac` that is fine, and **a user cannot work around a refusal.** The
+can-fail control in § 9 (the 10/10 split validating clean) is aimed at exactly that direction.
 
 ### Decision 11 — `allocation.json`'s `holdout` stays FLAT and gains one key; `sweep.yaml`'s `partitions` entries are unchanged and the document gains one key; neither round-trip pin moves
 
@@ -563,6 +598,12 @@ assumed.
 
 **Why `cells` is a `Prepared` field rather than recomputed.** `_resumed_allocation` (Decision 5) and
 `_execute_prepared` both need it, and a second derivation of a decomposition is a second producer.
+
+**Cost if wrong.** A hoist that resolves an axis twice draws a *second* allocation under `random` or
+`blocked` — the whole reason `_resolved_group_axes` documents itself as realized once per run — and
+the run would then narrow conditions by one draw while `allocation.json` records another. MU-16's
+counting patch is what stands between this design and that, and it is a count rather than a
+membership because a count cannot be satisfied by a coincidence.
 
 ### Decision 13 — a cluster that spans two cells is legal today, breaks an assumption this slice does not build, and is FILED rather than refused — and there is no later slice
 
@@ -719,11 +760,21 @@ The literals are M2's: `assign_seed_for` `2988051695` forward and `1647976561` r
 partitions are the ones the **recorded** decomposition yields, not the fresh one — asserted by
 membership, not by a count, because both decompositions give the same sizes.
 
-**F6 — the per-cell holdout fixture (task 13).** 20 units, two arms of 10, `frac: 0.2` → each cell's
-test side is exactly **2** and the union is **4**, against a roster-wide draw's 4 distributed by
-chance. The discriminating assertion is **per cell**: `len(test ∩ arm) == 2` for both arms. A
-whole-roster draw satisfying `len(test) == 4` passes a union-only assertion, which is why the
-per-arm form is the one written.
+**F6 — the per-cell holdout fixture (task 13), and the rule it establishes.** 20 units, two arms of
+10, `frac: 0.2`. **A per-arm COUNT assertion cannot discriminate here, and this was checked rather
+than assumed.** The pre-slice draw is one shuffle of the whole roster and two slices — a uniform
+4-subset of 20 — so it lands on 2 units per arm with probability
+C(10,2)² / C(20,4) = 2025 / 4845 ≈ **0.42**. At whatever seed the fixture happens to use it is a coin
+flip whether `len(test ∩ arm) == 2` sees the bug at all: **a fixture whose numbers agree with the
+bug.** Unequal arms do not repair it — 15/5 at `frac: 0.2` gives 3/1 with probability
+C(15,3)·5 / C(20,4) ≈ 0.47 — because the roster-wide draw's *modal* split **is** the proportional
+one.
+
+**The rule, stated here so no later task re-derives it: per-arm counts cannot discriminate a
+proportional split; only MEMBERSHIP at a pinned seed can.** So F6 pins the per-cell membership at a
+fixed seed, and task 13 additionally computes the **roster-wide** draw at the **same** seed and
+asserts the two differ — changing the seed if they coincide and recording that the check was run.
+The union assertion (`len(test) == 4`) stays as a shape check and is not counted as discrimination.
 
 **F7 — the thin-cell holdout refusal (Decision 10).** 20 units split **18/2**, `frac: 0.2`:
 `holdout_sizes(20, 0.2) == (16, 4)` clears the roster bound, `holdout_sizes(2, 0.2) == (2, 0)`
@@ -746,8 +797,8 @@ entry below is owned `unassigned` with that as the stated reason rather than as 
 | **`limits.max_ineligible_fraction`** and the rest of the silent-`limits` family | Out of scope; unchanged by this slice. **Ships unread; nothing follows** |
 | **The `W-…-THIN` family's documentation question** | Already filed and unowned. `W-DATA-CELL-THIN` **joins** the family rather than settling it, and task 18 says so in the filing rather than claiming a closure. **Nothing follows** |
 | **A nested per-cell `partitions` shape in `sweep.yaml`** | Declined for the disclosure key (Decision 11). If a reader judges the key insufficient, the nested shape is a known fallback with a known cost. **Nothing follows** |
-| **`partition_units`' signature, `_assign_whole_clusters`, `_seed_from`** | Untouched by ruling. The trade this slice must not make |
-| **Interactions, dose-response orderings, difference-in-differences over cells** | Unchanged non-promises: a `summary`-step `Estimate`. `experimental-designs.md` § What core will not do for you already carries them |
+| **`partition_units`' signature, `_assign_whole_clusters`, `_seed_from`** | Untouched by ruling — the trade this slice must not make is a fold regression bought for an arm feature. **Nothing follows this slice**, so an unclustered draw pinned here is pinned for good |
+| **Interactions, dose-response orderings, difference-in-differences over cells** | Unchanged non-promises: a `summary`-step `Estimate`. `experimental-designs.md` § What core will not do for you already carries them, with reasons. **Nothing follows this slice**, and these are refusals with reasons rather than gaps, so that is the intended end state rather than a cost |
 
 ---
 
@@ -774,6 +825,7 @@ exists. **A mutation is a claim too.**
 | MU-14 | `partitions_within` written unconditionally | Guard pin arm B (no-axis `sweep.yaml` carries **no** such key) | an unconditional write adds a key arm B asserts absent |
 | MU-15 | `holdout.within` written unconditionally | The round-trip pin arm C plus a no-axis `allocation.json` assertion | same shape as MU-14, in the other file |
 | MU-16 | The hoist reordered so `arm_members` is called twice | Task 4's *"realized once per run"* assertion, a counting patch on `_resolved_group_axes` | one call against two — a count |
+| MU-17 | `_resolved_holdout` ignores `group_axes` (the pre-slice roster-wide draw) | F6's pinned per-cell **membership**, plus its same-seed roster-wide comparison | the two draws differ at the pinned seed **by construction of the fixture**, which task 13 verifies rather than assumes — a count assertion here is ≈42 % blind (§ 9) |
 
 **No mutation in this slice is declared blind in advance.** MU-9 was the candidate — Ruling KK's
 mutation needs the fresh draw to differ from the recorded one, and under `by_attribute` correct and

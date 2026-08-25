@@ -23,7 +23,7 @@ E: 18–20. F: 21–23. **Every batch is reviewed, including F.**
 
 ## § Corrections against the code
 
-Twenty-seven, each measured at `3d72910`. They correct the two scopings, the spine charter, and the
+Twenty-eight, each measured at `3d72910`. They correct the two scopings, the spine charter, and the
 controller's own ruling text. **Cite by section, never by line number.**
 
 **C1 — the empty-fold fixture's cluster-to-arm mapping is under-determined, and the difference is a
@@ -106,8 +106,10 @@ Neither § Validation row's own wording carries the gate; both rows' **examples*
 
 **C17 — in an otherwise-clean config a cell structure is exactly one shape.** A non-empty
 `sweep.groups` beside `allocation: within` earns `E-DATA-ALLOCATION-WITHIN-ARMS`; `allocation:
-between` with no group axis earns *Allocation needs arms*. So gating on the resolved axes gates on
-both. Binds tasks 5, 18.
+between` with no group axis earns `E-DATA-ALLOCATION-NO-ARMS` (§ Validation's *Allocation needs
+arms*). **Both codes grepped in `validate.py` rather than carried from the re-scoping's § 1.1.**
+Gating on the resolved axes therefore gates on both — and it would be safe even if the second half
+were wrong, since a design with no resolved axis has no cells to be thin. Binds tasks 5, 18.
 
 **C18 — `_check_evaluation_split_cells`' `groups`-branch message is pinned by
 `tests/test_validate.py::test_a_group_axis_alone_triggers_the_refusal_without_between`**, and that
@@ -133,6 +135,12 @@ must not hard-code "test". Binds tasks 13, 14.
 that it does not** (`within` is rebuilt from `group_axes`, which the resume overrides consistently).
 **Task 17 is the pin's sole authorized editor anyway**, with `unchanged` as the post-edit state
 specified in advance. Binds tasks 1, 16, 17.
+
+**C28 — a per-arm COUNT cannot discriminate a proportional holdout split.** The pre-slice
+roster-wide draw is one shuffle and two slices — a uniform 4-subset of 20 — so over two arms of 10 at
+`frac: 0.2` it lands on 2 per arm with probability C(10,2)²/C(20,4) ≈ **0.42**, and unequal arms are
+no better (15/5 gives 3/1 at ≈ 0.47) because the roster-wide draw's modal split **is** the
+proportional one. **Only membership at a pinned seed discriminates.** Binds task 13.
 
 **C24 — the count is 23, not 20.** The three tasks the re-scoping's § 9 does not have are C5's, C6's
 and C7's surfaces. Say 23 and derive it; do not merge to hit 20.
@@ -354,6 +362,14 @@ unnamed"** — a helper that ignores an argument hides what its callers stopped 
 `k` through `validate`, a `k: all` through `resolve_repeats`, a direct `_fold_k` call), each
 asserting the **message names the cell**, not just the code.
 
+**One asymmetry to answer rather than leave.** `E-DATA-HOLDOUT-EMPTY` has rows in **both** § Errors
+tables (task 14) while this code has one, in the validate table, though `_fold_k` raises it twice.
+Task 5's swallowing `try` is what could change that: if `validate`'s cell draw returns `None` while
+`_prepare_run`'s succeeds, a config validates clean and then meets the raise, and § Errors core
+raises would owe this code a row — **checked against THAT table's scope sentence, not the validate
+one.** Answer it from the code (both draws call the same function at the same `design_digest(doc)`
+over the same roster, so a fault in one is a fault in the other), and either say so or file the path.
+
 **Report must state:** the grep it ran (`grep -rn "E-REPL-FOLD-K-TOO-LARGE" src/`), its hit count,
 and every hit attributed. **Report what you grepped, not a count without a noun.**
 
@@ -513,9 +529,17 @@ crossed combination nothing carries. Task 14 is what stops most of these reachin
 **Rewrite the docstring's *"`group_axes` is deliberately not a parameter"* paragraph.** It is now
 false. **Delete it and state what is true**, rather than editing it into something that half-survives.
 
-**Fixture F6:** 20 units, two arms of 10, `frac: 0.2` → **each cell's test side is exactly 2** and
-the union is 4. **The assertion is per cell** — `len(test ∩ arm) == 2` for both arms — because a
-whole-roster draw satisfying `len(test) == 4` passes a union-only assertion.
+**Fixture F6, and a per-arm COUNT will not do (C28).** 20 units, two arms of 10, `frac: 0.2`. The
+pre-slice roster-wide draw lands on 2 per arm with probability ≈ **0.42**, so
+`len(test ∩ arm) == 2` is a coin flip on whether it sees the bug — *a fixture whose numbers agree
+with the bug*. **Pin the per-cell MEMBERSHIP at a fixed seed**, and — in this task, not later —
+compute the **roster-wide** draw at the **same** seed and assert the two differ, changing the seed if
+they coincide and **recording that the check was run**. `len(test) == 4` stays as a shape check and
+is not counted as discrimination.
+
+**Mutation MU-17:** `_resolved_holdout` ignores `group_axes` — that is the pre-slice code, and F6's
+membership assertion is what catches it. Without MU-17 this task has no mutation at all and F6 is
+the whole of its pinning.
 
 **Must not touch:** `holdout_for`, `holdout_seed_for`, `holdout_sizes`, `_evaluation_roster`,
 `E-DATA-HOLDOUT-FOLD` (C27).
@@ -808,6 +832,14 @@ here, and confirm it), config completeness, enum comments, schema fields in pros
 derived, prevented mistakes. **After removing `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`, grep
 the four documents, `CLAUDE.md` and the feasibility analysis for what should no longer exist** —
 and **filter the file list, never the output of the sweep.**
+
+**Run every sweep NEWLINE-INSENSITIVELY.** These files are hard-wrapped and a phrase can straddle a
+break; a line-based `grep -n` undercounts in the direction that makes a table look complete. The
+design's § 0 M15 records the pre-edit counts to check yours against: `within each cell` → **2**, both
+inside § Clustered units' one paragraph; `is not built` → 3 in `reference.md` and 1 in
+`experimental-designs.md`; `E-DATA-HOLDOUT-CELLS` → 3 and `E-REPL-FOLD-CELLS` → 4, both
+`reference.md`-only; *Cells are populated* → 2 and *Allocation is coherent* → 2; *One split, not one
+cell each* → 2. **Prove each sweep can fail** by running it against a string known to be present.
 
 **Must not touch:** `docs/superpowers/**` except as tasks 20 and 23 direct; the development record is
 exempt from both passes and retro-editing it destroys the evidence it holds.
