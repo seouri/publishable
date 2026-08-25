@@ -1,8 +1,8 @@
 # H9d tasks 4, 5, 6, 7, 8 — report
 
-**Status: all five complete, branch green.** `uv run pytest` at `585278c`:
-**3318 passed, 1 skipped, 2 xfailed** (batch-1 baseline `7adbdb2`: 3282 passed, 1 skipped,
-2 xfailed — +7 task 4, +5 task 5, +6 task 6, +11 task 7, +7 task 8). `ruff check .`,
+**Status: all five complete, branch green.** `uv run pytest` at `HEAD`:
+**3319 passed, 1 skipped, 2 xfailed** (batch-1 baseline `7adbdb2`: 3282 passed, 1 skipped,
+2 xfailed — +7 task 4, +5 task 5, +6 task 6, +11 task 7, +7 task 8, +1 review fix). `ruff check .`,
 `ruff format --check .` and `mypy` clean at every commit.
 
 | Task | Commit |
@@ -13,6 +13,7 @@
 | 7 — `docs`' dispatch | `b9fc368` |
 | 8 — `list-templates` | `03baa3d` |
 | 8 follow-up — the by-type catch Decision 4 rules | `585278c` |
+| review fixes — the `E-DOCS-NO-README` path column, and the end-to-end installed arm | the last commit on this branch |
 
 Guard-pin arm A/B (`test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_text[README]`) is
 **green at every commit** and was not edited; `NOT_BUILT_COMMANDS`' three keys were not touched
@@ -432,8 +433,9 @@ of a merged kind. **Task 13 should write the enumeration from the code, as it is
 
 **And the row's cwd clause needs its subject widened, not restated** (Ruling FF): *"the creation
 commands walk up from `Path.cwd()` rather than a path argument, being the commands with none to
-walk up from"* is now true of **the creation commands, `docs` and `list-templates`**. Two of the
-ten sites (2 and 10 above, plus site 6) walk up from `Path.cwd()`.
+walk up from"* is now true of **the creation commands, `docs` and `list-templates`**. **Three** of
+the ten sites walk up from `Path.cwd()` — site 2 (`generate`/`init`), site 6 (`docs`) and site 10
+(`list-templates`) — and the other seven walk up from a path their command was given.
 
 ---
 
@@ -538,6 +540,35 @@ generator follows the document, not the brief's parenthetical** (*"default (or r
 
 ---
 
+## Two fixes made after the report was first written
+
+Both came out of a review pass over this report and are in the final commit.
+
+1. **`E-DOCS-NO-README`'s path column named a file the message beside it says does not exist.**
+   `command_docs`' refusal handler wrote `str(repo_root / "README.md")` for **all five** codes —
+   one expression standing in for five subjects, which is the proxy shape. Four of the five are
+   faults *in* a README that exists; this one is the *absence* of one, and its subject is the
+   directory. Fixed, and `test_docs_refuses_a_repository_with_no_readme` now asserts the path
+   column rather than only the code. Mutation (the branch removed, the old expression restored):
+   **1 failed** — that test alone, on the path assertion.
+2. **The installed claim had no end-to-end arm.** Both installed tests called a body builder
+   directly, which is a probe of the moment standing in for the path a user takes — the shape that
+   hid H4b-2's Critical. `test_docs_writes_an_installed_claims_named_absence_into_the_FILE` runs
+   `main(["docs"])` in a project holding an installed claim, a local template and a config naming
+   the installed one, and reads both regions back **out of the file `docs` wrote**. It also
+   asserts the repository path does **not** appear in the `templates` region, which is the
+   machine-local-provider rule stated as an assertion rather than only in a docstring.
+
+**On the provider written into a committed file:** `plugins.provider_of` answers
+`"<dist-name> <version>"` for every entry point `entry_points()` attaches a distribution to, and
+its `ep.value` fallback is marked unreachable from that call in its own docstring — so the only
+shape a README can receive is the distribution pair, which is what a reader pins or uninstalls.
+A **local** claim's provider (an absolute `<path>::<ClassName>`) is never written to a README at
+all: `templates_body` prints no provider for one, and `credentials_body`'s unreadable rows are
+reachable only for a claim with no class, which a local claim never is.
+
+---
+
 ## Concerns
 
 1. **The transitional deferral at the top of this report is a plan-ordering conflict, not a code
@@ -556,6 +587,12 @@ generator follows the document, not the brief's parenthetical** (*"default (or r
    a generator print a note and succeed, where every other command in the build turns an `OSError`
    into `E-IO-FAILED` at exit `1`. Deliberate — the generator's files are already on disk — but it
    is a second answer to one question, and it is unowned after this slice.
-5. **Task 6's tests and task 8's live in `tests/test_docs.py`**, not `tests/test_cli.py`, because
+5. **`CLAUDE.md` § Misreadings' `field_convention` row now has ZERO examples**, not merely a
+   stale one — every entry it has ever listed (`required_env`, `apparatus_probe`,
+   `apparatus_facts`, `EXIT_EXTERNAL`, and now `field_convention`) has a reader. The row's own
+   text says it keeps retired entries as evidence that it retires them, so the decision is
+   whether the row survives with an empty current list. **That is a decision for the controller,
+   not an example to update**, and it is unowned after this slice.
+6. **Task 6's tests and task 8's live in `tests/test_docs.py`**, not `tests/test_cli.py`, because
    they share this file's project fixture and the renderer under test. If the reviewer wants
    `list-templates`' arms in `test_cli.py`, that is a move, not a rewrite.

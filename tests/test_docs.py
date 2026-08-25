@@ -1106,7 +1106,13 @@ def test_docs_refuses_a_repository_with_no_readme(tmp_path: Path, monkeypatch, c
     monkeypatch.chdir(root)
 
     assert main(["docs"]) == 1
-    assert "E-DOCS-NO-README" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "E-DOCS-NO-README" in err
+    # The path column names the DIRECTORY, not a `README.md` the message beside
+    # it says does not exist — the four structural refusals name the file
+    # because there is one, and this refusal is the absence of it.
+    assert f"E-DOCS-NO-README     {root}\n" in err
+    assert f"{root / 'README.md'}\n" not in err
     assert not (root / "README.md").exists()
 
 
@@ -1504,3 +1510,45 @@ def test_the_two_surfaces_render_one_parameter_spec_the_same_way(
     expected = "\n".join(template_details(_claims(root)["shapes_assay"]))
     assert expected in out
     assert "| `assay.vendor` | string | `vendor_a` |" in expected
+
+
+def test_docs_writes_an_installed_claims_named_absence_into_the_FILE(
+    tmp_path: Path, installed, monkeypatch, capsys
+):
+    """The end-to-end arm the two installed tests above do not make: they call
+    the body builders directly, and a direct call is a probe of the moment
+    rather than of the path a user takes.
+
+    So this runs the real command through `main`, in a project holding an
+    installed claim and a local template, and reads the two regions back OUT OF
+    THE FILE `docs` wrote. Both directions: the installed claim's named absence
+    is in the `templates` region and its credentials row is in the
+    `credentials` one, and the local template's real table is in the same file
+    — so neither can pass for a command that wrote nothing.
+    """
+    from publishable.cli import main
+
+    root = _fixture_d(tmp_path, installed, monkeypatch)
+    (root / "configs" / "exp-far").mkdir(parents=True)
+    (root / "configs" / "exp-far" / "config.yaml").write_text(
+        "name: exp-far\nexperiment_type: mmm_installed\n"
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 0
+    capsys.readouterr()
+    text = (root / "README.md").read_text()
+
+    templates = body_of(text, "templates")
+    assert "### `mmm_installed`\n\nInstalled, provided by `dist-assay 0.3.1` — " in templates
+    assert "`E-TEMPLATE-INSTALLED-UNSUPPORTED`" in templates
+    assert "| `aaa.n` | integer | `3` | >= 1 | how many |" in templates
+    assert (
+        "| _(unknown)_ | `exp-far` — its template `mmm_installed` is installed "
+        "(dist-assay 0.3.1), so its `required_env` is not readable in this build "
+        "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) |"
+    ) in body_of(text, "credentials")
+    # And the provider written into this committed file is a DISTRIBUTION name
+    # and version — what a reader pins or uninstalls — never a machine-local
+    # path: `templates_body` prints no provider for a `local` claim at all.
+    assert str(root) not in templates

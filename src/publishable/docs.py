@@ -743,7 +743,14 @@ def command_docs() -> int:
         c.credentials = _credentials_in_reach(
             repo_root, list(getattr(exc, "partial_templates", None) or [])
         )
-        c.error(code, str(repo_root / "README.md"), str(exc))
+        # The path column names what the diagnostic is ABOUT, and the five
+        # refusals are not all about the same thing: four are faults IN a
+        # README that exists, and `E-DOCS-NO-README` is the absence of one, so
+        # naming `<root>/README.md` there would print a path the message beside
+        # it says does not exist. One expression standing in for five subjects
+        # is the proxy shape; the subject is asked for instead.
+        subject = repo_root if code == "E-DOCS-NO-README" else repo_root / "README.md"
+        c.error(code, str(subject), str(exc))
         print(c.render(), file=sys.stderr)
         return EXIT_WRONG
 
