@@ -26379,3 +26379,186 @@ def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
     # it rather than by eye — a diagnostic citing a section this document does
     # not have sends a reader nowhere.
     assert "Operation commands" in _cited_sections()
+
+
+# --- H3c-3 guard pin, arms B, C, D and E -------------------------------------
+
+
+def test_h3c3_pin_arm_b_a_no_axis_sweep_document_carries_only_the_flat_partitions(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm B. Authorized editor: NONE**, post-edit state
+    *unchanged*.
+
+    A run with **no group axis** records its folds flat: every `partitions`
+    entry carries exactly `fold`, `test` and `train`, and the document carries
+    **no** `partitions_within` key. Decision 11 gives the cell disclosure key
+    to designs that have cells; MU-14 is the mutation that writes it
+    unconditionally, and this arm is what reports it.
+
+    The key-set assertion is by equality, not by membership: `train` present is
+    itself pinned (C8 — under cells the flat `train` would name a side no
+    execution sees, and dropping the key rather than composing it is the shape
+    this forbids), and an *added* per-entry key fails the same assertion.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [sorted(p) for p in sweep["partitions"]] == [["fold", "test", "train"]] * 5
+    assert "partitions_within" not in sweep
+    # The can-fail half: the document really was read and really holds folds,
+    # so the absence above is an absence from a populated document rather than
+    # from a shape this test failed to reach.
+    assert [p["fold"] for p in sweep["partitions"]] == [f"fold{i:02d}" for i in range(1, 6)]
+
+
+def test_h3c3_pin_arm_c_the_resumed_allocation_round_trips_to_the_recorded_document(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm C. Authorized editor: task 17, and only task 17.**
+    Post-edit state, specified in advance: **unchanged**. Decision 11 derives
+    that `holdout.within` is not written for this design, so the rebuilt
+    document equals the recorded one after the slice exactly as before it. If
+    task 17 measures otherwise it edits this arm **once**, appends the recorded
+    document's `holdout.within` to the expected value, **reorders nothing**,
+    and reports the measurement (C23).
+
+    One property and one only: what `_execute_prepared` hashes is what the file
+    on disk holds. `provenance.allocation_hash` covers `allocation.json`, and a
+    resume never rewrites it, so a `seed`, a `strata` or a `within` block taken
+    from the recomputed plans instead of the record would publish a hash of a
+    document no file holds.
+
+    Deliberately **not** a copy of
+    `test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest`:
+    that test also pins `Prepared`'s field count and a field-by-field identity
+    loop, both of which this slice moves (C20 adds a field; Ruling KK re-derives
+    the partitions). Those assertions stay where they already live, with their
+    own editors; this arm pins the round trip alone.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
+def test_h3c3_pin_arm_d_a_no_axis_prepare_makes_exactly_one_bare_digest_partition_call(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm D. Authorized editor: NONE**, post-edit state
+    *unchanged*.
+
+    A design with no group axis calls `partition_units` **exactly once**, over
+    the whole roster, with the **bare** design digest. That is the oracle arm A
+    pins the output of, seen from the call side: MU-5 (a per-cell digest,
+    `digest + cell_label`) and any second draw both fail here, and neither is
+    visible to arm A, which calls the function directly.
+
+    **The counting wrapper is installed at BOTH names, and the assertion is on
+    the sum.** `cli.py` does `from publishable.units import partition_units`,
+    so `cli` holds its own binding: a patch on `publishable.cli.partition_units`
+    alone counts zero the moment task 8 reroutes the call site through
+    `units.partition_within_cells`, whose inner call resolves `units`' binding —
+    and this arm has no authorized editor, so it may not be repaired then.
+    Patching both and summing is invariant under either shape. **The constraint
+    this arm imposes on task 8** is therefore only that the per-cell loop keep
+    *calling* `partition_units` rather than inlining its body; where it is
+    called from is free.
+
+    Measured before the literal was written: `validate_config`, which
+    `_prepare_run` runs first, contributes **no** call of its own today, so the
+    count is 1 and not 2.
+    """
+    from publishable import cli as cli_mod
+    from publishable import units as units_mod
+    from publishable.cli import Prepared, _prepare_run
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+
+    calls: list[dict[str, Any]] = []
+    original = cli_mod.partition_units
+
+    def counting(roster, k, digest, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"n": len(list(roster)), "k": k, "digest": digest})
+        return original(roster, k, digest, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli_mod, "partition_units", counting)
+        mp.setattr(units_mod, "partition_units", counting)
+        prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+
+    assert len(calls) == 1, calls
+    # The whole roster, undivided — a per-cell loop over this design would draw
+    # once per cell over sub-rosters, and there is exactly one cell here.
+    assert calls[0]["n"] == 10
+    assert calls[0]["k"] == 5
+    # The BARE digest: the same string `sweep.yaml` records, with nothing
+    # appended. Compared against the recorded value rather than a literal, so
+    # the two sources have to agree rather than each agreeing with itself.
+    assert calls[0]["digest"] == sweep["design_digest"]
+
+
+def test_h3c3_pin_arm_e_a_six_unit_no_axis_config_validates_with_no_findings_at_all(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm E. Authorized editor: NONE**, post-edit state
+    *unchanged* — and in particular it must never gain `W-DATA-CELL-THIN`.
+
+    Captured **before** Decision 3's warning exists, which is what makes it a
+    pin rather than a restatement of the code. `materialize.py` writes
+    `min_units_per_cell: 20` into every config `init` produces, so an ungated
+    thin-cell check warns on every small generated project — this one included,
+    at 6 units. MU-11 (the cell-structure gate removed) is caught here.
+    **MU-11 cannot be run at task 1**: the code it mutates does not exist yet,
+    and task 18 owes the run.
+
+    The finding set is asserted **exactly** (`== []`), not as
+    `"W-DATA-CELL-THIN" not in codes`: a set assertion catches a warning
+    arriving under any spelling, and an absence-only assertion would pass
+    identically if nothing ran.
+
+    **The half that must report, paired here rather than in a separate test so
+    `pytest -k h3c3_pin_arm_e` runs both:** the same six units and the same
+    generated config under `allocation: between` earns
+    `E-DATA-ALLOCATION-NO-ARMS`. That is C17's other half of the cell-structure
+    question, and it is what shows `validate_config` reaches the allocation
+    block of *this* config rather than returning before it.
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text(
+        "patient_id,cohort,arm\n"
+        + "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, 7))
+        + "\n"
+    )
+
+    def findings_for(allocation: str, project: str) -> list[str]:
+        root = tmp_path / project
+        assert main(["new", str(root)]) == EXIT_OK
+        cfg = generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(tmp_path / f"results-{project}"),
+        )
+        doc = yaml.safe_load(cfg.read_text())
+        doc["metadata"]["description"] = "the arm E guard pin"
+        doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+        doc["data"]["units"]["allocation"] = allocation
+        assert doc["limits"]["min_units_per_cell"] == 20, "the value `init` writes"
+        assert doc["sweep"] == {}, "no group axis, so no cell structure exists"
+        cfg.write_text(yaml.safe_dump(doc))
+        collector = Collector()
+        validate_config(cfg, collector)
+        return [f.code for f in collector.findings]
+
+    assert findings_for("within", "within-proj") == []
+    assert findings_for("between", "between-proj") == ["E-DATA-ALLOCATION-NO-ARMS"]

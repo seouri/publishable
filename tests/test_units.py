@@ -4515,3 +4515,61 @@ def test_index_names_covers_every_source_shape(tmp_path):
         "reads/a1.fq",
     }
     assert index_names({"from": "index.csv"}, None) == {"index.csv"}  # no roster, still the index
+
+
+# --- H3c-3 guard pin, arm A: the bit-stability oracle -------------------------
+
+
+def test_h3c3_pin_arm_a_the_three_partition_draws_are_byte_identical():
+    """**H3c-3 guard pin, arm A. Authorized editor: NONE.** No task in the
+    folds-inside-cells slice may edit this test; its post-edit state, specified
+    in advance, is *unchanged, byte for byte*.
+
+    The bit-stability oracle the whole slice rests on: a design with **no
+    cells** must draw exactly the partition it drew at `3d72910`. Cells are
+    drawn per cell only when a group axis resolves, and a one-cell design must
+    reduce to today's single call byte-identically — so a fold regression
+    bought for an arm feature is the one trade this slice must not make
+    (`_assign_whole_clusters_by_ratio`'s docstring states the same rule).
+
+    Three draws, not one, because `partition_units` has three paths and the
+    slice's per-cell loop passes `clusters=` and `strata=` through: the
+    unclustered draw (the existing oracle
+    `test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite`,
+    re-asserted here under this slice's name so a reader greps the slice and
+    finds it), the clustered draw at `sha256:abc`, and the clustered-stratified
+    draw at `sha256:0000`.
+
+    Every literal below was **computed** by calling `partition_units` at
+    `d17d402`, not read from another test: the sibling clustered tests pin
+    sizes (`{8, 7}`) and cluster identity, which a rewrite that reordered units
+    *inside* a fold would still satisfy. Membership in order is what this pins.
+    The size vectors are hand-derivable — largest-cluster-first into the
+    least-loaded fold — but the membership is not: `S4` and `S5` tie at size 1
+    and the shuffle breaks that tie, so only running produces the order.
+    """
+    unclustered = partition_units(_roster(50), 5, "d")
+    assert [[u.key for u in p] for p in unclustered] == [
+        ["u018", "u019", "u034", "u029", "u025", "u023", "u007", "u016", "u013", "u035"],
+        ["u036", "u000", "u043", "u040", "u026", "u032", "u003", "u031", "u022", "u041"],
+        ["u020", "u046", "u004", "u001", "u038", "u049", "u017", "u030", "u012", "u033"],
+        ["u039", "u021", "u028", "u010", "u045", "u048", "u009", "u024", "u014", "u042"],
+        ["u011", "u006", "u002", "u005", "u015", "u037", "u027", "u008", "u047", "u044"],
+    ]
+
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    clustered = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    assert [[u.key for u in p] for p in clustered] == [
+        ["S1_0", "S1_1", "S1_2", "S1_3", "S1_4", "S1_5", "S1_6", "S4_0"],
+        ["S3_0", "S3_1", "S3_2", "S2_0", "S2_1", "S2_2", "S5_0"],
+    ]
+
+    roster, clusters, strata = _clustered_by_stratum({"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]})
+    stratified = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [[u.key for u in p] for p in stratified] == [
+        ["Ac0_0", "Ac0_1", "Ac0_2", "Bc0_0", "Bc0_1", "Bc0_2", "Bc0_3", "Bc0_4"],
+        ["Ac2_0", "Ac2_1", "Ac1_0", "Ac1_1", "Bc3_0", "Bc1_0"],
+        ["Ac3_0", "Ac3_1", "Bc4_0", "Bc2_0"],
+    ]
