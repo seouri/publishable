@@ -1,5 +1,6 @@
 # tests/test_units.py
 import importlib
+import itertools
 import sys
 from collections import Counter
 from pathlib import Path
@@ -23,6 +24,7 @@ from publishable.units import (
     arms_of,
     assign_seed_for,
     assignment_for,
+    cells_of,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -4573,3 +4575,98 @@ def test_h3c3_pin_arm_a_the_three_partition_draws_are_byte_identical():
         ["Ac2_0", "Ac2_1", "Ac1_0", "Ac1_1", "Bc3_0", "Bc1_0"],
         ["Ac3_0", "Ac3_1", "Bc4_0", "Bc2_0"],
     ]
+
+
+# --- H3c-3 task 2: `cells_of`, the design's cell decomposition ----------------
+
+
+def _plan(members: dict[str, list[str]]) -> ArmPlan:
+    """One realized `ArmPlan` from a level → keys mapping, `levels` in the
+    mapping's own order — the shape `assignment_for` produces and the only
+    input `cells_of` takes."""
+    return ArmPlan(
+        levels=tuple(members),
+        members={level: tuple(keys) for level, keys in members.items()},
+        seed=None,
+        strata=(),
+    )
+
+
+_CELLS_ROSTER = [f"u{i:02d}" for i in range(12)]
+
+
+def test_two_crossed_axes_give_one_cell_per_combination_in_declaration_order():
+    """12 units, `arm` × `sex`, two levels each → **4** cells whose keys are
+    `(axis, level)` pairs in **declaration order**: `arm` was declared first,
+    so it is the first pair of every key, and each axis's levels vary in the
+    order that axis declares them.
+
+    The two axes cut the roster differently on purpose — `arm` is the first
+    six against the last six, `sex` is even indices against odd — so the four
+    intersections are genuinely four different 3-unit sets. Two axes that
+    agreed would make the disjointness assertion below pass under a union as
+    well as under an intersection.
+    """
+    axes = {
+        "arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]}),
+        "sex": _plan({"f": _CELLS_ROSTER[::2], "m": _CELLS_ROSTER[1::2]}),
+    }
+    cells = cells_of(axes)
+    assert list(cells) == [
+        (("arm", "control"), ("sex", "f")),
+        (("arm", "control"), ("sex", "m")),
+        (("arm", "treatment"), ("sex", "f")),
+        (("arm", "treatment"), ("sex", "m")),
+    ]
+    assert cells[(("arm", "control"), ("sex", "f"))] == frozenset({"u00", "u02", "u04"})
+    assert cells[(("arm", "treatment"), ("sex", "m"))] == frozenset({"u07", "u09", "u11"})
+    # MU-2's catcher: a union in place of the intersection puts every unit in
+    # two cells. Asserted as a total over the cells against the roster size,
+    # which a union raises from 12 to 24, and as pairwise disjointness.
+    assert sum(len(keys) for keys in cells.values()) == 12
+    assert frozenset().union(*cells.values()) == frozenset(_CELLS_ROSTER)
+    for one, other in itertools.combinations(cells.values(), 2):
+        assert not (one & other), "cells partition the roster"
+
+
+def test_an_empty_intersection_is_kept_as_a_cell_rather_than_skipped():
+    """MU-1's catcher, and it is a **count**: `arm` × `site` where no `control`
+    unit sits at `s2` gives **4** cells, one of them empty — not 3.
+
+    The count is what a per-cell bound has to see. `cells_of`'s callers ask
+    *how many cells does this design declare* and *is any of them too thin*,
+    and a decomposition that silently dropped the empty one would answer the
+    second question with a cell that does not exist and the first with a
+    number the config does not declare.
+    """
+    axes = {
+        "arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]}),
+        "site": _plan({"s1": _CELLS_ROSTER[:8], "s2": _CELLS_ROSTER[8:]}),
+    }
+    cells = cells_of(axes)
+    assert len(cells) == 4
+    assert cells[(("arm", "control"), ("site", "s2"))] == frozenset()
+    # The can-fail half: the other three are populated, so the empty one is an
+    # empty cell in a real decomposition rather than four empty cells.
+    assert [len(cells[key]) for key in cells] == [6, 0, 2, 4]
+
+
+def test_one_axis_gives_one_cell_per_level():
+    axes = {"arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]})}
+    cells = cells_of(axes)
+    assert list(cells) == [(("arm", "control"),), (("arm", "treatment"),)]
+    assert cells[(("arm", "control"),)] == frozenset(_CELLS_ROSTER[:6])
+
+
+def test_no_axes_give_one_empty_cell_and_the_caller_composes_the_roster():
+    """`cells_of({}) == {(): frozenset()}`: one cell, holding nothing, because
+    this function has no roster to fall back on and takes none by design.
+
+    **A design with no group axis is one cell holding the whole roster, and
+    that composition is the caller's**, written once in the docstring and once
+    at the caller rather than invented at both. Asserted as an equality on the
+    whole mapping — one cell, whose key is the empty tuple — so a future edit
+    that returned `{}` for no axes (no cells at all, a different claim) fails
+    here.
+    """
+    assert cells_of({}) == {(): frozenset()}

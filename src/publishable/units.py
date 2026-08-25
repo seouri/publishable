@@ -8,6 +8,7 @@ directory and no step for an `io` to belong to.
 
 import csv
 import hashlib
+import itertools
 import json
 import math
 import random
@@ -2536,6 +2537,67 @@ def arm_members(
             members = keys if members is None else members & keys
         result[condition.index] = frozenset(members or set())
     return result
+
+
+def cells_of(
+    axes: Mapping[str, ArmPlan],
+) -> dict[tuple[tuple[str, str], ...], frozenset[str]]:
+    """The design's **cells**: every combination of one level from each group
+    axis, mapped to the unit keys that combination holds.
+
+    The cartesian product of every axis's declared `levels`, in **declaration
+    order** — `axes` is an ordered mapping and that order is
+    `cli._resolved_group_axes`' contract — with each key a tuple of
+    `(axis, level)` pairs in that same order and each value the intersection of
+    those arms' keys. `sex × arm` over two levels each gives four cells, keyed
+    `(("sex", "f"), ("arm", "control"))` and so on.
+
+    **Empty cells are kept.** A cell no unit falls in is a fact about the
+    design, and dropping it here would make the count of cells disagree with
+    the count of combinations the config declares — which is what every caller
+    that bounds something per cell has to see. The one caller that must not
+    draw over an empty cell skips it at its own loop and says so there.
+
+    **Derived from the realized `ArmPlan`s, not from `arm_members`**, which is
+    the wrong shape twice over: it is keyed by **condition index**, so under
+    `groups × grid` several conditions share one cell and the mapping would
+    hand back the same cell several times; and a condition selecting no axis is
+    absent from it entirely. Deriving cells from it would draw one partition
+    per condition and break *"Partitions are computed once per run, not once
+    per condition"* for real — the property `reference.md` § Repeat kinds
+    states and this decomposition exists to keep.
+
+    **This function takes no roster**, for `arm_members`' own reason and
+    `build_allocation_document`'s: with nothing to read membership *from*, no
+    future edit here can quietly become the second producer of it. It returns
+    key sets, and a caller composes sub-rosters from its own roster in roster
+    order.
+
+    `cells_of({}) -> {(): frozenset()}` — one cell, holding nothing, because
+    with no plans there are no keys to intersect and this function has no
+    roster to fall back on. **A design with no group axis is one cell holding
+    the whole roster, and composing that is the caller's job**, stated here and
+    once at the caller rather than invented at both. It falls out of the
+    product rather than being branched around: `itertools.product()` over no
+    axes yields exactly one empty combination.
+
+    A level a plan did not realize raises a bare `KeyError`, the rule
+    `arm_members` follows: `levels` and `members` come from one `ArmPlan`, so a
+    gap between them is a core defect to see rather than one to absorb by
+    handing back a cell nothing verified.
+    """
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] = {}
+    for combination in itertools.product(*(plan.levels for plan in axes.values())):
+        key = tuple(zip(axes, combination, strict=True))
+        members: frozenset[str] | None = None
+        for axis, level in key:
+            # `axes[axis].members[level]`, not `.get`: see the docstring — a
+            # level `levels` declares and `members` does not hold is one plan
+            # disagreeing with itself.
+            arm = frozenset(axes[axis].members[level])
+            members = arm if members is None else members & arm
+        cells[key] = members if members is not None else frozenset()
+    return cells
 
 
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
