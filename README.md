@@ -325,7 +325,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 | `study new` · `study add` | Assemble the runs a paper reports, outside the repo |
 | `docs` · `list-templates` | Regenerate the managed README regions; list every installed template and its parameters |
 
-Full details: [CLI reference](docs/reference.md#cli-reference) — which also carries the `Status` column saying which of these the current build executes. A command specified but not yet built says so when you invoke it, rather than reporting an unknown command.
+Full details: [CLI reference](docs/reference.md#cli-reference) — which also carries the `Status` column saying which of these the current build executes.
 
 ---
 

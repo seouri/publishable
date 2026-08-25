@@ -8339,7 +8339,27 @@ against the function itself, for the next caller that does not route through `fi
 
 **Found by:** H8a task-b3 review, "Not checked, or checked only by reading", fix round 1.
 
-## OPEN — `discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second — **Owner: H9**
+## ~~`discover_local`'s bytecode cache can serve a STALE `templates/*.py` when the file is rewritten within the same wall-clock second~~ — STRUCK 2026-08-25 (H9d task 9), CLOSED
+
+**Closed by `src/publishable/sourceimport.py`**, at all three call sites this entry and its sibling
+name — `templates/discovery.py`'s `_import_file`, `report.py`'s `render_with_override` and
+`base_experiment.py`'s `load_experiment`. The filing's own recipe was re-run at HEAD before the fix
+and reproduced (`f_probe` twice, one process, no exception), and answers `g_probe` after it.
+
+**With one correction this strike may not swallow: the remedy this entry proposed is FALSE of the
+fix, and was false when it was written.** *"Handing it a fresh
+`importlib.machinery.SourceFileLoader(module_name, str(path))` explicitly"* changes nothing —
+`spec_from_file_location` already returns exactly that class, so the explicit form is the same
+object by another route, and the filing's recipe still serves the stale answer under it. Measured,
+not reasoned. What option (a) actually required was **forcing recompilation**: `FreshSourceFileLoader`
+overrides `get_code` to compile the bytes on disk, so `__pycache__` is neither read nor written for
+these imports. Option (b) — documenting the weaker per-process property — was rejected, as design
+Decision 10 records. `sys.dont_write_bytecode` was rejected too, for being module-global.
+
+**What is NOT closed, recorded here rather than left implied:** a module the loaded file itself
+imports — a sibling step, a vendored helper — goes through the ordinary import system and can still
+be served from `__pycache__` within one second. Both filings are about the entrypoint, override and
+template file itself, so that is beyond them; it is filed below on its own.
 
 `src/publishable/templates/discovery.py`'s `_import_file` builds its spec through
 `importlib.util.spec_from_file_location`, which hands back an ordinary `SourceFileLoader` — the
@@ -8903,7 +8923,17 @@ docs/reference.md` → **1** as the can-fail control. `E-PROJECT-EXISTS`'s sente
 reason**, and H6b taking two codes does not make it H6's: the two were taken by emit site, not by a
 charter that grew.
 
-## OPEN — a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0` — **Owner: H9**
+## ~~a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0`~~ — STRUCK 2026-08-25 (H9d task 9), CLOSED
+
+**Closed by the same pass as its sibling above**, which is what this entry's own *check its owner
+must make* required (*"whichever option this owner picks for the entry above should be picked for
+both … in the same pass, since it is one root cause with three call sites"*). Its recipe — a
+byte-identical-length rewrite of an override inside one wall-clock second — was re-run and now
+renders the second body.
+
+**Same correction as its sibling, and it applies to this entry's own wording too:** the explicit
+`SourceFileLoader` both filings proposed is a no-op. The fix is `FreshSourceFileLoader.get_code`
+compiling the source every load.
 
 **Found by:** H8c whole-branch review, Minor 9, verified by running.
 
@@ -9358,10 +9388,21 @@ own copy disagree is the question H9c's Decision 3 (Ruling AA) answers — the r
 `uv_lock_hash` is the authority, the run directory's byte copy is the preferred carrier, and the
 committed copy is used only when it matches. Rendering **per-package detail lines** underneath the
 two digests is `diff`'s surface, not `reproduce`'s: `reproduce` prints no comparison table and
-resolves no dependency graph. **Owner: H9d** (`demo`, `docs`, `list-templates`) — the only remaining
+resolves no dependency graph. ~~**Owner: H9d** (`demo`, `docs`, `list-templates`) — the only remaining
 slice with a CLI rendering surface, H8b (`diff`'s own slice) being complete and H3c-3's remaining 14
-being folds and holdouts inside cells. Stated as a fact with a reason rather than as *"whichever
+being folds and holdouts inside cells.~~ Stated as a fact with a reason rather than as *"whichever
 slice next touches `diff`"*, which this file rejects by name.
+
+**RE-OWNED AGAIN 2026-08-25 (H9d task 14): `unassigned`, with the reason, and the 2026-08-24
+re-owning is answered rather than repeated.** *"The only remaining slice with a CLI rendering
+surface"* is a **schedule argument wearing a surface argument's clothes**: it establishes that H9d
+is next, not that `diff`'s rows are H9d's. `diff` is **H8b's** command, and none of `demo`, `docs`
+or `list-templates` renders a `diff` row or resolves a dependency graph — building this here would
+mean one slice adding a rendering feature to another slice's command, with no fixture family of its
+own to add it to. **H8b is complete and H3c-3's remaining 14 is folds and holdouts inside cells**,
+so no remaining slice has `diff`'s output as its surface. The input this entry was waiting on
+(Ruling AA's authority question) has landed and stays landed; what is missing is an owner, and
+saying so is more useful than an owner who would decline.
 
 **Filed 2026-08-22 by H5b task 15, as the residual of this slice's own cost-if-wrong.** H5b changes what
 `aggregated` reports for a config whose `code_hash`, `parameters_hash` and `input_manifest_hash` are all
@@ -10255,3 +10296,205 @@ is folds and holdouts inside cells. H7 is complete.
 
 **Severity:** Minor. Nothing behavioural; a reader who trusts the count adds a fourth importer
 believing there were two.
+
+---
+
+## OPEN — `reference.md` gives template `generic` an `aggregate` in one section and denies it in another, and the shipped class has none — **Owner: unassigned, with the reason (no remaining slice owns the worked example's template story)**
+
+**Found by:** H9d design § 3 finding 1, measured before any code was written; re-verified 2026-08-25.
+
+Three readings of one name. `reference.md` § Templates' fenced example is
+`@register_template("generic")` and **shows an `aggregate`** computing pearson/spearman/kendall;
+the same document's § Validation row says *"template `generic` defines no `aggregate`"*; and
+`src/publishable/templates/builtin/generic.py` — all 26 lines of it — declares none, inheriting
+`BaseTemplate.aggregate`'s `{}`. `CLAUDE.md` § The worked example then says `cohort-pilot` uses
+`generic` and derives `r` by `aggregate(units)`, which no shipped code can do.
+
+**Reproduced:**
+
+```python
+from publishable.templates.registry import get_template
+t = get_template("generic")
+print(type(t).__dict__.get("aggregate"))     # None — inherited, returns {}
+print(t.aggregate(None, None))               # {}
+```
+
+A config naming `generic` therefore derives nothing, which is why H9d's `demo` writes a
+**project-local** template instead (design Decision 5) — it depends on neither reading and so
+could decline this.
+
+**Why H9d did not repair it.** Repairing means either giving a shipped `generic` an `aggregate` —
+which falsifies `E-HYPOTHESIS-BOUND`'s shipped premise and the tests resting on it — or editing the
+worked example across four documents. Neither is `demo`/`docs`/`list-templates`' surface.
+
+**Owner: unassigned, with the reason.** No remaining slice has core's shipped template or the worked
+example as its surface: H9d is the command surface and **H3c-3's remaining 14 is folds and holdouts
+inside cells**. H5, H7 and H8 are complete.
+
+**Severity:** Major as documentation. A reader following § Templates writes a config that derives
+nothing and gets no diagnostic saying why.
+
+---
+
+## OPEN — ruling GG asked for `self.rng` to become a `numpy.random.Generator` and NO task built it; the four obligations it attached are unowned — **Owner: unassigned, with the reason (H9d is the last slice of the command surface)**
+
+**Found by:** H9d batch 5-6 (tasks 10-14), reading the ruling against the plan's own task sections.
+
+**What happened, so it is not re-derived.** H9d corrections 3, 4 and 5 measured a divergence:
+`base_step.py` builds a `random.Random`, `reference.md` said `numpy.random.Generator` at two sites,
+and a step calling `self.rng.normal(...)` — which the document invited — failed its execution at
+exit `3`. Design **Decision 13** resolved it by moving the **document**. **Controller ruling GG,
+appended 2026-08-24, overruled that and required the CODE to move**, with four obligations: a
+disclosure section, a pin on the type itself, `demo`'s generated step drawing from `self.rng`, and
+the two `reference.md` statements re-checked against the new code. Its own escape clause says
+*"whichever task owns `base_step.py` owns all four. If no task does, the batch that discovers it says
+so and stops rather than folding it in silently."*
+
+**No task owns `base_step.py`.** Measured: no task section 1-14 of
+`docs/superpowers/plans/2026-08-24-demo-and-docs.md` names the file as an edit, and
+`git log main..HEAD -- src/publishable/base_step.py` is **empty**. So the escape clause fired and
+H9d's batch 6 did not fold the change in.
+
+**What H9d did instead, stated so the two entries do not read as contradicting each other.** The
+document/code divergence is **closed by moving the document** (§ Using them in step code, § Randomness'
+table row, and two further statements that were false of `random.Random` and are corrected with
+them: `self.rng.spawn(n)`, which the standard library's generator does not have, and
+*"`self.rng` is exactly `default_rng(self.derive_seed(...))`"*). GG's own fourth obligation is
+therefore discharged as a finding: **both statements were false of the shipped code, and two
+neighbouring ones were too.** `demo`'s generated step draws from `self.rng.random()` — a method both
+types carry — so the walkthrough exercises the attribute under either resolution and nothing has to
+move if the ruling is later built.
+
+**What is unowned:** the type change itself, its disclosure section, and a pin on the type. The
+measurement that outlives the wording fix is `grep -rn 'self.rng' tests/*.py` → **zero hits**: this
+surface shipped without ever being exercised, which is *an unbuilt reader of a shipped surface*
+wearing its other face, and is why the divergence survived a release.
+
+**Cost if wrong / if unclaimed:** a research tool whose per-execution stream cannot draw a normal,
+met by a new user following the documented example on their first step — GG's own argument, recorded
+here rather than lost with the ruling.
+
+**Owner: unassigned, with the reason.** `base_step.py` is core's step surface. **H9d is the last
+slice of the command surface** and **H3c-3's remaining 14 is folds and holdouts inside cells**;
+neither has `BaseStep` as its surface. A controller re-taking GG would be scheduling new work, not
+assigning existing work, and this entry is what makes that visible.
+
+---
+
+## OPEN — `reference.md`'s worked `run.yaml` gives a DERIVED metric a `repeat_spread` the code computes only for recorded columns — **Owner: unassigned, with the reason (no remaining slice has the `statistics` block as its surface)**
+
+**Found by:** H9d correction 8, read from a real `run.yaml`; re-verified 2026-08-25 against H9d's own
+demo run.
+
+`reference.md`'s worked record shows
+`r: {value: 0.607, …, repeat_spread: {std: 0.014, n: 5, kind: seed}}` — `r` being **derived** by the
+template's `aggregate`. The code computes `repeat_spread` only where a column was **recorded** per
+repeat.
+
+**Reproduced:** `publishable demo` writes a project whose `r` is derived and whose `pred`/`truth` are
+recorded. In the resulting `run.yaml`, `pred` and `truth` each carry
+`repeat_spread: {std: …, n: 5, kind: seed}` and **`r` carries no such key at all**. That is why
+`demo`'s own transcript reports a recorded column's spread and names which column.
+
+**Owner: unassigned, with the reason.** It is `stats.summarize_step`'s construction. No remaining
+slice has the `statistics` block as its surface — H4 is complete, H9d is the command surface, and
+H3c-3's remaining 14 is folds and holdouts inside cells.
+
+**Severity:** Minor as code, Major as documentation: the worked example shows a key a reader will
+look for and not find.
+
+---
+
+## OPEN — a derived metric whose `aggregate` reads DECLARED ATTRIBUTES gets a paired contrast draw of `0 of 2000` and a `null` interval, while the same metric over RECORDED COLUMNS gets both — **Owner: unassigned, with the reason (no remaining slice has the resample constructions as its surface)**
+
+**Found by:** H9d correction 10 / design Decision 6, measured by two runs differing only in that.
+
+Per condition, an attribute-reading `aggregate` computes its percentile interval fine. Its **paired
+contrast** draw yields `0 of 2000` — `W-STATS-CONTRAST-RESAMPLE-THIN`, `ci95: null`, `method: null`
+— while the identical `aggregate` reading recorded columns gets `paired_percentile_over_units` and a
+real interval.
+
+**Reproduced:** two runs of one config differing only in whether `aggregate` reads `units.pred` or
+`unit.x`-derived attributes. **Casting the attribute to `float` inside `aggregate` does not help**,
+which is what isolates the cause away from the string-typing of attributes (a real but separate
+fact: attributes from `index.csv` arrive as `str`, so `spearmanr` over them ranks
+lexicographically — `0.4212` against the float column's `0.6781`).
+
+H9d routes **around** this rather than through it: `demo`'s template reads recorded columns, because
+the paired delta is the walkthrough's headline number and the attribute route puts a dash where it
+belongs.
+
+**Owner: unassigned, with the reason.** The construction is in `stats.py`'s derived-contrast
+resampling, reached from `cli.py`'s `_make_resample_fn`. No remaining slice has it as its surface;
+H4 is complete.
+
+**Severity:** Major. A template written the documented way silently loses every contrast interval in
+the run, at exit `0`, with only a warning that reads as a thin-data problem.
+
+---
+
+## OPEN — `run` prints no execution banner, no progress indication and no results table, for a plan of any size — **Owner: unassigned, with the reason (a behaviour change to the most-tested shipped command)**
+
+**Found by:** H9d correction 6, captured whole to a file rather than tailed; re-measured 2026-08-25.
+
+**Reproduced:** a successful 19-execution run's **entire** stdout is the warning block and one line
+`run.yaml → <path>`. Nothing reports that 19 executions are planned, nothing reports progress
+through them, and no results table is printed — for a run that may take hours.
+
+This is why `demo` renders its own stop-5 summary from the record `run` just wrote (design
+Decision 7), and why README's stop-5 block now attributes `run`'s two real lines to `run` and
+everything beneath them to `demo`.
+
+**Owner: unassigned, with the reason.** Giving `run` progress indication is a behaviour change to
+the most-tested shipped command, on the last slice of the project; it would move every `run` stdout
+pin in the suite, and the four documents nowhere say `run` prints one. **H9d declined it in writing**
+rather than building it. No remaining slice has `run`'s output as its surface.
+
+**Severity:** Minor as correctness, real as usability: a long plan gives a user nothing to watch.
+
+---
+
+## OPEN — `reference.md` § Package layout names `examples/generic/`, which does not exist and which nothing consumes — **Owner: unassigned, with the reason**
+
+**Found by:** H9d correction 20; `ls examples/` says no such directory, at HEAD.
+
+The row carries no `— not yet built` marker, so it reads as describing a directory that ships. The S1
+spine design's § Explicitly out of scope names it too: *"`examples/generic/` from § Package layout.
+Nothing consumes it until `demo`."* **`demo` is now built and consumes nothing of the kind**: it
+scaffolds its own project and its own data, which is the thing a reader wanting an example now has.
+
+**Why H9d neither built nor deleted it.** Inventing an examples tree is not `demo`'s surface, and
+deleting a documented directory to make a tree pass is the *delete the claim to make the check green*
+move. The row is left, and this entry is what says it is unbacked.
+
+**Owner: unassigned, with the reason.** No remaining slice has § Package layout's tree as its
+surface: H9d is the command surface and H3c-3's remaining 14 is folds and holdouts inside cells.
+
+**Severity:** Minor. A reader looking for `examples/generic/` finds nothing and no explanation.
+
+---
+
+## OPEN — the fresh-source loader covers the file it imports and NOT the modules that file imports, so a sibling step edited in the same second can still be served stale — **Owner: unassigned, with the reason (the two filings it completes are closed)**
+
+**Found by:** H9d batch 1's task 9 report, concern 2, recorded there and filed here so it is not
+carried only in a batch report.
+
+`sourceimport.import_module_fresh` forces recompilation of the module **it** resolves — the template
+file, the report override, the entrypoint. A module that file then imports itself — a sibling step,
+a vendored helper — goes through the ordinary import system, whose `SourceFileLoader` still validates
+`__pycache__` against `(mtime, size)` at whole-second resolution. So the same-size, same-second
+rewrite the two struck entries above describe is still reachable **one import deeper**.
+
+**Reproduced:** the struck entries' own recipe, with the marker moved out of the imported file and
+into a sibling module it imports — the second resolution serves the first write's body.
+
+**Why it was not built.** A meta-path finder would cover it and was deliberately declined: it makes
+design § 10's mutation row 6 — *revert the fix at exactly one of three call sites* —
+unexhibitable, which would trade a real pin for a wider fix.
+
+**Owner: unassigned, with the reason.** The two filings this completes are closed by H9d task 9, and
+no remaining slice has `sourceimport.py` as its surface: H9d is the command surface and H3c-3's
+remaining 14 is folds and holdouts inside cells.
+
+**Severity:** Minor. It needs a long-lived process, a same-second rewrite, and a same-size one, in a
+module reached only indirectly.
