@@ -23,9 +23,16 @@ site, from a successful parse of a file with nothing to manage.
 """
 
 import re
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import yaml
 
 from publishable.errors import ContractError
+
+if TYPE_CHECKING:
+    from publishable.templates.registry import Claim
 
 #: The four regions core manages. The first three come from `docs/reference.md`
 #: § The generated README; the fourth from § Templates, whose plugin README
@@ -225,3 +232,199 @@ def read_readme(repo_root: Path) -> tuple[Path, str]:
             code="E-DOCS-NO-README",
         )
     return path, path.read_text()
+
+
+# --- The region BODIES, and the merge every generator performs (tasks 4-7) ---
+#
+# One builder per managed region, each a pure function of the repository: the
+# region is *derived*, so a generator never composes markdown of its own and
+# `docs` never has a second opinion about what a region should hold. The
+# generators call `merge_into_readme` for the regions their own write changed;
+# `publishable docs` calls `refresh` for all four.
+#
+# Every empty state below is the literal the scaffolded README already carries
+# (`readme_templates/README.md.tmpl`), so `docs` on a freshly scaffolded
+# project rewrites the file to itself byte for byte — pinned, because a
+# populated form that cannot degenerate to the scaffold's own line means the
+# line is documentation of a state the generator never writes.
+
+#: The `credentials` row a project with nothing to declare carries.
+CREDENTIALS_EMPTY_ROW = "| _(none yet — added as experiments declare them)_ | |"
+
+
+def config_paths(repo_root: Path) -> list[Path]:
+    """Every `configs/<name>/config.yaml`, in name order.
+
+    The experiment's NAME is its directory's, not a field read out of the file:
+    `generate experiment` creates `configs/<name>/`, and the directory is what
+    the `Run` column's own invocation has to name for the command to work.
+    """
+    return sorted((repo_root / "configs").glob("*/config.yaml"))
+
+
+def _declared_template(path: Path) -> str | None:
+    """One config's `experiment_type`, or `None` when the file cannot be read.
+
+    Tolerant on purpose: a generator refreshing the README is not the place a
+    malformed config is refused — `validate` is, and it says so with a code and
+    a remedy. `None` becomes a printed row here rather than a silence, which is
+    Ruling EE's rule applied to the row rather than to the region.
+    """
+    try:
+        doc = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(doc, Mapping):
+        return None
+    name = doc.get("experiment_type")
+    return name if isinstance(name, str) and name else None
+
+
+def experiments(repo_root: Path) -> list[tuple[str, str | None]]:
+    """`(experiment name, template name or None)` for every config, in name order."""
+    return [(path.parent.name, _declared_template(path)) for path in config_paths(repo_root)]
+
+
+def _unreadable_reason(name: str, template_name: str | None, claim: "Claim | None") -> str:
+    """Why one experiment contributes no credential row — a printed fact, never
+    a silence.
+
+    Correction 21 is the case this exists for: an installed template's `cls` is
+    `None` by construction, because core resolves an entry-point name from
+    package metadata without importing the package, so its `required_env` is
+    unreadable here and a *shorter table with no explanation* would be the
+    silently-skipped fault. The other two shapes are reached the same way and
+    say what they are.
+    """
+    if template_name is None:
+        return (
+            f"`{name}` — its `config.yaml` declares no readable `experiment_type`, "
+            "so no template's `required_env` could be read"
+        )
+    if claim is None:
+        return (
+            f"`{name}` — no template claims the name `{template_name}`, so no "
+            "`required_env` could be read"
+        )
+    return (
+        f"`{name}` — its template `{template_name}` is installed "
+        f"({claim.provider}), so its `required_env` is not readable in this "
+        "build (`E-TEMPLATE-INSTALLED-UNSUPPORTED`)"
+    )
+
+
+def credentials_body(repo_root: Path) -> str:
+    """The `credentials` region: one row per variable any experiment's template
+    declares in `required_env`, sorted by variable, with the experiments needing
+    it in the second cell.
+
+    **`required_env` only, deliberately not the wider set
+    `validate.declared_credential_names_for` computes.** That helper unions
+    `required_env` with every `Param.requires_env` variable across the expanded
+    sweep — a variable a *choice* needs. Such a variable is needed by the
+    experiment only under one value of one parameter, so a `Needed by` cell
+    naming the experiment flatly would be false under every other value, and
+    this table has no column to qualify it in. `publishable list-templates` and
+    the `templates` region carry the per-choice requirement instead, beside the
+    choice it belongs to.
+    """
+    from publishable.templates.registry import _claims
+
+    claims = _claims(repo_root)
+    needed: dict[str, set[str]] = {}
+    unreadable: list[str] = []
+    for name, template_name in experiments(repo_root):
+        claim = claims.get(template_name) if template_name is not None else None
+        cls = claim.cls if claim is not None else None
+        if cls is None:
+            unreadable.append(_unreadable_reason(name, template_name, claim))
+            continue
+        declared = getattr(cls, "required_env", None)
+        # The same guard `validate._check_required_env` uses: a `required_env`
+        # that is not a list is that check's finding to report, not this
+        # renderer's to iterate as characters.
+        for variable in declared if isinstance(declared, list) else []:
+            needed.setdefault(str(variable), set()).add(name)
+    rows = [
+        f"| `{variable}` | {', '.join(f'`{who}`' for who in sorted(names))} |"
+        for variable, names in sorted(needed.items())
+    ]
+    rows += [f"| _(unknown)_ | {reason} |" for reason in unreadable]
+    return "\n".join(
+        [
+            "### Required credentials",
+            "",
+            "| Variable | Needed by |",
+            "|---|---|",
+            *(rows or [CREDENTIALS_EMPTY_ROW]),
+        ]
+    )
+
+
+#: Region name → the function that computes its body from the repository.
+#: `refresh` reads this rather than a chain of branches, so a region with no
+#: builder is a `KeyError` at the call site rather than a region silently left
+#: alone — the silence Ruling EE refuses.
+BODY_BUILDERS: dict[str, Callable[[Path], str]] = {
+    "credentials": credentials_body,
+}
+
+
+def refresh(repo_root: Path, names: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Rewrite the named regions of this repository's README from the repository
+    itself, and answer `(rewritten, not declared)`.
+
+    Raises this module's five refusals — the README's absence, and the four
+    structural faults `regions` computes — because each is a case where the
+    bound a rewrite would be performed against cannot be computed. A managed
+    name this README does not declare is **not** one of them: that is the
+    ordinary state of every project scaffolded before H9d, and it is returned
+    in the second list for the caller to NAME rather than being skipped
+    silently.
+
+    The file is written only when a byte actually moved, so a repository whose
+    README is already current keeps its mtime.
+    """
+    path, text = read_readme(repo_root)
+    present = regions(text)
+    rewritten: list[str] = []
+    absent: list[str] = []
+    updated = text
+    for name in names:
+        if name not in present:
+            absent.append(name)
+            continue
+        updated = rewrite(updated, name, BODY_BUILDERS[name](repo_root))
+        rewritten.append(name)
+    if updated != text:
+        path.write_text(updated)
+    return rewritten, absent
+
+
+def merge_into_readme(repo_root: Path, names: Sequence[str]) -> list[str]:
+    """`refresh`, for a GENERATOR: the notes it should print, and no exception.
+
+    A generator has already written a package, a config or a template file by
+    the time it gets here, so a README it cannot rewrite may not cost the
+    caller the files that are already on disk — `generate experiment` against a
+    README scaffolded before this slice would otherwise leave a half-generated
+    tree behind a non-zero exit. Every fault therefore becomes a **printed
+    note** and the generator succeeds.
+
+    The notes are the caller's to print, not this function's: `docs` names its
+    own absences on stdout, and a generator prints these beside its own
+    diagnostics on stderr.
+    """
+    try:
+        _rewritten, absent = refresh(repo_root, names)
+    except ContractError as exc:
+        return [
+            f"note: README.md's managed regions were not updated — {exc.code}: {exc}",
+        ]
+    except OSError as exc:
+        return [f"note: README.md's managed regions were not updated — {exc}"]
+    return [
+        f"note: README.md declares no `{name}` region, so nothing was written "
+        "there — a region is never created, only rewritten"
+        for name in absent
+    ]

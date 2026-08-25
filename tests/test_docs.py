@@ -369,3 +369,240 @@ def test_the_round_trip_holds_for_a_file_that_does_not_end_in_a_newline(text: st
     to hold for every region of both, or `docs` moves a byte on a README
     somebody hand-edited."""
     assert rewrite(text, name, body_of(text, name)) == text
+
+
+# ---------------------------------------------------------------------------
+# H9d task 4 — the `credentials` region body, and `generate experiment`'s
+# `required_env` merge.
+#
+# Two experiments, deliberately: one declaring two variables and one declaring
+# ONE OF THE SAME TWO. A single experiment tests the write and not the merge —
+# every row would have exactly one name in its second cell, so a builder that
+# overwrote instead of unioning, and one that unioned, produce the same table.
+# ---------------------------------------------------------------------------
+
+_ALPHA_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("alpha_assay")
+class AlphaAssayTemplate(BaseTemplate):
+    required_env = ["ALPHA_TOKEN", "SHARED_TOKEN"]
+    parameter_spec = {
+        "alpha.threshold": Param(float, default=0.5, gt=0, lt=1, help="a threshold"),
+    }
+"""
+
+_BETA_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("beta_assay")
+class BetaAssayTemplate(BaseTemplate):
+    required_env = ["SHARED_TOKEN"]
+    parameter_spec = {
+        "beta.threshold": Param(float, default=0.5, gt=0, lt=1, help="a threshold"),
+    }
+"""
+
+
+def _project(tmp_path: Path, templates: dict[str, str] | None = None) -> Path:
+    """A scaffolded project, with any local templates written before anything
+    reads them. Never this repository: every helper here works in `tmp_path`,
+    because `docs` walks up from `Path.cwd()` and pytest's own cwd is the
+    `publishable` checkout — whose README is guard-pin arm B's subject."""
+    from publishable.scaffold import scaffold_project
+
+    root = scaffold_project(tmp_path / "my-study")
+    for name, source in (templates or {}).items():
+        (root / "templates").mkdir(exist_ok=True)
+        (root / "templates" / f"{name}.py").write_text(source)
+    return root
+
+
+def _generate(root: Path, tmp_path: Path, name: str, template: str) -> Path:
+    from publishable.generators.experiment import generate_experiment
+
+    return generate_experiment(
+        repo_root=root,
+        name=name,
+        template_name=template,
+        input_dir=str(tmp_path / "input"),
+        output_dir=str(tmp_path / "results"),
+    )
+
+
+def test_the_credentials_region_merges_two_experiments_declared_required_env(tmp_path: Path):
+    """The merge, asserted as the WHOLE region body rather than as substrings:
+    a row per variable in variable order, and the experiments needing it in the
+    second cell in name order.
+
+    `SHARED_TOKEN` is declared by both templates and gets ONE row naming both —
+    which is the assertion a single-experiment fixture cannot make.
+    """
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE, "beta": _BETA_TEMPLATE})
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+    _generate(root, tmp_path, "exp-two", "beta_assay")
+
+    body = body_of((root / "README.md").read_text(), "credentials")
+    assert body == (
+        "### Required credentials\n"
+        "\n"
+        "| Variable | Needed by |\n"
+        "|---|---|\n"
+        "| `ALPHA_TOKEN` | `exp-one` |\n"
+        "| `SHARED_TOKEN` | `exp-one`, `exp-two` |\n"
+    )
+
+
+def test_the_credentials_merge_moves_no_byte_outside_its_own_region(tmp_path: Path):
+    """The other half of the same write, and the one a substring assertion
+    cannot make: every byte of the README outside the `credentials` span is
+    identical to what `publishable new` wrote. Compared as whole files against
+    an independently spliced expectation, never as `in`."""
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE})
+    before = (root / "README.md").read_text()
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+    after = (root / "README.md").read_text()
+
+    assert after != before
+    assert after == rewrite(before, "credentials", body_of(after, "credentials"))
+
+
+def test_a_project_with_no_experiments_renders_the_scaffolds_own_empty_row(tmp_path: Path):
+    """The empty state is not a second literal: it is the row
+    `readme_templates/README.md.tmpl` already carries, so refreshing a freshly
+    scaffolded project rewrites the file to ITSELF, byte for byte.
+
+    That identity is the honouring half of Ruling EE from the other side. A
+    populated form that could not degenerate to the scaffold's own line would
+    mean the scaffold documents a state the generator never writes — and the
+    round trip is asserted on the whole file, so it cannot pass by the
+    comparison being a substring of itself.
+    """
+    from publishable.docs import CREDENTIALS_EMPTY_ROW, credentials_body, refresh
+
+    root = _project(tmp_path)
+    before = (root / "README.md").read_text()
+    assert CREDENTIALS_EMPTY_ROW in body_of(before, "credentials")
+    assert credentials_body(root) + "\n" == body_of(before, "credentials")
+
+    rewritten, absent = refresh(root, ("credentials",))
+    assert (rewritten, absent) == (["credentials"], [])
+    assert (root / "README.md").read_text() == before
+
+
+def test_an_experiment_whose_template_is_installed_contributes_a_row_saying_so(
+    tmp_path: Path, installed
+):
+    """Correction 21: an installed template's class is `None` by construction —
+    core resolves an entry-point name from package metadata without importing
+    the package — so its `required_env` cannot be read. The region says so, in
+    a row, naming the experiment, the template and the distribution.
+
+    A **silence** is the fault this exists to exclude: a table that simply
+    omitted the experiment is indistinguishable from a template declaring no
+    credentials at all. So the positive control is in the same test — a local
+    template's real row is present beside it.
+    """
+    installed("dist-assay", "0.3.1", {"publishable.templates": {"far_assay": "far.t:T"}})
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE})
+    _generate(root, tmp_path, "exp-one", "alpha_assay")
+    # `generate experiment` refuses an installed template outright
+    # (`E-TEMPLATE-INSTALLED-UNSUPPORTED`), so the config that names one is
+    # written directly here: the case is a repository that ACQUIRES the plugin
+    # later, or a config a collaborator wrote against a build that resolves it.
+    (root / "configs" / "exp-far").mkdir()
+    (root / "configs" / "exp-far" / "config.yaml").write_text(
+        "name: exp-far\nexperiment_type: far_assay\n"
+    )
+    from publishable.docs import credentials_body
+
+    body = credentials_body(root)
+    assert "| `ALPHA_TOKEN` | `exp-one` |" in body
+    assert (
+        "| _(unknown)_ | `exp-far` — its template `far_assay` is installed "
+        "(dist-assay 0.3.1), so its `required_env` is not readable in this "
+        "build (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) |"
+    ) in body
+
+
+def test_a_config_naming_no_template_core_can_resolve_also_gets_a_row(tmp_path: Path):
+    """The two other unreadable shapes, for the same reason and in the same
+    place: a config declaring no `experiment_type` core can read, and one
+    naming a template nothing claims. Both would otherwise be silences."""
+    from publishable.docs import credentials_body
+
+    root = _project(tmp_path)
+    for name, text in (
+        ("exp-blank", "name: exp-blank\n"),
+        ("exp-ghost", "name: exp-ghost\nexperiment_type: nobody_registers_this\n"),
+    ):
+        (root / "configs" / name).mkdir(parents=True)
+        (root / "configs" / name / "config.yaml").write_text(text)
+
+    body = credentials_body(root)
+    assert (
+        "| _(unknown)_ | `exp-blank` — its `config.yaml` declares no readable "
+        "`experiment_type`, so no template's `required_env` could be read |"
+    ) in body
+    assert (
+        "| _(unknown)_ | `exp-ghost` — no template claims the name "
+        "`nobody_registers_this`, so no `required_env` could be read |"
+    ) in body
+    # And the empty row is NOT there: rows exist, so the "none yet" line would
+    # be a false claim beside them.
+    assert "_(none yet" not in body
+
+
+def test_generate_experiment_survives_a_readme_it_cannot_rewrite_and_names_it(
+    tmp_path: Path, capsys
+):
+    """The generator's files are on disk BEFORE the merge, and the merge raises
+    nothing: a project scaffolded before H9d declares no `credentials` region,
+    and a README that cannot be rewritten may not cost the caller the package
+    and the config it just asked for.
+
+    Both directions in one test — the note is printed AND the two artifacts
+    exist. A test asserting only that nothing raised would pass for a generator
+    that wrote nothing at all.
+    """
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE})
+    readme = root / "README.md"
+    # An older README: one well-formed region, and no `credentials` one.
+    readme.write_text(
+        "# my-study\n\n<!-- publishable:begin overview -->\nprose\n"
+        "<!-- publishable:end overview -->\n"
+    )
+    capsys.readouterr()
+    config = _generate(root, tmp_path, "exp-one", "alpha_assay")
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "note: README.md declares no `credentials` region, so nothing was "
+        "written there — a region is never created, only rewritten\n"
+    )
+    assert config.is_file()
+    assert (root / "src" / "exp_one" / "experiment.py").is_file()
+    assert readme.read_text() == (
+        "# my-study\n\n<!-- publishable:begin overview -->\nprose\n"
+        "<!-- publishable:end overview -->\n"
+    )
+
+
+def test_a_malformed_readme_is_named_by_its_code_and_still_costs_the_generator_nothing(
+    tmp_path: Path, capsys
+):
+    """The other arm of the same guarantee: a structurally broken README is one
+    of `docs`' five refusals, and `merge_into_readme` turns it into a printed
+    note carrying the code rather than into an exception the generator dies
+    on. The safety claim in that function's docstring is what this makes fail."""
+    root = _project(tmp_path, {"alpha": _ALPHA_TEMPLATE})
+    (root / "README.md").write_text("# my-study\n\n<!-- publishable:begin credentials -->\nprose\n")
+    capsys.readouterr()
+    config = _generate(root, tmp_path, "exp-one", "alpha_assay")
+
+    err = capsys.readouterr().err
+    assert "E-DOCS-REGION-UNBALANCED" in err
+    assert "begins and never ends" in err
+    assert config.is_file()
