@@ -14794,3 +14794,70 @@ def test_resolved_cells_is_none_without_a_roster():
         )
         is None
     )
+
+
+# --- Ruling LL: the `min_clusters` denominator stays roster-wide ------------
+
+_H3C3_THIN_CELL_ROSTER = (
+    "patient_id,arm,site\n"
+    + "".join(f"c{i},control,S{i // 2}\n" for i in range(6))
+    + "".join(f"t{i},treatment,T{i // 2}\n" for i in range(10))
+)
+
+
+def _h3c3_thin_cell_config(write_config, min_clusters: int) -> Path:
+    """16 units in 8 clusters, in two arms: `control` holds 3 clusters and
+    `treatment` 5.
+
+    The numbers are chosen so the roster-wide cluster count (8) and the
+    smallest cell's (3) fall on **opposite sides** of a floor of 4 — which a
+    fixture with equal arms could not distinguish at all."""
+    return write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["arm", "site"],
+                "cluster_by": "site",
+                "allocation": "between",
+                "assign": {"arm": {"method": "by_attribute"}},
+            },
+            "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+            "limits": {"min_clusters": min_clusters},
+            "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+        }
+    )
+
+
+def test_the_min_clusters_denominator_is_roster_wide_not_the_thinnest_cell(write_config, tmp_path):
+    """**Ruling LL, pinned: `_check_resample`'s `limits.min_clusters` call keeps
+    `units.fold_basis` and does not become `cell_fold_basis`.**
+
+    That call asks *how many independent draws does a percentile interval rest
+    on* — and `statistics.resample` draws over the per-unit table, which holds
+    every condition's units across every cell, so the denominator is the whole
+    test roster's clusters. The fold's basis is a different question and is the
+    one H3c-3 task 6 threaded cells into.
+
+    **The mutation this test exists for:** replace that site's `fold_basis` with
+    `cell_fold_basis(roster, cluster_by, cells)`. The thinnest cell holds 3
+    clusters, below the floor of 4, so the mutant warns against a denominator no
+    interval used and the first half below fails. Without this test the
+    substitution is silent, and silence is evidence about the tests rather than
+    about the code.
+
+    **Both directions, in one test.** The second half declares `min_clusters:
+    20`, which the roster-wide count of 8 really is below, so the check is shown
+    to be live on this exact config rather than merely quiet — an absence-only
+    assertion passes identically if nothing ran."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_THIN_CELL_ROSTER)
+
+    silent = codes(_h3c3_thin_cell_config(write_config, 4))
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in silent
+
+    warned = messages_by_code(_h3c3_thin_cell_config(write_config, 20))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in warned
+    # The roster-wide count, named in the message: 8 clusters, not the 3 of the
+    # thinnest cell and not the 16 units.
+    assert "8" in warned["W-STATS-RESAMPLE-CLUSTERS"]
+    assert "3" not in warned["W-STATS-RESAMPLE-CLUSTERS"]

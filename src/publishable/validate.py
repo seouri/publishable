@@ -52,6 +52,7 @@ from publishable.units import (
     UnitList,
     assignment_for,
     auto_block_size,
+    cell_fold_basis,
     cells_of,
     clusters_of,
     fold_basis,
@@ -681,10 +682,35 @@ def validate_config(
     usable_cluster = (
         declared_cluster if isinstance(declared_cluster, str) and declared_cluster else None
     )
+    # The design's cells, realized here so the basis below is the basis of the
+    # cell the fold is actually drawn inside. `None` means *no cell structure*
+    # — which is also what a fault means, `_resolved_cells` swallowing every
+    # one — and both readings take the roster-wide answer.
+    cells = _resolved_cells(doc, units_decl, roster, usable_cluster)
     basis: int | None = None
     if roster is not None:
         try:
-            basis = fold_basis(roster, usable_cluster)
+            # **Which question this call asks: the FOLD's basis** — how many
+            # indivisible things a fold can be drawn from, in the cell that has
+            # fewest, because a fold level runs in every cell and the cell that
+            # cannot carry `k` is what makes the declaration unaffordable. The
+            # `limits.min_clusters` call further down asks a different question
+            # of the same function and stays roster-wide; see its own comment,
+            # and Decision 4 of
+            # `docs/superpowers/specs/2026-08-25-folds-inside-cells-design.md`,
+            # whose table states all three call sites' questions in one place.
+            #
+            # One local, both callers (`_check_replication` bounds `k` against
+            # it, `_check_sweep` sizes a `k: all` budget from it), and the
+            # substitution is inside the SAME `try`: `cell_fold_basis` calls
+            # `fold_basis` once per cell, so `E-DATA-CLUSTER-UNKNOWN`
+            # propagates from any one of them and an unwrapped call would turn
+            # a collecting `validate` into a raising one.
+            basis = (
+                cell_fold_basis(roster, usable_cluster, cells)
+                if cells is not None
+                else fold_basis(roster, usable_cluster)
+            )
         except ContractError:
             # Swallowed so `validate` keeps collecting. Usually the same fault is
             # reported beside this by `_check_cluster_by` — but **not always, and
@@ -5972,7 +5998,29 @@ def _resolved_cells(
         if not axes:
             return None
         return cells_of(axes)
-    except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):
+    # `ZeroDivisionError` is the sixth, and the design's Decision 8 enumerates
+    # only five: it was **measured**, not predicted, by
+    # `test_a_ratio_whose_values_are_not_usable_shares_is_refused[all-zero]`.
+    # An `assign.<axis>.ratio` whose weights are all zero reaches
+    # `units._apportion`'s `n * weight / total` with `total == 0`, and before
+    # H3c-3 task 6 wired this function into `validate_config` nothing in
+    # `validate` drew that shape for real — `_check_assign` refuses it as
+    # `E-DATA-ASSIGN-RATIO` from the declaration. Without it a config `validate`
+    # is supposed to REFUSE crashes instead, which is the collecting-to-raising
+    # fault this whole `try` exists to prevent.
+    #
+    # The list stays an enumeration rather than becoming a bare `except
+    # Exception`, for `REPL_DECLARATION_CODES`' reason: a fault outside it is a
+    # genuine core defect, and absorbing all of them is how a real error becomes
+    # a silent pass.
+    except (
+        ContractError,
+        NotImplementedError,
+        KeyError,
+        TypeError,
+        ValueError,
+        ZeroDivisionError,
+    ):
         return None
 
 
@@ -6210,15 +6258,24 @@ def _check_resample(
     # and `_check_sweep` read — via `basis`, resolved once above this call and
     # threaded through as their `fold_basis=` argument. This check calls it a
     # second time on `cluster_by` rather than being handed `basis` itself:
-    # `basis` is over the WHOLE roster (it feeds `fold`, which has no holdout
-    # to narrow against), while this call is over `holdout_test` when one
-    # resolved — a different roster than `basis` was counted from whenever a
-    # holdout is declared, so the two are deliberately not the same
-    # derivation reused, only the same function. A second call to one
-    # derivation is not a second derivation, but it IS a second
-    # `try`/`except ContractError` an edit to the first must not forget to
-    # mirror. Not threaded through `basis` in this slice; doing so is a cheap
-    # follow-up, not a correctness gap today.
+    # `basis` is the fold's basis, while this call is over `holdout_test` when
+    # one resolved — a different roster than `basis` was counted from whenever a
+    # holdout is declared — and, since H3c-3 threaded cells into it, `basis` is
+    # narrowed to the SMALLEST CELL under a cell structure while this
+    # denominator is not, which is the third reason the two are deliberately not
+    # the same derivation reused, only the same function.
+    #
+    # **Which question this call asks: how many independent draws does a
+    # percentile interval rest on.** `statistics.resample` draws over the
+    # per-unit table, which holds every condition's units across every cell, so
+    # the answer does not decompose by cell — the denominator is the whole test
+    # roster's clusters. Threading `basis` in, or giving `fold_basis` a `cells`
+    # argument, would warn against a denominator no interval used (Ruling LL,
+    # and Decision 4's three-site table).
+    #
+    # A second call to one derivation is not a second derivation, but it IS a
+    # second `try`/`except ContractError` an edit to the first must not forget
+    # to mirror.
     cluster_by = units_declared.get("cluster_by")
     min_clusters = (doc.get("limits") or {}).get("min_clusters")
     if (

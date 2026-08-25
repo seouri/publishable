@@ -932,3 +932,24 @@ three tasks that merged with H3d.
 needs, and the reachable-leak class Ruling II names is opened for the first time — **which is exactly why
 Ruling II is not deferrable and why no commit may exist with the assert gone and the train side still
 roster-wide.** *The last slice is the last chance to not ship that.*
+
+---
+
+## Correction to Decision 8, 2026-08-25 (task 6) — the swallow list is six, not five
+
+Decision 8 enumerates the faults `validate._resolved_cells` swallows as *"`ContractError`,
+`NotImplementedError`, `KeyError`, `TypeError` and `ValueError`"*. **That list is one short, and the sixth
+is `ZeroDivisionError`** — measured at task 6, when the function was first wired into `validate_config`,
+by `tests/test_validate.py::test_a_ratio_whose_values_are_not_usable_shares_is_refused[all-zero]`.
+
+An `assign.<axis>.ratio` whose weights are all zero reaches `units._apportion`'s `n * weight / total`
+with `total == 0`. `ZeroDivisionError` is an `ArithmeticError` and so is caught by none of the five, and
+before this wiring nothing in `validate` drew that shape for real — `_check_assign` refuses it from the
+declaration as `E-DATA-ASSIGN-RATIO`. Without the sixth entry a config `validate` is supposed to
+**refuse** raises a traceback instead: the collecting-to-raising fault the whole `try` exists to prevent,
+reached through a config the suite already had.
+
+**This replaces the five-item list in Decision 8 and nothing else in it.** The list stays an enumeration
+rather than a bare `except Exception`, for `REPL_DECLARATION_CODES`' reason: a fault outside it is a
+genuine core defect, and absorbing all of them is how a real error becomes a silent pass. The pin is that
+existing test, which fails with the entry removed.

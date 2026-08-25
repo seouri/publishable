@@ -147,6 +147,7 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
+    cell_fold_basis,
     cells_of,
     cluster_count_of,
     clusters_of,
@@ -2759,10 +2760,30 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # clusters* and *Leave-one-out is affordable*). `units.fold_basis` is the one
     # derivation, the same `validate` bounded `k` with, applied here to the roster
     # `run` re-resolves fresh rather than trusted from the earlier pass.
+    #
+    # **Under a cell structure the basis is the SMALLEST CELL's**, resolved by
+    # `units.cell_fold_basis` from the `cells` just above — because the fold is
+    # drawn inside each cell, so the cell that cannot carry `k` is what makes
+    # the declaration unaffordable. `cells is None` means no cell structure and
+    # takes the roster-wide answer, which is the identical predicate
+    # `validate_config` applies to its own `basis` local: `validate` bounding
+    # `k` against one number while this draws against another is the drift
+    # `fold_basis`' single derivation exists to prevent. The third caller of
+    # `fold_basis` — `validate._check_resample`'s `limits.min_clusters`
+    # denominator — asks a different question and stays roster-wide (Ruling LL,
+    # and Decision 4's three-site table in
+    # `docs/superpowers/specs/2026-08-25-folds-inside-cells-design.md`).
+    fold_level_basis: int | None = None
+    if roster is not None:
+        fold_level_basis = (
+            cell_fold_basis(roster, cluster_by, cells)
+            if cells is not None
+            else fold_basis(roster, cluster_by)
+        )
     levels = resolve_repeats(
         doc,
         digest,
-        fold_basis=fold_basis(roster, cluster_by) if roster is not None else None,
+        fold_basis=fold_level_basis,
     )
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
