@@ -530,3 +530,70 @@ leaves open. A refusal with a route is the shape this project uses for exactly t
 
 If the decision goes the other way, § 9's twenty tasks and its five batches are the plan, and
 **task 11 is the one that must not be deferred to a later batch**.
+
+---
+
+## Correction, 2026-08-25, made in the same pass — three claims re-measured
+
+Appended rather than edited in, this repo's rule for a published claim. **The count does not move
+and the recommendation does not move**; two tasks are re-sized, one is bounded, and **one claim
+carried from the original scoping is withdrawn**.
+
+### C1. Both fold codes have three emit sites each, and the § Errors row shape was not checked
+
+The exact trap `CLAUDE.md` names — *"§ Errors carries one row per code, not per emit site, so a
+diagnostic's unit of work is every site that raises or reports it"* — and § 9 sized two tasks
+without running the grep.
+
+`grep -rn "E-REPL-FOLD-K-TOO-LARGE" src/` → **three** sites that raise or report:
+`validate.py` (a `c.error`) and **two** in `replication._fold_k` (units and clusters). The original
+scoping's § 1 said *"two `E-REPL-FOLD-K-TOO-LARGE` messages, units and clusters"* — that counted
+`replication.py` alone and **missed `validate`'s own**. Task 6's cell clause must reach all three,
+or argue in writing which it does not reach; it stays one task and is bigger than its line reads.
+
+`grep -rn "E-RUN-FOLD-UNRESOLVED" src/` → **three** sites: `runner._handed_keys` (a label with no
+fold token), `cli`'s fold-with-no-roster guard, and **`sweep.py`** — the *"partitions were drawn but
+no `fold` level is declared"* guard, which is the third and which § 3's reading of `sweep.py` saw
+without connecting to the code. **The per-cell index-wise merge changes what that guard is looking
+at**, so it belongs to task 7 rather than to a new task.
+
+Neither code splits a task. **20 stands**, with tasks 6 and 7 re-sized.
+
+### C2. WITHDRAWN — the *"realized fold sizes"* claim, carried from the original and not re-derived
+
+§ 7 and § 10 both listed *"the realized fold sizes when `cluster_by` makes them uneven"* as a
+promise with no code behind it, on the evidence that `grep -n "sizes" src/publishable/sweep.py`
+returns nothing. **That grep proves the absence of a key, not the absence of the behaviour.**
+
+Re-derived: `build_sweep_document` writes `fold`, `test` and `train` per entry, so **each fold's
+realized size is `len(test)`, recorded per fold**. `reference.md` § The other files a run writes has
+**no fenced `sweep.yaml` example carrying `partitions` at all** — the prose sentence is its only
+description — so there is no example key contradicting the code either. Recording the membership
+discharges *"records the realized sizes in `sweep.yaml`"*; a `sizes` key would be a derived
+duplicate of a list already there.
+
+**The claim is withdrawn from § 7's table and from § 10's declined table.** It is a wording nit at
+most, and the free-ride onto task 12 that the original scoping proposed for it disappears with it.
+**This is the exact move a re-scoping exists to prevent** — a claim carried from a stale document
+because its supporting grep looked like a measurement — and it was made here, once, by the pass
+whose § 0 lists that shape as its own finding.
+
+### C3. Task 13's downstream is bounded, and smaller than § 6.3 implies
+
+`allocation.json`'s readers, by file: `cli.py` and `artifacts.py` (the producers),
+`lineage.read_allocation` (the reader `_resumed_allocation` calls), and comment-only mentions in
+`validate.py` and `apparatus.py`. **`report.py`, `study.py` and `diff.py` read it at zero sites** —
+`grep -rn "allocation" src/publishable/report.py src/publishable/study.py src/publishable/diff.py`
+returns nothing. H8c's ruling that *a bundle never carries `allocation.json`* is what makes that
+true, and it holds for `diff`'s rows as well.
+
+So a shape change to the `holdout` key reaches exactly `lineage.read_allocation` and
+`_resumed_allocation` — **task 13 and task 14, both already named**, and no fourth command. Task 13
+is bounded, not grown.
+
+### C4. What the mechanical pass actually proved
+
+Stated precisely rather than as *"clean"*: the trailing-whitespace, tab, table-column, empty-row,
+duplicate-anchor, `×`-for-`x` and relative-link checks all executed and all passed (the 85 flags
+raised were `§`, the house style). **The internal `#anchor` branch never executed**, because this
+document uses no internal anchor links — so that check is untested here rather than passed.
