@@ -1,0 +1,51 @@
+# {name}
+
+<!-- publishable:begin overview -->
+A `publishable` experiment repository. Code, parameters, and provenance are
+separated by construction: this repo holds code and configs; input and output
+data live outside it, under paths each config names.
+<!-- publishable:end overview -->
+
+## Setup
+
+```bash
+uv sync
+cp .env.example .env    # then fill in the values below
+```
+
+<!-- publishable:begin credentials -->
+### Required credentials
+
+| Variable | Needed by |
+|---|---|
+| _(none yet — added as experiments declare them)_ | |
+<!-- publishable:end credentials -->
+
+<!-- publishable:begin experiments -->
+## Experiments
+
+| Name | Template | Run |
+|---|---|---|
+| _(none yet — add one with `publishable generate experiment`)_ | | |
+<!-- publishable:end experiments -->
+
+<!-- publishable:begin templates -->
+## Templates
+
+| Template | Parameters |
+|---|---|
+| _(none yet — add one with `publishable generate template`)_ | |
+<!-- publishable:end templates -->
+
+## Reproducing a published result
+
+Every result from this repo is reported as a `run.yaml`. Given one:
+
+```bash
+uv run --with publishable publishable reproduce run.yaml
+```
+
+That clones this repo at the exact recorded commit, restores the locked
+environment, and writes out the config that produced the result. It then tells
+you the two things you must supply yourself — your own `.env` and your own copy
+of the data — before you run it. Core transmits neither.

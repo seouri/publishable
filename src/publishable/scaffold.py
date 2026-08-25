@@ -1,62 +1,31 @@
 """`publishable new`. docs/reference.md § Scaffolding."""
 
 import subprocess
+from importlib.resources import files
 from pathlib import Path
 
 from publishable.errors import ContractError
 
-GITIGNORE = """\
-# Credentials — never committed
-.env
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-"""
+def read_scaffold(filename: str) -> str:
+    """One shipped scaffold, read out of `publishable.readme_templates` at
+    scaffold time.
 
-README = """\
-# {name}
+    `README.md.tmpl`, `CITATION.cff.tmpl`, `LICENSE.mit.tmpl` and
+    `gitignore.tmpl` live as FILES rather than as this module's string
+    globals, which is what `docs/reference.md` § Package layout has always
+    said `readme_templates/` holds, and what the S1 spine plan scheduled for
+    *"when `publishable docs` needs to rewrite managed regions"* — this slice.
+    It is not tidying: `docs` regenerates the same region bodies `new` writes,
+    so the two either share one source or become two copies of four regions
+    that drift.
 
-<!-- publishable:begin overview -->
-A `publishable` experiment repository. Code, parameters, and provenance are
-separated by construction: this repo holds code and configs; input and output
-data live outside it, under paths each config names.
-<!-- publishable:end overview -->
+    Read through `importlib.resources` rather than off `__file__`, so an
+    installed wheel answers the same way a source checkout does; the two
+    `{name}` interpolations and every refusal stay in `scaffold_project`.
+    """
+    return (files("publishable.readme_templates") / filename).read_text()
 
-## Setup
-
-```bash
-uv sync
-```
-
-## Experiments
-
-<!-- publishable:begin experiments -->
-None yet. Create one with `publishable generate experiment <name>`.
-<!-- publishable:end experiments -->
-"""
-
-CITATION = """\
-cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
-type: software
-title: {name}
-authors:
-  - family-names: ""
-    given-names: ""
-version: 0.1.0
-"""
-
-MIT = """\
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
-"""
 
 PYPROJECT = """\
 [project]
@@ -84,11 +53,13 @@ def scaffold_project(root: Path, license_name: str = "MIT") -> Path:
     for directory in ("src", "templates", "configs", "tests", "docs"):
         (root / directory).mkdir(exist_ok=True)
         (root / directory / ".gitkeep").touch()
-    (root / "README.md").write_text(README.format(name=name))
-    (root / "CITATION.cff").write_text(CITATION.format(name=name))
-    (root / "LICENSE").write_text(MIT if license_name == "MIT" else f"{license_name}\n")
+    (root / "README.md").write_text(read_scaffold("README.md.tmpl").format(name=name))
+    (root / "CITATION.cff").write_text(read_scaffold("CITATION.cff.tmpl").format(name=name))
+    (root / "LICENSE").write_text(
+        read_scaffold("LICENSE.mit.tmpl") if license_name == "MIT" else f"{license_name}\n"
+    )
     (root / "pyproject.toml").write_text(PYPROJECT.format(name=name))
-    (root / ".gitignore").write_text(GITIGNORE)
+    (root / ".gitignore").write_text(read_scaffold("gitignore.tmpl"))
     (root / ".env.example").write_text("# Credential variable NAMES only, never values\n")
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
