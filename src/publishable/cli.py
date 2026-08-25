@@ -5716,6 +5716,34 @@ def _dispatch(command: str, rest: list[str]) -> int:
             "list-templates": command_list_templates,
         }
         return zero_argument[command]()
+    if command == "demo":
+        # A creation command, so it takes what is needed to bring something into
+        # existence and nothing else: `docs/reference.md` § Creation commands
+        # gives it *(none)* and `[--into DIR]`. `--into` is legal here and
+        # refused by `reproduce` for a reason the two documents now state once:
+        # `reproduce` derives its destination from the record, and `demo` has no
+        # record to derive from.
+        into: Path | None = None
+        if rest:
+            if len(rest) != 2 or rest[0] != "--into" or rest[1].startswith("-"):
+                # TRANSITIONAL, and task 13 deletes these two lines with the
+                # dictionary key: while `demo` still carries a `NOT BUILT` row,
+                # `test_reference_cli_tables_match_what_the_cli_does` binds that
+                # row to the specified-but-unbuilt diagnostic for EVERY
+                # invocation of the name, wrong-arity ones included. Batch 4 met
+                # the identical blocker for `docs` and `list-templates`.
+                if command in NOT_BUILT_COMMANDS:
+                    return _report_not_built(command, NOT_BUILT_COMMANDS[command])
+                print("`demo` takes nothing, or `--into DIR`", file=sys.stderr)
+                return EXIT_INVOCATION
+            into = Path(rest[1])
+        # Function-local, `command_freeze`'s own reason: `demo.py` imports
+        # `scaffold` and `materialize` at module scope and runs the other
+        # commands through this module's own `main`, so a module-scope import
+        # here would close a cycle.
+        from publishable.demo import command_demo
+
+        return command_demo(into)
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION
