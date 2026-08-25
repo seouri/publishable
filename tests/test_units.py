@@ -24,6 +24,7 @@ from publishable.units import (
     arms_of,
     assign_seed_for,
     assignment_for,
+    cell_fold_basis,
     cells_of,
     cluster_count,
     clusters_of,
@@ -4670,3 +4671,127 @@ def test_no_axes_give_one_empty_cell_and_the_caller_composes_the_roster():
     here.
     """
     assert cells_of({}) == {(): frozenset()}
+
+
+# --- H3c-3 task 3: `cell_fold_basis`, the fold basis of the thinnest cell -----
+
+
+_F2_SPEC = {"control": {"A": 5, "B": 3}, "treatment": {"C": 4, "D": 3, "E": 1}}
+
+
+def _f2(control_level: str, treatment_level: str) -> tuple[UnitList, dict[str, tuple[str, ...]]]:
+    """F2: 16 units, `control` = clusters `A`×5 and `B`×3, `treatment` = `C`×4,
+    `D`×3 and `E`×1. **Every cluster nests inside one arm**, so no cluster
+    spans a cell — Decision 13's spanning-cluster question is deliberately kept
+    out of this fixture, which is about the per-cell basis alone.
+
+    The two cells carry **different** cluster counts, 2 against 3, which is
+    what makes "the minimum over cells" distinguishable from "the first cell's
+    count" at all: two elements only ever distinguish two answers, and two
+    cells of 2 and 2 would distinguish none.
+
+    The arm level names are parameters so a caller can put the thin cell on
+    either side of an alphabetical sort.
+    """
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {}
+    for arm, level in (("control", control_level), ("treatment", treatment_level)):
+        for site, n in _F2_SPEC[arm].items():
+            for i in range(n):
+                key = f"{site}{i}"
+                units.append(Unit(key=key, paths=(), attributes={"site": site, "arm": level}))
+                members.setdefault(level, []).append(key)
+    return UnitList(units), {level: tuple(keys) for level, keys in members.items()}
+
+
+def test_the_cell_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
+    """F2's four computed literals, each one produced by calling rather than
+    read from the design: per-cell cluster counts 2 and 3, so the clustered
+    cell basis is **2** and the unclustered one **8** — while the whole
+    roster's `fold_basis` is **5** clustered and **16** unclustered.
+
+    That gap is the point and the can-fail control at once. `{kind: fold,
+    k: 3}` clears the roster bound (5 ≥ 3) and exceeds the cell bound (2 < 3),
+    which is the discriminating literal a per-cell bound is built on. **The
+    refusal itself is not exercised here**: nothing consumes `cell_fold_basis`
+    at this task, and wiring the bound into `_fold_k`'s three
+    `E-REPL-FOLD-K-TOO-LARGE` emit sites is task 7's. MU-3 (`max` for `min`) is
+    run against the `== 2` assertion below, where `max` gives 3.
+    """
+    roster, members = _f2("control", "treatment")
+    plan = ArmPlan(levels=("control", "treatment"), members=members, seed=None, strata=())
+    cells = cells_of({"arm": plan})
+    assert [len(keys) for keys in cells.values()] == [8, 8], "equal unit counts, unequal clusters"
+    assert [
+        len({u.attributes["site"] for u in roster if u.key in keys}) for keys in cells.values()
+    ] == [2, 3]
+
+    assert cell_fold_basis(roster, "site", cells) == 2
+    assert cell_fold_basis(roster, None, cells) == 8
+    # The roster's own answer, which is what a caller reaching for `fold_basis`
+    # under cells would get instead — and it is larger on both halves, so the
+    # per-cell answer cannot be coinciding with it.
+    assert fold_basis(roster, "site") == 5
+    assert fold_basis(roster, None) == 16
+
+
+@pytest.mark.parametrize("thin_level,thick_level", [("aaa", "zzz"), ("zzz", "aaa")])
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_the_minimum_holds_whichever_cell_comes_first(
+    thin_level: str, thick_level: str, thin_first: bool
+):
+    """MU-4's catcher: returning the **first** cell's basis instead of the
+    minimum.
+
+    Four arrangements, not one. The thin cell (2 clusters) is put first and
+    last in the mapping's own order, **and** its level is named `aaa` in one
+    pair and `zzz` in the other — so neither "first by insertion" nor "first
+    by sorted name" can coincide with the minimum in every arrangement. A
+    single order rules out only one wrong answer, and a decoy on one side only
+    rules out only one sort direction; this fixture has one on each side.
+    """
+    roster, members = _f2(thin_level, thick_level)
+    order = (thin_level, thick_level) if thin_first else (thick_level, thin_level)
+    cells = {((("arm", level),)): frozenset(members[level]) for level in order}
+    assert list(cells) == [(("arm", order[0]),), (("arm", order[1]),)]
+    assert cell_fold_basis(roster, "site", cells) == 2
+
+
+def test_an_empty_cell_is_skipped_rather_than_making_the_basis_zero():
+    """`cells_of` keeps an empty cell because the count of cells is
+    load-bearing; this is the one place that count is not the question. An
+    empty cell has no units to distribute, and counting it would make every
+    minimum 0 and refuse every `k` in every design that declares a level no
+    unit falls in.
+
+    Asserted against the same F2 answer with the empty cell present and
+    absent, so the skip is visible as an equality rather than as a value that
+    happens to be right.
+    """
+    roster, members = _f2("control", "treatment")
+    populated = {
+        (("arm", "control"),): frozenset(members["control"]),
+        (("arm", "treatment"),): frozenset(members["treatment"]),
+    }
+    with_empty = dict(populated)
+    with_empty[(("arm", "unresolved"),)] = frozenset()
+    assert cell_fold_basis(roster, "site", with_empty) == cell_fold_basis(roster, "site", populated)
+    assert cell_fold_basis(roster, "site", with_empty) == 2
+
+
+def test_a_decomposition_with_no_populated_cell_reduces_to_the_whole_roster():
+    """The one-cell reduction, which is what makes a design with **no group
+    axis** fall through this function unchanged rather than being branched
+    around at the caller: `cells_of({})` is one empty cell, and the answer is
+    the roster's own `fold_basis` — 5 clustered, 16 unclustered on F2.
+
+    The seam is asserted against `fold_basis`' live answer, not against a
+    literal, so the two derivations have to agree rather than each agreeing
+    with its own copy of the number. `{}` — no cells at all — is asserted
+    beside it, since an empty decomposition and a decomposition of empty cells
+    are two different inputs reaching the same rule.
+    """
+    roster, _ = _f2("control", "treatment")
+    for cells in (cells_of({}), {}):
+        assert cell_fold_basis(roster, "site", cells) == fold_basis(roster, "site") == 5
+        assert cell_fold_basis(roster, None, cells) == fold_basis(roster, None) == 16

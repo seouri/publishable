@@ -2564,7 +2564,7 @@ def cells_of(
     hand back the same cell several times; and a condition selecting no axis is
     absent from it entirely. Deriving cells from it would draw one partition
     per condition and break *"Partitions are computed once per run, not once
-    per condition"* for real — the property `reference.md` § Repeat kinds
+    per condition"* for real — the property `reference.md` § Clustered units
     states and this decomposition exists to keep.
 
     **This function takes no roster**, for `arm_members`' own reason and
@@ -2655,6 +2655,63 @@ def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
     treats the basis as unresolved.
     """
     return cluster_count(roster, cluster_by) if cluster_by else len(roster)
+
+
+def cell_fold_basis(
+    roster: UnitList,
+    cluster_by: str | None,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+) -> int:
+    """How many indivisible things a `fold` level can distribute **in the cell
+    that has fewest** — `fold_basis`' question asked of a design whose folds are
+    drawn inside its cells.
+
+    **One number, not two, and not a mapping**, the return type `fold_basis`
+    has and for its reason: a `k` checked against one number while the
+    partition is drawn against another is the disagreement that single
+    derivation exists to prevent, and a per-cell mapping would hand every
+    caller the job of deciding which entry its own check meant. `fold_basis`'
+    own docstring states the rule this one inherits — *"One number, not two"*,
+    and *"every caller resolves the basis here rather than deciding for
+    itself"*. The minimum is the answer because
+    a fold level runs in **every** cell: the cell that cannot carry `k` is what
+    makes the whole declaration unaffordable, not the cell that can.
+
+    Only **non-empty** cells are counted. An empty cell has no units to
+    distribute and would make every minimum zero, which is a fact about the
+    decomposition rather than a bound on `k`; `cells_of` keeps empty cells
+    because the count of cells is itself load-bearing, and this is the one
+    place that count is not the question. An empty `cells`, or one whose cells
+    are all empty, returns `fold_basis(roster, cluster_by)` — the **one-cell
+    reduction**, which is what makes a design with no group axis fall through
+    this function unchanged rather than being branched around at the caller.
+
+    Each sub-roster is built from `roster` **in roster order**, the order
+    `clusters_of` preserves deliberately and the one `units_hash` pins as
+    reproducible.
+
+    **`fold_basis` is deliberately not touched, and does not gain a `cells`
+    argument.** It has three call sites and only two of them ask this
+    question. The third is `validate._check_resample`'s `limits.min_clusters`
+    denominator, which asks *how many independent draws does a percentile
+    interval rest on* — and `statistics.resample` draws over the **per-unit
+    table**, which holds every condition's units across every cell, so its
+    answer is over the whole roster — or the holdout's test side, when one is
+    declared — and does not decompose by cell. Giving `fold_basis`
+    a `cells=None` default would make it a helper that ignores an argument at
+    one of its callers, which hides what that caller stopped testing; passing
+    it the cells there would warn against a denominator no interval used. A
+    function whose name fits one of its three callers is a proxy waiting to be
+    believed.
+    """
+    bases: list[int] = []
+    for keys in cells.values():
+        if not keys:
+            continue
+        bases.append(
+            fold_basis(UnitList([unit for unit in roster if unit.key in keys]), cluster_by)
+        )
+    return min(bases) if bases else fold_basis(roster, cluster_by)
 
 
 def stratum_varies_within_cluster(
