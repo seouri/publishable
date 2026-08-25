@@ -15063,3 +15063,169 @@ def test_the_k_all_budget_is_sized_from_the_same_cell_basis_the_bound_uses(write
     warned = messages_by_code(cfg(3))
     assert "W-EXEC-BUDGET" in warned
     assert "2 conditions × 2 repeats = 4 executions exceeds 3" in warned["W-EXEC-BUDGET"]
+
+
+# --- H3c-3 task 18: `W-DATA-CELL-THIN`, the thin-cell floor ------------------
+
+
+def _h3c3_thin_config(n_control: int, n_treatment: int, floor: int | None) -> dict:
+    """A two-arm `between` design over `n_control + n_treatment` units, with
+    `limits.min_units_per_cell` set to `floor`.
+
+    The `limits` block is written whole because `base_config` carries none —
+    every other limit stays absent, so any finding this fixture produces is
+    attributable to `min_units_per_cell` and to nothing beside it."""
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["arm"],
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute"}},
+    }
+    doc: dict = {
+        "data.units": units,
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    }
+    if floor is not None:
+        doc["limits"] = {"min_units_per_cell": floor}
+    return doc
+
+
+def _h3c3_write_arms(tmp_path: Path, n_control: int, n_treatment: int) -> None:
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,arm\n"
+        + "".join(f"c{i},control\n" for i in range(n_control))
+        + "".join(f"t{i},treatment\n" for i in range(n_treatment))
+    )
+
+
+def test_a_thin_cell_warns_once_and_names_the_cell(write_config, tmp_path):
+    """**F3.** 12 units, two arms of 6, `min_units_per_cell: 20`, no fold and no
+    holdout: exactly one `W-DATA-CELL-THIN`, naming a cell and its count.
+
+    Six and six rather than an uneven split on purpose — this fixture's job is
+    the *presence* and the message, and MU-12's job (the sibling below) is the
+    minimum, which equal arms cannot discriminate. The finding list is asserted
+    **by equality** so a second diagnostic arriving from anywhere else in this
+    config fails here rather than being filtered out of a membership test."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    path = write_config(_h3c3_thin_config(6, 6, 20))
+    c = Collector()
+    validate_config(path, c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert c.findings[0].path == "limits.min_units_per_cell"
+    assert c.findings[0].message == (
+        "is 20, and the design's thinnest cell (`arm=control`) holds 6 of 12 "
+        "resolved units. Every interval a condition in that cell reports rests "
+        "on those, and attrition can only make the number smaller"
+    )
+
+
+def test_a_cell_at_or_above_the_floor_earns_no_thin_warning(write_config, tmp_path):
+    """**Control 1**: the identical 12-unit design at `min_units_per_cell: 5`.
+
+    Paired with F3 above, which differs from it in the floor alone, so the
+    warning's absence here is attributable to the floor rather than to the
+    roster or to the shape of the design. 6 ≥ 5 in both cells, and equality is
+    deliberately not the boundary tested here — the `>=` boundary is the sibling
+    at floor 6 below, where the thinnest cell holds 5."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    assert codes(write_config(_h3c3_thin_config(6, 6, 5))) == set()
+
+
+def test_the_thin_cell_warning_reads_the_SMALLEST_cell_not_the_largest(write_config, tmp_path):
+    """**MU-12's discriminating fixture**: arms of **7 and 5** at
+    `min_units_per_cell: 6`.
+
+    The two readings differ here and only here: the smallest cell holds 5 and
+    must warn, the largest holds 7 and would not. F3's equal 6/6 arms are blind
+    to that mutation by construction, which is why this fixture is uneven and
+    why the floor sits between the two counts rather than above both.
+
+    It also pins the `>=` boundary from the reporting side: 5 < 6 warns, and the
+    control above has 6 ≥ 5 silent."""
+    _h3c3_write_arms(tmp_path, 7, 5)
+    c = Collector()
+    validate_config(write_config(_h3c3_thin_config(7, 5, 6)), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "(`arm=treatment`) holds 5 of 12 resolved units" in c.findings[0].message
+
+
+def test_the_thin_cell_warning_is_gated_on_a_cell_structure_resolving(write_config, tmp_path):
+    """**Control 2, the gate (C16), as a config**: the same 12 units and the
+    same `min_units_per_cell: 20`, with **no** `sweep.groups` axis.
+
+    `materialize.py` writes `min_units_per_cell: 20` into every config `init`
+    produces, so an ungated floor fires on every generated project holding
+    fewer than twenty units. Guard-pin arm E
+    (`test_h3c3_pin_arm_e_a_six_unit_no_axis_config_validates_with_no_findings_at_all`)
+    is the same control over a really generated project and is where **MU-11**
+    is caught; this one is the same claim over a config that differs from F3 in
+    the group axis alone, so the silence is attributable to the gate.
+
+    Paired with a can-fail half in the same test: adding the axis back to this
+    very document reports, which is what shows `validate_config` reached the
+    check at all."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    flat = _h3c3_thin_config(6, 6, 20)
+    flat["sweep"] = {}
+    flat["data.units"] = {**flat["data.units"], "allocation": "within"}
+    flat["data.units"].pop("assign")
+    assert codes(write_config(flat)) == set()
+
+    with_axis = _h3c3_thin_config(6, 6, 20)
+    assert codes(write_config(with_axis)) == {"W-DATA-CELL-THIN"}
+
+
+def test_the_thin_cell_floor_counts_UNITS_where_the_fold_bound_counts_clusters(
+    write_config, tmp_path
+):
+    """`units.thinnest_cell` is **not** reused, and this is the fixture where
+    the two answers differ.
+
+    That helper returns a *fold basis* — the cluster count under a declared
+    `data.units.cluster_by` — because `replication._fold_k` bounds `k` against
+    indivisible things. `limits.min_units_per_cell` counts units. Here each arm
+    holds 10 units in 2 clusters of 5: at `min_units_per_cell: 6` the unit
+    count clears (10 ≥ 6) and the cluster count would not (2 < 6), so a check
+    built on `thinnest_cell(roster, cluster_by, cells)` warns here and names a
+    cluster count as though it were a unit count.
+
+    The can-fail half is the same clustered design at `min_units_per_cell: 20`,
+    where the unit count itself is thin: the silence above is an absence from a
+    check that runs on exactly this shape."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,arm,site\n"
+        + "".join(f"c{i},control,CS{i // 5}\n" for i in range(10))
+        + "".join(f"t{i},treatment,TS{i // 5}\n" for i in range(10))
+    )
+
+    def doc(floor: int) -> dict:
+        out = _h3c3_thin_config(10, 10, floor)
+        out["data.units"] = {
+            **out["data.units"],
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+        }
+        return out
+
+    assert "W-DATA-CELL-THIN" not in codes(write_config(doc(6)))
+    c = Collector()
+    validate_config(write_config(doc(20)), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "holds 10 of 20 resolved units" in c.findings[0].message
+
+
+def test_a_wrongly_typed_thin_cell_floor_drives_no_warning(write_config, tmp_path):
+    """`check_envelope` is what REPORTS a wrong-typed `min_units_per_cell`, and
+    a second reader here would report a derived fault on top of it.
+
+    `_check_report_by`'s guard, for its reason. `True` is the case the bare
+    `isinstance(..., int)` misses — `isinstance(True, int)` is `True` in Python
+    — and it is asserted beside a `str`, which is the shape that would raise
+    `TypeError` comparing a count against it."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    for bad in ("twenty", True):
+        found = codes(write_config(_h3c3_thin_config(6, 6, bad)))  # type: ignore[arg-type]
+        assert "W-DATA-CELL-THIN" not in found
+        assert "E-CONFIG-TYPE" in found

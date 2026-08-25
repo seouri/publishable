@@ -740,6 +740,11 @@ def validate_config(
     # denominator a resample's cluster count is actually over. Resolved here
     # rather than inside `_check_resample` so a future second reader gets the
     # same object rather than realizing a second draw.
+    # The thin-cell floor, over the same decomposition the fold bound and the
+    # holdout loop read. Sited beside them rather than inside `_check_assign`
+    # because it answers for `limits.min_units_per_cell` — a floor on a
+    # realized cell — and not for the `assign` declaration.
+    _check_cell_size(doc, roster, cells, c)
     holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster, cells)
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
@@ -6020,6 +6025,90 @@ def _resolved_cells(
         ZeroDivisionError,
     ):
         return None
+
+
+def _check_cell_size(
+    doc: dict[str, Any],
+    roster: UnitList | None,
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None,
+    c: Collector,
+) -> None:
+    """`W-DATA-CELL-THIN` — the design's thinnest populated cell holds fewer
+    units than `limits.min_units_per_cell`.
+
+    **A warning rather than a refusal, because three document sites say
+    warning in those words** and the code follows the documents:
+    `reference.md` § Validation's *Cells are populated* and *Allocation is
+    coherent*, and § The one config file's own inline comment on the
+    parameter. § Weighted samples supplies the reason — *"a two-arm design
+    where one arm resolves to exactly two units passes `validate` clean and
+    reports a real `basis: units` interval from those two observations"* — and
+    that is a design whose answer is weak, not a declaration that is wrong.
+    The hard line already sits at `E-DATA-ASSIGN-LEVELS`, which refuses the arm
+    no unit resolves to at all.
+
+    **Gated on a cell structure resolving, and the gate is the whole of the
+    care this check needs.** `materialize.py` writes `min_units_per_cell: 20`
+    into every config `publishable init` produces, so an ungated floor over the
+    roster would fire on every generated project with fewer than twenty units
+    — the scaffold `demo` builds included — and a warning readers learn to skip
+    is worse than none. `cells is None` is *no cell structure resolved*, which
+    is also what a fault inside `_resolved_cells` becomes, and both readings
+    are silence here. Neither § Validation row states the gate in its own cell;
+    both rows' **examples** carry it (`sex × arm`, `allocation: between` over 2
+    arms), which is the *"taking a § Validation row's own wording as its whole
+    scope"* misreading in its natural habitat.
+
+    **`units.thinnest_cell` is deliberately NOT reused, and the two answers
+    genuinely differ.** That helper returns a *fold basis* — the cluster count
+    under a declared `data.units.cluster_by`, the unit count otherwise —
+    because `replication._fold_k` bounds `k` against indivisible things. This
+    floor counts **units**, and `limits.min_units_per_cell` says so in its
+    name. On a design whose thinnest cell holds two clusters of ten units, the
+    fold basis is 2 and the unit count is 20: at `min_units_per_cell: 20` this
+    check must be silent and `thinnest_cell` would have it report, naming a
+    cluster count as though it were a unit count. Two questions over one
+    decomposition, not one derivation written twice — `populated_cells` is the
+    shared piece, and it is shared.
+
+    **Empty cells are skipped**, through `units.populated_cells` — the same
+    projection the draw loops over and the same one `_check_holdout`'s bound
+    takes, rather than a second spelling. A cell no unit falls in holds zero
+    units, is below every floor, and would name a cell no reader can make
+    thicker; a level no unit resolves to is `E-DATA-ASSIGN-LEVELS`' fault and
+    is reported there.
+
+    Reported **once**, for the thinnest such cell, on
+    `W-DATA-CLUSTER-UNDECLARED`'s and `W-DATA-WEIGHT-UNDECLARED`'s own shape:
+    the remedy — enrol more units, or drop an axis — is the same for every thin
+    cell in one design, so a diagnostic per cell would be the same sentence
+    repeated once per level of the product.
+
+    The `bool`/`int` guard on the floor is `_check_report_by`'s, for its
+    reason: `check_envelope` is what REPORTS a wrong-typed
+    `limits.min_units_per_cell` (`E-CONFIG-TYPE`), a leaf fault is deliberately
+    non-fatal so this function still runs on that doc, and `isinstance(True,
+    int)` is `True` in Python.
+    """
+    if roster is None or cells is None:
+        return
+    floor = (doc.get("limits") or {}).get("min_units_per_cell")
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)):
+        return
+    populated = populated_cells(cells)
+    if not populated:
+        return
+    cell, keys = min(populated, key=lambda item: len(item[1]))
+    if len(keys) >= floor:
+        return
+    c.warn(
+        "W-DATA-CELL-THIN",
+        "limits.min_units_per_cell",
+        f"is {floor}, and the design's thinnest cell (`{cell_label(cell)}`) holds "
+        f"{len(keys)} of {len(roster)} resolved units. Every interval a condition "
+        f"in that cell reports rests on those, and attrition can only make the "
+        f"number smaller",
+    )
 
 
 def _holdout_test_roster(
