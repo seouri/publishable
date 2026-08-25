@@ -2054,7 +2054,9 @@ def command_validate(config_path: Path) -> int:
 class Prepared:
     """Everything phases 1-5 of `command_run` produce that phases 6-10 read.
 
-    Thirty-SIX values, and the count is the argument FOR the seam: nothing in
+    Thirty-SIX values when this docstring's measurement was taken, and
+    thirty-SEVEN since H3c-3 task 4 (the paragraph below). The count is the
+    argument FOR the seam: nothing in
     phases 6-10 can be re-entered without them, so a second entry either
     receives them or recomputes them, and recomputing is what `resume` (H9b)
     must not do.
@@ -2080,9 +2082,10 @@ class Prepared:
     because a second entry into phases 1-5 needs the diagnostic channel those
     phases rendered from. **No statement in phases 6-10 reads it at this
     commit** -- every post-seam `c` is a comprehension target, and phase 9's
-    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`. It is
-    therefore the one field `_execute_prepared` does not unpack -- so of the
-    thirty-six, thirty-five are read in phases 6-10 and `c` is not.
+    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`, so
+    `_execute_prepared` does not unpack it. **`cells` is the second field it
+    does not unpack**, for the same reason and since the same task that added
+    it; the paragraph below says so. Every other field is read in phases 6-10.
 
     **Thirty-SEVEN since H3c-3 task 4**, and the `ast` walk above is not
     re-run: it measured what `command_run` assigned before the seam and loaded

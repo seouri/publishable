@@ -38,6 +38,7 @@ from publishable.units import (
     partition_units,
     resolve_units,
     stratum_varies_within_cluster,
+    thinnest_cell,
     units_hash,
 )
 
@@ -4818,3 +4819,47 @@ def test_a_level_the_plan_did_not_realize_is_a_core_defect():
     )
     with pytest.raises(KeyError):
         cells_of({"arm": plan})
+
+
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_thinnest_cell_returns_the_cell_the_minimum_came_from(thin_first: bool):
+    """H3c-3 task 7: the number AND the cell it came from, so
+    `replication._fold_k` can name the declaration a reader must change.
+
+    F2 again, in both insertion orders: the label must follow the **minimum**,
+    not the position — so a mutation returning the first cell's key while
+    keeping the right number fails one of the two arms."""
+    roster, members = _f2("control", "treatment")
+    order = ("control", "treatment") if thin_first else ("treatment", "control")
+    cells = {(("arm", level),): frozenset(members[level]) for level in order}
+    assert thinnest_cell(roster, "site", cells) == (2, (("arm", "control"),))
+    # The number is `cell_fold_basis`' own, which delegates here — asserted so
+    # the two cannot drift apart under an edit to either.
+    assert cell_fold_basis(roster, "site", cells) == 2
+
+
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_a_tie_between_two_cells_goes_to_the_first_in_key_order(thin_first: bool):
+    """The tie-break `reference.md`'s `E-REPL-FOLD-K-TOO-LARGE` row now states —
+    *ties go to the first cell in declaration order* — pinned rather than only
+    documented.
+
+    Two cells of **two clusters each**, so the bases are equal and only the
+    order can decide. Run in both insertion orders, and the level names are
+    chosen so `zzz` sorts after `aaa`: whichever cell is inserted first is the
+    one named, which rules out both "last wins" and "alphabetically first
+    wins" — a single order would rule out only one of the three."""
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {}
+    for level, sites in (("aaa", ("P", "Q")), ("zzz", ("R", "S"))):
+        for site in sites:
+            for i in range(3):
+                key = f"{site}{i}"
+                units.append(Unit(key=key, paths=(), attributes={"site": site, "arm": level}))
+                members.setdefault(level, []).append(key)
+    roster = UnitList(units)
+    order = ("aaa", "zzz") if thin_first else ("zzz", "aaa")
+    cells = {(("arm", level),): frozenset(members[level]) for level in order}
+    basis, cell = thinnest_cell(roster, "site", cells)
+    assert basis == 2
+    assert cell == (("arm", order[0]),)

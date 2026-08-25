@@ -14945,3 +14945,50 @@ def test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell(write
     # `k: 3`'s refusal above attributable to the cell rather than to the fold
     # count being too large for this roster at all.
     assert "E-REPL-FOLD-CELLS" in fits
+
+
+def test_the_k_all_budget_is_sized_from_the_same_cell_basis_the_bound_uses(write_config, tmp_path):
+    """**C5's seam, instantiated.** `_check_sweep`'s `k: all` execution budget
+    and `_check_replication`'s `k` bound read the **same** `basis` local, and
+    under a cell structure that local is the thinnest cell's.
+
+    F2 again, with `{kind: fold, k: all}`: the thinnest cell holds 2 clusters
+    and the whole roster 5, and the axis gives 2 conditions. So the budget
+    arithmetic is `2 × 2 = 4` on the cell basis and `2 × 5 = 10` on the
+    roster's, and a `limits.max_executions: 5` separates them — the only
+    fixture shape that can, since a design with equal arms would give the same
+    product either way.
+
+    **Both directions.** At a budget of 5 the check is silent; at 3 it warns and
+    the message names `2 repeats` and `4 executions`, so the silence above is
+    the check clearing rather than the check being dead. Without this test C5 is
+    a seam named in a brief and instantiated by no fixture: **the mutation** is
+    to resolve a second, roster-wide basis for `_check_sweep` while
+    `_check_replication` keeps the cell one, which changes nothing observable
+    unless a config's two products straddle a declared budget."""
+    (tmp_path / "input" / "index.csv").write_text(_F2_ROSTER)
+
+    def cfg(budget: int) -> Path:
+        return write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["arm", "site"],
+                    "cluster_by": "site",
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+                "replication": {
+                    "repeats": [{"kind": "fold", "k": "all"}],
+                    "rationale": "leave one cluster out",
+                },
+                "limits": {"max_executions": budget},
+            }
+        )
+
+    assert "W-EXEC-BUDGET" not in codes(cfg(5))
+    warned = messages_by_code(cfg(3))
+    assert "W-EXEC-BUDGET" in warned
+    assert "2 conditions × 2 repeats = 4 executions exceeds 3" in warned["W-EXEC-BUDGET"]

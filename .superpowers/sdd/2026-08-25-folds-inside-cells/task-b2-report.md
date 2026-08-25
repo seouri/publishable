@@ -9,8 +9,10 @@
 | 6 | `6f3c1f8` | The cell-aware basis at the two callers that ask the fold's question |
 | 7 | `962fc05` | `E-REPL-FOLD-K-TOO-LARGE` names the cell, at all three emit sites |
 
-Branch base: batch A at `864f702`. Final suite: **3372 passed, 1 skipped, 2 xfailed**
-(3355 pre-batch + 17 new). `ruff check`, `ruff format --check` and `mypy` clean at each commit.
+Branch base: batch A at `864f702`. Final suite: **3377 passed, 1 skipped, 2 xfailed**
+(3355 pre-batch + 22 new). `ruff check`, `ruff format --check` and `mypy` clean at each commit.
+The four task commits above closed at 3372; a **follow-up round** (§ 9) added five tests and closed a
+self-contradiction in `Prepared`'s docstring.
 
 ---
 
@@ -54,6 +56,18 @@ writes `partitions_within` (task 11). Experiment: field + unpack line added,
 by line. Edited back and **diffed byte-identical** against a pre-edit copy. **The field landed here;
 the unpack line lands with its first reader**, exactly the shape batch A measured for C25 (F401+I001).
 **C20 also binds task 17, so that obligation moved and the controller has to route it.**
+
+**And the correction reached the sentence that contradicted it, in the follow-up round.**
+`Prepared`'s docstring said `c` *"is therefore the **one** field `_execute_prepared` does not unpack
+— so of the thirty-six, thirty-five are read in phases 6-10"*. Both halves went false the moment
+`cells` landed, and the appended 37th-field paragraph twenty lines lower did not repair them: **a
+sentence contradicting the argument that justifies the thing it describes.** The "one field" clause
+now names `cells` beside `c`, and the opening count says *thirty-six when this docstring's
+measurement was taken, thirty-SEVEN since task 4* — the `ast` walk's measurement is untouched.
+Worth carrying: **appending a correction does not retire the sentences above it**, and the first
+attempt at this edit put a line at column 0 inside the docstring, which made `ruff format`
+**re-indent the entire docstring to eight spaces** — 50 insertions for a two-sentence change, caught
+by reading `git diff --stat` rather than by any gate.
 
 ### The `== 36` assertion moved, and the mutation that fails it
 
@@ -127,6 +141,26 @@ The predicate is `cells is not None` at **both** fold sites and it is one compar
 "is this decomposition trivial" for themselves is how `validate` bounds `k` against one number while
 the run draws against another.
 
+### C5's seam is now instantiated by a fixture, not only argued
+
+*"It is one local and stays one local"* is the argument, not the check, and a seam named in a brief
+and instantiated by no fixture is a shape this project has hit twice in one slice. `_check_sweep`'s
+`k: all` budget produces one observable finding, `W-EXEC-BUDGET`
+(`len(conditions) × repeat_total > limits.max_executions`), so the discriminating fixture is F2 with
+`{kind: fold, k: all}`: 2 conditions, and `repeat_total` of **2** on the cell basis against **5** on
+the roster's, giving products of 4 and 10 that a `max_executions: 5` separates. An equal-arm fixture
+gives the same product either way and separates nothing.
+
+`test_the_k_all_budget_is_sized_from_the_same_cell_basis_the_bound_uses` pins both directions —
+silent at 5, warning at 3 naming *"2 conditions × 2 repeats = 4 executions exceeds 3"*.
+**Mutation** (a second, roster-wide basis resolved for `_check_sweep` while `_check_replication`
+keeps the cell one): **4 failed, 3373 passed** — that test plus
+`test_a_cluster_by_under_a_glob_source_is_reported`,
+`test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising` and one more, because the
+second resolution sits **outside** the `try` and turns a collecting `validate` into a raising one.
+That is the same second-`try` hazard the `min_clusters` comment names, arriving from the other side,
+and it is why C5 is *one local* rather than two calls that agree.
+
 **Deleted rather than rewritten**: *"Not threaded through `basis` in this slice; doing so is a cheap
 follow-up, not a correctness gap today."* `grep -rn "cheap follow-up" src/ tests/ README.md
 docs/design-principles.md docs/experimental-designs.md docs/reference.md` → **zero hits**. The
@@ -185,8 +219,14 @@ resolved*, not *cells resolved and unnamed*.
 delegating to it, so the number and the label cannot disagree about which cell the bound bit on. A
 caller re-deriving the label by looking for a cell whose basis equals the number would be a second
 derivation of the thing `fold_basis`' single-derivation rule keeps single. Ties go to the first cell
-in `cells_of` key order (strict `<`), stated in the docstring, and **no fixture tests a tie** — F2's
-cells are 2 and 3.
+in `cells_of` key order (strict `<`), stated in the docstring **and now in `reference.md`'s
+normative row** — which is why the follow-up round gave it a fixture rather than leaving it
+documented only: `test_a_tie_between_two_cells_goes_to_the_first_in_key_order`, two cells of two
+clusters each so only the order can decide, run in both insertion orders with levels named `aaa` and
+`zzz` so *last wins* and *alphabetically first wins* are both ruled out. F2's own cells are 2 and 3,
+so it could not have tested this. `test_thinnest_cell_returns_the_cell_the_minimum_came_from` pins
+the label following the **minimum** rather than the position, in both orders, and asserts
+`cell_fold_basis`' number beside it so the two cannot drift.
 
 **MU-3's refusal half, built and run.** `test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell`
 uses F2 exactly: 16 units, `control` = `A`×5 + `B`×3, `treatment` = `C`×4 + `D`×3 + `E`×1, no spanning
@@ -213,7 +253,13 @@ site is broken**, which is the property MU-7 exists for.
 core raises: `validate`'s cell draw and `_prepare_run`'s call `units.assignment_for` over the same
 roster at the same `design_digest(doc)` through the **same skip rules** (copied verbatim, task 5), so
 they resolve the same cells and take the same minimum — a `k` this check clears is a `k` `_fold_k`
-clears at run. Where the draw faults, `_resolved_cells` returns `None` and the roster-wide basis is
+clears at run. **The one input the two spell differently was checked rather than assumed**:
+`validate_config` reads the declaration through `_units_declaration(...) or {}` and `_prepare_run`
+through `(doc.get("data") or {}).get("units")`. Read at `_units_declaration`: it returns that same
+object, or `None` — and `None` for a non-mapping only *after* reporting `E-CONFIG-SHAPE`, which is an
+error. So for any config that validates clean the two accessors are the same mapping and neither can
+see an `assign` block the other cannot. That clause is in the comment, because without it the answer
+rests on an equality nobody verified. Where the draw faults, `_resolved_cells` returns `None` and the roster-wide basis is
 used at both ends, since the fault is the same fault; the config then meets that fault under its own
 code. `E-DATA-HOLDOUT-EMPTY` has rows in both tables because its two bounds are genuinely **two
 computations** — `_check_holdout` against a declared `frac`, `holdout_for` against a realized split —
@@ -295,8 +341,8 @@ rather than three `k` shapes: `validate_config` → `_check_replication` → `re
 clustered raise), and `_fold_k` called directly with no cluster (the units raise). Both message
 variants are covered; without the split one of the two raises would have shipped unpinned.
 
-**D5 — `thinnest_cell` supersedes `cell_fold_basis` at both callers, so C25's `cell_fold_basis`
-import is gone again from `validate.py` and `cli.py`.** C25 requires the name in both import lists;
+**D5 — `thinnest_cell` supersedes `cell_fold_basis` at both callers, so C25 is discharged for
+`cells_of` only.** C25's `cell_fold_basis` import is gone again from `validate.py` and `cli.py`. C25 requires the name in both import lists;
 task 6 put it there and task 7 replaced it with `thinnest_cell`, because both callers need the label
 as well as the number and a second call would be a second walk. **`cell_fold_basis` therefore has
 zero production callers at `962fc05`** — kept, not folded away, because the tasks that bound
@@ -369,3 +415,21 @@ exactly as before.
 5. **Decision 12's "exactly two calls" and Decision 8's five-item swallow list are both corrected by
    this batch**, the first in the report only (a plan/design phrasing) and the second by an appended
    correction in the design file. Neither design section was retro-edited.
+
+---
+
+## 9. The follow-up round
+
+Four items, none of which any gate would have caught.
+
+1. **`Prepared`'s docstring contradicted itself** (§ 1). Closed by naming `cells` in the "one field"
+   clause and dating the count, not by rewriting the `ast` walk.
+2. **C5's seam had code and no fixture** (§ 3). Closed with a fixture and its mutation:
+   **4 failed, 3373 passed**.
+3. **The tie-break was in a normative row with no fixture** (§ 4). Closed with two tests, four arms.
+4. **The § Errors answer rested on an unverified input equality** (§ 4). Verified at
+   `_units_declaration`, and the clause added to the comment.
+
+Final suite after the round: **3377 passed, 1 skipped, 2 xfailed**.
+`git diff 864f702..HEAD --stat` touches ten files and
+**`docs/feasibility-llm-growth-studies.md` is not among them.**

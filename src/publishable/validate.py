@@ -3886,7 +3886,15 @@ def _check_replication(
         # draw and `_prepare_run`'s call `units.assignment_for` over the same
         # roster at the same `design_digest(doc)` through the same skip rules,
         # so they resolve the same cells and take the same minimum — a `k` this
-        # check clears is a `k` `_fold_k` clears at run. Where the draw faults,
+        # check clears is a `k` `_fold_k` clears at run. **Including the
+        # declaration they read it from**, which is the one input the two spell
+        # differently: `validate_config` passes `_units_declaration(...) or {}`
+        # and `_prepare_run` passes `(doc.get("data") or {}).get("units")`.
+        # `_units_declaration` returns that same object or `None`, and it
+        # returns `None` for a non-mapping only after reporting
+        # `E-CONFIG-SHAPE` — so for any config that validates clean the two
+        # accessors are the same mapping, and neither can see an `assign` block
+        # the other cannot. Where the draw faults,
         # `_resolved_cells` returns `None` and the roster-wide basis is used at
         # BOTH ends, since the fault is the same fault; the config then meets
         # that fault itself, under its own code, rather than this one.
