@@ -2182,3 +2182,71 @@ def test_run_status_max_failed_fraction_suppresses_the_truncation_assert(tmp_pat
     assert run_status(truncated, planned=len(results) + 5, stop="max_failed_fraction") == (
         run_status(truncated)
     )
+
+
+# --- H3c-3 task 12: the three `runner.py` readers of a per-cell `fold_members` -
+
+
+def test_h3c3_handed_keys_gives_every_arm_fold_pair_a_unit():
+    """Reader 5 of 7. `_handed_keys` intersects the flat mapping with the arm's
+    keys, and under the per-cell draw every `(arm, fold)` pair comes back
+    non-empty — one `treatment` unit per fold.
+
+    The whole-roster mapping is the discriminator and the defect at once:
+    `fold01` returns the **empty set** there, which is the zero denominator
+    `E-REPL-FOLD-CELLS` used to refuse the design over.
+    """
+    from tests.test_units import h3c3_per_cell_fixture
+
+    from publishable.runner import _handed_keys
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    keys = set(arms["treatment"])
+    assert [len(_handed_keys(label, keys, per_cell)) for label in sorted(per_cell)] == [1, 1, 1]
+    assert [len(_handed_keys(label, keys, whole)) for label in sorted(whole)] == [0, 1, 2]
+
+
+def test_h3c3_attrition_counts_the_thin_arms_units_against_the_folds_they_were_in():
+    """Reader 6 of 7. `attrition` over the `treatment` arm's roster: three
+    resolved, three completed, none failed — each unit recorded in the one fold
+    the per-cell draw handed it to.
+
+    Under the whole-roster mapping the identical executions give **one**
+    completed and **two** failed, because two units were recorded in a fold that
+    mapping does not hand them. Both directions in one test: the counts are
+    asserted in full, not as an absence of failures.
+    """
+    from tests.test_stats import _h3c3_treatment_results
+    from tests.test_units import h3c3_per_cell_fixture
+
+    from publishable.runner import attrition
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    arm_roster = UnitList([Unit(key=key) for key in sorted(arms["treatment"])])
+    results = _h3c3_treatment_results(per_cell, arms)
+    counted = attrition(results, arm_roster, "analyze", 0, per_cell)
+    assert (counted["resolved"], counted["completed"], counted["failed"]) == (3, 3, 0)
+    stale = attrition(results, arm_roster, "analyze", 0, whole)
+    assert (stale["resolved"], stale["completed"], stale["failed"]) == (3, 1, 2)
+
+
+def test_h3c3_units_failed_anywhere_narrows_by_arm_then_by_fold():
+    """Reader 7 of 7. The run-level union: `_arm_keys` first, `_handed_keys`
+    second, so a `control` unit is never counted as a `treatment` execution's
+    failure and the other two folds' units are never counted as this one's.
+
+    Nothing failed under the per-cell mapping. Under the whole-roster mapping
+    the same executions leave two `treatment` units unaccounted for in the fold
+    it hands them — an empty answer beside a non-empty one, rather than an
+    empty answer alone, which would pass identically if the walk never ran.
+    """
+    from tests.test_stats import _h3c3_treatment_results
+    from tests.test_units import h3c3_per_cell_fixture
+
+    from publishable.runner import _units_failed_anywhere
+
+    roster, per_cell, whole, arms = h3c3_per_cell_fixture()
+    results = _h3c3_treatment_results(per_cell, arms)
+    arm_members = {0: arms["treatment"]}
+    assert _units_failed_anywhere(results, roster, per_cell, arm_members) == set()
+    assert _units_failed_anywhere(results, roster, whole, arm_members) == {"t0", "t1"}

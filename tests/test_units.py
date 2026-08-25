@@ -5184,3 +5184,72 @@ def test_h3c3_the_bound_refuses_that_k_and_the_per_cell_draw_at_the_admitted_one
     merged = partition_within_cells(roster, 2, "sha256:abc", cells, clusters=clusters)
     assert [len(part) for part in merged] == [11, 4]
     assert sorted(u.key for part in merged for u in part) == sorted(u.key for u in roster)
+
+
+# --- H3c-3 task 12: the flat `fold_members` mapping, and its seven readers ----
+
+
+def h3c3_per_cell_fixture() -> tuple[
+    UnitList, dict[str, frozenset[str]], dict[str, frozenset[str]], dict[str, frozenset[str]]
+]:
+    """F1's shape at the fold's own draw: 12 units, `control` 9 and `treatment`
+    3, `{kind: fold, k: 3}` at digest `"d"` — the roster, the **per-cell**
+    `fold_members`, the **whole-roster** `fold_members` the same declaration
+    produced before this slice, and the two arms.
+
+    **The two mappings are the fixture's discriminator**, and it is a real
+    difference rather than a hoped-for one: the whole-roster draw at this digest
+    puts 0, 1 and 2 of the three `treatment` units in its three folds, so
+    `fold01` holds **no** `treatment` unit at all, while the per-cell draw puts
+    exactly one in each. Every reader test below computes its answer under both
+    and pins them **unequal** — a reader tested under the per-cell mapping alone
+    would pass identically under the mapping this slice replaced, which is a
+    test of nothing.
+
+    Built by calling: `partition_within_cells` and `partition_units` for the two
+    draws, and `fold_members_for` for the labels, so no literal here restates a
+    production rule.
+    """
+    from tests.test_replication import cfg
+
+    from publishable.replication import fold_members_for, resolve_repeats
+
+    roster = UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(9)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(3)]
+    )
+    arms = {
+        "control": frozenset(f"c{i}" for i in range(9)),
+        "treatment": frozenset(f"t{i}" for i in range(3)),
+    }
+    cells = {(("arm", level),): keys for level, keys in arms.items()}
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", fold_basis=3)
+    per_cell = fold_members_for(levels, partition_within_cells(roster, 3, "d", cells))
+    whole = fold_members_for(levels, partition_units(roster, 3, "d"))
+    assert per_cell is not None and whole is not None
+    return roster, per_cell, whole, arms
+
+
+def test_h3c3_the_per_cell_fold_members_stay_a_flat_partition_of_the_roster():
+    """**Task 12's property, at the source**: each unit is in exactly one cell
+    and in exactly one partition, so `fold_members` is still the flat
+    `label -> frozenset(keys)` over the whole roster that
+    `fold_members_for` produced before — the same shape all seven readers rest
+    on, and the reason none of them needed a change.
+
+    Asserted as a partition, not as a shape: the union is the roster and the
+    folds are pairwise disjoint. The per-arm counts beside it are what the
+    draw bought — three `control` and one `treatment` in every fold — and the
+    whole-roster mapping's `[0, 1, 2]` is the same count under the draw this
+    slice replaced, which is what makes the seven reader tests discriminating
+    rather than decorative.
+    """
+    roster, per_cell, whole, arms = h3c3_per_cell_fixture()
+    assert sorted(per_cell) == ["fold01", "fold02", "fold03"]
+    assert frozenset().union(*per_cell.values()) == {u.key for u in roster}
+    assert sum(len(keys) for keys in per_cell.values()) == len(roster) == 12
+    assert [len(keys & arms["control"]) for keys in per_cell.values()] == [3, 3, 3]
+    assert [len(keys & arms["treatment"]) for keys in per_cell.values()] == [1, 1, 1]
+    # The draw this replaced, at the identical digest: `fold01` holds no
+    # `treatment` unit, which is the empty per-arm fold the slice exists for.
+    assert [len(keys & arms["treatment"]) for keys in whole.values()] == [0, 1, 2]
