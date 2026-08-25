@@ -52,15 +52,17 @@ from publishable.units import (
     UnitList,
     assignment_for,
     auto_block_size,
+    cell_label,
     cells_of,
     clusters_of,
     fold_basis,
-    holdout_for,
     holdout_seed_for,
     holdout_sizes,
     holdout_values_fault,
+    holdout_within_cells,
     is_measurement_numeric,
     null_test_level,
+    populated_cells,
     resolve_units,
     rule_for,
     stratum_names,
@@ -738,20 +740,16 @@ def validate_config(
     # denominator a resample's cluster count is actually over. Resolved here
     # rather than inside `_check_resample` so a future second reader gets the
     # same object rather than realizing a second draw.
-    holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster)
+    holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster, cells)
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
     # whether the stratum survives a split that cannot divide one. Not in
     # `replication._fold_k`, which sees the declaration and a count and never a
     # roster.
     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
-    # Sited beside `_check_fold_stratify_by` because tasks 6-7 will read
-    # `roster` and `usable_cluster` here too, and taking both parameters now
-    # means the signature does not change under this caller later — at this
-    # commit `_check_holdout` reads neither (see its own docstring).
     # `usable_cluster` is already narrowed to a non-empty string or `None`
     # above, so this call needs no guard of its own.
-    _check_holdout(doc, units_decl, roster, usable_cluster, c)
+    _check_holdout(doc, units_decl, roster, usable_cluster, cells, c)
     # One site for both split kinds, deliberately: see this function's own
     # docstring for why a second site is the thing being avoided rather than a
     # cost being paid.
@@ -3193,6 +3191,7 @@ def _check_holdout(
     units: dict[str, Any],
     roster: UnitList | None,
     cluster_by: str | None,
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None,
     c: Collector,
 ) -> None:
     """Every check `data.units.holdout` gets — ten findings at this commit,
@@ -3213,14 +3212,22 @@ def _check_holdout(
       named column resolving to exactly `train` and `test`.
     - `E-DATA-HOLDOUT-STRATIFY-VARIES` — **reads the roster:** a stratum that
       varies within a `cluster_by` cluster.
-    - `E-DATA-HOLDOUT-EMPTY` — **reads the roster:** a `random`, unstratified,
-      unclustered split that apportions the test side zero units.
+    - `E-DATA-HOLDOUT-EMPTY` — **reads the roster, and the cells:** a `random`,
+      unstratified, unclustered split that apportions the test side zero units
+      — over the **thinnest populated cell** when the design has a cell
+      structure, since that is the sub-roster the split is drawn inside
+      (`units.holdout_within_cells`), and over the whole roster when it has
+      none.
 
     **Three of the ten read `roster`**, and each carries its own
     `roster is not None` guard rather than leaning on a caller — `_check_resample`'s
     stated convention.
 
-    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**; `roster` and `cluster_by` are
+    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**, and only `E-DATA-HOLDOUT-EMPTY`
+    reads `cells` — `_resolved_cells`' realized decomposition, threaded from
+    `validate_config`'s single local rather than derived a second time here, for
+    the reason `_holdout_test_roster` takes it: two answers to one declaration
+    is what a single derivation exists to prevent. `roster` and `cluster_by` are
     both in the signature anyway, `units.assignment_for`'s reason: the caller
     already holds them, and a caller told the signature changed under it is
     what a stable one avoids. A check added here must state which side of
@@ -3252,8 +3259,15 @@ def _check_holdout(
     **`frac`'s interval is open at both ends.** `0` holds nothing out and `1`
     holds everything out; each leaves one side of the split empty, and a split
     with an empty side is not a split. A `frac` small enough to apportion the
-    test side zero units over *this* roster is a different fault with a
-    different fix — widen it, or resolve more units — and is not this check's.
+    test side zero units over *this* roster — or over the thinnest cell of it —
+    is a different fault with a different fix — widen it, or resolve more units
+    — and is not this check's but `E-DATA-HOLDOUT-EMPTY`'s.
+
+    **The train side is not checked here, under cells or without them.** A cell
+    thin enough for `holdout_sizes` to leave the *train* side empty is
+    `reference.md` § Errors core raises' own row — "the **train** side of any
+    draw, since `validate` tests the test side alone" — and widening this check
+    to it would give one fault two reporting surfaces with two messages.
     """
     holdout = units.get("holdout")
     if not isinstance(holdout, dict) or not holdout:
@@ -3516,12 +3530,35 @@ def _check_holdout(
         and not isinstance(declared_frac, bool)
         and 0.0 < float(declared_frac) < 1.0
     ):
-        _train_size, test_size = holdout_sizes(len(roster), float(declared_frac))
+        # **The denominator is the thinnest POPULATED cell**, not the roster,
+        # when the design has a cell structure — because that is the sub-roster
+        # `units.holdout_within_cells` draws inside, and a `frac` that clears
+        # the roster does not clear every cell of it. `holdout_sizes` is
+        # largest-remainder and so non-decreasing in `n`, which is why this
+        # REPLACES the roster-wide bound rather than joining it: a thinnest
+        # cell that clears leaves nothing for a roster-wide test to catch.
+        # `populated_cells` is the predicate rather than a second spelling of
+        # it, and it is the same projection the draw loops over, so the cell
+        # this names is a cell that will really be drawn in — an empty cell is
+        # dropped by both.
+        bound_cell: tuple[tuple[str, str], ...] | None = None
+        bound_n = len(roster)
+        populated = populated_cells(cells or {})
+        if populated:
+            bound_cell, bound_keys = min(populated, key=lambda item: len(item[1]))
+            bound_n = len(bound_keys)
+        _train_size, test_size = holdout_sizes(bound_n, float(declared_frac))
         if test_size == 0:
+            where = (
+                f"{bound_n} resolved units"
+                if bound_cell is None
+                else f"the {bound_n} resolved units in cell {cell_label(bound_cell)}, the "
+                "thinnest of the design's cells and the sub-roster the split is drawn inside"
+            )
             c.error(
                 "E-DATA-HOLDOUT-EMPTY",
                 "data.units.holdout.frac",
-                f"is {declared_frac} over {len(roster)} resolved units, which apportions "
+                f"is {declared_frac} over {where}, which apportions "
                 "the test side zero of them — every metric would be over nothing. Widen "
                 "`frac`, or resolve a larger roster",
             )
@@ -6048,16 +6085,25 @@ def _holdout_test_roster(
     units_decl: dict[str, Any],
     roster: UnitList | None,
     cluster_by: str | None,
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None,
 ) -> UnitList | None:
     """The holdout's realized **test** partition, or `None` when the design
     declares none or the draw cannot be performed.
 
-    Realized through `units.holdout_for`, the same pure function
-    `cli.command_run` realizes it with — which is the reason that function is
-    pure at all, `assignment_for`'s own argument: `validate` has to ask "which
-    units will the interval rest on" of the same declaration the run asks it
-    of, so a second answer computed here would be a check aimed at a partition
-    the run does not use.
+    Realized through `units.holdout_within_cells`, the same pure function
+    `cli._resolved_holdout` realizes it with — which is the reason that
+    function is pure at all, `assignment_for`'s own argument: `validate` has to
+    ask "which units will the interval rest on" of the same declaration the run
+    asks it of, so a second answer computed here would be a check aimed at a
+    partition the run does not use.
+
+    **`cells` is `_resolved_cells`' answer, threaded rather than re-derived**,
+    and it is what makes that sentence true again. The split is drawn inside
+    each cell, so a call that passed the decomposition here and not there — or
+    the reverse — would bound `limits.min_clusters` against a test partition no
+    run produces. `None` is a design with no cell structure and takes
+    `holdout_within_cells`' own one-cell reduction, which is the byte-identical
+    whole-roster draw this function has always made.
 
     **Does not raise for any fault `validate` can already see.** `validate`
     collects, and this runs over configs that are already known bad — a
@@ -6074,10 +6120,11 @@ def _holdout_test_roster(
         return None
     try:
         clusters = clusters_of(roster, cluster_by) if cluster_by else None
-        plan = holdout_for(
+        plan = holdout_within_cells(
             roster,
             block,
             seed=holdout_seed_for(block, design_digest(doc), roster),
+            cells=cells,
             clusters=clusters,
         )
     except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):

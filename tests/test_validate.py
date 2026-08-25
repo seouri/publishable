@@ -13116,6 +13116,128 @@ def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
     assert "E-DATA-HOLDOUT-CELLS" in found
 
 
+# --- H3c-3 task 14: `E-DATA-HOLDOUT-EMPTY` is bounded by the thinnest cell ----
+
+
+def _skewed_cell_roster(n_a: int, n_b: int) -> str:
+    """`n_a` units in arm `a` and `n_b` in arm `b`, as an `index.csv`."""
+    rows = "".join(f"p{i},a\n" for i in range(n_a)) + "".join(f"q{i},b\n" for i in range(n_b))
+    return "patient_id,arm\n" + rows
+
+
+def test_the_empty_test_partition_is_bounded_by_the_thinnest_cell_not_the_roster(
+    write_config, tmp_path
+):
+    """**Fixture F7 and its can-fail control, paired in one test.**
+
+    20 units at `frac: 0.2`. Split **18/2** across the `arm` axis, the split is
+    drawn inside each cell (`units.holdout_within_cells`) and arm `b`'s two
+    units apportion `holdout_sizes(2, 0.2) == (2, 0)` — a test side of nothing,
+    which is `E-DATA-HOLDOUT-EMPTY`. The roster-wide arithmetic the check used
+    before this task clears at `holdout_sizes(20, 0.2) == (16, 4)`, so **only
+    the cell bound can report this config** and MU-13 (the bound left at
+    `len(roster)`) fails here.
+
+    The can-fail half is the **same 20 units at the same `frac`, split 10/10**:
+    `holdout_sizes(10, 0.2) == (8, 2)` and nothing is reported. Without it,
+    "every holdout beside a cell structure earns this code" would be
+    indistinguishable from the bound — the *testing the refusal and never the
+    honouring* shape.
+
+    Membership rather than an exact finding set, deliberately: at this commit
+    `E-DATA-HOLDOUT-CELLS` still refuses the pair (task 16 retires it), so both
+    configs also carry that code and an `== [...]` assertion would break under
+    a task whose brief does not authorize editing this test.
+
+    The **message** is asserted, not only the code: `where` is a two-branch
+    ternary emitting one code at one path, so a code-only assertion passes
+    identically if the ternary is collapsed to the roster branch — which is
+    MU-13 in a different currency.
+    """
+    (tmp_path / "input" / "index.csv").write_text(_skewed_cell_roster(18, 2))
+    path = write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
+    found = codes(path)
+    assert "E-DATA-HOLDOUT-EMPTY" in found
+    message = messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
+    assert "the 2 resolved units in cell arm=b" in message
+    assert "thinnest of the design's cells" in message
+
+    (tmp_path / "input" / "index.csv").write_text(_skewed_cell_roster(10, 10))
+    even = write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
+    assert "E-DATA-HOLDOUT-EMPTY" not in codes(even)
+
+
+def test_the_thinnest_cell_bound_skips_an_EMPTY_cell_rather_than_bounding_on_zero():
+    """An **empty** cell is not the denominator, and this is the discriminating
+    fixture for that.
+
+    `holdout_sizes(0, 0.2) == (0, 0)`, so a bound taken over
+    `min(cells.items(), key=len)` rather than over `populated_cells`' projection
+    would report `E-DATA-HOLDOUT-EMPTY` for a design whose every drawn cell
+    splits perfectly — and would name a cell no unit is in. The check's
+    predicate is `units.populated_cells`', the same projection
+    `units.holdout_within_cells` loops over, so the cell this names is a cell
+    the draw really enters.
+
+    Called directly rather than through a config: `_resolved_cells` cannot
+    produce an empty cell from a clean config — `units.arms_of` raises
+    `E-DATA-ASSIGN-LEVELS` for a declared level no unit's value names, and the
+    `try` turns that into `None` — so the only way to instantiate the seam is
+    to hand `_check_holdout` the decomposition. C9's empty-cell raise is the
+    same shape at the run-time end, pinned by
+    `test_h3c3_a_thin_cells_holdout_raises_naming_the_cell_on_both_sides`.
+    """
+    from publishable.validate import _check_holdout
+
+    roster = _h3c3_arm_roster(10, 10)
+    units_decl = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "holdout": {"method": "random", "frac": 0.2},
+    }
+    cells = {
+        (("arm", "control"),): frozenset(f"c{i}" for i in range(10)),
+        (("arm", "treatment"),): frozenset(f"t{i}" for i in range(10)),
+        (("arm", "placebo"),): frozenset(),
+    }
+    c = Collector()
+    _check_holdout(_CELLS_DOC, units_decl, roster, None, cells, c)
+    assert [f.code for f in c.findings] == []
+
+    # The can-fail half: the same call with a POPULATED thin cell does report,
+    # so the absence above is an absence from a check that ran.
+    thin = dict(cells)
+    thin[(("arm", "placebo"),)] = frozenset({"c0", "c1"})
+    c2 = Collector()
+    _check_holdout(_CELLS_DOC, units_decl, roster, None, thin, c2)
+    assert [f.code for f in c2.findings] == ["E-DATA-HOLDOUT-EMPTY"]
+    assert "cell arm=placebo" in c2.findings[0].message
+
+
+def test_the_empty_test_partition_message_still_names_the_roster_with_no_cells(
+    write_config, tmp_path
+):
+    """The no-cell path is byte-identical to what it printed before task 14.
+
+    Two units at `frac: 0.2` — `holdout_sizes(2, 0.2) == (2, 0)`, measured, and
+    `holdout_sizes(4, 0.2)` is `(3, 1)` rather than the `(4, 0)` a first draft
+    of this fixture assumed — with no
+    `sweep.groups` and `allocation: within`, so `_resolved_cells` answers
+    `None` and the bound is the roster's own. Paired here rather than left to
+    the sibling above because a widening that silently renamed the roster
+    branch's message would otherwise be invisible: this asserts the whole
+    message, by equality."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(2))
+    )
+    path = write_config(_holdout({"method": "random", "frac": 0.2}))
+    assert messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"] == (
+        "is 0.2 over 2 resolved units, which apportions the test side zero of "
+        "them — every metric would be over nothing. Widen `frac`, or resolve a "
+        "larger roster"
+    )
+
+
 def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(write_config, tmp_path):
     """`allocation: between` and a non-empty `sweep.groups` are two spellings
     of the same cell structure, and EITHER is enough. Without this row a check
