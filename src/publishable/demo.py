@@ -11,6 +11,7 @@ rather than sampled: the same 240 rows everywhere, so two people comparing scree
 comparing the same run.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -160,7 +161,7 @@ class Step(BaseStep):
             # `self.rng` is core's per-execution stream, seeded from the design
             # digest and this repeat's seed. `.random()` draws a float in
             # [0, 1) — the jitter is what makes the five seeds differ.
-            jitter = (self.rng.random() - 0.5) * 0.08
+            jitter = (self.rng.random() - 0.5) * 0.4
             io.record(unit.key, {{"pred": float(unit.x) + jitter, "truth": float(unit.y)}})
         return {{"analysis_complete": True}}
 """
@@ -476,4 +477,172 @@ def command_demo(into: Path | None = None) -> int:
         print()
         write_progress(root, 2)
 
+    return _walk(root, config_rel, stop)
+
+
+def _run_in_project(root: Path, argv: list[str]) -> int:
+    """Run one real command, in this process, from the demo repository.
+
+    In-process through the same `main` the console script calls, rather than as
+    a subprocess: the walkthrough's whole claim is *these are the commands you
+    would type*, and a subprocess would make its output depend on how
+    `publishable` was installed. The working directory is the demo repository
+    for the same reason — the command printed above the output is the command
+    that ran, relative path and all.
+
+    The directory is restored by identity in a `finally`, never by remembering
+    a position: user code runs inside this window (the project's own steps),
+    and a step that chdirs would otherwise leave the walk somewhere else.
+    """
+    from publishable.cli import main
+
+    previous = Path.cwd()
+    try:
+        os.chdir(root)
+        return main(argv)
+    finally:
+        os.chdir(previous)
+
+
+def _render_summary(run_yaml: Path, metric: str = "r") -> list[str]:
+    """`demo`'s own stop-5 summary, read out of the record `run` just wrote.
+
+    `run` prints no results table, no progress indication and no banner — its
+    whole stdout for a successful run is the warning block and one
+    `run.yaml → <path>` line. So this is `demo` saying what that output meant,
+    which is what stops 3 through 5 are; `run` is not changed and `report` is
+    not invoked (Decision 7).
+    """
+    import yaml
+
+    doc = yaml.safe_load(run_yaml.read_text())
+    conditions = doc["results"]["conditions"]
+    lines = ["  condition             r       95% CI            vs baseline (paired, 95% CI)"]
+    attrition: dict[str, int] = {}
+    spread: tuple[str, float] | None = None
+    for cond in conditions:
+        label = f"{cond['index']:02d}_{cond['label']}"
+        block = next(iter(cond["aggregated"].values()))
+        entry = block[metric]
+        attrition = entry["n"]
+        value = f"{entry['value']:.3f}"
+        interval = f"[{entry['ci95'][0]:.3f}, {entry['ci95'][1]:.3f}]"
+        delta = "—"
+        against = cond.get("vs_baseline") or {}
+        for step_block in against.values():
+            if metric in step_block:
+                d = step_block[metric]
+                delta = (
+                    f"{d['delta']:+.3f}  [{d['ci95'][0]:.3f}, {d['ci95'][1]:.3f}]"
+                    if d.get("ci95")
+                    else f"{d['delta']:+.3f}  (no interval)"
+                )
+        lines.append(f"  {label:<21} {value:<7} {interval:<17} {delta}")
+        for name, other in block.items():
+            # The spread reported is a RECORDED column's. A derived metric
+            # carries no `repeat_spread` at all — core computes one only where
+            # a column was recorded per repeat — so reporting `r`'s would be
+            # reporting a key that is not in the record.
+            if name != metric and other.get("repeat_spread") and spread is None:
+                spread = (name, other["repeat_spread"]["std"])
+    lines.append("")
+    tail = (
+        f"  intervals over {attrition['completed']} of {attrition['resolved']} units "
+        f"({attrition['failed']} failed)"
+    )
+    if spread is not None:
+        tail += f" · seed spread std {spread[1]:.3f} of recorded `{spread[0]}`"
+    lines.append(tail)
+    return lines
+
+
+def _walk(root: Path, config_rel: str, stop: int) -> int:
+    """Stops 3 through 6. Each of 3, 4 and 5 prints the command, waits, runs it,
+    and then says what its output meant."""
+    commands = walk_commands(config_rel)
+    for index, command in enumerate(commands, start=3):
+        if stop >= index:
+            continue
+        if not _pause(command, "run it"):
+            _print_remaining(config_rel, index)
+            return EXIT_OK
+        code = _run_in_project(root, command.split()[1:])
+        if code != EXIT_OK:
+            print(
+                f"`{command}` exited {code}. The walk stops here rather than "
+                "pretending the next stop would mean anything.",
+                file=sys.stderr,
+            )
+            return code
+        print()
+        for line in _commentary(root, index):
+            print(line)
+        print()
+        write_progress(root, index)
+
+    if stop >= 6:
+        print("This demo is finished. Delete the directory to start over.")
+        return EXIT_OK
+    run_yaml = latest_run_yaml(root)
+    if not _pause("the run.yaml all of this produced, and who reads it", "continue"):
+        _print_remaining(config_rel, 6)
+        return EXIT_OK
+    print(f"The record is {run_yaml}")
+    print("It carries the results AND everything needed to regenerate them. On any")
+    print("other machine, a collaborator runs:")
+    print()
+    print(f"  publishable reproduce {run_yaml}")
+    print()
+    print("Not run here, and that is the lesson: `reproduce` clones the repository")
+    print("`provenance.git.remote` names, and this demo repo has one local commit and")
+    print("no remote. It is what somebody ELSE runs, on a machine holding neither your")
+    print("data nor your credentials.")
+    write_progress(root, 6)
     return EXIT_OK
+
+
+def latest_run_yaml(root: Path) -> Path:
+    """The record stop 5 produced — the newest run under the demo's output dir."""
+    runs = sorted((data_root() / "results").glob("run_*/run.yaml"))
+    if not runs:
+        raise ContractError(
+            "no run record found under the demo's output directory",
+            code="E-DEMO-NO-RUN",
+        )
+    return runs[-1]
+
+
+def _commentary(root: Path, stop: int) -> list[str]:
+    """Two or three lines saying what the command's output meant."""
+    if stop == 3:
+        return [
+            "validate read your config and your data. It created nothing and reached",
+            "nothing off this machine — the 240 units it resolved came from the",
+            "index.csv outside the repo, and `input_dir` being outside is enforced.",
+        ]
+    if stop == 4:
+        return [
+            "3 conditions × 5 repeats = 15 repeat-scoped executions, and 19 in all —",
+            "the plan also runs step01_load_cohort once for the whole sweep and",
+            "step02_fit_model once per condition. Still creates nothing.",
+        ]
+    lines = [
+        "W-ENV-UNLOCKED fired because this project has no uv.lock: its pyproject",
+        "depends on `publishable`, which cannot resolve until the package is",
+        "published, so there is nothing to pin yet. Nothing was suppressed.",
+        "",
+        "run printed no table — its whole output is that warning and the path to the",
+        "record. Everything below is `demo` reading the record back:",
+        "",
+    ]
+    lines.extend(_render_summary(latest_run_yaml(root)))
+    lines.extend(
+        [
+            "",
+            "  `pred` and `truth` are recorded columns, so each publishes its own",
+            "  metric and joins the correction family beside `r` — six members, and",
+            "  two of them nobody reads. A template that derived twenty diagnostics",
+            "  would correct every interval in the run for numbers nobody reads.",
+        ]
+    )
+    return lines
