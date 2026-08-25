@@ -2703,6 +2703,15 @@ def cell_fold_basis(
     it the cells there would warn against a denominator no interval used. A
     function whose name fits one of its three callers is a proxy waiting to be
     believed.
+
+    **`fold_basis`' raise propagates, per cell.** `cluster_count` raises
+    `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no value for the cluster
+    attribute, and nothing here catches it — a caller that collects rather than
+    raises (`validate`) wraps this call in the `try`/`except ContractError` its
+    roster-wide call already sits in, and treats the basis as unresolved. One
+    unreadable cell makes the whole answer unresolved, which is the honest
+    reading: the minimum over cells cannot be known while one of them cannot be
+    counted.
     """
     bases: list[int] = []
     for keys in cells.values():

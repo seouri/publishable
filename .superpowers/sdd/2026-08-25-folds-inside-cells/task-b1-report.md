@@ -9,8 +9,20 @@
 | 3 | `6a5c751` | `units.cell_fold_basis(roster, cluster_by, cells)` |
 
 Branch base: `main` at `d17d402`, code at `3d72910`.
-Final suite: **3354 passed, 1 skipped, 2 xfailed** (3338 + 16 new). `ruff check`,
+Final suite: **3355 passed, 1 skipped, 2 xfailed** (3338 + 17 new). `ruff check`,
 `ruff format --check` and `mypy` clean at each commit.
+
+**C24 — the count is 23, and here is the derivation rather than the number.** `H3c-3-SCOPING-2.md`
+decomposes at **20**. Three surfaces its § 9 does not have, each measured against the code by the
+plan's own corrections: **C5's** — `_check_sweep`'s `k: all` budget reads the *same* `basis` local
+`_check_replication` does (confirmed by `grep -n "fold_basis" src/publishable/validate.py`: one
+`basis`, threaded to both as `fold_basis=`), so the `k: all` half needs its own task or a `k: all`
+design resolves to a `k` the cell bound then refuses; **C6's** — `validate._holdout_test_roster`
+realizes the holdout over the **whole** roster and feeds `limits.min_clusters`, which becomes two
+answers to one declaration the moment `_resolved_holdout` draws per cell; **C7's** —
+`_check_holdout`'s `E-DATA-HOLDOUT-EMPTY` bounds `frac` against `len(roster)`, which under cells must
+bound against the smallest non-empty cell at `validate` **and** in the message `holdout_for` raises.
+20 + 3 = **23**. Nothing was merged to hit 20.
 
 ---
 
@@ -160,6 +172,7 @@ yet**, by design; their callers are tasks 6 and 8).
 | `cells_of` — disjointness and the 12-unit total | **MU-2** (union for intersection): **2 failed, 3345 passed** — the crossed-axes test and the empty-intersection test |
 | `cell_fold_basis(roster, "site", cells) == 2` | **MU-3** (`max` for `min`): **6 failed, 3348 passed** |
 | `cell_fold_basis == 2` in all four orderings | **MU-4** (the first cell's basis): **2 failed, 3352 passed** — the two `thin_first=False` arms, in **both** naming directions |
+| `cells_of` raises on a level the plan did not realize | **MU-4b** (`members.get(level, ())`): **1 failed, 3354 passed** — `test_a_level_the_plan_did_not_realize_is_a_core_defect` alone |
 
 **MU-3's named catcher does not exist yet and this is declared rather than glossed.** The brief names
 *"`{kind: fold, k: 3}` must be refused: max 3 clears, min 2 refuses"*. Nothing consumes
@@ -266,14 +279,31 @@ is declared, not the whole roster"*.
    forget, `cells_of` and `cell_fold_basis` are dead code in `units.py` and every per-cell check
    silently keeps calling the roster-wide one. **This is the shape of a finding falling out of the
    chain**, so it is stated here rather than only in the commit messages.
-2. **Arm D's constraint on task 8 is narrower than the brief's**, and task 8's brief does not carry
-   it. Task 8 must keep `partition_within_cells` **calling** `partition_units`; inlining its body
-   fails arm D, which has no authorized editor.
+2. **Arm D constrains task 8 in TWO ways, and the second is the dangerous one.** Task 8's brief
+   carries neither, and arm D has no authorized editor.
+   **(a)** `partition_within_cells` must keep **calling** `partition_units` rather than inlining its
+   body — otherwise the counting wrapper sees nothing.
+   **(b) The one-cell case must be composed before the loop, not passed through it.** `cells_of({})`
+   returns **one empty cell**, and Decision 7 has `partition_within_cells` **skip empty cells**. A
+   task 8 that hands `cells_of({})` straight to that loop for a no-axis design calls
+   `partition_units` **zero** times: arm D fails at `len(calls) == 1`, and — the part arm D is there
+   to make loud — **every fold silently vanishes** for every design with no group axis. Decision 7's
+   own grounds assume the opposite (*"a one-cell design then reduces to the current single call
+   byte-identically"*), so the whole-roster composition has to happen either at the caller or inside
+   `partition_within_cells`. This is D1's *"owed once at the caller"* stated as the failure it
+   causes, because a reader stops at the doc-inconsistency framing.
 3. **Decision 6's `cells_of({})` sentence stays false in the design** (D1). It is not retro-edited.
    If the whole-branch review reads the design rather than the code it will find a function that
    disagrees with it; the disagreement is deliberate and recorded here.
 4. **MU-3's refusal half and MU-11 are owed**, by tasks 7 and 18 respectively. Both are declared in
    advance, and both are named in the tests' own docstrings so the owing task finds them by grep.
-5. **`cell_fold_basis` is O(cells × roster)** — it walks the roster once per non-empty cell to
+5. **Two things were added after the three commits, in `ae5b4d9`'s follow-up**, both inside files
+   this batch owns and neither changing behaviour: `cells_of`'s indexed-not-`.get` rule had **no
+   fixture** — the *"seam named and instantiated by no fixture"* shape, and every sibling total-mapping
+   rule in `units.py` has one — so it now has one, pinned by MU-4b; and `cell_fold_basis`' docstring
+   now says that `fold_basis`' `E-DATA-CLUSTER-UNKNOWN` **propagates per cell**, so task 6 wraps the
+   call in the same `try`/`except ContractError` `validate`'s roster-wide `basis` already sits in. An
+   unwrapped call there turns a collecting `validate` into a raising one.
+6. **`cell_fold_basis` is O(cells × roster)** — it walks the roster once per non-empty cell to
    preserve roster order. At the design's own scale that is nothing; it is stated because a later
    task copying the loop into an inner path would pay it per fold.

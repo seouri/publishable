@@ -4795,3 +4795,26 @@ def test_a_decomposition_with_no_populated_cell_reduces_to_the_whole_roster():
     for cells in (cells_of({}), {}):
         assert cell_fold_basis(roster, "site", cells) == fold_basis(roster, "site") == 5
         assert cell_fold_basis(roster, None, cells) == fold_basis(roster, None) == 16
+
+
+def test_a_level_the_plan_did_not_realize_is_a_core_defect():
+    """`cells_of` indexes `members`, it does not `.get` it — the rule
+    `arm_members`, `cluster_count_of` and `partition_units`' `strata` mapping
+    all follow, each with its own fixture (`test_a_unit_missing_from_the_
+    stratum_mapping_is_a_core_defect` is the nearest sibling).
+
+    `levels` and `members` come from **one** `ArmPlan`, so a level the first
+    declares and the second does not hold is one plan disagreeing with itself.
+    A `.get(level, ())` default would turn that into an empty cell — a cell
+    that looks like a level no unit resolved to, which is a different and
+    perfectly legal thing — and every per-cell bound would then be computed
+    over a decomposition nothing verified.
+    """
+    plan = ArmPlan(
+        levels=("control", "treatment"),
+        members={"control": tuple(_CELLS_ROSTER)},  # `treatment` never realized
+        seed=None,
+        strata=(),
+    )
+    with pytest.raises(KeyError):
+        cells_of({"arm": plan})
