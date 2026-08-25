@@ -472,6 +472,17 @@ saying so.
 
 ## Task 11
 
+> **AMENDED 2026-08-25 by the controller, from batch B's concerns 1 and 2.** Two obligations fell out of
+> earlier tasks and land on whichever of tasks 11, 14, 17 or 18 reaches them first — **check both before you
+> start, and if you are the first, they are yours:**
+>
+> 1. **`Prepared.cells` has NO `_execute_prepared` unpack line** — measured, `ruff` reports one `F841`, and
+>    C20 says the opposite. **The first task reading `cells` in phases 6–10 adds it.**
+> 2. **`units.cell_fold_basis` has ZERO production callers.** Task 7 needed the argmin cell and used
+>    `units.thinnest_cell` instead. **If no task calls it, the slice ships a tested function nothing calls**
+>    — which is *an unbuilt reader of a shipped surface* wearing its other face, in the row whose example
+>    list just ran out. **Either call it or delete it, and say which.**
+
 **Corrections that bind this task: C8, C13, C14.**
 
 **`sweep.yaml` gains one top-level key, `partitions_within: [<axis names>]`, written only when the
