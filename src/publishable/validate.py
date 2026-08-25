@@ -48,9 +48,11 @@ from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
     NUMERIC_COLLAPSE_RULES,
+    ArmPlan,
     UnitList,
     assignment_for,
     auto_block_size,
+    cells_of,
     clusters_of,
     fold_basis,
     holdout_for,
@@ -5878,6 +5880,100 @@ reporting's construction tables enumerate the method strings core *emits*
 a config may name. Stating the enum is what makes `method: bootstap` a
 diagnostic rather than a shrug, and what makes adding a second value a
 documented change rather than a silent one."""
+
+
+def _resolved_cells(
+    doc: dict[str, Any],
+    units_decl: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+) -> dict[tuple[tuple[str, str], ...], frozenset[str]] | None:
+    """The design's realized **cells** — every `sweep.groups` axis drawn for
+    real and intersected by `units.cells_of` — or `None` when the design has no
+    cell structure or the draw cannot be performed.
+
+    **`_holdout_test_roster` is the precedent, and its ground is repeated here
+    verbatim.** That function realizes the holdout through `units.holdout_for`,
+    the same pure function `cli._prepare_run` realizes it with, because
+    `validate` has to ask *which units will this rest on* of the same
+    declaration the run asks it of — **a second answer computed here would be a
+    check aimed at a partition the run does not use.** A cell bound on one
+    decomposition while the run draws its folds inside another is that defect
+    with a different noun.
+
+    **The digest is the real `design_digest(doc)`, not `_check_assign`'s
+    placeholder `"validate"`.** That placeholder is sound only where it is
+    used: the unstratified, unclustered `by_attribute`-adjacent case, whose
+    *sizes* are digest-independent. A cell's **cluster count** is precisely the
+    seed-dependent quantity that gating excludes, and it is the number
+    `cell_fold_basis` returns under a declared `cluster_by`. Drawing at
+    `"validate"` would bound `k` against a decomposition no run produces.
+
+    Every fault becomes `None`, the way `_holdout_test_roster` does and for its
+    reason: this runs over configs that are already known bad — a malformed
+    `assign` block, an unresolvable level, a `blocked` method beside a declared
+    `cluster_by`, a unit carrying no value for the cluster attribute — and each
+    is reported by its own check elsewhere. Here they mean *no cells resolved*,
+    and every cell-aware check simply does not run rather than reporting a
+    second, derived fault on top of the one the reader has to fix anyway.
+
+    **`None` also answers the triviality question, so no caller has to.** A
+    design whose `sweep.groups` resolves to no axis at all has no cell
+    structure, and returning `None` rather than `cells_of({})`'s one empty cell
+    makes the caller's test one comparison — the same one
+    `cli._prepare_run` makes against its own `group_axes`. Two callers deciding
+    "is this decomposition trivial" for themselves is how `validate` ends up
+    bounding `k` against one number while the run draws against another.
+
+    The axis loop is `cli._resolved_group_axes`' loop, skip rules included: a
+    non-mapping entry, a `by` that is not a non-empty string, and a `levels`
+    that is not a non-empty list of strings are each skipped, exactly as
+    `_check_assign` skips them. **Deliberately the same skips, not merely
+    similar ones**: two loops that skipped different axes would give `validate`
+    and `run` different decompositions of one declaration, which is the whole
+    fault this function exists not to introduce. It is duplicated rather than
+    imported because `cli` imports this module.
+    """
+    if roster is None:
+        return None
+    groups = (doc.get("sweep") or {}).get("groups")
+    if not isinstance(groups, list) or not groups:
+        return None
+    assign = units_decl.get("assign")
+    blocks = assign if isinstance(assign, dict) else {}
+    try:
+        clusters = clusters_of(roster, cluster_by) if cluster_by else None
+        axes: dict[str, ArmPlan] = {}
+        for entry in groups:
+            if not isinstance(entry, dict):
+                continue
+            axis = entry.get("by")
+            if not isinstance(axis, str) or not axis:
+                continue
+            levels = entry.get("levels")
+            if not (
+                isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
+            ):
+                continue
+            block = blocks.get(axis)
+            # `dict(axes)` — the axes drawn SO FAR, for `_resolved_group_axes`'
+            # reason: an axis whose `stratify_by` names an earlier one is
+            # balanced on that axis's realized membership, and a copy rather
+            # than the live dict is what the axis was drawn against.
+            axes[axis] = assignment_for(
+                roster,
+                axis,
+                block if isinstance(block, dict) else None,
+                levels,
+                design_digest(doc),
+                clusters,
+                dict(axes),
+            )
+        if not axes:
+            return None
+        return cells_of(axes)
+    except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _holdout_test_roster(

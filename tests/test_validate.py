@@ -20,6 +20,7 @@ from publishable.validate import (
     _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
+    _resolved_cells,
     _warn_undeclared_cluster,
     validate_config,
 )
@@ -14605,4 +14606,191 @@ def test_h6a_w_param_unset_message_agrees_with_the_path_it_carries(write_config)
         "holds paths that carry a default and are left unset here; a step "
         "reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: "
         "analysis.confidence"
+    )
+
+
+# --- `_resolved_cells`: validate's own view of the design's cells -----------
+#
+# H3c-3 task 5. The precedent is `_holdout_test_roster`: a real draw at the real
+# `design_digest(doc)`, inside a `try` that swallows every fault, because a
+# second answer computed here would be a check aimed at a partition the run does
+# not use.
+
+
+def _h3c3_arm_roster(n_control: int, n_treatment: int, cluster: str | None = None) -> UnitList:
+    """A roster carrying an `arm` attribute, and optionally a cluster label."""
+    units = []
+    for i in range(n_control):
+        attrs = {"arm": "control"}
+        if cluster is not None:
+            attrs[cluster] = f"S{i}"
+        units.append(Unit(key=f"c{i}", paths=(), attributes=attrs))
+    for i in range(n_treatment):
+        attrs = {"arm": "treatment"}
+        if cluster is not None:
+            attrs[cluster] = f"T{i}"
+        units.append(Unit(key=f"t{i}", paths=(), attributes=attrs))
+    return UnitList(units)
+
+
+_CELLS_DOC = {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+
+
+def test_resolved_cells_decomposes_a_by_attribute_axis():
+    """The `by_attribute` case: no draw at all, and the memberships are the
+    attribute's own split.
+
+    Asserted as an exact mapping rather than as "two cells exist": a count of 2
+    is satisfied by any decomposition that happens to produce two keys,
+    including one that read the wrong column."""
+    cells = _resolved_cells(
+        _CELLS_DOC,
+        {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+        _h3c3_arm_roster(3, 3),
+        None,
+    )
+    assert cells == {
+        (("arm", "control"),): frozenset({"c0", "c1", "c2"}),
+        (("arm", "treatment"),): frozenset({"t0", "t1", "t2"}),
+    }
+
+
+def test_resolved_cells_draws_a_random_axis_at_the_real_digest_and_matches_the_run(
+    tmp_path: Path, monkeypatch
+):
+    """The `random` case, and the load-bearing half of this task: the cells
+    `validate` sees are byte-for-byte the cells the run draws.
+
+    A `random` axis is a real draw seeded from `design_digest(doc)`, so this is
+    the one fixture that can tell the real digest from `_check_assign`'s
+    placeholder `"validate"` — and it is the mutation that fails this test
+    alone. The memberships are compared against `cli._prepare_run`'s own
+    `Prepared.cells` for the **same config**, not against a literal: two
+    sources that must agree, rather than each agreeing with itself.
+
+    **The membership, not the existence.** An assertion that only checked
+    `cells is not None` passes under any draw whatsoever, including one seeded
+    from the empty string."""
+    from publishable.cli import Prepared, _prepare_run
+
+    control_rows = "\n".join(f"c{i},control" for i in range(6))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(6))
+    doc_paths = run_a_project(
+        tmp_path,
+        roster_csv=f"patient_id,arm\n{control_rows}\n{treatment_rows}\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    prepared = _prepare_run(Path(doc_paths["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+
+    config = yaml.safe_load(Path(doc_paths["cfg"]).read_text())
+    cells = _resolved_cells(
+        config,
+        config["data"]["units"],
+        prepared.roster,
+        None,
+    )
+    assert cells == prepared.cells
+    # The half that must REPORT: a real draw happened and it is not the
+    # attribute's own split, so an equality against `prepared.cells` cannot pass
+    # by both sides being `None` or both being the `by_attribute` answer.
+    assert cells is not None
+    assert set(cells) == {(("arm", "control"),), (("arm", "treatment"),)}
+    assert cells[(("arm", "control"),)] != frozenset(f"c{i}" for i in range(6))
+
+
+def test_resolved_cells_is_none_when_the_draw_raises_and_validate_still_reports(
+    write_config, tmp_path
+):
+    """`blocked` beside a declared `cluster_by`: `units.assignment_for` raises
+    `NotImplementedError`, the `try` swallows it, and **`validate` still
+    reports `E-DATA-ASSIGN-BLOCKED-CLUSTER` from its own check** — the swallow
+    hides no finding.
+
+    **The `None` is attributed, not counted.** The same doc, the same roster and
+    the same cluster declaration under `method: random` resolve to two real
+    cells, so the `None` above belongs to the method rather than to anything
+    incidental about this fixture."""
+    roster = _h3c3_arm_roster(3, 3, cluster="site")
+    units_decl = {"allocation": "between", "cluster_by": "site", "assign": {}}
+
+    assert (
+        _resolved_cells(
+            _CELLS_DOC, {**units_decl, "assign": {"arm": {"method": "blocked"}}}, roster, "site"
+        )
+        is None
+    )
+    drawn = _resolved_cells(
+        _CELLS_DOC, {**units_decl, "assign": {"arm": {"method": "random"}}}, roster, "site"
+    )
+    assert drawn is not None
+    assert set(drawn) == {(("arm", "control"),), (("arm", "treatment"),)}
+
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    assert _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked"}}, attributes=["site"], cluster_by="site")
+        )
+    ) == {"E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        pytest.param("nonsense", id="not-a-list"),
+        pytest.param([], id="empty-list"),
+        pytest.param(["arm"], id="entry-not-a-mapping"),
+        pytest.param([{"by": "", "levels": ["control", "treatment"]}], id="empty-axis-name"),
+        pytest.param([{"by": "arm", "levels": [1, 2]}], id="levels-not-strings"),
+        pytest.param([{"by": "arm", "levels": []}], id="levels-empty"),
+    ],
+)
+def test_resolved_cells_is_none_for_a_declaration_with_no_resolvable_axis(groups):
+    """Every skip `cli._resolved_group_axes` makes, made here too — and each
+    means *no cells resolved* rather than one empty cell.
+
+    Deliberately the same skips: two loops that skipped different axes would
+    give `validate` and `run` different decompositions of one declaration,
+    which is the fault this function exists not to introduce.
+
+    **The control is the same call with a resolvable axis**, below, so a
+    parametrized test asserting `None` for six shapes cannot pass by the
+    function returning `None` for everything."""
+    assert (
+        _resolved_cells(
+            {"sweep": {"groups": groups}},
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            _h3c3_arm_roster(3, 3),
+            None,
+        )
+        is None
+    )
+    assert (
+        _resolved_cells(
+            _CELLS_DOC,
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            _h3c3_arm_roster(3, 3),
+            None,
+        )
+        is not None
+    )
+
+
+def test_resolved_cells_is_none_without_a_roster():
+    """No roster, no decomposition — an allocation is a partition of a resolved
+    roster, `_resolved_group_axes`' own rule."""
+    assert (
+        _resolved_cells(
+            _CELLS_DOC,
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            None,
+            None,
+        )
+        is None
     )
