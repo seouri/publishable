@@ -10590,7 +10590,7 @@ counted once:
 
 | Measured | Count |
 |---|---|
-| `## OPEN` headings in this file | 56 |
+| `## OPEN` headings in this file, **before the three filings this same commit appends below** | 56 |
 | …whose body names `H3c-3` | 33 |
 | …whose body names *whichever slice* | 10, of which **2** are the rejection of that form rather than a use of it, and **1** (`technical_n`) is re-ownered in its own body below on its own instruction |
 | …the union, which is what this entry governs | **38** |
@@ -10598,6 +10598,15 @@ counted once:
 **The sweep can fail, proved rather than asserted:** the same walk over the string `Owner:` returns
 a non-zero count and over `H99z-4` returns **0**, so a zero here would have been a finding about the
 sweep rather than about the file.
+
+**And the count is stated against a moment, because this commit moves it.** The three entries filed
+below — the spanning cluster, `limits.min_clusters` under cells, and the per-stratum fold bound —
+each name H3c-3 in their own provenance line, so **re-running this sweep at this commit returns 59
+and 41**, not 56 and 38. They are this entry's **siblings**, filed by the same task in the same
+commit, rather than its subjects: each already states `unassigned` with *no slice follows* in its own
+heading, which is the form this entry exists to impose on the other thirty-eight. A reader who
+re-measures and gets 59/41 has reproduced the sweep correctly; a reader who gets 56/38 is standing
+one commit earlier.
 
 **Read every one of those thirty-eight reasons this way, and it is the only change:**
 
