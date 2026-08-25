@@ -414,13 +414,22 @@ def walk_commands(config_rel: str) -> list[str]:
     ]
 
 
-def _print_remaining(config_rel: str, after_stop: int) -> None:
-    """`q` leaves you holding the whole path rather than half of it."""
-    remaining = walk_commands(config_rel)[max(0, after_stop - 2) :]
-    print("The rest of the walk, in order:")
-    for command in remaining:
-        print(f"  {command}")
-    print("  publishable report <the run.yaml those write>")
+def _print_remaining(config_rel: str, next_stop: int) -> None:
+    """`q` leaves you holding the whole path rather than half of it.
+
+    `next_stop` is the stop that was declined, so the command belonging to it is
+    still in the list: quitting at stop 4 leaves you holding `dry-run` and `run`,
+    not `run` alone. Indexed off the stop number rather than off a position,
+    because stops 3, 4 and 5 are the ones with commands and the arithmetic has to
+    say so.
+    """
+    remaining = walk_commands(config_rel)[max(0, next_stop - 3) :]
+    if remaining:
+        print("The rest of the walk, in order:")
+        for command in remaining:
+            print(f"  {command}")
+    else:
+        print("Every command in the walk has run; stop 6 only prints one.")
     print()
     print("`publishable demo` from this directory picks up where you left off.")
 
@@ -463,7 +472,7 @@ def command_demo(into: Path | None = None) -> int:
 
     if stop < 2:
         if not _pause("a look at the config that describes this run", "continue"):
-            _print_remaining(config_rel, 2)
+            _print_remaining(config_rel, 3)
             return EXIT_OK
         text = config_path.read_text()
         print(block_of(text, "sweep"))
@@ -602,11 +611,23 @@ def _walk(root: Path, config_rel: str, stop: int) -> int:
 
 
 def latest_run_yaml(root: Path) -> Path:
-    """The record stop 5 produced — the newest run under the demo's output dir."""
-    runs = sorted((data_root() / "results").glob("run_*/run.yaml"))
+    """The record stop 5 produced, under THIS project's own `output_dir`.
+
+    Read out of the config rather than off `data_root()`: the demo's default data
+    root is shared, so a second demo elsewhere on the machine would otherwise
+    have its record named here — a parameter whose name asserts a fact the body
+    never answered. The config is the direct question, and it is the same value
+    `run` resolved.
+    """
+    import yaml
+
+    config_path = root / f"configs/{EXPERIMENT_NAME}/config.yaml"
+    doc = yaml.safe_load(config_path.read_text())
+    output_dir = Path(str(doc["data"]["output_dir"])).expanduser()
+    runs = sorted(output_dir.glob("run_*/run.yaml"))
     if not runs:
         raise ContractError(
-            "no run record found under the demo's output directory",
+            f"no run record found under {output_dir}",
             code="E-DEMO-NO-RUN",
         )
     return runs[-1]

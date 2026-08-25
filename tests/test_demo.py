@@ -329,6 +329,55 @@ def test_q_leaves_you_holding_the_remaining_commands_and_resumes_where_you_left(
     assert read_progress(root) == 6
 
 
+def test_q_at_a_LATER_stop_still_hands_back_the_command_it_declined(
+    home: Path, capsys, monkeypatch
+):
+    """`q` at any stop prints the remaining commands *in order*, and the command
+    you just declined is one of them.
+
+    A separate arm because the `q`-at-stop-2 case is the one value where a
+    position-based slice happens to be right: it starts at index 0 whatever the
+    arithmetic. Quitting at stop 4 is what tells the two readings apart —
+    `dry-run` and `run` remaining, not `run` alone.
+    """
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["", "", "q"])
+    monkeypatch.setattr("builtins.input", lambda: next(answers, "q"))
+    root = home / "publishable-demo"
+    assert command_demo(root) == EXIT_OK
+    out = capsys.readouterr().out
+    tail = out[out.index("The rest of the walk, in order:") :]
+    assert "publishable dry-run configs/correlation-pilot/config.yaml" in tail
+    assert "publishable run configs/correlation-pilot/config.yaml" in tail
+    assert "publishable validate" not in tail, "validate already ran; it is not remaining"
+    assert read_progress(root) == 3
+
+
+def test_stop_6_names_THIS_projects_record_not_the_machines_newest(home: Path, capsys):
+    """`--into` gives two demos on one machine two repositories, and the default
+    data root is shared, so `latest_run_yaml` reads each project's own
+    `data.output_dir` out of its own config rather than globbing the shared
+    directory."""
+    import yaml
+
+    first = home / "first"
+    assert command_demo(first) == EXIT_OK
+    second = home / "second"
+    config = second / "configs" / "correlation-pilot" / "config.yaml"
+    build_demo_project(second)
+    doc = yaml.safe_load(config.read_text())
+    doc["data"]["output_dir"] = str(home / "second-results")
+    config.write_text(yaml.safe_dump(doc))
+    (home / "second-results").mkdir()
+    (second / PROGRESS_FILE).write_text("stop 2\n")
+    capsys.readouterr()
+
+    assert command_demo(second) == EXIT_OK
+    record = latest_run_yaml(second)
+    assert record.is_relative_to(home / "second-results")
+    assert f"publishable reproduce {record}" in capsys.readouterr().out
+
+
 def test_no_pause_alters_the_config(home: Path, capsys, monkeypatch):
     """Design § 10 row 13: every prompt is proceed-or-quit, so a `q` and a
     resume must produce the identical parameters. Compared on
