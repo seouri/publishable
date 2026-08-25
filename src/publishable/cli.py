@@ -147,6 +147,7 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
+    cells_of,
     cluster_count_of,
     clusters_of,
     fold_basis,
@@ -2082,6 +2083,19 @@ class Prepared:
     therefore the one field `_execute_prepared` does not unpack -- so of the
     thirty-six, thirty-five are read in phases 6-10 and `c` is not.
 
+    **Thirty-SEVEN since H3c-3 task 4**, and the `ast` walk above is not
+    re-run: it measured what `command_run` assigned before the seam and loaded
+    after it, and that measurement stays what it was. `cells` is the
+    thirty-seventh, ADDED by that task rather than found by the walk — the
+    design's cell decomposition, realized once beside `group_axes` because
+    `_resumed_allocation` and `_execute_prepared` both need it and a second
+    derivation of a decomposition is a second producer of it. It is a field
+    with **no unpack line yet**: nothing in phases 6-10 reads it at this
+    commit, and `_execute_prepared`'s unpack is a block of locals, so an unread
+    one is an `F841` (measured: `uv run ruff check .` reports exactly that).
+    The unpack line lands with its first reader, the same way this branch's
+    imports land with their callers.
+
     Frozen on purpose: phases 6-10 must not write back into what phases 1-5
     pinned. That is the property `resume` will rest on. `plan` is the one name
     phases 6-10 re-bind (`_apply_execution_order` under `order: randomized`),
@@ -2129,6 +2143,7 @@ class Prepared:
     lock_hash: str | None
     upstream_ledger: UpstreamLedger
     upstream_resolver: UpstreamResolver
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2358,11 +2373,7 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
     replaced by the ones the first attempt recorded, through
     `dataclasses.replace` on the frozen `Prepared`.
 
-    **Ruling S is honoured by overriding results, never by moving calls.**
-    `_resolved_group_axes`, `units.arm_members` and `_resolved_holdout` stay
-    exactly where they are, in their current order inside `_prepare_run`;
-    H3c-3's remaining 14 owns the hoist, because folds and holdouts *inside
-    cells* need the axes realized before the cell decomposition. What happens
+    **This function overrides results; it moves no call.** What happens
     here is one step later and on the other side of the seam: the plans are
     rebuilt from the record and `arm_members` is called **again**, on the
     overridden axes, so that the per-condition mapping is a reduction of the
@@ -2691,6 +2702,55 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     clusters: dict[str, str] | None = None
     if isinstance(cluster_by, str) and cluster_by and roster is not None:
         clusters = clusters_of(roster, cluster_by)
+    # Hoisted above the fold region (H3c-3 task 4, discharging H9a Ruling S).
+    # The fold is drawn INSIDE the cells (`reference.md` § Group axes), and a
+    # cell is an intersection of realized arms, so the axes have to be realized
+    # before the basis `k` is bounded against and before the partition is drawn
+    # — not after. The move resolves nothing new: `expand(doc)` already sits
+    # above this whole region and `clusters` two lines up. `sweep_block` travels
+    # with them because both read it; `swept_paths` does not, and stays beside
+    # its own reader.
+    sweep_block = doc.get("sweep") or {}
+    # One frozenset of unit keys per condition that selects a group axis — `None`
+    # for a design declaring none. Reachable now that task 17 retired
+    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
+    # subset view through a real `command_run`.
+    #
+    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
+    # already used `selector_paths` to decide which paths are group cells, so
+    # `conditions` below carries `Condition.selectors` naming every axis
+    # `selector_paths` names — regardless of whether that axis's `levels` also
+    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
+    # requirement `validate._check_assign`'s own `by_attribute` branch applies
+    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
+    # axis this function skips but `selector_paths`/`expand` still treat as one
+    # silently skip arm narrowing entirely. `by: ""` is the live case:
+    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
+    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
+    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
+    # string is falsy) skips it — every condition on that axis would then get
+    # the whole roster, exactly the outcome two declared arms exist to make
+    # impossible. Gating on `selector_paths` instead means `arm_members` is
+    # still called whenever `expand` treated the config as having a group axis,
+    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+    # caller-disagreement bug to see, not a config to silently accept — rather
+    # than as a silently unnarrowed run.
+    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+    arm_members_map = (
+        arm_members(group_axes, conditions)
+        if selector_paths(sweep_block) and roster is not None
+        else None
+    )
+    # The design's cells, realized once from the axes just above — `None` for a
+    # design with no group axis at all. **A design with no group axis is one
+    # cell holding the whole roster**, and composing that is this caller's job
+    # rather than `units.cells_of`'s: that function takes no roster (see its
+    # docstring), so `cells_of({})` is one cell holding *nothing*. `None` here
+    # IS that composition — every reader below falls back to the roster-wide
+    # answer rather than looping over a cell that holds no units.
+    cells = cells_of(group_axes) if group_axes else None
+
     # `fold_basis` is what turns `{kind: fold, k: all}` into a real count and what
     # `_fold_k` checks a declared `k` against — the resolved roster's units, or its
     # clusters when `data.units.cluster_by` declares the units are not independent
@@ -2778,34 +2838,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
-    sweep_block = doc.get("sweep") or {}
     swept_paths = wide_swept_paths(sweep_block)
-    # One frozenset of unit keys per condition that selects a group axis — `None`
-    # for a design declaring none. Reachable now that task 17 retired
-    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
-    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
-    # subset view through a real `command_run`.
-    #
-    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
-    # already used `selector_paths` to decide which paths are group cells, so
-    # `conditions` below carries `Condition.selectors` naming every axis
-    # `selector_paths` names — regardless of whether that axis's `levels` also
-    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
-    # requirement `validate._check_assign`'s own `by_attribute` branch applies
-    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
-    # axis this function skips but `selector_paths`/`expand` still treat as one
-    # silently skip arm narrowing entirely. `by: ""` is the live case:
-    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
-    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
-    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
-    # string is falsy) skips it — every condition on that axis would then get
-    # the whole roster, exactly the outcome two declared arms exist to make
-    # impossible. Gating on `selector_paths` instead means `arm_members` is
-    # still called whenever `expand` treated the config as having a group axis,
-    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
-    # caller-disagreement bug to see, not a config to silently accept — rather
-    # than as a silently unnarrowed run.
-    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
     # Realized here, once, and before anything reads it — the runner's
     # narrowing, the denominators and `allocation.json` are all handed this one
     # object. See `_resolved_holdout` for why not calling twice is the only
@@ -2822,11 +2855,6 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # first execution runs, not after — a crash once executions are already
     # paid for loses the record along with the money (see `4b1aebf`).
     assert (eval_roster is None) == (roster is None)
-    arm_members_map = (
-        arm_members(group_axes, conditions)
-        if selector_paths(sweep_block) and roster is not None
-        else None
-    )
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
@@ -2949,6 +2977,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         holdout_plan=holdout_plan,
         eval_roster=eval_roster,
         arm_members_map=arm_members_map,
+        cells=cells,
         plan=plan,
         cfgs=cfgs,
         ch=ch,

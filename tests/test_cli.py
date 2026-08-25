@@ -24452,20 +24452,19 @@ def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
 def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest(
     tmp_path: Path,
 ):
-    """`dataclasses.replace` must round-trip all **36** fields (plan
-    § Corrections, correction 17), so the field count is asserted here: a
-    future field added to `Prepared` and forgotten by this override fails
-    loudly rather than travelling as whatever `_prepare_run` computed.
+    """`dataclasses.replace` must round-trip all **37** fields — 36 when this
+    test was written (plan § Corrections, correction 17), plus `cells`, added
+    by H3c-3 task 4 — so the field count is asserted here: a future field
+    added to `Prepared` and forgotten by this override fails loudly rather
+    than travelling as whatever `_prepare_run` computed.
 
-    Four fields move and thirty-two are the same objects, asserted field by
+    Four fields move and thirty-three are the same objects, asserted field by
     field rather than by a count — `group_axes` and `holdout_plan` are the
     record, `eval_roster` is `_evaluation_roster` re-derived from the
     overridden holdout, and `arm_members_map` is `units.arm_members` called
     AGAIN on the overridden axes. That second call is overriding a *result*,
-    not moving a call: `_resolved_group_axes` and `arm_members` stay exactly
-    where they are inside `_prepare_run` (Ruling S), and re-deriving the
-    per-condition mapping here by hand would make this function a second
-    producer of arm membership.
+    not moving a call, and re-deriving the per-condition mapping here by hand
+    would make this function a second producer of arm membership.
 
     **And the rebuilt document equals the recorded one**, which is what makes
     `provenance.allocation_hash` cover the file on disk: a resume never
@@ -24481,7 +24480,7 @@ def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_re
     edited = _h9b_swapped(recorded)
     prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
     assert isinstance(prepared, Prepared)
-    assert len(dataclasses.fields(Prepared)) == 36
+    assert len(dataclasses.fields(Prepared)) == 37
 
     overridden = _resumed_allocation(prepared, edited)
     moved = {"group_axes", "holdout_plan", "eval_roster", "arm_members_map"}
@@ -26562,3 +26561,121 @@ def test_h3c3_pin_arm_e_a_six_unit_no_axis_config_validates_with_no_findings_at_
 
     assert findings_for("within", "within-proj") == []
     assert findings_for("between", "between-proj") == ["E-DATA-ALLOCATION-NO-ARMS"]
+
+
+_H3C3_ARM_ROSTER = (
+    "patient_id,arm\n"
+    + "".join(f"c{i},control\n" for i in range(6))
+    + "".join(f"t{i},treatment\n" for i in range(6))
+)
+
+
+def _h3c3_cell_project(tmp_path: Path, monkeypatch) -> dict[str, Any]:
+    """A real two-arm `between` design, run end to end — 6 `control` units and
+    6 `treatment` units.
+
+    Equal arms on purpose here, unlike
+    `test_a_group_axis_actually_narrows_end_to_end`'s 8/3: nothing in the
+    hoist's tests reads an arm *size*, and what they do read — the cell
+    memberships — are two disjoint six-key sets that no count could be
+    confused for."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+    return run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+
+def test_h3c3_the_hoisted_axes_and_reduction_are_each_realized_exactly_once(
+    tmp_path: Path, monkeypatch
+):
+    """H3c-3 task 4, the half that is asserted rather than assumed.
+
+    `_resolved_group_axes` documents itself as realized **once per run** —
+    *"under a draw a second call is a second allocation"* — and `arm_members`
+    is the single authority for the per-condition reduction. Task 4 moves both
+    calls above the fold region, and a hoist that *copies* a call rather than
+    moving it is the one way that move can be wrong: the run would then narrow
+    conditions by one draw while `allocation.json` recorded another.
+
+    Counted through a real `command_run`, not a direct `_prepare_run` call, so
+    the count covers every path the command takes. **MU-16** is the mutation
+    that fails this and nothing else: leave a second `arm_members(...)` call
+    behind at the old position, which changes no output for this
+    `by_attribute` design and is invisible to every other assertion in the
+    suite.
+
+    A count rather than a membership, deliberately: two draws of one
+    `by_attribute` axis agree, so a membership assertion cannot see the second
+    call at all."""
+    from publishable import cli as cli_mod
+
+    axes_calls: list[int] = []
+    reduce_calls: list[int] = []
+    original_axes = cli_mod._resolved_group_axes
+    original_reduce = cli_mod.arm_members
+
+    def counting_axes(*args, **kwargs):  # type: ignore[no-untyped-def]
+        axes_calls.append(1)
+        return original_axes(*args, **kwargs)
+
+    def counting_reduce(*args, **kwargs):  # type: ignore[no-untyped-def]
+        reduce_calls.append(1)
+        return original_reduce(*args, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "_resolved_group_axes", counting_axes)
+    monkeypatch.setattr(cli_mod, "arm_members", counting_reduce)
+
+    doc = _h3c3_cell_project(tmp_path, monkeypatch)
+
+    # The half that must REPORT: the run really happened and really narrowed,
+    # so a patch that silently stopped the command reaching either call cannot
+    # pass this test by asserting two absences.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert [c["label"] for c in run["results"]["conditions"]] == [
+        "arm=control",
+        "arm=treatment",
+    ]
+    assert len(axes_calls) == 1, axes_calls
+    assert len(reduce_calls) == 1, reduce_calls
+
+
+def test_h3c3_prepared_carries_the_cell_decomposition_and_none_without_an_axis(
+    tmp_path: Path, monkeypatch
+):
+    """H3c-3 task 4: `Prepared.cells`, the thirty-seventh field.
+
+    Two halves, because *"a design with no group axis is one cell holding the
+    whole roster"* is composed at this caller rather than inside
+    `units.cells_of` (which takes no roster and so answers `{(): frozenset()}`
+    for `{}` axes). `None` is that composition, and the mutation that fails
+    this alone is dropping the `cells=` argument from the `Prepared(...)` call
+    — which `mypy` also catches, and which the field-count assertion in
+    `test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest`
+    catches from the other end at **37**.
+
+    The memberships are asserted, not the cell *count*: two cells of six is a
+    fact a count of 2 is satisfied by under any decomposition of the roster,
+    including one that put every unit in one cell."""
+    from publishable.cli import Prepared, _prepare_run
+
+    doc = _h3c3_cell_project(tmp_path, monkeypatch)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.cells == {
+        (("arm", "control"),): frozenset(f"c{i}" for i in range(6)),
+        (("arm", "treatment"),): frozenset(f"t{i}" for i in range(6)),
+    }
+
+    flat = run_a_project(tmp_path / "flat", replication={"repeats": [{"kind": "seed", "n": 2}]})
+    flat_prepared = _prepare_run(Path(flat["cfg"]), allow_dirty=False)
+    assert isinstance(flat_prepared, Prepared)
+    assert flat_prepared.cells is None
