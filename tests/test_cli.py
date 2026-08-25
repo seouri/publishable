@@ -26894,3 +26894,157 @@ def test_h3c3_a_design_with_cells_and_no_fold_level_discloses_nothing(tmp_path: 
         "arm=treatment__site=north",
         "arm=treatment__site=south",
     ]
+
+
+def _h3c3_f6_roster() -> Any:
+    """F6's roster: 20 units, two arms of 10, `arm` on the unit itself.
+
+    `by_attribute`-shaped rather than drawn: the only draw this fixture may
+    contain is the **holdout's**, or a pinned per-cell membership would depend
+    on the arm draw too and MU-17's discrimination would be entangled with it.
+    """
+    from publishable.units import Unit, UnitList
+
+    return UnitList(
+        [
+            Unit(
+                key=f"u{i:03d}",
+                paths=(),
+                attributes={"arm": "control" if i <= 10 else "treatment"},
+            )
+            for i in range(1, 21)
+        ]
+    )
+
+
+_H3C3_F6_CELLS = {
+    (("arm", "control"),): frozenset(f"u{i:03d}" for i in range(1, 11)),
+    (("arm", "treatment"),): frozenset(f"u{i:03d}" for i in range(11, 21)),
+}
+
+
+def test_h3c3_f6_the_holdout_is_drawn_inside_each_cell_pinned_by_membership():
+    """**F6 (task 13), and the rule it establishes: a per-arm COUNT cannot
+    discriminate a proportional holdout split — only MEMBERSHIP at a pinned
+    seed can (C28).**
+
+    The pre-slice draw is one shuffle of the whole roster and two slices — a
+    uniform 4-subset of 20 — so over two arms of 10 at `frac: 0.2` it lands on
+    2 units per arm with probability C(10,2)²/C(20,4) = 2025/4845 ≈ **0.42**.
+    A `len(test ∩ arm) == 2` assertion is therefore a coin flip on whether it
+    sees the bug at all: *a fixture whose numbers agree with the bug*, which is
+    this repo's most common dead check.
+
+    **That is not argued here, it is exhibited.** At seed 7 the roster-wide
+    draw really does land 2/2 — asserted below — so a count assertion at this
+    fixture's own seed would pass under MU-17 while the membership assertion
+    fails. The two draws are computed at the **same** seed and asserted to
+    differ, which is what makes MU-17 discriminating rather than assumed to be;
+    the check was run at four seeds (7, 11, 4321, 99) and all four differ, so
+    no seed change was needed.
+
+    `len(test) == 4` is a shape check and is **not** counted as
+    discrimination: the roster-wide draw gives 4 as well.
+    """
+    from publishable.units import holdout_for
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2, "seed": 7}
+    plan = _resolved_holdout({"holdout": block}, roster, "d", None, _H3C3_F6_CELLS)
+    assert plan is not None
+
+    # THE discriminating assertion: which units, not how many.
+    assert sorted(plan.test) == ["u003", "u006", "u013", "u016"]
+    assert set(plan.train) | set(plan.test) == {f"u{i:03d}" for i in range(1, 21)}
+    assert len(plan.test) == 4  # shape only — the roster-wide draw gives 4 too
+    # A pinned seed is returned literally and is the seed the merged plan
+    # records: one seed per run, handed to every cell's draw.
+    assert plan.seed == 7
+
+    # The same declaration drawn roster-wide at the SAME seed — the pre-slice
+    # answer, and MU-17's. Different membership, and the check that the
+    # mutation can be seen at all rather than a claim that it can.
+    wide = holdout_for(roster, block, seed=7)
+    assert sorted(wide.test) == ["u002", "u005", "u011", "u013"]
+    assert set(wide.test) != set(plan.test)
+    # And the count a careless fixture would have asserted, at this very seed:
+    # 2 per arm under the BUG, which is what makes the count blind here.
+    assert len([k for k in wide.test if k <= "u010"]) == 2
+    assert len([k for k in wide.test if k > "u010"]) == 2
+    # While the per-cell draw's own counts are 2 and 2 as well — the two
+    # readings agree on every count available and disagree only on identity.
+    assert len([k for k in plan.test if k <= "u010"]) == 2
+    assert len([k for k in plan.test if k > "u010"]) == 2
+
+
+def test_h3c3_f6_no_cells_reduces_to_the_byte_identical_whole_roster_draw():
+    """The can-fail control and the reduction in one: the **same** declaration,
+    the **same** roster, `cells=None` — the answer is `holdout_for`'s own,
+    element for element and in order.
+
+    Without this, F6 above shows only that two functions give different
+    answers, not that the no-axis path is unmoved. `None` is what
+    `_prepare_run` passes for a design with no group axis, and `{}` and
+    `cells_of({})`'s one empty cell reach the same reduction.
+    """
+    from publishable.units import cells_of, holdout_for
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2, "seed": 7}
+    wide = holdout_for(roster, block, seed=7)
+    for cells in (None, {}, cells_of({})):
+        plan = _resolved_holdout({"holdout": block}, roster, "d", None, cells)
+        assert plan is not None
+        assert list(plan.test) == list(wide.test), cells
+        assert list(plan.train) == list(wide.train), cells
+
+
+def test_h3c3_a_thin_cells_holdout_raises_naming_the_cell_on_both_sides():
+    """**C9 and C22, made to happen rather than described.** `holdout_for` over
+    an **empty** sub-roster raises on the **TRAIN** side — `holdout_sizes(0,
+    0.2) == (0, 0)` and train is checked first — and over a 2-unit cell at
+    `frac: 0.2` it raises on the **test** side. A per-cell message that
+    hard-coded "test" would be wrong for the first shape.
+
+    The loop does not swallow either: the code is preserved (one remedy, one
+    name) and the cell is named, because a message reading *"over 0 resolved
+    units"* sends a reader to the roster when the fault is a crossed
+    combination nothing in the config carries.
+
+    **An empty cell reaches the raise only through `holdout_for` directly** —
+    `populated_cells` drops it before the loop sees it, so what
+    `holdout_within_cells` re-raises for is a **thin** cell. Both halves are
+    asserted: the empty cell's train-side raise at the source, and the thin
+    cell's re-raise through the loop.
+    """
+    from publishable.errors import ContractError
+    from publishable.units import UnitList, holdout_for, holdout_within_cells
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2}
+
+    # C9's train side, at the source, over an EMPTY sub-roster.
+    with pytest.raises(ContractError) as empty:
+        holdout_for(UnitList([]), block, seed=7)
+    assert empty.value.code == "E-DATA-HOLDOUT-EMPTY"
+    assert "over 0 resolved units leaves the train side empty" in str(empty.value)
+
+    # C22's test side, through the loop, with the cell named. 18/2.
+    cells = {
+        (("arm", "control"),): frozenset(f"u{i:03d}" for i in range(1, 19)),
+        (("arm", "treatment"),): frozenset(f"u{i:03d}" for i in range(19, 21)),
+    }
+    with pytest.raises(ContractError) as thin:
+        holdout_within_cells(roster, block, seed=7, cells=cells)
+    assert thin.value.code == "E-DATA-HOLDOUT-EMPTY"
+    message = str(thin.value)
+    assert "cell arm=treatment" in message
+    assert "which holds 2 of the roster's 20 resolved units" in message
+    assert "leaves the test side empty" in message
+    # The can-fail half: the 18-unit cell does NOT raise, so the refusal above
+    # is the thin cell's rather than the declaration's over any cell at all.
+    assert "arm=control" not in message
+    ok = holdout_within_cells(
+        roster, block, seed=7, cells={(("arm", "control"),): cells[(("arm", "control"),)]}
+    )
+    assert len(ok.test) == 4

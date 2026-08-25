@@ -1831,6 +1831,110 @@ def holdout_for(
     )
 
 
+def holdout_within_cells(
+    roster: UnitList,
+    block: Mapping[str, Any] | None,
+    *,
+    seed: int,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]] | None,
+    clusters: Mapping[str, str] | None = None,
+) -> HoldoutPlan:
+    """`holdout_for`, drawn **inside each cell** and merged in cell order —
+    `partition_within_cells`' sibling for the other evaluation split, and the
+    **single producer** `validate` and `run` both call.
+
+    `data.units.holdout` partitions the roster once, and a `sweep.groups` axis
+    divides that same roster into cells. A split drawn across the cells gives
+    them unequal test sizes and, once `frac` is fine enough, a cell holding
+    none of its own units at all — a cell-level metric computed from nothing.
+    That combination was refused outright (`E-DATA-HOLDOUT-CELLS`) until this
+    function existed; drawing within each cell is the design that lifts it.
+
+    **One seed per run, not per cell**, and the bare one — `partition_within_cells`'
+    rule in the holdout's currency. `holdout_seed_for` is computed once over the
+    **whole** roster and handed to every cell's draw, so a **pinned**
+    `data.units.holdout.seed` is returned literally and survives a roster that
+    grows, shrinks or reorders. The draws still differ between cells because the
+    sub-rosters differ, which is what `random.Random(seed)` over different key
+    lists gives; mixing the cell label into the seed would buy nothing and would
+    be safe only while the no-cell path never touched it.
+
+    **No populated cell at all reduces to the single whole-roster call**, and
+    byte-identically — `None` and `{}` (what `cli._prepare_run` and
+    `validate._resolved_cells` pass for a design with no group axis) and
+    `cells_of({})`'s one empty cell all reach that one rule, which is
+    `partition_within_cells`' own reduction stated for the same two inputs. Two
+    functions in one module answering one triviality question differently is
+    exactly the drift single derivation exists to prevent, so the predicate is
+    `populated_cells`' rather than a second spelling of it.
+
+    Each sub-roster is rebuilt from `roster` in **roster order**, the order
+    `clusters_of` preserves deliberately and `units_hash` pins as reproducible,
+    and each cell's `clusters` map is the run's map **restricted to that cell's
+    keys and total over its sub-roster** — indexed, not `.get`-ed, so
+    `_assign_whole_clusters_by_ratio`'s contract that a unit missing from the map
+    is a `KeyError` and a core defect survives the restriction rather than being
+    softened by it. `partition_within_cells` restricts the same way for the same
+    reason.
+
+    **A cell's own raise is re-raised with the cell named, under the same
+    code.** `holdout_for` over an empty sub-roster raises
+    `E-DATA-HOLDOUT-EMPTY` reading *"over 0 resolved units leaves the **train**
+    side empty"* — the **train** side, not the test side, since `holdout_sizes(0,
+    frac)` is `(0, 0)` and train is checked first — and over a 2-unit cell at
+    `frac: 0.2` it raises for the test side. Either message names a count that
+    is the **cell's** while its wording says *resolved units*, which sends a
+    reader to the roster when the fault is a crossed combination nothing in the
+    config carries. The code is preserved rather than re-minted: the remedy is
+    unchanged, and a second code would give one remedy two names. `holdout_for`
+    gains no cell parameter for this — it has no other use for one, and the
+    caller is where the label lives.
+
+    **The empty cell is not skipped**, unlike `partition_within_cells`' loop,
+    and the difference is real rather than an inconsistency: an empty cell
+    contributes `k` empty lists to a fold merge and nothing else, where an empty
+    cell's *holdout* is a cell that will be evaluated against nothing. Only
+    `populated_cells` drops cells here, and it drops them before this loop sees
+    them — so what reaches the re-raise is a **thin** cell, not an empty one.
+    `validate._check_holdout` bounds `frac` over the thinnest non-empty cell so
+    most of these never reach a run at all.
+
+    `seed` and `strata` on the merged plan are a cell's own, which is every
+    cell's: the seed is the one argument above, identical by construction, and
+    `strata` is `stratum_names(block["stratify_by"])`, a function of the
+    declaration alone. Taking them from the last cell rather than recomputing
+    them is one derivation rather than two.
+    """
+    populated = populated_cells(cells or {})
+    if not populated:
+        return holdout_for(roster, block, seed=seed, clusters=clusters)
+    train_keys: list[str] = []
+    test_keys: list[str] = []
+    merged_seed: int | None = None
+    merged_strata: tuple[str, ...] = ()
+    for key, keys in populated:
+        sub = UnitList([unit for unit in roster if unit.key in keys])
+        sub_clusters = None if clusters is None else {u.key: clusters[u.key] for u in sub}
+        try:
+            plan = holdout_for(sub, block, seed=seed, clusters=sub_clusters)
+        except ContractError as exc:
+            raise ContractError(
+                f"`data.units.holdout` is drawn within cell {cell_label(key)}, which holds "
+                f"{len(sub)} of the roster's {len(roster)} resolved units, and there: {exc}",
+                code=exc.code,
+            ) from exc
+        train_keys.extend(plan.train)
+        test_keys.extend(plan.test)
+        merged_seed = plan.seed
+        merged_strata = plan.strata
+    return HoldoutPlan(
+        train=tuple(train_keys),
+        test=tuple(test_keys),
+        seed=merged_seed,
+        strata=merged_strata,
+    )
+
+
 def auto_block_size(weights: Sequence[float]) -> int:
     """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
     `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
@@ -2598,6 +2702,28 @@ def cells_of(
             members = arm if members is None else members & arm
         cells[key] = members if members is not None else frozenset()
     return cells
+
+
+def cell_label(cell: tuple[tuple[str, str], ...]) -> str:
+    """A cell's `(axis, level)` pairs, as a reader wrote them.
+
+    `(("sex", "f"), ("arm", "control"))` renders `sex=f, arm=control` — the
+    axes in `sweep.groups` declaration order, which is `cells_of`' key order,
+    and the same `axis=level` spelling `sweep.expand` gives a condition label.
+    A cell with no pairs at all cannot reach here: it is the no-axis
+    decomposition, which every caller represents as `None` rather than `()`.
+
+    **One rendering, three callers**, which is why it lives beside `cells_of`
+    rather than in the first module that needed it. It was
+    `replication._cell_label` while `replication._fold_k`'s refusal was the only
+    message naming a cell; `holdout_within_cells` and
+    `validate._check_holdout` now name one too, and `replication` imports this
+    module while this module cannot import it — so a second spelling at either
+    new site is how two messages describing one decomposition come to disagree
+    about how a cell is written. `fold_basis`' single-derivation rule, applied
+    to a rendering.
+    """
+    return ", ".join(f"{axis}={level}" for axis, level in cell)
 
 
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:

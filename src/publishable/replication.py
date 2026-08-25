@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from publishable.errors import ContractError
-from publishable.units import Unit
+from publishable.units import Unit, cell_label
 
 SUPPORTED_KINDS = ("seed", "batch", "fold")
 LABEL_JOIN = "_"
@@ -86,18 +86,6 @@ def _seed_members(digest: str, kind: str, n: int) -> tuple[RepeatMember, ...]:
     return tuple(RepeatMember(label=lb, seed=s) for lb, s in zip(labels, seeds, strict=True))
 
 
-def _cell_label(cell: tuple[tuple[str, str], ...]) -> str:
-    """A cell's `(axis, level)` pairs, as a reader wrote them.
-
-    `(("sex", "f"), ("arm", "control"))` renders `sex=f, arm=control` — the
-    axes in `sweep.groups` declaration order, which is `units.cells_of`' key
-    order, and the same `axis=level` spelling `sweep.expand` gives a condition
-    label. A cell with no pairs at all cannot reach here: it is the no-axis
-    decomposition, which every caller represents as `None` rather than `()`.
-    """
-    return ", ".join(f"{axis}={level}" for axis, level in cell)
-
-
 def _fold_k(
     level: dict[str, Any],
     fold_basis: int | None,
@@ -167,7 +155,7 @@ def _fold_k(
         # Empty for a caller that resolved no cells, which is what makes both
         # messages below byte-identical to the ones this build has always
         # printed for a design with no cell structure.
-        in_cell = f" in cell {_cell_label(cell)}" if cell is not None else ""
+        in_cell = f" in cell {cell_label(cell)}" if cell is not None else ""
         because = (
             ""
             if cell is None

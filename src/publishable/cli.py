@@ -151,8 +151,8 @@ from publishable.units import (
     cluster_count_of,
     clusters_of,
     fold_basis,
-    holdout_for,
     holdout_seed_for,
+    holdout_within_cells,
     index_names,
     null_test_level,
     partition_units,  # noqa: F401 — see `partition_within_cells` below
@@ -536,6 +536,7 @@ def _resolved_holdout(
     roster: "UnitList | None",
     digest: str,
     clusters: dict[str, str] | None,
+    cells: "dict[tuple[tuple[str, str], ...], frozenset[str]] | None" = None,
 ) -> "HoldoutPlan | None":
     """`data.units.holdout`, realized **once per run** — or `None` when the
     design declares none.
@@ -563,18 +564,39 @@ def _resolved_holdout(
 
     `clusters` is `cli.command_run`'s single cluster map, the same one the fold
     partition and the arm draw are handed — not re-derived here, `clusters_of`
-    being the single authority. `group_axes` is deliberately not a parameter: a
-    holdout beside a group axis is refused at this commit as
-    `E-DATA-HOLDOUT-CELLS`, so there is no cell structure for a split to be
-    drawn inside of.
+    being the single authority.
+
+    `cells` is the design's realized decomposition, and the split is drawn
+    **inside each cell** through `units.holdout_within_cells` — the same single
+    producer `validate._holdout_test_roster` calls, so the partition `validate`
+    bounds `limits.min_clusters` against and the partition the run executes are
+    one answer rather than two. `None` is a design with no group axis and takes
+    that function's own one-cell reduction, which is the byte-identical
+    whole-roster draw.
+
+    **The decomposition arrives as `cells`, not as `group_axes`.**
+    `_prepare_run` already holds `units.cells_of`'s answer in one local, and
+    calling `cells_of` a second time here would be a second derivation of the
+    decomposition — the thing that local exists to prevent, and the same
+    argument `build_allocation_document`'s docstring makes for being handed the
+    plans rather than the roster. The fold partition beside it is handed the
+    same object.
     """
     if roster is None:
         return None
     block = (units_decl or {}).get("holdout")
     if not isinstance(block, dict) or not block:
         return None
-    return holdout_for(
-        roster, block, seed=holdout_seed_for(block, digest, roster), clusters=clusters
+    # `holdout_seed_for` over the WHOLE roster, computed once and handed to
+    # every cell's draw — see `units.holdout_within_cells` for why the seed is
+    # one per run rather than one per cell, and why a pinned integer survives a
+    # roster that reorders.
+    return holdout_within_cells(
+        roster,
+        block,
+        seed=holdout_seed_for(block, digest, roster),
+        cells=cells,
+        clusters=clusters,
     )
 
 
@@ -2891,7 +2913,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # narrowing, the denominators and `allocation.json` are all handed this one
     # object. See `_resolved_holdout` for why not calling twice is the only
     # thing that can promise the run and the record agree.
-    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
+    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters, cells)
     # One narrowing, six readers. `roster` itself stays whole below this line —
     # `provenance.units.n` and `units_hash` are the roster's identity rather
     # than a metric's denominator, and rebinding the name would narrow every
