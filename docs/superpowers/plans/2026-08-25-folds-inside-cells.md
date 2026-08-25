@@ -844,6 +844,13 @@ exist in `spec-defects.md`, and the report must quote its heading.
 
 ## Task 21
 
+> **AMENDED 2026-08-25 by the controller, from batch C's sweep.** **`E-REPL-FOLD-CELLS` survives at SIX
+> sites, not four**: `reference.md` 4 **and `CLAUDE.md` 2**, measured newline-insensitively with a can-fail
+> control. **M15's count phrase says "reference.md-only", so a task checking itself against M15 alone reads
+> 4 and stops** — which is how a documented refusal outlives the code that raised it. **The `CLAUDE.md`
+> pair is the controller's to edit; report them rather than taking them**, and treat M15's number as the
+> claim it is rather than the count it looks like.
+
 **Corrections that bind this task: C2, C18.**
 
 **The document sites, none of them locatable by position.** Name what a sibling row *does*; when you
