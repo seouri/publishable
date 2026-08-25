@@ -150,18 +150,13 @@ def test_progress_records_the_stop_and_a_second_invocation_resumes(home: Path, c
     assert "This demo is finished" in capsys.readouterr().out
 
 
-def test_demo_defers_to_the_unbuilt_diagnostic_while_its_row_says_so(capsys):
-    """TRANSITIONAL — task 13 deletes this test with the dictionary key and the
-    two lines in `_dispatch` that produce it. While `docs/reference.md`
-    § Creation commands marks `demo` `NOT BUILT`,
-    `test_reference_cli_tables_match_what_the_cli_does` binds that row to the
-    specified-but-unbuilt diagnostic for every invocation of the name, and a
-    wrong-arity one is an invocation of the name."""
-    from publishable import cli
-
-    assert "demo" in cli.NOT_BUILT_COMMANDS
-    assert main(["demo", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
-    assert "is specified but not built" in capsys.readouterr().err
+def test_demo_rejects_a_wrong_invocation_naming_what_it_takes(capsys):
+    """`demo` is a creation command: it takes nothing, or `--into DIR`, and no
+    other argument and no flag. The specified-but-unbuilt diagnostic a wrong
+    invocation used to defer to went with the dictionary key in task 13."""
+    for argv in (["demo", "_probe_a", "_probe_b"], ["demo", "--force"], ["demo", "--into"]):
+        assert main(argv) == EXIT_INVOCATION, argv
+        assert capsys.readouterr().err == "`demo` takes nothing, or `--into DIR`\n"
 
 
 # --- Stops 3 through 6, and the transcript's own numbers --------------------

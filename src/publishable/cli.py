@@ -193,11 +193,17 @@ OPERATION_COMMANDS = {
 # § Everything is in the file admitting none anywhere.
 ZERO_ARGUMENT_COMMANDS = {"docs", "list-templates"}
 
-NOT_BUILT_COMMANDS: dict[str, str] = {
-    "demo": "What `demo` walks you through",
-    "docs": "Operation commands",
-    "list-templates": "Operation commands",
-}
+# EMPTY as of H9d, and deliberately kept rather than deleted: `demo`, `docs` and
+# `list-templates` were its last three keys and all three dispatch now. The
+# distinction it draws — *specified and unbuilt* against *unknown command* — is
+# argued at length in `docs/reference.md` § Creation commands, and a future
+# command specified before it is built would otherwise have to re-argue it.
+# `_report_not_built` therefore has no reachable dispatch today; the companion
+# `test_the_not_built_machinery_is_retained_with_no_row_marked` asserts BOTH that
+# this mapping is empty and that the helper still formats the documented
+# diagnostic, so the formatting half stays killable while the dispatch half has
+# no input.
+NOT_BUILT_COMMANDS: dict[str, str] = {}
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names
 # four and this build materializes all four (H8c task 15 built `report`,
@@ -5692,17 +5698,6 @@ def _dispatch(command: str, rest: list[str]) -> int:
         # one-path one: a different arity rule, not a second enforcer of the
         # same one.
         if rest:
-            # TRANSITIONAL, and task 13 deletes these two lines with the
-            # dictionary key: while `docs`/`list-templates` still carry a
-            # `NOT BUILT` row, `test_reference_cli_tables_match_what_the_cli_
-            # does` binds that row to the specified-but-unbuilt diagnostic for
-            # EVERY invocation of the name, wrong-arity ones included, and a
-            # built branch answering first would make the code disagree with
-            # the document this slice has not yet edited. Both answers are
-            # pinned: the deferral against the shipped dictionary, and the
-            # message below against an empty one.
-            if command in NOT_BUILT_COMMANDS:
-                return _report_not_built(command, NOT_BUILT_COMMANDS[command])
             print(f"`{command}` takes no arguments and no flags", file=sys.stderr)
             return EXIT_INVOCATION
         # Function-local, `command_freeze`'s own reason: `docs.py` is imported
@@ -5726,14 +5721,6 @@ def _dispatch(command: str, rest: list[str]) -> int:
         into: Path | None = None
         if rest:
             if len(rest) != 2 or rest[0] != "--into" or rest[1].startswith("-"):
-                # TRANSITIONAL, and task 13 deletes these two lines with the
-                # dictionary key: while `demo` still carries a `NOT BUILT` row,
-                # `test_reference_cli_tables_match_what_the_cli_does` binds that
-                # row to the specified-but-unbuilt diagnostic for EVERY
-                # invocation of the name, wrong-arity ones included. Batch 4 met
-                # the identical blocker for `docs` and `list-templates`.
-                if command in NOT_BUILT_COMMANDS:
-                    return _report_not_built(command, NOT_BUILT_COMMANDS[command])
                 print("`demo` takes nothing, or `--into DIR`", file=sys.stderr)
                 return EXIT_INVOCATION
             into = Path(rest[1])

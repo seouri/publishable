@@ -9605,7 +9605,18 @@ def test_reference_cli_tables_are_parsed_at_all():
     # above names). The `set(NOT_BUILT_COMMANDS)` equalities below are
     # SELF-MAINTAINING and were not edited.
     assert ("reproduce", "built") in tables["Command"]
-    assert ("list-templates", "NOT BUILT") in tables["Command"]
+    # H9d guard-pin arm F, EDITED by its sole authorized editor, H9d task 13.
+    # H9c arm B added `("list-templates", "NOT BUILT")` here so the table kept
+    # one MARKED row-presence probe; H9d builds that command and the other two,
+    # so no row carries the marker and no such probe exists to keep. The
+    # `set(NOT_BUILT_COMMANDS)` equalities below are self-maintaining and were
+    # not edited: they now assert the empty set against the empty mapping from
+    # both ends, which is the direction that catches a marker reappearing in one
+    # place only. `test_the_not_built_machinery_is_retained_with_no_row_marked`
+    # carries the claim this line used to carry.
+    assert ("list-templates", "built") in tables["Command"]
+    assert ("demo", "built") in tables["Command"]
+    assert ("docs", "built") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
     assert ("report", "built") in tables["Generator"]
     assert ("template", "built") in tables["Generator"]
@@ -26340,4 +26351,31 @@ def test_h9d_arm_f_the_not_built_command_set():
     """
     from publishable.cli import NOT_BUILT_COMMANDS
 
-    assert set(NOT_BUILT_COMMANDS) == {"demo", "docs", "list-templates"}
+    assert NOT_BUILT_COMMANDS == {}
+
+
+def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
+    """Decision 12's companion, and BOTH claims are here so they cannot drift.
+
+    Emptying `NOT_BUILT_COMMANDS` makes `_report_not_built` unreachable from
+    dispatch, which makes `test_reference_cli_tables_match_what_the_cli_does`'
+    `if status == "NOT BUILT"` branch DEAD — the mutation that would have
+    caught a broken diagnostic no longer has an input. The machinery stays
+    anyway (deleting it means re-arguing *specified and unbuilt* against
+    *unknown command* the next time a command is specified ahead of its
+    build), so the formatting half is exercised by calling the helper
+    directly, with a name and a § heading `docs/reference.md` really carries.
+    """
+    from publishable.cli import NOT_BUILT_COMMANDS, _report_not_built
+    from publishable.diagnostics import EXIT_INVOCATION
+
+    assert NOT_BUILT_COMMANDS == {}, "no row carries the marker today"
+    assert _report_not_built("frobnicate", "Operation commands") == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`publishable frobnicate` is specified but not built in this version — "
+        "see docs/reference.md § Operation commands\n"
+    )
+    # The cited heading is a real one, checked the way the binding test checks
+    # it rather than by eye — a diagnostic citing a section this document does
+    # not have sends a reader nowhere.
+    assert "Operation commands" in _cited_sections()

@@ -1205,33 +1205,6 @@ def test_docs_takes_no_argument_and_no_flag(tmp_path: Path, monkeypatch, capsys)
     assert capsys.readouterr().out.startswith("README.md: rewrote")
 
 
-def test_while_the_document_still_says_not_built_a_wrong_arity_docs_defers_to_it(
-    tmp_path: Path, monkeypatch, capsys
-):
-    """The transitional half, pinned rather than left to be discovered.
-
-    `docs` dispatches from this task; its `docs/reference.md` § Operation
-    commands row still reads `NOT BUILT` until task 13, and
-    `test_reference_cli_tables_match_what_the_cli_does` binds that row to the
-    specified-but-unbuilt diagnostic for every invocation of the name. So a
-    wrong-arity `docs` answers with the document's claim while the document
-    still makes it, and the branch above answers once task 13 removes the key.
-    **Task 13 deletes this test with those two lines.**
-    """
-    from publishable.cli import NOT_BUILT_COMMANDS, main
-
-    root = _project(tmp_path)
-    monkeypatch.chdir(root)
-    assert "docs" in NOT_BUILT_COMMANDS
-
-    assert main(["docs", "somewhere"]) == 2
-    assert capsys.readouterr().err.startswith(
-        "`publishable docs` is specified but not built in this version"
-    )
-    # And the zero-argument form is NOT deferred: the command is built.
-    assert main(["docs"]) == 0
-
-
 # ---------------------------------------------------------------------------
 # H9d task 8 — `publishable list-templates`.
 #
@@ -1467,24 +1440,6 @@ def test_list_templates_takes_no_argument_and_no_flag(tmp_path: Path, monkeypatc
         assert capsys.readouterr().err == "`list-templates` takes no arguments and no flags\n"
     assert main(["list-templates"]) == 0
     assert "### `generic`" in capsys.readouterr().out
-
-
-def test_while_the_document_still_says_not_built_a_wrong_arity_list_templates_defers(
-    tmp_path: Path, monkeypatch, capsys
-):
-    """`list-templates`' half of the transitional deferral `docs` documents.
-    **Task 13 deletes this test with the dictionary key.**"""
-    from publishable.cli import NOT_BUILT_COMMANDS, main
-
-    root = _project(tmp_path)
-    monkeypatch.chdir(root)
-    assert "list-templates" in NOT_BUILT_COMMANDS
-
-    assert main(["list-templates", "somewhere"]) == 2
-    assert capsys.readouterr().err.startswith(
-        "`publishable list-templates` is specified but not built in this version"
-    )
-    assert main(["list-templates"]) == 0
 
 
 def test_the_two_surfaces_render_one_parameter_spec_the_same_way(
