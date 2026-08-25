@@ -6759,6 +6759,17 @@ existing third argument.
 **Found by:** H3d, Task 2 (documents-only). **Owner:** whichever slice next changes
 `_cond_beside_n`, or H3c-3 if it retrofits the holdout to cells first — re-owner this entry
 when that slice finishes rather than leaving it pointing at a closed one.
+
+**RE-OWNED 2026-08-25 (H3c-3 task 20), on this entry's own instruction: `unassigned`, and no
+slice follows.** H3c-3 did retrofit the holdout to cells — `units.holdout_within_cells` draws the
+split inside each populated cell, and task 15 narrowed a `condition`-scoped step's training side
+to its own arm — so the conditional half of the owner line above has fired and the entry would
+otherwise point at a closed slice, which is what it told its reader not to leave. **The gap is
+unchanged and is now wider by one axis rather than narrower:** `_cond_beside_n`'s third argument
+is `eval_roster`, which under a cell structure is the holdout's test partition **and** may then
+be narrowed to an arm, so `cond_roster is roster` distinguishes neither of the two narrowings from
+the other nor either from none. Closing it still needs the un-narrowed roster threaded as a
+separate identity reference. Nothing follows this slice; it ships this way.
 **Severity:** Minor. Both numbers are individually true and separately labelled; the fault
 is that a reader must know which roster each was computed over.
 
@@ -6814,13 +6825,21 @@ proposed fix — "state what the helper is for and drop the count" — is the on
 than re-measuring forever. The substance (a docstring enumeration is a maintenance obligation
 nobody owns) stands unweakened by which number is currently wrong.
 
+**RE-READ 2026-08-25 (H3c-3 task 20), because this slice changed code this entry describes** —
+`validate._check_holdout` gained the cell decomposition, and a filing's claims about the code go
+stale like any other comment. The same grep at this commit finds **nine**, one more again. **Not
+corrected to nine, on this entry's own argument**, which is the whole reason the re-measurement is
+recorded here rather than written into the heading: the count is the thing that cannot be kept
+true. The load-bearing halves — *"written against neither in particular"*, and the proposed fix —
+are both re-read and both still hold. **Owner stays `unassigned`, and no slice follows this one.**
+
 **Found by:** H3d, Task 6 review; deferred again at Task 7. **Owner:** whichever slice next
 edits `units.stratum_names` — re-owner this entry when that slice finishes rather than
 leaving it pointing at a closed one.
 **Severity:** Minor. A stale count in a docstring misleads a reader deciding whether a change
 is safe, which is exactly the decision this repo's § Development record exists to support.
 
-## OPEN — an evaluation split cannot be drawn within a cell
+## ~~an evaluation split cannot be drawn within a cell~~ — STRUCK 2026-08-25 (H3c-3): CLOSED, by the slice this entry named as the owner of the retirement
 
 `data.units.holdout` and a `{kind: fold}` repeat both partition the whole roster once, and
 `data.units.allocation: between` / a non-empty `sweep.groups` divides that same roster into
@@ -6838,6 +6857,20 @@ a truthful record of an imbalance no reader crosses by hand is the silently-wron
 **Owner of the retirement: H3c-3**, the slice that builds folds and holdouts inside cells.
 Re-owner this entry if that slice's scope changes, rather than leaving it pointing at a
 closed one.
+
+**STRUCK 2026-08-25 (H3c-3 task 20): CLOSED by the code, both halves.** Task 10 retired
+`E-REPL-FOLD-CELLS` and task 16 retired `E-DATA-HOLDOUT-CELLS`; `units.partition_within_cells`
+draws a `fold` level's partitions inside each populated cell and `units.holdout_within_cells`
+draws the split inside each, `validate` bounds `k` and `frac` against the thinnest **populated**
+cell (`units.thinnest_cell`), and a `condition`-scoped step's training side is narrowed to its
+own arm. *"**No build draws one**"* is the sentence this entry turned on and it is false as of
+2026-08-25. The registry rows for both codes are removed from `reference.md` § Errors `validate`
+reports by task 21. **The scope did not change**, so no re-ownering was needed — the owner this
+entry named is the slice that closed it.
+
+**What ships open beside it, filed separately rather than folded in here:** a cluster spanning
+two cells, `limits.min_clusters`' roster-wide denominator under cells, and the per-stratum fold
+bound. Each is its own entry below, each `unassigned`, and **no slice follows this one.**
 
 **Found by:** H3d, Task 8. **Severity:** Was Major for `fold` while open — a validated
 config produced empty folds per arm — and is now closed as a refusal rather than as a
@@ -9848,8 +9881,11 @@ of `cli.command_run` into `cli._prepare_run` and phases 6-10 into `cli._execute_
 behaviour to `command_run` and means *the `run` command* is still true of the command and no longer
 true of the function.
 
-**Measured 2026-08-23, and the count the plan carried was a lower bound.** `grep -rn "command_run"
-src/ tests/` prints **195** lines across 22 files — `tests/test_cli.py` 79, `cli.py` 34,
+**Measured 2026-08-23** (**re-measured 2026-08-25 by H3c-3 task 20: 202 lines, `cli.py` 36 —
+the class is unchanged and the number is not the claim; H3c-3 hoisted `_resolved_group_axes`
+inside `_prepare_run`, which is one of the entry's own named non-`command_run` homes, and the
+entry's reading of it is unchanged**), **and the count the plan carried was a lower bound.**
+`grep -rn "command_run" src/ tests/` printed **195** lines across 22 files — `tests/test_cli.py` 79, `cli.py` 34,
 `validate.py` 13, `apparatus.py` 10, and eighteen more files with 1-6 each. The plan's *"roughly
 forty-five"* was measured over a narrower pattern; the class is the same and the number is four times
 larger.
@@ -10530,3 +10566,146 @@ missing is the default being right.
 cells as its surface — `units.py` and `stats.py` — and this is `runner.py`'s seed derivation. Whoever
 takes it should read it beside the `self.rng` type filing above: **both are the same accessor promising
 more than it delivers, and closing either without the other leaves § Randomness half true.**
+
+## RE-OWNED 2026-08-25, as H3c-3 completes and the spine's order is EXHAUSTED — thirty-eight open entries justify `unassigned` by naming a slice that does not follow, and **no slice follows any of them**
+
+**This is the recurrence the `RE-OWNED 2026-08-21` and `RE-OWNED 2026-08-22` entries each predicted,
+at the only scale it can still occur at.** H3c-3 is the last slice in the project; nothing is
+chartered after it. Every reason below that reads *"no remaining slice (…, H3c-3's remaining 14)
+charters …"* asserted a pending set that is now **empty**, and every owner line that reads
+*"whichever slice next touches X"* — the form this file rejects by name at its own
+`RE-OWNED 2026-08-19` entry — now resolves to a closed slice the moment anybody touches X.
+
+**The correction is written once, here, rather than thirty-eight times in thirty-eight bodies** —
+the same form and the same reason the `RE-OWNED 2026-08-19`, `RE-OWNED 2026-08-21` and
+`RE-OWNED 2026-08-22` entries took: each body records what was measured on its own date, and editing
+thirty-eight of them would destroy that and invent thirty-eight new sentences besides. **Prefer
+deleting a claim to rewriting it**, and prefer governing it once to either.
+
+**Measured 2026-08-25, at this commit, newline-insensitively** — this file is hard-wrapped and
+`H3c-3's remaining 14` wraps after `H3c-3's` in at least one place, which a line-based `grep -n`
+cannot see across (the `RE-OWNED 2026-08-22` entry hit exactly that and says so). Whitespace was
+collapsed over each `## ` section's own body before counting, so a phrase straddling a break is
+counted once:
+
+| Measured | Count |
+|---|---|
+| `## OPEN` headings in this file | 56 |
+| …whose body names `H3c-3` | 33 |
+| …whose body names *whichever slice* | 10, of which **2** are the rejection of that form rather than a use of it, and **1** (`technical_n`) is re-ownered in its own body below on its own instruction |
+| …the union, which is what this entry governs | **38** |
+
+**The sweep can fail, proved rather than asserted:** the same walk over the string `Owner:` returns
+a non-zero count and over `H99z-4` returns **0**, so a zero here would have been a finding about the
+sweep rather than about the file.
+
+**Read every one of those thirty-eight reasons this way, and it is the only change:**
+
+- **The verdict does not move.** Every one of them already says `unassigned`, and every one of them
+  now says it for a *stronger* reason: the enumeration was *"no **remaining** slice has this
+  surface"* and the fact is *"**no slice follows this one**"*. Not one entry changes owner, and not
+  one becomes H3c-3's — H3c-3's surface is folds and holdouts drawn inside cells, and none of the
+  thirty-eight is that.
+- **Every *"whichever slice next touches X"* line is `unassigned`, with *no slice follows* as the
+  reason.** Seven live ones remain, named by their question rather than by position: the typo'd
+  `data.units.holdout.from`'s diagnostic; `units.stratum_names`' docstring call-site count; the
+  generated README's `credentials` region; `declared_credential_names`' template-default credential;
+  the constraint table's unrendered `min_items`/`max_items`; the positional reference at
+  § the provenance table; and the unescaped interpolation in `generators/step.py`. Each ships open.
+- **It is a fact, not a deferral.** Nothing about these entries is scheduled, waiting, or blocked on
+  an input. A reader who wants one closed is the owner, and this file is the brief.
+
+**And the hygiene check the `RE-OWNED 2026-08-22` entry asked for is still missing, permanently.**
+It wanted a test that parses every unclosed `## ` heading's `Owner:` line **and** any *"no remaining
+slice (…)"* enumeration and fails on either naming a merged slice. It would live in `tests/`, and
+**there is no slice left whose surface is this file's own hygiene** — so this entry is the last time
+that staleness can be corrected by a slice, which is why it is corrected in bulk rather than left to
+the next one.
+
+## OPEN — a cluster may span two cells, which breaks the between-sides independence H4c's clustered unpaired constructions assume — **Owner: unassigned, and no slice follows this one**
+
+**Filed 2026-08-25 by H3c-3 task 20, from the slice's own design Decision 13.**
+
+Under `assign.<axis>.method: by_attribute` a group axis reads a column, and nothing requires that
+column to be constant within a `data.units.cluster_by` cluster. So a cluster's units can land in two
+different arms, and — once axes are crossed — in two different **cells**. Under `method: random` this
+cannot happen: `units.assignment_for` allocates whole clusters, which is the property
+`E-DATA-ASSIGN-BLOCKED-CLUSTER` exists to protect for `blocked`.
+
+**What it breaks.** H4c's `welch_t_over_units_clustered` and `unpaired_percentile_over_units_clustered`
+take a Welch–Satterthwaite df from two **cluster-robust per-side variances**, each side contributing
+`G_s − 1`. A cluster spanning both sides is counted once in each `G_s`, so the two sides are not
+independent and the df is larger than the evidence supports — wrong in the direction of a **narrower**
+interval, which is the direction that matters. H3c-3 makes the shape easier to reach rather than
+creating it: cells multiply the number of boundaries a cluster can straddle.
+
+**The check that would close it** is a constant-cluster-within-arm rule —
+`units.stratum_varies_within_cluster`'s shape, one declaration over: that helper already reports the
+first cluster whose units disagree about a named attribute, and the arm attribute is such an
+attribute. It reports the pair and lets the caller choose the code, which is exactly what a fifth
+caller would need. **The reason it is not built here** is that H3c-3's charter is the fold and the
+holdout inside a cell, and a new refusal over `by_attribute` allocation would change which configs
+validate for designs that declare no evaluation split at all.
+
+**Note for whoever reads this beside a fixture:** C1's own measured roster **has one**. Fifteen units,
+`S1`×7 / `S2`×3 / `S3`×3 / `S4`×1 / `S5`×1 with `control` = units 0–7, puts `S2`'s first unit in
+`control` and its other two in `treatment` — which is the whole of why the two scopings reported
+different `treatment` rows for one roster. A fixture built to exercise the spanning case therefore
+already exists in this slice's record; what does not exist is the check.
+
+**Severity:** Major where it applies — a published interval narrower than its evidence — and it
+applies only to a design that declares `cluster_by`, a `by_attribute` group axis, and an unpaired
+clustered comparison together. No config in `docs/feasibility-llm-growth-studies.md` declares
+`data.units.cluster_by` at all.
+
+## OPEN — `limits.min_clusters` counts clusters over the whole roster while a resample under a cell structure draws inside one — **Owner: unassigned, and no slice follows this one**
+
+**Filed 2026-08-25 by H3c-3 task 20, from the slice's own design Decision 4 (Ruling LL).**
+
+`validate._check_resample`'s `limits.min_clusters` denominator is `units.fold_basis`' third call site,
+and Ruling LL deliberately kept it **roster-wide** while the other two moved to the thinnest cell:
+`statistics.resample` draws over the per-unit table, which holds every condition's units, so the cell
+decomposition is not that call's question. That ruling stands.
+
+**What is still open is the warning's precision, not its call.** Under `allocation: between` a
+condition's units are one arm's, so a percentile interval for that condition rests on that arm's
+cluster count and not the roster's — the identical shape `W-STATS-REPORTBY-THIN` already records for
+itself (*"the WHOLE roster, not a group axis's own arm"*). H3d found the same figure and called it
+*"wrong in the direction of NOT firing"*, which is the right direction to be wrong in and is why
+nothing here was widened: a warning that fires on a design whose every arm clears the floor is worse
+than one that misses a design whose thinnest arm does not.
+
+**H3c-3 did not move it and did not make it worse**, and this entry exists so that is on the record
+rather than inferred from silence: the slice threads `cells` into `_check_holdout` and into the fold
+basis and into nothing else, and `_check_resample`'s call is unchanged, still `fold_basis(roster,
+cluster_by)` over the roster or over the holdout's realized test side.
+
+**Severity:** Minor. Both the roster figure and the per-arm figure are true; the warning states the
+one that fires less often.
+
+## OPEN — `k` is bounded by no per-STRATUM basis, so a stratified fold can still come out empty, and cells add a multiplier rather than a bound — **Owner: unassigned, and no slice follows this one**
+
+**Filed 2026-08-25 by H3c-3 task 19.** `units.partition_units`' docstring has recorded this since
+before H3c-3: each stratum is partitioned on its own and the per-stratum folds are merged index-wise,
+so when every stratum holds fewer than `k` clusters the high-index folds hold **nothing at all** —
+six units as three plus three under `{k: all, stratify_by: label}` fills folds 0–2 and leaves 3–5
+empty, six executions run, three of them over no units, and `validate` is silent because the basis it
+reads is not the stratum's. `replication._fold_k` refuses a fold with no units by its own route, so
+core reaches by one path a state it refuses by another.
+
+**What H3c-3 changed, and what it deliberately did not.** The basis moved: `k` is now bounded by the
+thinnest **populated cell's** basis (`units.thinnest_cell`) rather than the whole roster's, and
+`units.partition_within_cells` calls `partition_units` once per populated cell — so the independent
+partition lists are **cells × strata** where they were strata alone. **The per-stratum bound is still
+a check that does not exist**, and its denominator is now one multiplier further from the number
+`validate` reads. `partition_units`' docstring says all of that in those words, so the slice cannot
+read as having added a bound it did not add.
+
+**The check that would close it** bounds `k` against `min` over the per-stratum bases, inside each
+cell — which is `thinnest_cell`'s walk with a second nesting level, and a rule
+`reference.md` § Validation does not state today. Inventing it in `partition_units` would be a rule no
+document states, which is why the docstring records rather than fixes.
+
+**Severity:** Minor-to-Major depending on the design — an empty fold is a paid execution over no
+units, disclosed by `n.resolved: 0` rather than hidden, but nothing refuses it. Reachable only under a
+declared `fold.stratify_by`, which no config in `docs/feasibility-llm-growth-studies.md` declares.
