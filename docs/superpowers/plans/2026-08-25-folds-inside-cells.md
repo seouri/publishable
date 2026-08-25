@@ -321,6 +321,11 @@ exists — an assertion that only checks non-`None` passes with any draw.
 
 ## Task 6
 
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 2.** **C25 is undischargeable at tasks 2
+> and 3 — measured**: adding the imports with no caller fails `ruff` (F401 + I001). **The imports land with
+> their callers, here and at task 8.** Neither brief said so, and both experiments were edited back and
+> diffed identical, so nothing is owed but the landing.
+
 **Corrections that bind this task: C4, C5, C25.** **Ruling LL binds this task and is the reason it
 exists.**
 
@@ -345,6 +350,11 @@ would be evidence about the tests, not the code.
 **Must not touch:** `fold_basis`, `_check_resample`'s holdout narrowing, `_fold_k`.
 
 ## Task 7
+
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 4.** **Mutation MU-3's refusal half is
+> YOURS** — batch A declared it in advance and named it in the shipped test's docstring, because the code
+> it mutates did not exist yet. *Reporting a mutation blind is necessary and not sufficient; it owes a
+> replacement*, and the replacement is due here.
 
 **Corrections that bind this task: C12.**
 
@@ -380,6 +390,18 @@ and every hit attributed. **Report what you grepped, not a count without a noun.
 # Batch C — the fold half
 
 ## Task 8
+
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 1. This is the sharpest carry-forward in
+> the slice and this section did not carry it.** Guard-pin **arm D** constrains you two ways:
+>
+> 1. **You must keep CALLING `partition_units`** — the arm pins that, not merely its result.
+> 2. **You must compose the one-cell case BEFORE the loop.** `cells_of({})` returns **one EMPTY cell**, and
+>    Decision 7's loop **skips empty cells** — so passing a no-axis design through the loop calls
+>    `partition_units` **zero times and every fold silently vanishes.** Measured by batch A.
+>
+> **That is the bit-stability oracle's exact failure mode**: a design with no cells must come out
+> **bit-identical**, and the loop as designed would make it come out empty. **Build the no-axis case first
+> and pin it before you write the loop**, not after.
 
 **Corrections that bind this task: C10, C25, C26.**
 
@@ -701,6 +723,9 @@ guards.
 # Batch E — the thin cell, the interactions, the filings
 
 ## Task 18
+
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 4.** **Mutation MU-11 is YOURS**, declared
+> in advance by batch A and named in a shipped test's docstring because your code did not exist yet.
 
 **Corrections that bind this task: C16, C17.** **RULING JJ BINDS THIS TASK: `limits.min_units_per_cell`
 must be DECIDED, not declined, and there is no later slice.**
