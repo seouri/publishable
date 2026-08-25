@@ -924,3 +924,303 @@ def test_generate_template_survives_a_readme_with_no_templates_region(tmp_path: 
     )
     assert path.is_file()
     assert "parameter_spec" in path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# H9d task 7 — `publishable docs`' dispatch.
+#
+# Every arm here runs in `tmp_path`. `docs` walks up from `Path.cwd()` and
+# pytest's own cwd is the `publishable` checkout, whose README is guard-pin
+# arm B's subject with an editor this task is not — so a `monkeypatch.chdir`
+# is not tidiness here, it is the guard.
+# ---------------------------------------------------------------------------
+
+
+def _older_readme(root: Path) -> str:
+    """A README as `publishable new` wrote it BEFORE H9d: two of the four
+    regions, and hand-written prose outside them."""
+    text = (
+        "# my-study\n"
+        "\n"
+        "Hand-written prose with no other copy.\n"
+        "\n"
+        "<!-- publishable:begin overview -->\n"
+        "something a person typed over the generated overview\n"
+        "<!-- publishable:end overview -->\n"
+        "\n"
+        "## Experiments\n"
+        "\n"
+        "<!-- publishable:begin experiments -->\n"
+        "None yet.\n"
+        "<!-- publishable:end experiments -->\n"
+    )
+    (root / "README.md").write_text(text)
+    return text
+
+
+def test_docs_rewrites_what_it_finds_and_names_what_it_did_not(tmp_path: Path, monkeypatch, capsys):
+    """Ruling EE's asymmetry, in both directions and in one test.
+
+    A README missing two of the four is NOT a refusal — it is the ordinary
+    state of every project scaffolded before this slice. So: exit `0`, the two
+    it found actually rewritten (their bytes moved, and to the computed
+    bodies), the two it did not NAMED on stdout, and every byte outside the two
+    spans untouched — the hand-written prose included, which is the thing the
+    markers exist to protect.
+    """
+    from publishable.cli import main
+    from publishable.docs import experiments_body, overview_body
+
+    root = _project(tmp_path)
+    before = _older_readme(root)
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 0
+    out = capsys.readouterr().out
+    after = (root / "README.md").read_text()
+
+    assert out == (
+        "README.md: rewrote `overview`, `experiments`\n"
+        "README.md declares no `credentials` region, so nothing was written "
+        "there — a region is never created, only rewritten\n"
+        "README.md declares no `templates` region, so nothing was written "
+        "there — a region is never created, only rewritten\n"
+    )
+    assert after != before
+    assert body_of(after, "overview") == overview_body(root) + "\n"
+    assert body_of(after, "experiments") == experiments_body(root) + "\n"
+    spliced = rewrite(before, "overview", body_of(after, "overview"))
+    spliced = rewrite(spliced, "experiments", body_of(after, "experiments"))
+    assert after == spliced
+    assert "Hand-written prose with no other copy." in after
+
+
+def test_docs_on_a_freshly_scaffolded_project_names_all_four_and_moves_no_byte(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The idempotence the four builders' empty states buy: every region a
+    fresh `publishable new` writes is exactly what `docs` computes, so the file
+    is byte-identical afterward.
+
+    The stdout line is asserted BESIDE that, because *"the file did not
+    change"* is also what a command that did nothing produces — which is the
+    fault Ruling EE exists for.
+    """
+    from publishable.cli import main
+
+    root = _project(tmp_path)
+    before = (root / "README.md").read_text()
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 0
+    assert capsys.readouterr().out == (
+        "README.md: rewrote `overview`, `credentials`, `experiments`, `templates`\n"
+    )
+    assert (root / "README.md").read_text() == before
+
+
+def test_docs_picks_up_an_experiment_and_a_template_added_since_the_last_write(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The positive control for the test above, and the command's whole
+    purpose: a repository whose README is stale is brought current — a table
+    row for the experiment, a sub-section for the template — by `docs` alone,
+    with no generator involved."""
+    from publishable.cli import main
+
+    root = _project(tmp_path, {"shapes": _SHAPES_TEMPLATE})
+    (root / "configs" / "exp-one").mkdir(parents=True)
+    (root / "configs" / "exp-one" / "config.yaml").write_text(
+        "name: exp-one\nexperiment_type: shapes_assay\n"
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 0
+    capsys.readouterr()
+    text = (root / "README.md").read_text()
+    assert (
+        "| `exp-one` | `shapes_assay` | `uv run publishable run configs/exp-one/config.yaml` |"
+    ) in body_of(text, "experiments")
+    assert "### `shapes_assay`" in body_of(text, "templates")
+    assert "| `SHAPES_TOKEN` | `exp-one` |" in body_of(text, "credentials")
+
+
+@pytest.mark.parametrize(
+    "condition,code,fragment",
+    [
+        (
+            "<!-- publishable:begin credentials -->\nbody\n",
+            "E-DOCS-REGION-UNBALANCED",
+            "begins and never ends",
+        ),
+        (
+            "<!-- publishable:begin overview -->\na\n<!-- publishable:end overview -->\n"
+            "<!-- publishable:begin overview -->\nb\n<!-- publishable:end overview -->\n",
+            "E-DOCS-REGION-DUPLICATE",
+            "is opened twice",
+        ),
+        (
+            "<!-- publishable:begin summary -->\nb\n<!-- publishable:end summary -->\n",
+            "E-DOCS-REGION-UNKNOWN",
+            "is not a region core manages",
+        ),
+        (
+            "no region here at all\n",
+            "E-DOCS-NO-REGIONS",
+            "declares none of the managed regions",
+        ),
+    ],
+)
+def test_docs_refuses_a_readme_whose_bound_it_cannot_compute(
+    tmp_path: Path, monkeypatch, capsys, condition: str, code: str, fragment: str
+):
+    """Exit `1`, the CODE and the stderr LINE — never the exit code alone,
+    which a `return EXIT_OK` mutation would leave alone in one of these arms
+    and which says nothing about whether the user was told what to fix.
+
+    And the file is asserted UNCHANGED: a refusal that had already rewritten
+    half the regions before deciding would pass every assertion above it.
+    """
+    from publishable.cli import main
+
+    root = _project(tmp_path)
+    (root / "README.md").write_text(condition)
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 1
+    captured = capsys.readouterr()
+    assert code in captured.err
+    assert fragment in captured.err
+    assert captured.out == ""
+    assert (root / "README.md").read_text() == condition
+
+
+def test_docs_refuses_a_repository_with_no_readme(tmp_path: Path, monkeypatch, capsys):
+    """The fifth refusal. `docs` never CREATES a README — one `publishable new`
+    did not write is a file this command has no template for, and writing one
+    would be writing outside every region."""
+    from publishable.cli import main
+
+    root = _project(tmp_path)
+    (root / "README.md").unlink()
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 1
+    assert "E-DOCS-NO-README" in capsys.readouterr().err
+    assert not (root / "README.md").exists()
+
+
+def test_docs_outside_a_repository_is_a_rendered_diagnostic_not_a_traceback(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`E-GIT-NO-REPO`, caught **by code** and re-reported through this
+    command's own `Collector` at exit `1` — never raised into `main`, whose
+    handler holds no collector and applies no redaction pass.
+
+    Asserted on the `Collector`'s own rendering (`  error   <code>` and the
+    trailing problem count), because `main`'s bare handler prints a line that
+    also contains the code: a substring check on the code alone cannot tell the
+    two printers apart.
+    """
+    from publishable.cli import main
+
+    here = tmp_path / "not-a-repo"
+    here.mkdir()
+    monkeypatch.chdir(here)
+
+    assert main(["docs"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("  error   E-GIT-NO-REPO")
+    assert "1 problem (1 error, 0 warnings)" in err
+    assert "rewrites the managed regions of a repository's own README" in err
+
+
+_LEAKY_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, register_template
+
+
+@register_template("leaky_assay")
+class LeakyAssayTemplate(BaseTemplate):
+    required_env = ["DOCS_TOKEN"]
+
+
+raise RuntimeError("connecting with " + os.environ["DOCS_TOKEN"])
+"""
+
+
+def test_a_credential_a_local_template_raises_with_is_redacted(tmp_path: Path, monkeypatch, capsys):
+    """`docs` runs user code — `_claims` imports every `templates/*.py` — so a
+    template that raises can put an environment value in its message, and
+    `main`'s own handler would print it verbatim. This command prints through
+    its own credential-bearing `Collector` instead.
+
+    Both directions: the redaction marker naming the variable IS present, and
+    the value is NOT — a test asserting only the absence passes if the whole
+    message went missing.
+    """
+    from publishable.cli import main
+
+    monkeypatch.setenv("DOCS_TOKEN", "sk-do-not-print-this")
+    root = _project(tmp_path, {"leaky": _LEAKY_TEMPLATE})
+    monkeypatch.chdir(root)
+
+    assert main(["docs"]) == 1
+    err = capsys.readouterr().err
+    assert "E-TEMPLATE-LOAD" in err
+    assert "<redacted:DOCS_TOKEN>" in err
+    assert "sk-do-not-print-this" not in err
+
+
+def test_docs_takes_no_argument_and_no_flag(tmp_path: Path, monkeypatch, capsys):
+    """*Operation commands take paths and nothing else* — and the argument
+    `docs/reference.md` § Operation commands gives this one is *(none)*, so
+    both halves of the arity rule are the same check: an argument and a flag
+    are both `rest`.
+
+    Pinned in the state task 13 leaves behind, with `NOT_BUILT_COMMANDS`
+    emptied, because until then the shipped dictionary answers first — which
+    the companion below pins from the other side. `main` is called rather than
+    `_dispatch`, so the whole invocation path is what is measured.
+    """
+    import publishable.cli as cli_module
+    from publishable.cli import main
+
+    root = _project(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(cli_module, "NOT_BUILT_COMMANDS", {})
+
+    for argv in (["docs", "somewhere"], ["docs", "--force"], ["docs", "a", "b"]):
+        assert main(argv) == 2, argv
+        assert capsys.readouterr().err == "`docs` takes no arguments and no flags\n"
+    # The honouring half in the same state: with no arguments it really runs.
+    assert main(["docs"]) == 0
+    assert capsys.readouterr().out.startswith("README.md: rewrote")
+
+
+def test_while_the_document_still_says_not_built_a_wrong_arity_docs_defers_to_it(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The transitional half, pinned rather than left to be discovered.
+
+    `docs` dispatches from this task; its `docs/reference.md` § Operation
+    commands row still reads `NOT BUILT` until task 13, and
+    `test_reference_cli_tables_match_what_the_cli_does` binds that row to the
+    specified-but-unbuilt diagnostic for every invocation of the name. So a
+    wrong-arity `docs` answers with the document's claim while the document
+    still makes it, and the branch above answers once task 13 removes the key.
+    **Task 13 deletes this test with those two lines.**
+    """
+    from publishable.cli import NOT_BUILT_COMMANDS, main
+
+    root = _project(tmp_path)
+    monkeypatch.chdir(root)
+    assert "docs" in NOT_BUILT_COMMANDS
+
+    assert main(["docs", "somewhere"]) == 2
+    assert capsys.readouterr().err.startswith(
+        "`publishable docs` is specified but not built in this version"
+    )
+    # And the zero-argument form is NOT deferred: the command is built.
+    assert main(["docs"]) == 0

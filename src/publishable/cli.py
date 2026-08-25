@@ -186,6 +186,13 @@ OPERATION_COMMANDS = {
 # the rows marked `NOT BUILT` there are exactly the keys here, and every unmarked
 # row is a command this module really dispatches. Cited by section, never by line
 # number — `docs/reference.md` moves under every edit above the citation.
+# The commands `docs/reference.md` § Operation commands gives the argument
+# *(none)*. They walk up from `Path.cwd()` — the exception `E-GIT-NO-REPO`'s own
+# § Errors row already documents for the creation commands, reused rather than
+# restated (Ruling FF) — and they take no flag either, `design-principles.md`
+# § Everything is in the file admitting none anywhere.
+ZERO_ARGUMENT_COMMANDS = {"docs"}
+
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
     "docs": "Operation commands",
@@ -5595,6 +5602,35 @@ def _dispatch(command: str, rest: list[str]) -> int:
         from publishable.diff import command_diff
 
         return command_diff(Path(rest[0]), Path(rest[1]))
+    if command in ZERO_ARGUMENT_COMMANDS:
+        # The arity rule these two carry is *takes nothing*, so ONE check
+        # covers both halves `docs/reference.md` § Operation commands states —
+        # no path, and no flag either, a flag being an argument. `diff`'s arm
+        # argues why this is its own arm rather than a widening of the
+        # one-path one: a different arity rule, not a second enforcer of the
+        # same one.
+        if rest:
+            # TRANSITIONAL, and task 13 deletes these two lines with the
+            # dictionary key: while `docs`/`list-templates` still carry a
+            # `NOT BUILT` row, `test_reference_cli_tables_match_what_the_cli_
+            # does` binds that row to the specified-but-unbuilt diagnostic for
+            # EVERY invocation of the name, wrong-arity ones included, and a
+            # built branch answering first would make the code disagree with
+            # the document this slice has not yet edited. Both answers are
+            # pinned: the deferral against the shipped dictionary, and the
+            # message below against an empty one.
+            if command in NOT_BUILT_COMMANDS:
+                return _report_not_built(command, NOT_BUILT_COMMANDS[command])
+            print(f"`{command}` takes no arguments and no flags", file=sys.stderr)
+            return EXIT_INVOCATION
+        # Function-local, `command_freeze`'s own reason: `docs.py` is imported
+        # by both generators at module scope and `cli.py` imports them, so a
+        # module-scope import here would put this module on that chain for no
+        # gain — `_dispatch` runs once per invocation, not once per import.
+        from publishable.docs import command_docs
+
+        zero_argument: dict[str, Callable[[], int]] = {"docs": command_docs}
+        return zero_argument[command]()
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION

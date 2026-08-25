@@ -23,12 +23,14 @@ site, from a successful parse of a file with nothing to manage.
 """
 
 import re
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable.diagnostics import EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.param import Param
 
@@ -537,11 +539,32 @@ def templates_body(repo_root: Path) -> str:
     return "\n".join(sections)
 
 
+def overview_body(repo_root: Path) -> str:
+    """The `overview` region: the scaffold's own prose, read from
+    `readme_templates/README.md.tmpl` through this module's own parser.
+
+    Not a constant of this module's: the scaffold already holds these bytes,
+    and a second copy here is a second source of truth that drifts the first
+    time `publishable new`'s README is edited. `repo_root` is unused and
+    declared anyway, because `BODY_BUILDERS` is one signature — a builder that
+    took nothing would need a branch at the call site.
+
+    **A hand-edited `overview` is overwritten, and that is the contract, not an
+    accident**: everything INSIDE a managed region belongs to the generator,
+    and § The generated README's promise is about everything outside one. A
+    project wanting its own words has the whole file outside the four markers.
+    """
+    from publishable.scaffold import read_scaffold
+
+    return body_of(read_scaffold("README.md.tmpl"), "overview").rstrip("\n")
+
+
 #: Region name → the function that computes its body from the repository.
 #: `refresh` reads this rather than a chain of branches, so a region with no
 #: builder is a `KeyError` at the call site rather than a region silently left
 #: alone — the silence Ruling EE refuses.
 BODY_BUILDERS: dict[str, Callable[[Path], str]] = {
+    "overview": overview_body,
     "credentials": credentials_body,
     "experiments": experiments_body,
     "templates": templates_body,
@@ -606,3 +629,113 @@ def merge_into_readme(repo_root: Path, names: Sequence[str]) -> list[str]:
         "there — a region is never created, only rewritten"
         for name in absent
     ]
+
+
+def _credentials_in_reach(repo_root: Path, partial: list[Any]) -> dict[str, str]:
+    """The credential values a refusal from this command could be carrying.
+
+    `docs` runs USER CODE — `_claims` imports every non-`__`-prefixed file
+    under `templates/` to find its registration — so a template that raises on
+    import can put anything in an exception message, including a value it read
+    out of the environment. `main`'s own `except PublishableError` handler
+    holds no `Collector` and applies **no redaction pass**, so every diagnostic
+    this command prints goes through one of its own carrying these values.
+
+    Built the way `command_report` builds its own: `declared_credential_names_
+    for(doc, cls)` over each class the failed discovery got far enough to
+    construct (`PartialLoadError.partial_templates` — a class body finishes
+    running before `@register_template` ever sees it), against each config this
+    repository holds, since `docs` is a whole-repository command rather than a
+    one-config one. An empty set is the honest answer when nothing declared
+    anything, and it redacts nothing — stated rather than hidden.
+    """
+    from publishable.secrets import credential_values
+    from publishable.validate import declared_credential_names_for
+
+    names: list[str] = []
+    for path in config_paths(repo_root):
+        try:
+            doc = yaml.safe_load(path.read_text())
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for cls in partial:
+            names.extend(declared_credential_names_for(doc, cls))
+    for cls in partial:
+        declared = getattr(cls, "required_env", None)
+        if isinstance(declared, list):
+            names.extend(str(variable) for variable in declared)
+    return credential_values(names)
+
+
+def command_docs() -> int:
+    """`publishable docs` — rewrite every managed region this repository's
+    README holds, name every one it does not, exit `0`.
+
+    **It takes no path** (`docs/reference.md` § Operation commands: *(none)*)
+    and walks up from `Path.cwd()`. That is the exception `E-GIT-NO-REPO`'s own
+    § Errors row **already documents** for the creation commands — *the one
+    place `CLAUDE.md` § Invariants' walk-up-from-the-argument sentence does not
+    apply, being the commands with no argument to walk up from* — reused rather
+    than restated, because a second explanation of one rule is how a rule
+    acquires two sources of truth (Ruling FF).
+
+    **Ruling EE decides the asymmetry.** A README missing SOME of the four
+    regions is the ordinary state of every project scaffolded before H9d: the
+    regions it has are rewritten and the ones it has not are NAMED on stdout,
+    at exit `0`. A README holding NONE of them, or one whose markers cannot be
+    paired, is a refusal at exit `1` — those are the cases where the bound a
+    rewrite would be performed against cannot be computed, and prose outside a
+    region is hand-written by definition and has no other copy.
+
+    Every refusal is printed through this function's own credential-bearing
+    `Collector` and **none is raised into `main`**, whose handler applies no
+    redaction (H9b correction C3). `E-GIT-NO-REPO` is caught **by code** here —
+    a README to rewrite is this command's entire input, so no repository means
+    nothing to do — the way `reproduce`, `validate._check_data` and
+    `study._refuse_if_in_repo` already catch it. `KeyboardInterrupt` is
+    re-raised fresh and argument-less, H7b Part B's precedent, so Ctrl-C still
+    stops the command carrying no message user code could have constructed.
+    """
+    from publishable.diagnostics import Collector
+    from publishable.errors import PublishableError
+    from publishable.provenance import find_repo_root
+
+    here = Path.cwd()
+    try:
+        repo_root = find_repo_root(here)
+    except ContractError as exc:
+        if exc.code != "E-GIT-NO-REPO":
+            raise
+        c = Collector()
+        c.error(
+            "E-GIT-NO-REPO",
+            str(here),
+            f"`docs` rewrites the managed regions of a repository's own README, "
+            f"and there is none to rewrite: {exc}",
+        )
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    try:
+        rewritten, absent = refresh(repo_root, MANAGED_REGIONS)
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
+    except BaseException as exc:
+        code = exc.code if isinstance(exc, PublishableError) else "E-TEMPLATE-LOAD"
+        c = Collector()
+        c.credentials = _credentials_in_reach(
+            repo_root, list(getattr(exc, "partial_templates", None) or [])
+        )
+        c.error(code, str(repo_root / "README.md"), str(exc))
+        print(c.render(), file=sys.stderr)
+        return EXIT_WRONG
+
+    print(f"README.md: rewrote {', '.join(f'`{name}`' for name in rewritten)}")
+    for name in absent:
+        print(
+            f"README.md declares no `{name}` region, so nothing was written "
+            "there — a region is never created, only rewritten"
+        )
+    return EXIT_OK
