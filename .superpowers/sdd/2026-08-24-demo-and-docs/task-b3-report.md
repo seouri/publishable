@@ -11,7 +11,7 @@ full suite **3336 passed, 1 skipped, 2 xfailed**.
 | `ebe58ca` | fix round — two defects of mine, found before the gate |
 | `cbfda10` | 13 — the `NOT BUILT` retirement, `E-GIT-NO-REPO`'s row |
 | `1c49187` | 14 — the four documents, `CLAUDE.md`, `spec-defects.md`, § Executability |
-| `<this commit>` | fix round 2 — three undocumented `E-DEMO-*` identifiers retired, `demo`'s refusal moved to exit `1`, two stale capability claims |
+| `9c31d88` | fix round 2 — three undocumented `E-DEMO-*` identifiers retired, `demo`'s refusal moved to exit `1`, two stale capability claims |
 
 **Test count, with its nouns rather than a total.** The dispatch's `3319` is the **pre-work
 baseline**: I ran `uv run pytest` at `42e3f02` before writing a line and got exactly
