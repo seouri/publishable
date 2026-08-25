@@ -931,7 +931,7 @@ def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
 
-    def _boom(doc, digest, fold_basis=None):
+    def _boom(doc, digest, fold_basis=None, fold_cell=None):
         raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
 
     monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
@@ -14861,3 +14861,87 @@ def test_the_min_clusters_denominator_is_roster_wide_not_the_thinnest_cell(write
     # thinnest cell and not the 16 units.
     assert "8" in warned["W-STATS-RESAMPLE-CLUSTERS"]
     assert "3" not in warned["W-STATS-RESAMPLE-CLUSTERS"]
+
+
+# --- `E-REPL-FOLD-K-TOO-LARGE` at `validate`'s own emit site ----------------
+
+_F2_ROSTER = (
+    "patient_id,arm,site\n"
+    + "".join(f"c{i},control,{'A' if i < 5 else 'B'}\n" for i in range(8))
+    + "".join(f"t{i},treatment,{'C' if i < 4 else 'D' if i < 7 else 'E'}\n" for i in range(8))
+)
+
+
+def test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell(write_config, tmp_path):
+    """**Emit site 1 of 3, and MU-3's refusal half, owed by this task.**
+
+    Fixture F2, from the design's § Fixtures as claims: 16 units; `control` is
+    clusters `A`×5 and `B`×3, `treatment` is `C`×4, `D`×3 and `E`×1, and no
+    cluster spans an arm. Cell cluster counts are **2** and **3**; the whole
+    roster's is **5**.
+
+    `{kind: fold, k: 3}` is therefore the discriminating declaration: 3 ≤ 5
+    clears the roster bound and 3 > 2 fails the cell bound. Batch A ran MU-3
+    (`max` for `min` in the cell basis) against a direct `== 2` assertion
+    because nothing consumed the number yet, and **declared the refusal half
+    owed here**. This is it: under `max` the basis is 3, `k: 3` clears, and
+    `E-REPL-FOLD-K-TOO-LARGE` disappears from the finding set below.
+
+    `validate.py`'s `c.error` prints `str(exc)` from `_fold_k`, so this site's
+    own work is **forwarding the label** through `_check_replication` into
+    `resolve_repeats`. **The mutation that fails this test alone**: drop
+    `fold_cell=fold_cell` from that `resolve_repeats` call — the code still
+    fires and only the message loses the cell.
+
+    `E-REPL-FOLD-CELLS` is reported beside it and that is not a competing
+    answer: `validate` collects rather than aborting, so the roster-wide-split
+    refusal and the cell bound are both reported, and the bound is what tells
+    the reader `k: 3` would not have fitted even once the split is drawn per
+    cell."""
+    (tmp_path / "input" / "index.csv").write_text(_F2_ROSTER)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["arm", "site"],
+                "cluster_by": "site",
+                "allocation": "between",
+                "assign": {"arm": {"method": "by_attribute"}},
+            },
+            "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+            "replication": {"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        }
+    )
+    messages = messages_by_code(path)
+    assert "E-REPL-FOLD-K-TOO-LARGE" in messages
+    message = messages["E-REPL-FOLD-K-TOO-LARGE"]
+    assert "in cell arm=control" in message
+    # That cell's cluster count, 2 — not the roster's 5 and not its 8 units.
+    assert "over 2 clusters of `site`" in message
+    assert "5" not in message
+
+    # The honouring half, on the same fixture: `k: 2` fits the thinnest cell and
+    # is NOT refused, so the bound is shown to be the cell's basis rather than
+    # a refusal of every clustered fold beside a cell structure.
+    fits = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["arm", "site"],
+                    "cluster_by": "site",
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+                "replication": {"repeats": [{"kind": "fold", "k": 2}], "rationale": "two folds"},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in fits
+    # And the roster-wide bound would have permitted 5, which is what makes
+    # `k: 3`'s refusal above attributable to the cell rather than to the fold
+    # count being too large for this roster at all.
+    assert "E-REPL-FOLD-CELLS" in fits

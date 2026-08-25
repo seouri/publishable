@@ -147,7 +147,6 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
-    cell_fold_basis,
     cells_of,
     cluster_count_of,
     clusters_of,
@@ -159,6 +158,7 @@ from publishable.units import (
     partition_units,
     resolve_units,
     stratum_names,
+    thinnest_cell,
     units_hash,
 )
 from publishable.uv_support import uv_lock_info
@@ -2762,7 +2762,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # `run` re-resolves fresh rather than trusted from the earlier pass.
     #
     # **Under a cell structure the basis is the SMALLEST CELL's**, resolved by
-    # `units.cell_fold_basis` from the `cells` just above — because the fold is
+    # `units.thinnest_cell` from the `cells` just above — because the fold is
     # drawn inside each cell, so the cell that cannot carry `k` is what makes
     # the declaration unaffordable. `cells is None` means no cell structure and
     # takes the roster-wide answer, which is the identical predicate
@@ -2774,16 +2774,20 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # and Decision 4's three-site table in
     # `docs/superpowers/specs/2026-08-25-folds-inside-cells-design.md`).
     fold_level_basis: int | None = None
+    # The cell that basis was counted over, travelling with it so a refused `k`
+    # names the declaration a reader must change. `None` means *no cells
+    # resolved*; see `replication._fold_k`.
+    fold_level_cell: tuple[tuple[str, str], ...] | None = None
     if roster is not None:
-        fold_level_basis = (
-            cell_fold_basis(roster, cluster_by, cells)
-            if cells is not None
-            else fold_basis(roster, cluster_by)
-        )
+        if cells is not None:
+            fold_level_basis, fold_level_cell = thinnest_cell(roster, cluster_by, cells)
+        else:
+            fold_level_basis = fold_basis(roster, cluster_by)
     levels = resolve_repeats(
         doc,
         digest,
         fold_basis=fold_level_basis,
+        fold_cell=fold_level_cell,
     )
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]

@@ -52,7 +52,6 @@ from publishable.units import (
     UnitList,
     assignment_for,
     auto_block_size,
-    cell_fold_basis,
     cells_of,
     clusters_of,
     fold_basis,
@@ -66,6 +65,7 @@ from publishable.units import (
     rule_for,
     stratum_names,
     stratum_varies_within_cluster,
+    thinnest_cell,
     usable_weight,
 )
 
@@ -688,6 +688,12 @@ def validate_config(
     # one — and both readings take the roster-wide answer.
     cells = _resolved_cells(doc, units_decl, roster, usable_cluster)
     basis: int | None = None
+    # The cell `basis` was counted over, when it was counted over one — the
+    # label `replication._fold_k` needs to name the declaration a reader must
+    # change, and `None` there means *no cells resolved* rather than *cells
+    # resolved and unnamed*. It comes back from the same walk as the number, so
+    # the two cannot disagree about which cell the bound bit on.
+    basis_cell: tuple[tuple[str, str], ...] | None = None
     if roster is not None:
         try:
             # **Which question this call asks: the FOLD's basis** — how many
@@ -702,15 +708,14 @@ def validate_config(
             #
             # One local, both callers (`_check_replication` bounds `k` against
             # it, `_check_sweep` sizes a `k: all` budget from it), and the
-            # substitution is inside the SAME `try`: `cell_fold_basis` calls
+            # substitution is inside the SAME `try`: `thinnest_cell` calls
             # `fold_basis` once per cell, so `E-DATA-CLUSTER-UNKNOWN`
             # propagates from any one of them and an unwrapped call would turn
             # a collecting `validate` into a raising one.
-            basis = (
-                cell_fold_basis(roster, usable_cluster, cells)
-                if cells is not None
-                else fold_basis(roster, usable_cluster)
-            )
+            if cells is not None:
+                basis, basis_cell = thinnest_cell(roster, usable_cluster, cells)
+            else:
+                basis = fold_basis(roster, usable_cluster)
         except ContractError:
             # Swallowed so `validate` keeps collecting. Usually the same fault is
             # reported beside this by `_check_cluster_by` — but **not always, and
@@ -728,6 +733,7 @@ def validate_config(
             # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
             # for real at `run`.
             basis = None
+            basis_cell = None
     # The holdout's realized test partition, resolved once and threaded — the
     # denominator a resample's cluster count is actually over. Resolved here
     # rather than inside `_check_resample` so a future second reader gets the
@@ -756,6 +762,7 @@ def validate_config(
         c,
         experiment=experiment,
         fold_basis=basis,
+        fold_cell=basis_cell,
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, fold_basis=basis)
@@ -3792,6 +3799,7 @@ def _check_replication(
     *,
     experiment: Any | None = None,
     fold_basis: int | None = None,
+    fold_cell: tuple[tuple[str, str], ...] | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     # A `fold` level partitions units into train/test splits; with no
@@ -3863,7 +3871,30 @@ def _check_replication(
     # `E-REPL-FOLD-K`, which is honest: the fold count genuinely cannot be known,
     # and the roster's own finding is already reported beside it.
     try:
-        resolve_repeats(doc, "validate", fold_basis=fold_basis)
+        # `fold_cell` travels with `fold_basis` for the reason `_fold_k` states:
+        # a bound taken over one cell and reported against the whole roster's
+        # count sends a reader to the wrong declaration. This forwarding IS the
+        # third emit site of `E-REPL-FOLD-K-TOO-LARGE` — the `c.error` below
+        # prints `str(exc)`, so the clause reaches `validate` only if the label
+        # reaches `_fold_k`.
+        #
+        # **Why `E-REPL-FOLD-K-TOO-LARGE` still has ONE § Errors row, in the
+        # `validate` table, while `_fold_k` raises it twice.** § Errors core
+        # raises covers the codes core raises where no `validate` pass is
+        # running; that would owe this code a row only if a config could
+        # validate clean and then meet the raise. It cannot: `validate`'s cell
+        # draw and `_prepare_run`'s call `units.assignment_for` over the same
+        # roster at the same `design_digest(doc)` through the same skip rules,
+        # so they resolve the same cells and take the same minimum — a `k` this
+        # check clears is a `k` `_fold_k` clears at run. Where the draw faults,
+        # `_resolved_cells` returns `None` and the roster-wide basis is used at
+        # BOTH ends, since the fault is the same fault; the config then meets
+        # that fault itself, under its own code, rather than this one.
+        # `E-DATA-HOLDOUT-EMPTY` has rows in both tables because its two bounds
+        # are genuinely two computations (`_check_holdout`'s against a declared
+        # `frac`, `holdout_for`'s against a realized split), which is the
+        # asymmetry, not an inconsistency.
+        resolve_repeats(doc, "validate", fold_basis=fold_basis, fold_cell=fold_cell)
     except ContractError as exc:
         if exc.code in REPL_DECLARATION_CODES:
             c.error(exc.code, "replication.repeats", str(exc))

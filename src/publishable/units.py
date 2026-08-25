@@ -2712,15 +2712,60 @@ def cell_fold_basis(
     unreadable cell makes the whole answer unresolved, which is the honest
     reading: the minimum over cells cannot be known while one of them cannot be
     counted.
+
+    **This is the one-number face; `thinnest_cell` below is the walk.** Both
+    callers that resolve a fold basis need the cell's label as well as the
+    number — `replication._fold_k`'s refusal has to name the declaration a
+    reader must change — so `validate.validate_config` and `cli._prepare_run`
+    call `thinnest_cell` and unpack both, and this function has **no production
+    caller at this commit**. It is kept, rather than folded away, for the
+    callers that want the bound and not the label: H3c-3's own remaining
+    tasks bound `E-DATA-HOLDOUT-EMPTY` and `W-DATA-CELL-THIN` over the
+    thinnest cell, and neither names it.
     """
-    bases: list[int] = []
-    for keys in cells.values():
+    return thinnest_cell(roster, cluster_by, cells)[0]
+
+
+def thinnest_cell(
+    roster: UnitList,
+    cluster_by: str | None,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+) -> tuple[int, tuple[tuple[str, str], ...] | None]:
+    """`cell_fold_basis`' answer **and the cell it came from** — one walk, two
+    readers.
+
+    The number is exactly `cell_fold_basis`' (which delegates here, so the two
+    cannot disagree); the second element is the key of the cell that produced
+    it, or `None` when there was no non-empty cell to produce it and the answer
+    fell back to the whole roster's `fold_basis`.
+
+    **Why the label travels at all.** `replication._fold_k` refuses a `k` past
+    the basis and its message has to name the declaration a reader must change.
+    Under a cell structure the count it refused is one cell's, so a message
+    naming only the number sends the reader to the whole roster's count when
+    the fault is one arm's. `_fold_k` sees a declaration and a count and never
+    a roster (by design), so the label reaches it as an argument — and it has
+    to be the label of the cell the *minimum* came from, which is knowable only
+    where the minimum is taken. A caller that re-derived it by looking for a
+    cell whose basis equals the number would be a second derivation of exactly
+    the thing `fold_basis`' single-derivation rule exists to keep single.
+
+    **Ties go to the first cell in `cells_of`' key order**, which is
+    declaration order of the axes and of their levels. Any of the tied cells is
+    equally true of the bound, so the rule exists to make the message
+    deterministic rather than to prefer one cell on its merits. No fixture in
+    this slice tests a tie: F2's cells are 2 and 3.
+    """
+    thinnest: tuple[int, tuple[tuple[str, str], ...]] | None = None
+    for key, keys in cells.items():
         if not keys:
             continue
-        bases.append(
-            fold_basis(UnitList([unit for unit in roster if unit.key in keys]), cluster_by)
-        )
-    return min(bases) if bases else fold_basis(roster, cluster_by)
+        basis = fold_basis(UnitList([unit for unit in roster if unit.key in keys]), cluster_by)
+        # Strict `<`, which is what makes the tie-break the FIRST cell in key
+        # order rather than the last.
+        if thinnest is None or basis < thinnest[0]:
+            thinnest = (basis, key)
+    return thinnest if thinnest is not None else (fold_basis(roster, cluster_by), None)
 
 
 def stratum_varies_within_cluster(
