@@ -479,15 +479,30 @@ def parameter_table(spec: Mapping[str, Param]) -> list[str]:
 
 
 def template_section(name: str, claim: "Claim") -> list[str]:
-    """One template's sub-section: `### `<name>``, a convention line, its
-    parameter table, and whatever declarations it carries beside them.
+    """One template's sub-section for the README: `### `<name>`` and its
+    details.
+
+    **No provider is printed for a local claim here**, and `list-templates`
+    prints one for every claim: `LocalTemplate.provider` is an absolute
+    `<path>::<ClassName>` pair, so a README carrying it would carry one
+    machine's directory layout into a committed file. An installed claim's
+    provider is a distribution name and version — what a reader pins or
+    uninstalls — so `template_details` prints that one at both surfaces.
+    """
+    return [f"### `{name}`", "", *template_details(claim)]
+
+
+def template_details(claim: "Claim") -> list[str]:
+    """A template's convention line, its parameter table and whatever
+    declarations travel beside them — shared by the `templates` region and by
+    `publishable list-templates`, so one spec has one rendering.
 
     An **installed** claim gets a named line instead of a table (correction 21)
     — never a blank, and never an omission: an honest absence is a reported
     fact, a blank is a silence, and both would be indistinguishable from a
     template that declares no parameters at all.
     """
-    lines = [f"### `{name}`", ""]
+    lines: list[str] = []
     cls = claim.cls
     if cls is None:
         lines.append(f"Installed, provided by `{claim.provider}` — {INSTALLED_SPEC_UNREADABLE}.")

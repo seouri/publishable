@@ -1224,3 +1224,283 @@ def test_while_the_document_still_says_not_built_a_wrong_arity_docs_defers_to_it
     )
     # And the zero-argument form is NOT deferred: the command is built.
     assert main(["docs"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# H9d task 8 — `publishable list-templates`.
+#
+# These live beside `docs`' arms rather than in `tests/test_cli.py` because
+# they reuse this file's project fixture and because the two commands share one
+# renderer (`docs.template_details`) — a rendering asserted in one file and
+# built in another is how two copies of one table start.
+#
+# Fixture D (design § 9): `aaa_probe` and `zzz_probe`, ONE ON EACH SIDE of
+# core's `generic` in sort order, plus an installed claim between them. Locals
+# on both sides is what makes name order, provenance order and discovery order
+# three different answers — a decoy that sorts on one side only rules out
+# `first`-wins and lets `last`-wins through, which this repo has been bitten by
+# twice.
+# ---------------------------------------------------------------------------
+
+_AAA_PROBE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("aaa_probe")
+class AaaProbeTemplate(BaseTemplate):
+    required_env = ["AAA_TOKEN"]
+    parameter_spec = {"aaa.n": Param(int, default=3, ge=1, help="how many")}
+"""
+
+_ZZZ_PROBE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("zzz_probe")
+class ZzzProbeTemplate(BaseTemplate):
+    parameter_spec = {"zzz.label": Param(str, help="a label")}
+"""
+
+#: A module that RECORDS ITS OWN IMPORT. Mutation 7's assertion — that
+#: `list-templates` reads an installed claim from package metadata and imports
+#: nothing — cannot be made from an absence of output: a command that printed
+#: nothing at all would satisfy it. This leaves a file behind if it is ever
+#: executed, and the test proves the sentinel works before trusting its silence.
+_SENTINEL_MODULE = """\
+import os
+from pathlib import Path
+
+from publishable import BaseTemplate, register_template
+
+
+Path(os.environ["SENTINEL_MARKER"]).write_text("imported")
+
+
+# Named `Mmm` to match the entry point's own `sentinel_tpl:Mmm` target, so a
+# mutation that DOES import this module succeeds and is then caught by the
+# marker above rather than by an AttributeError. A mutation caught by a crash
+# proves the import happened and nothing about the property.
+@register_template("mmm_installed")
+class Mmm(BaseTemplate):
+    parameter_spec = {}
+"""
+
+
+def _fixture_d(tmp_path: Path, installed, monkeypatch) -> Path:
+    """Two local templates on either side of `generic`, plus an installed claim
+    whose module records its own import."""
+    import sys
+
+    # The sentinel's module NAME is what `sys.modules` caches, and each call to
+    # `installed` writes a fresh copy of it in a fresh directory — so a second
+    # test in the same session would import nothing, the body would not run, and
+    # the marker would stay absent no matter what the command did. Measured, not
+    # anticipated: with this line missing, the mutation that makes
+    # `list-templates` import an installed template left this file's own
+    # no-import arm GREEN, because an earlier arm had already imported the
+    # sentinel. The entry is dropped so every arm's import is a real one.
+    monkeypatch.delitem(sys.modules, "sentinel_tpl", raising=False)
+    site = installed(
+        "dist-assay", "0.3.1", {"publishable.templates": {"mmm_installed": "sentinel_tpl:Mmm"}}
+    )
+    (site / "sentinel_tpl.py").write_text(_SENTINEL_MODULE)
+    monkeypatch.setenv("SENTINEL_MARKER", str(tmp_path / "sentinel-was-imported"))
+    return _project(tmp_path, {"aaa_probe": _AAA_PROBE, "zzz_probe": _ZZZ_PROBE})
+
+
+def test_list_templates_prints_every_claim_in_name_order(
+    tmp_path: Path, installed, monkeypatch, capsys
+):
+    """Every claim `_claims` returns — core's, this project's own, and the
+    installed one — in NAME order, each with its provenance and its provider.
+
+    The headings are asserted as a SEQUENCE, not as memberships: with a local
+    template on each side of `generic` and an installed claim between them, the
+    reverse of this list, discovery order (core, installed, local) and
+    insertion order are three different sequences, so no one of them can pass
+    for another.
+    """
+    from publishable.cli import main
+
+    root = _fixture_d(tmp_path, installed, monkeypatch)
+    monkeypatch.chdir(root)
+
+    assert main(["list-templates"]) == 0
+    out = capsys.readouterr().out
+    assert [line for line in out.splitlines() if line.startswith("### ")] == [
+        "### `aaa_probe`",
+        "### `generic`",
+        "### `mmm_installed`",
+        "### `zzz_probe`",
+    ]
+    assert "local · provider" in out
+    assert "core · provider `publishable.templates.builtin.generic.GenericTemplate`" in out
+    assert "| `aaa.n` | integer | `3` | >= 1 | how many |" in out
+    assert "**Required credentials:** `AAA_TOKEN`" in out
+
+
+def test_an_installed_claim_prints_a_named_absence_and_imports_nothing(
+    tmp_path: Path, installed, monkeypatch, capsys
+):
+    """Correction 21, and the invariant behind it: core resolves an installed
+    template's name from package metadata **without importing the package**, so
+    this command cannot print its spec and says so rather than printing a
+    blank.
+
+    The no-import claim is made by a sentinel module that records its own
+    import — never by an absence of output, which a command that printed
+    nothing would also satisfy. The sentinel is PROVEN to work in the same
+    test, by importing it directly afterward: without that control, a broken
+    sentinel and a correct command are indistinguishable.
+    """
+    import importlib
+    import sys
+
+    from publishable.cli import main
+
+    root = _fixture_d(tmp_path, installed, monkeypatch)
+    marker = tmp_path / "sentinel-was-imported"
+    monkeypatch.chdir(root)
+
+    assert main(["list-templates"]) == 0
+    out = capsys.readouterr().out
+    assert "### `mmm_installed`\n\nInstalled, provided by `dist-assay 0.3.1` — " in out
+    assert "`E-TEMPLATE-INSTALLED-UNSUPPORTED`" in out
+    installed_block = out.split("### `mmm_installed`", 1)[1].split("### `", 1)[0]
+    assert "| Parameter | Type |" not in installed_block
+    assert "Convention class" not in installed_block
+    assert not marker.exists()
+
+    # The positive control: the sentinel really does record, so its silence
+    # above is evidence about the command rather than about the sentinel.
+    sys.modules.pop("sentinel_tpl", None)
+    importlib.import_module("sentinel_tpl")
+    assert marker.read_text() == "imported"
+
+
+def test_outside_a_repository_it_still_lists_and_says_why_the_list_is_shorter(
+    tmp_path: Path, installed, monkeypatch, capsys
+):
+    """`E-GIT-NO-REPO` caught **by type**, leaving `repo_root=None` — the same
+    thing `validate_config` does — never a refusal: core's `generic` and every
+    installed claim are answerable without a repository.
+
+    Asserted in both directions at once, which is what mutation 9 needs: the
+    rows that ARE answerable are present, AND the explanatory line is there.
+    A shorter list with no explanation is the *silently skipped* fault; an
+    explanation with no list would be a refusal wearing a note.
+    """
+    from publishable.cli import main
+
+    _fixture_d(tmp_path, installed, monkeypatch)
+    here = tmp_path / "not-a-repo"
+    here.mkdir()
+    monkeypatch.chdir(here)
+
+    assert main(["list-templates"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(
+        f"no git repository was found from {here} upwards, so no project-local "
+        "`templates/` was searched"
+    )
+    assert [line for line in out.splitlines() if line.startswith("### ")] == [
+        "### `generic`",
+        "### `mmm_installed`",
+    ]
+    assert "aaa_probe" not in out
+
+
+def test_a_collision_reaches_main_rather_than_being_listed_tolerantly(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`_claims` raises `E-TEMPLATE-COLLISION` on a name two providers claim,
+    and this command does not catch it — the same answer `validate` gives.
+    The command whose job is enumerating names is the wrong place to invent a
+    tolerant enumeration: a listing that picked one claimant would be a lie
+    about the other.
+
+    Told apart from a refusal this command decided by the PRINTER: `main`'s own
+    handler prints one line and no problem count, where every `Collector` this
+    slice builds renders a trailing `1 problem (…)`.
+    """
+    from publishable.cli import main
+
+    root = _project(
+        tmp_path,
+        {"aaa_probe": _AAA_PROBE, "twin": _AAA_PROBE.replace("AaaProbe", "TwinProbe")},
+    )
+    monkeypatch.chdir(root)
+
+    assert main(["list-templates"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("  error   E-TEMPLATE-COLLISION")
+    assert "claimed more than once" in err
+    assert "problem" not in err
+
+
+def test_list_templates_takes_no_argument_and_no_flag(tmp_path: Path, monkeypatch, capsys):
+    """The same arity rule `docs` carries, pinned for this command too rather
+    than inherited from its neighbour's arm: *(none)* is the argument
+    `docs/reference.md` § Operation commands gives it, and a flag is an
+    argument.
+
+    Pinned in the state task 13 leaves, with `NOT_BUILT_COMMANDS` emptied; the
+    companion below pins the transitional answer against the shipped one. The
+    honouring half is asserted here too, so this cannot pass for a command that
+    refuses every invocation.
+    """
+    import publishable.cli as cli_module
+    from publishable.cli import main
+
+    root = _project(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(cli_module, "NOT_BUILT_COMMANDS", {})
+
+    for argv in (["list-templates", "somewhere"], ["list-templates", "--all"]):
+        assert main(argv) == 2, argv
+        assert capsys.readouterr().err == "`list-templates` takes no arguments and no flags\n"
+    assert main(["list-templates"]) == 0
+    assert "### `generic`" in capsys.readouterr().out
+
+
+def test_while_the_document_still_says_not_built_a_wrong_arity_list_templates_defers(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`list-templates`' half of the transitional deferral `docs` documents.
+    **Task 13 deletes this test with the dictionary key.**"""
+    from publishable.cli import NOT_BUILT_COMMANDS, main
+
+    root = _project(tmp_path)
+    monkeypatch.chdir(root)
+    assert "list-templates" in NOT_BUILT_COMMANDS
+
+    assert main(["list-templates", "somewhere"]) == 2
+    assert capsys.readouterr().err.startswith(
+        "`publishable list-templates` is specified but not built in this version"
+    )
+    assert main(["list-templates"]) == 0
+
+
+def test_the_two_surfaces_render_one_parameter_spec_the_same_way(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`list-templates` and the README's `templates` region read the same
+    renderer, so the table a reader sees on the terminal and the table their
+    README carries cannot drift.
+
+    Asserted by comparing the printed block against `docs.template_details`'
+    own output for the same claim, rather than against a third literal — a
+    third literal would be exactly the drift this is about.
+    """
+    from publishable.cli import main
+    from publishable.docs import template_details
+    from publishable.templates.registry import _claims
+
+    root = _project(tmp_path, {"shapes": _SHAPES_TEMPLATE})
+    monkeypatch.chdir(root)
+
+    assert main(["list-templates"]) == 0
+    out = capsys.readouterr().out
+    expected = "\n".join(template_details(_claims(root)["shapes_assay"]))
+    assert expected in out
+    assert "| `assay.vendor` | string | `vendor_a` |" in expected

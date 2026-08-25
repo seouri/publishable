@@ -191,7 +191,7 @@ OPERATION_COMMANDS = {
 # § Errors row already documents for the creation commands, reused rather than
 # restated (Ruling FF) — and they take no flag either, `design-principles.md`
 # § Everything is in the file admitting none anywhere.
-ZERO_ARGUMENT_COMMANDS = {"docs"}
+ZERO_ARGUMENT_COMMANDS = {"docs", "list-templates"}
 
 NOT_BUILT_COMMANDS: dict[str, str] = {
     "demo": "What `demo` walks you through",
@@ -5532,6 +5532,82 @@ def command_dry_run(config_path: Path) -> int:
     return EXIT_OK
 
 
+def command_list_templates() -> int:
+    """`publishable list-templates` — every template name this build knows,
+    with its provenance, its provider, and its full parameter spec where one is
+    readable.
+
+    **It takes no path** and walks up from `Path.cwd()`, which is the exception
+    `E-GIT-NO-REPO`'s own § Errors row already documents for the creation
+    commands, reused rather than restated (Ruling FF).
+
+    **A missing repository is caught BY TYPE**, leaving `repo_root=None`
+    exactly as `validate.validate_config` does, and the absence is **printed**:
+    core's `generic` and every installed claim are answerable without a
+    repository, and only `templates/**` discovery is skipped — so a shorter
+    list with no explanation would be the *silently skipped* fault this repo
+    already has a filing about.
+
+    **It prints every CLAIM, and a parameter spec only where a class exists.**
+    An installed claim's class is `None` by construction (correction 21): the
+    entry-point scan reads package metadata and imports nothing, which is the
+    invariant *"`validate` resolves a name without importing the package"*.
+    Printing its spec would mean importing the package here, making this the
+    one surface in the build that loads what every other one refuses to load —
+    and resolving, for a listing, a name a config naming it is refused for. So
+    it prints the provider and one line saying the spec is not readable in this
+    build, citing `E-TEMPLATE-INSTALLED-UNSUPPORTED`.
+
+    **Ruling FF rejects `H9-SCOPING.md` § 7.2's own preferred answer** —
+    narrowing this to the installed set and never a project-local template.
+    A project-local template is the case `docs/reference.md` § Templates says
+    path discovery exists for, and the case `docs`' own `templates` region
+    needs.
+
+    **`E-TEMPLATE-COLLISION` is not caught**, and neither is `E-TEMPLATE-LOAD`:
+    both reach `main`, which is the same answer `validate` gives. The command
+    whose job is enumerating names is the wrong place to invent a tolerant
+    enumeration — a name two providers claim has no listing that is not a lie
+    about one of them.
+
+    The renderer is `docs.template_details`, the one the `templates` region
+    reads, rather than a second one: two renderings of one `parameter_spec` are
+    two literals that drift.
+    """
+    from publishable.docs import template_details
+    from publishable.templates.registry import _claims
+
+    here = Path.cwd()
+    notes: list[str] = []
+    try:
+        repo_root: Path | None = find_repo_root(here)
+    except ContractError as exc:
+        if exc.code != "E-GIT-NO-REPO":
+            raise
+        repo_root = None
+        notes.append(
+            f"no git repository was found from {here} upwards, so no project-local "
+            "`templates/` was searched — the names below are core's own and any "
+            "installed plugin's"
+        )
+
+    claims = _claims(repo_root)
+    lines = list(notes)
+    if notes:
+        lines.append("")
+    for name in sorted(claims):
+        claim = claims[name]
+        lines.append(f"### `{name}`")
+        lines.append("")
+        if claim.cls is not None:
+            lines.append(f"{claim.provenance} · provider `{claim.provider}`")
+            lines.append("")
+        lines.extend(template_details(claim))
+        lines.append("")
+    print("\n".join(lines).rstrip("\n"))
+    return EXIT_OK
+
+
 def _dispatch(command: str, rest: list[str]) -> int:
     if command in OPERATION_COMMANDS:
         if len(rest) != 1 or rest[0].startswith("-"):
@@ -5629,7 +5705,10 @@ def _dispatch(command: str, rest: list[str]) -> int:
         # gain — `_dispatch` runs once per invocation, not once per import.
         from publishable.docs import command_docs
 
-        zero_argument: dict[str, Callable[[], int]] = {"docs": command_docs}
+        zero_argument: dict[str, Callable[[], int]] = {
+            "docs": command_docs,
+            "list-templates": command_list_templates,
+        }
         return zero_argument[command]()
     if command == "new":
         if len(rest) != 1:
