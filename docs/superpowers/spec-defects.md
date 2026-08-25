@@ -8923,6 +8923,14 @@ docs/reference.md` → **1** as the can-fail control. `E-PROJECT-EXISTS`'s sente
 reason**, and H6b taking two codes does not make it H6's: the two were taken by emit site, not by a
 charter that grew.
 
+**APPENDED 2026-08-25 (H9d task 13): the `E-PROJECT-EXISTS` half is DONE, and this entry is amended
+rather than struck** — its `E-PARAM-MISSING` subject is untouched and stands. Task 13's instruction
+to re-check that row against the code found the same thing by reading both emit sites
+(`scaffold.py`'s `scaffold_project` and `plugin_scaffold.py`'s `scaffold_plugin`), and § Errors'
+sentence now names `plugin new` beside `publishable new` with the reason the two share one refusal.
+Recorded here because a filing whose claim about the code has gone stale reads as live work nobody
+holds — which is this file's own rule, and the document is what changed rather than the code.
+
 ## ~~a same-size, same-second rewrite of a report override is silently not picked up, and `report` renders the previous version at exit `0`~~ — STRUCK 2026-08-25 (H9d task 9), CLOSED
 
 **Closed by the same pass as its sibling above**, which is what this entry's own *check its owner

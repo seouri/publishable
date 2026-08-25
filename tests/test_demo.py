@@ -403,3 +403,47 @@ def test_no_pause_alters_the_config(home: Path, capsys, monkeypatch):
     assert stopped_hash == straight_hash
     assert stopped_hash.startswith("sha256:")
     capsys.readouterr()
+
+
+def test_demo_refuses_a_directory_that_already_holds_something_at_exit_1(home: Path, capsys):
+    """`demo` is a creation command, and `docs/reference.md` § Errors' rule for one
+    refusing to overwrite is exit **1** with the ordinary diagnostic shape — not
+    exit 2, which is a wrong invocation, and not a hand-rolled f-string, which
+    would bypass the `Collector` that applies the redaction pass.
+
+    Pinned on the code AND the exit, because either alone passes a build that got
+    the other wrong.
+    """
+    occupied = home / "occupied"
+    occupied.mkdir()
+    (occupied / "something.txt").write_text("not mine\n")
+    assert main(["demo", "--into", str(occupied)]) == 1
+    err = capsys.readouterr().err
+    assert "E-PROJECT-EXISTS" in err, err
+    assert not (occupied / PROGRESS_FILE).exists()
+
+
+def test_demo_mints_no_error_codes_of_its_own(home: Path):
+    """Design § 6's disclosure: *"the only `E-` codes minted are `docs`' five"*, and
+    § Executability's dated entry repeats it. A code with no
+    [§ Errors](../../docs/reference.md) row is an unbacked identifier — the
+    `field_convention` shape — so the claim is asserted here rather than left to a
+    reader's grep.
+
+    The three internal invariants this module still guards are `RuntimeError`s
+    (nothing a user declares can reach them) and the one wrong-directory case is an
+    invocation error with no identifier, exactly like a wrong arity.
+    """
+    import re
+
+    from publishable import demo as demo_module
+
+    source = Path(demo_module.__file__).read_text()
+    assert "E-DEMO" not in source
+    reference = (Path(__file__).resolve().parents[1] / "docs" / "reference.md").read_text()
+    used = set(re.findall(r'code="(E-[A-Z0-9-]+)"', source))
+    # Not "no codes at all": reusing a documented one is right where the fault
+    # really is that code. What may not happen is a code no § Errors row carries.
+    assert used == {"E-TEMPLATE-UNKNOWN"}, used
+    for code in used:
+        assert code in reference, code

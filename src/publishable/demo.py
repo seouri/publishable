@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK
+from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.scaffold import scaffold_project
@@ -231,10 +231,15 @@ def _replace_line(lines: list[str], prefix: str, replacement: str) -> None:
         if line.startswith(prefix):
             lines[i] = replacement
             return
-    raise ContractError(
+    # A `RuntimeError`, deliberately not a coded `ContractError`: nothing the user
+    # declared can reach this. It fires only when `materialize_config` has moved and
+    # `demo` has not moved with it, which is a bug in this package — and a coded
+    # identifier would need a § Errors row, a diagnostic and a remedy for a fault no
+    # remedy of the reader's fixes. `docs/reference.md` § Errors carries one row per
+    # code, so minting one nobody can act on is minting an unbacked row.
+    raise RuntimeError(
         f"`demo` could not find the line starting {prefix!r} in the materialized "
-        "config — `materialize_config` has moved and `demo` must move with it",
-        code="E-DEMO-CONFIG-SHAPE",
+        "config — `materialize_config` has moved and `demo` must move with it"
     )
 
 
@@ -294,7 +299,8 @@ def block_of(config_text: str, name: str) -> str:
     lines = config_text.split("\n")
     start = next((i for i, line in enumerate(lines) if line.startswith(f"{name}:")), None)
     if start is None:
-        raise ContractError(f"config has no `{name}` block to show", code="E-DEMO-CONFIG-SHAPE")
+        # `_replace_line`'s reason: `demo` wrote this config moments ago.
+        raise RuntimeError(f"config has no `{name}` block to show")
     end = start + 1
     while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
         end += 1
@@ -444,8 +450,20 @@ def command_demo(into: Path | None = None) -> int:
         try:
             build_demo_project(root)
         except ContractError as exc:
-            print(f"{exc.code}: {exc}", file=sys.stderr)
-            return EXIT_INVOCATION
+            # Reported through a `Collector`, never as a hand-rolled f-string:
+            # `demo` is a creation command, and § Errors' rule for one refusing to
+            # overwrite is exit `1` with the ordinary diagnostic shape. The
+            # reachable case is `E-PROJECT-EXISTS` — an `--into` directory that
+            # already holds something. `command_docs` is the sibling this copies,
+            # and it is copied WITH its containment rather than as its calls: the
+            # `Collector` is what applies the redaction pass `main`'s own handler
+            # does not.
+            from publishable.diagnostics import Collector
+
+            c = Collector()
+            c.error(exc.code or "E-IO-FAILED", str(root), str(exc))
+            print(c.render(), file=sys.stderr)
+            return EXIT_WRONG
         write_progress(root, 1)
         shown = root if into is not None else Path(".") / PROJECT_DIRNAME
         print(f"Created {shown}/")
@@ -463,9 +481,14 @@ def command_demo(into: Path | None = None) -> int:
 
     config_path = root / config_rel
     if not config_path.is_file():
+        # The argument named the wrong directory, which is an invocation error and
+        # not a fault in anything declared — the same shape, and the same exit, as
+        # "`demo` takes nothing, or `--into DIR`" above. No `E-` code: this slice
+        # mints none outside `docs`' five, and a code here would be a § Errors row
+        # for a mistyped path.
         print(
-            f"E-DEMO-NO-PROJECT: {root} holds a {PROGRESS_FILE} but no "
-            f"{config_rel} — this is not a demo directory",
+            f"{root} holds a {PROGRESS_FILE} but no {config_rel} — "
+            "`demo` was pointed at a directory that is not a demo directory",
             file=sys.stderr,
         )
         return EXIT_INVOCATION
@@ -626,10 +649,8 @@ def latest_run_yaml(root: Path) -> Path:
     output_dir = Path(str(doc["data"]["output_dir"])).expanduser()
     runs = sorted(output_dir.glob("run_*/run.yaml"))
     if not runs:
-        raise ContractError(
-            f"no run record found under {output_dir}",
-            code="E-DEMO-NO-RUN",
-        )
+        # `_replace_line`'s reason again: stop 5 exited 0, so a record exists.
+        raise RuntimeError(f"no run record found under {output_dir}")
     return runs[-1]
 
 

@@ -11,10 +11,11 @@ full suite **3336 passed, 1 skipped, 2 xfailed**.
 | `ebe58ca` | fix round — two defects of mine, found before the gate |
 | `cbfda10` | 13 — the `NOT BUILT` retirement, `E-GIT-NO-REPO`'s row |
 | `1c49187` | 14 — the four documents, `CLAUDE.md`, `spec-defects.md`, § Executability |
+| `<this commit>` | fix round 2 — three undocumented `E-DEMO-*` identifiers retired, `demo`'s refusal moved to exit `1`, two stale capability claims |
 
 **Test count, with its nouns rather than a total.** The dispatch's `3319` is the **pre-work
 baseline**: I ran `uv run pytest` at `42e3f02` before writing a line and got exactly
-`3319 passed, 1 skipped, 2 xfailed`. Final is **3336**: **+18** in `tests/test_demo.py`, **−2** in
+`3319 passed, 1 skipped, 2 xfailed`. Final is **3338**: **+20** in `tests/test_demo.py`, **−2** in
 `tests/test_docs.py` (the two `…_defers…` tests deleted with the dictionary key), **+1**
 `test_the_not_built_machinery_is_retained_with_no_row_marked`. A report claiming 3319 would be
 claiming I added no tests.
@@ -465,3 +466,44 @@ notice's clause false and is why it is gone.
 6. **`demo`'s stop-5 commentary claims a family of six.** It is read from the design's measurement and
    from my own run's `family_size: 6`; if a future change to the correction family moves it, that
    sentence is prose and no test pins the number.
+
+---
+
+## Fix round 2 — four defects a reviewer found that my own sweeps did not
+
+All four were in work I had already committed. Recorded here in full because *a report's claim that a
+carried finding is closed has to be checked against the code like any other claim.*
+
+1. **I minted three undocumented `E-` identifiers, in a slice whose disclosure says it minted none.**
+   `demo.py` carried `E-DEMO-CONFIG-SHAPE` (twice), `E-DEMO-NO-RUN` and a printed `E-DEMO-NO-PROJECT:`
+   — none with a § Errors row, which is the `field_convention` shape minted by the last slice with
+   nobody left to close it, and which made design § 6's *"the only `E-` codes minted are `docs`'
+   five"* and my own dated § Executability entry false. **The suite could not see it**: 3336 green
+   with all three present. Closed by **retiring them, not by writing rows**: the three internal ones
+   are `RuntimeError`s (nothing a user declares can reach them — a moved `materialize_config`, a
+   config `demo` wrote seconds earlier, a record stop 5 exited `0` without), and the one user-facing
+   case is an invocation error with no identifier, exactly like a wrong arity. So § 6's sentence and
+   the § Executability entry stay true as written and needed no correction.
+   **Pinned** by `test_demo_mints_no_error_codes_of_its_own`, which asserts the set of `code=`
+   identifiers in the module is exactly `{"E-TEMPLATE-UNKNOWN"}` — a documented one, reused where the
+   fault really is that code — and that every one of them appears in `reference.md`. Its mutation
+   (minting `E-DEMO-NO-RUN` again) fails it.
+2. **`demo` refusing an occupied `--into` directory exited `2`, where § Errors says `1`.** Task 14 put
+   `demo` inside `CLAUDE.md`'s creation-command enumeration, and § Errors' rule for a creation command
+   refusing to overwrite is exit `1`. The site also hand-rolled `f"{exc.code}: {exc}"`, bypassing the
+   `Collector` and so the redaction pass — correction 30's shape. Fixed by copying `command_docs`
+   **with its containment**, not just its calls. Pinned on the code **and** the exit, since either
+   alone passes a build that got the other wrong.
+3. **README's `## Commands` table still promised *"list every installed template and its
+   parameters"*** — the opposite of what Decision 8 built and what task 14 had just written into
+   § Operation commands, in the file task 12 owns. Narrowed. My sweeps had looked for **markers**
+   (`NOT BUILT`, `not yet built`, `specified but not built`) and not for the **claim**; the sweep that
+   finds it is `grep -n "installed" <each file> | grep -i parameter`, whose only surviving hit is the
+   § Operation commands row that says the spec is *not readable in this build*.
+4. **A live `spec-defects.md` entry asserted something my task 13 had just made false** — *"
+   `E-PROJECT-EXISTS`'s sentence still does not name `plugin new`, which this entry asked for and no
+   slice has done."* My earlier reasoning ("not mine to close") was wrong: the entry's claim is about
+   a document I changed, and *a filing's claims about the code go stale like any other comment*. The
+   entry is **amended with a dated line** naming the task that did it, not struck — its
+   `E-PARAM-MISSING` subject is untouched and stands.
+

@@ -323,7 +323,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 | `report` · `diff` · `freeze` | Render results, compare two runs hash by hash, re-check the apparatus mid-run |
 | `reproduce` | Clone the recorded commit and prepare it to run — no git commands typed |
 | `study new` · `study add` | Assemble the runs a paper reports, outside the repo |
-| `docs` · `list-templates` | Regenerate the managed README regions; list every installed template and its parameters |
+| `docs` · `list-templates` | Rewrite the managed README regions; list every template this build knows, with its parameters where it can read them |
 
 Full details: [CLI reference](docs/reference.md#cli-reference) — which also carries the `Status` column saying which of these the current build executes.
 
