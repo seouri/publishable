@@ -745,3 +745,182 @@ def test_both_region_bodies_are_in_name_order_whatever_the_filesystem_answers(
     ]
     assert [row.split("`")[1] for row in rows] == ["exp-one", "exp-two"]
     assert "| `SHARED_TOKEN` | `exp-one`, `exp-two` |" in docs_module.credentials_body(root)
+
+
+# ---------------------------------------------------------------------------
+# H9d task 6 — the `templates` region body, and `generate template`'s write.
+#
+# The fixture declares the FOUR shapes whose rendering differs, in one
+# template, because a spec with one parameter tests one branch: a required
+# parameter (no `default`), a `nullable=True` `default=None`, one with
+# `choices` AND `requires_env`, and a `list` with `item_type`.
+# ---------------------------------------------------------------------------
+
+_SHAPES_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("shapes_assay")
+class ShapesAssayTemplate(BaseTemplate):
+    field_convention = "wet_lab"
+    default_repeats = 3
+    required_env = ["SHAPES_TOKEN"]
+    parameter_spec = {
+        "assay.model": Param(str, help="Instrument model identifier"),
+        "assay.calibration": Param(
+            str, default=None, nullable=True, help="Calibration id, or null"
+        ),
+        "assay.vendor": Param(
+            str,
+            default="vendor_a",
+            choices=["vendor_a", "vendor_b"],
+            requires_env={"vendor_a": [], "vendor_b": ["VENDOR_B_TOKEN"]},
+            help="Which vendor's API the readings come through",
+        ),
+        "assay.wells": Param(
+            list, default=[], item_type=int, min_items=0, max_items=96,
+            help="Which wells to read",
+        ),
+    }
+"""
+
+
+def test_the_templates_region_renders_the_four_shapes_from_parameter_spec(tmp_path: Path):
+    """The whole sub-section, asserted as bytes: the heading, the convention
+    line, the five-column table with one row per parameter in DECLARATION
+    order, and the `Required credentials` line.
+
+    Each of the four rows is a different rendering branch — `required` with no
+    default, a nullable `null` default, a `choices` list carrying its own
+    `requires_env` note and escaped pipes, and a `list` with an item type and
+    both bounds. A one-parameter fixture would exercise one of them.
+    """
+    from publishable.docs import templates_body
+
+    root = _project(tmp_path, {"shapes": _SHAPES_TEMPLATE})
+    assert templates_body(root) == (
+        "## Templates\n"
+        "\n"
+        "### `shapes_assay`\n"
+        "\n"
+        "Convention class `wet_lab` · default repeats 3 · naming "
+        "`^[a-z0-9]+(-[a-z0-9]+)*$`\n"
+        "\n"
+        "| Parameter | Type | Default | Constraints | Description |\n"
+        "|---|---|---|---|---|\n"
+        "| `assay.model` | string | — | required | Instrument model identifier |\n"
+        "| `assay.calibration` | string | `null` | nullable | Calibration id, or null |\n"
+        "| `assay.vendor` | string | `vendor_a` | choices: vendor_a \\| vendor_b "
+        "(needs VENDOR_B_TOKEN) | Which vendor's API the readings come through |\n"
+        "| `assay.wells` | list | `[]` | list of integer; at least 0 items; at most 96 "
+        "items | Which wells to read |\n"
+        "\n"
+        "**Required credentials:** `SHAPES_TOKEN`"
+    )
+
+
+def test_the_templates_region_does_not_list_cores_own_generic(tmp_path: Path):
+    """The scaffolded empty state — *"none yet — add one with `publishable
+    generate template`"* — is what decides this: a fresh project that listed a
+    template nobody added would make that line false the moment it was written.
+
+    Both directions in one test, because an assertion that `generic` is absent
+    passes identically if the builder returned nothing at all: the fresh
+    project degenerates to the scaffold's own line, and the same project with
+    one local template lists that one and still not `generic`.
+    """
+    from publishable.docs import TEMPLATES_EMPTY_LINE, refresh, templates_body
+
+    root = _project(tmp_path)
+    before = (root / "README.md").read_text()
+    assert TEMPLATES_EMPTY_LINE in body_of(before, "templates")
+    assert templates_body(root) + "\n" == body_of(before, "templates")
+    assert refresh(root, ("templates",)) == (["templates"], [])
+    assert (root / "README.md").read_text() == before
+
+    (root / "templates").mkdir(exist_ok=True)
+    (root / "templates" / "shapes.py").write_text(_SHAPES_TEMPLATE)
+    populated = templates_body(root)
+    assert "### `shapes_assay`" in populated
+    assert "generic" not in populated
+    assert TEMPLATES_EMPTY_LINE not in populated
+
+
+def test_an_installed_template_gets_a_named_line_and_no_table(tmp_path: Path, installed):
+    """Correction 21: its class is `None`, so there is no `parameter_spec` to
+    read without importing the package — which is the one thing every other
+    surface in this build refuses to do. It gets a LINE saying so, citing the
+    code, never a blank and never an omission.
+
+    The positive control is in the same test: a local template's real table is
+    rendered beside it, so this cannot pass for a builder that emitted no
+    tables at all.
+    """
+    installed("dist-assay", "0.3.1", {"publishable.templates": {"far_assay": "far.t:T"}})
+    from publishable.docs import templates_body
+
+    root = _project(tmp_path, {"shapes": _SHAPES_TEMPLATE})
+    body = templates_body(root)
+
+    assert "### `far_assay`\n\nInstalled, provided by `dist-assay 0.3.1` — " in body
+    assert "`E-TEMPLATE-INSTALLED-UNSUPPORTED`" in body
+    # The line, and nothing else: no convention line and no table for it. The
+    # local template's table proves the assertion is not vacuous.
+    far = body.split("### `far_assay`", 1)[1].split("### `", 1)[0]
+    assert "| Parameter | Type |" not in far
+    assert "Convention class" not in far
+    assert "| `assay.model` | string | — | required |" in body
+
+
+def test_generate_template_writes_its_own_parameter_table_into_the_region(tmp_path: Path, capsys):
+    """The generator's half. The table is read back out of the file it just
+    wrote, through discovery, so it is derived from `parameter_spec` rather
+    than composed from the stub's own text — and the region is the ONLY thing
+    that moves, asserted as a whole-file comparison.
+    """
+    from publishable.generators.template import generate_template
+
+    root = _project(tmp_path)
+    before = (root / "README.md").read_text()
+    capsys.readouterr()
+    generate_template(repo_root=root, name="my_assay")
+
+    after = (root / "README.md").read_text()
+    assert capsys.readouterr().err == ""
+    assert body_of(after, "templates") == (
+        "## Templates\n"
+        "\n"
+        "### `my_assay`\n"
+        "\n"
+        "Convention class `generic` · default repeats 1 · naming "
+        "`^[a-z0-9]+(-[a-z0-9]+)*$`\n"
+        "\n"
+        "| Parameter | Type | Default | Constraints | Description |\n"
+        "|---|---|---|---|---|\n"
+        "| `my_assay.threshold` | float | `0.5` | > 0; < 1 | TODO: replace with this "
+        "experiment type's own parameters |\n"
+    )
+    assert after == rewrite(before, "templates", body_of(after, "templates"))
+
+
+def test_generate_template_survives_a_readme_with_no_templates_region(tmp_path: Path, capsys):
+    """A project scaffolded before H9d declares no `templates` region — the
+    region task 3 added. The stub is still written and the absence is NAMED,
+    both asserted here, because a test that only checked nothing raised would
+    pass for a generator that wrote nothing at all."""
+    from publishable.generators.template import generate_template
+
+    root = _project(tmp_path)
+    (root / "README.md").write_text(
+        "# my-study\n\n<!-- publishable:begin overview -->\nprose\n"
+        "<!-- publishable:end overview -->\n"
+    )
+    capsys.readouterr()
+    path = generate_template(repo_root=root, name="my_assay")
+
+    assert capsys.readouterr().err == (
+        "note: README.md declares no `templates` region, so nothing was "
+        "written there — a region is never created, only rewritten\n"
+    )
+    assert path.is_file()
+    assert "parameter_spec" in path.read_text()

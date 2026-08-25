@@ -158,6 +158,54 @@ class Param:
             return f"list of {_TYPE_NAMES[self.item_type]}"
         return self.help or ""
 
+    def constraints(self) -> list[str]:
+        """EVERY constraint this parameter carries, for a generated table.
+
+        `comment()` above answers a different question and answers it for
+        `init`: which SINGLE constraint claims the one inline comment a config
+        line has room for. A documentation table has a column of its own, so it
+        prints the whole set — a `float` that is required, bounded on both
+        sides and drawn from a closed set says all three or says less than it
+        knows.
+
+        `required` and `nullable` are in the list even though neither is in the
+        closed constraint vocabulary `docs/reference.md` § Templates tabulates:
+        both constrain what a config may write, they are what a reader of this
+        table needs first, and `docs/reference.md` § Templates' own generated
+        example puts `required` in exactly this column. `requires_env` travels
+        inside the `choices` label, where `_choice_label` already puts it,
+        because it belongs to one choice rather than to the parameter.
+        """
+        parts: list[str] = []
+        if self.required:
+            parts.append("required")
+        if self.nullable:
+            parts.append("nullable")
+        if self.choices is not None:
+            parts.append("choices: " + " | ".join(self._choice_label(c) for c in self.choices))
+        for bound, sym in ((self.ge, ">="), (self.gt, ">"), (self.le, "<="), (self.lt, "<")):
+            if bound is not None:
+                parts.append(f"{sym} {bound}")
+        if self.pattern is not None:
+            parts.append(f"matches {self.pattern}")
+        if self.type_ is list and self.item_type is not None:
+            parts.append(f"list of {_TYPE_NAMES[self.item_type]}")
+        if self.min_items is not None:
+            parts.append(f"at least {self.min_items} items")
+        if self.max_items is not None:
+            parts.append(f"at most {self.max_items} items")
+        return parts
+
+    def type_name(self) -> str:
+        """This parameter's type as core's own messages spell it.
+
+        Read from `_TYPE_NAMES`, the mapping every `check()` message already
+        interpolates, rather than from a second table in the renderer: two
+        spellings of one type is how a generated document comes to disagree
+        with the diagnostic a reader gets when they write the wrong one.
+        """
+        return _TYPE_NAMES[self.type_]
+
     def _choice_label(self, choice: Any) -> str:
         needs = (self.requires_env or {}).get(choice) or []
         if not needs:

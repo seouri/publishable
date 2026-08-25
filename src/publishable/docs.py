@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from publishable.errors import ContractError
+from publishable.param import Param
 
 if TYPE_CHECKING:
     from publishable.templates.registry import Claim
@@ -406,6 +407,136 @@ def experiments_body(repo_root: Path) -> str:
     )
 
 
+#: The `templates` line a project with no template of its own carries.
+TEMPLATES_EMPTY_LINE = "_(none yet — add one with `publishable generate template`)_"
+
+#: The one sentence a claim core cannot read a spec for gets. Correction 21:
+#: an installed template's class is `None` because the entry-point scan reads
+#: package METADATA and imports nothing, which is the invariant *"`validate`
+#: resolves a name without importing the package"*. Printing its spec would
+#: mean importing it here — making this the one surface in the build that loads
+#: what every other one refuses to load.
+INSTALLED_SPEC_UNREADABLE = (
+    "its parameter spec is **not readable in this build** "
+    "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed "
+    "template's name from package metadata without importing the package, so "
+    "there is no class here to read a `parameter_spec` off"
+)
+
+
+def _cell(text: str) -> str:
+    """One markdown table cell's text, with the one character a table cannot
+    hold escaped. A `choices:` constraint is rendered `a | b`, which would
+    otherwise split one cell into three — `docs/reference.md` § Templates'
+    own generated example escapes it exactly this way."""
+    return text.replace("|", r"\|")
+
+
+def _default_cell(param: Param) -> str:
+    """A parameter's default, as a table cell.
+
+    `—` for a required one, because omitting `default` is what makes a
+    parameter required and there is no value to show; `null` for the nullable
+    kind, spelled the way a config spells it rather than as Python's `None`.
+    """
+    if param.required:
+        return "—"
+    value = param.default
+    if value is None:
+        return "`null`"
+    if isinstance(value, str):
+        return f"`{value}`"
+    return f"`{value}`"
+
+
+def parameter_table(spec: Mapping[str, Param]) -> list[str]:
+    """One `parameter_spec` as the five-column table `docs/reference.md`
+    § Templates shows, in declaration order.
+
+    **`parameter_spec` is the single source of truth** — this reads nothing
+    else, and there is deliberately no defaults file to disagree with. Shared
+    by the `templates` region (task 6) and `publishable list-templates`
+    (task 8) rather than written twice: two renderers of one spec are two
+    literals that drift.
+
+    Declaration order, not name order: the spec is a dict a template author
+    wrote in the order they think the parameters belong in, and `init`
+    materializes a config in that same order — a table sorted differently would
+    be a second opinion about what belongs beside what.
+    """
+    rows = [
+        f"| `{path}` | {param.type_name()} | {_default_cell(param)} | "
+        f"{_cell('; '.join(param.constraints())) or '—'} | {_cell(param.help or '—')} |"
+        for path, param in spec.items()
+    ]
+    return [
+        "| Parameter | Type | Default | Constraints | Description |",
+        "|---|---|---|---|---|",
+        *(rows or ["| _(this template declares no parameters)_ | | | | |"]),
+    ]
+
+
+def template_section(name: str, claim: "Claim") -> list[str]:
+    """One template's sub-section: `### `<name>``, a convention line, its
+    parameter table, and whatever declarations it carries beside them.
+
+    An **installed** claim gets a named line instead of a table (correction 21)
+    — never a blank, and never an omission: an honest absence is a reported
+    fact, a blank is a silence, and both would be indistinguishable from a
+    template that declares no parameters at all.
+    """
+    lines = [f"### `{name}`", ""]
+    cls = claim.cls
+    if cls is None:
+        lines.append(f"Installed, provided by `{claim.provider}` — {INSTALLED_SPEC_UNREADABLE}.")
+        return lines
+    lines.append(
+        f"Convention class `{cls.field_convention}` · default repeats "
+        f"{cls.default_repeats} · naming `{cls.naming_pattern}`"
+    )
+    lines.append("")
+    spec = cls.parameter_spec if isinstance(cls.parameter_spec, dict) else {}
+    lines.extend(parameter_table(spec))
+    if cls.required_env:
+        lines.append("")
+        lines.append("**Required credentials:** " + ", ".join(f"`{v}`" for v in cls.required_env))
+    if cls.apparatus_probe:
+        records = ", ".join(f"`{f}`" for f in cls.apparatus_facts)
+        lines.append("")
+        lines.append(
+            f"**Apparatus probe:** `{cls.apparatus_probe}`"
+            + (f" — records {records}" if records else "")
+        )
+    return lines
+
+
+def templates_body(repo_root: Path) -> str:
+    """The `templates` region: one sub-section per template THIS PROJECT
+    supplies, in name order.
+
+    **Core's own `generic` is deliberately not listed**, and the scaffolded
+    empty state is what decides it: `readme_templates/README.md.tmpl` carries
+    *"none yet — add one with `publishable generate template`"*, which is false
+    the moment a fresh project's README lists a template nobody added. So the
+    region is this project's own templates — the `templates/**` files
+    `code_hash` covers — plus any INSTALLED claim, which is a template this
+    project acquired by depending on a plugin. `generic` is core's, documented
+    in `docs/reference.md` § Templates, and `publishable list-templates` is the
+    surface that answers *what can this build resolve*, which is a different
+    question from *what does this repository supply*.
+    """
+    from publishable.templates.registry import _claims
+
+    mine = {name: claim for name, claim in _claims(repo_root).items() if claim.provenance != "core"}
+    if not mine:
+        return "\n".join(["## Templates", "", TEMPLATES_EMPTY_LINE])
+    sections: list[str] = ["## Templates"]
+    for name in sorted(mine):
+        sections.append("")
+        sections.extend(template_section(name, mine[name]))
+    return "\n".join(sections)
+
+
 #: Region name → the function that computes its body from the repository.
 #: `refresh` reads this rather than a chain of branches, so a region with no
 #: builder is a `KeyError` at the call site rather than a region silently left
@@ -413,6 +544,7 @@ def experiments_body(repo_root: Path) -> str:
 BODY_BUILDERS: dict[str, Callable[[Path], str]] = {
     "credentials": credentials_body,
     "experiments": experiments_body,
+    "templates": templates_body,
 }
 
 
