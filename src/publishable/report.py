@@ -10,7 +10,6 @@ renders here too — `read_bundle`, `_bundle_cross_checks`, `render_bundle`
 `cli._report_not_built`.
 """
 
-import importlib
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ from publishable.diagnostics import EXIT_OK, EXIT_WRONG, Collector
 from publishable.errors import ContractError, PublishableError
 from publishable.lineage import read_record_file
 from publishable.secrets import credential_values
+from publishable.sourceimport import import_module_fresh
 from publishable.stats import RESERVED_METRIC_NAMES
 from publishable.templates.registry import get_template
 from publishable.validate import declared_credential_names_for
@@ -889,7 +889,16 @@ def render_with_override(
     sys.path.insert(0, src_entry)
     try:
         try:
-            module = importlib.import_module(module_name)
+            # `import_module_fresh`, not `importlib.import_module`: an override
+            # rewritten at the same size inside one wall-clock second is served
+            # from `__pycache__` by the ordinary loader, so `report` renders the
+            # PREVIOUS version of the file its author just edited, at exit `0`,
+            # with nothing to distinguish it from a correct render. That is this
+            # function's own filing in `docs/superpowers/spec-defects.md`; the
+            # discrimination below is unchanged, because `import_module_fresh`
+            # raises the import system's own `ModuleNotFoundError` with `.name`
+            # set to the part it could not find.
+            module = import_module_fresh(module_name)
         except ModuleNotFoundError as exc:
             if exc.name == module_name:
                 return render(None)

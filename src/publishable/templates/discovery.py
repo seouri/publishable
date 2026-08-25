@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from publishable.errors import ContractError
+from publishable.sourceimport import fresh_spec
 from publishable.templates.base import BaseTemplate
 
 
@@ -185,8 +186,13 @@ def _import_file(
     """
     before = dict(sys.modules)
     before_path = list(sys.path)
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:  # pragma: no cover - unreachable for a .py file
+    # `fresh_spec`, never a bare `spec_from_file_location`: the implicit
+    # loader serves `__pycache__` bytecode for a file rewritten at the same
+    # size inside one wall-clock second, which is this function's own filing
+    # in `docs/superpowers/spec-defects.md`. `sourceimport` says why the
+    # explicit `SourceFileLoader` that filing proposes is not the fix.
+    spec = fresh_spec(module_name, path)
+    if spec.loader is None:  # pragma: no cover - unreachable for a .py file
         raise ImportError(f"no import machinery for {path}")
     module = importlib.util.module_from_spec(spec)
     sys.path.append(str(templates_dir))
