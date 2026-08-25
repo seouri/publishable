@@ -897,3 +897,38 @@ only tasks 1–7 — but **this is the last slice**, so a split leaves a remaind
 build in which one evaluation split is drawn within cells and the other is still refused, with
 `reference.md` § A fixed holdout split and § Clustered units disagreeing about the same rule. Build
 all twenty-three or none.
+
+---
+
+## Correction to Ruling HH, 2026-08-25 — its stated premise is false, and the decision stands on a different one
+
+**Correction C2 measured that Ruling HH's premise does not hold at HEAD.** The ruling argued the slice must
+be built because *"two normative documents describe folds and holdouts inside cells in the present tense,
+and where the code cannot follow the documents, the document changes first"* — so shipping the refusal
+permanently would mean a larger document change than building it. **Measured: all three sites are marked
+"not built".** The documents and the code already agree, and *an unbuilt reader of an unbuilt surface is
+specification* — which is this project's own rule, cited against the ruling that forgot it.
+
+**So the honest position is this.** Shipping the refusal permanently is **consistent**, requires no
+document change, and the re-scoping's grounds for it are sound: the slice unblocks **zero** configs,
+retires two refusals **no outside evidence hits**, and its original justification was consumed by the
+three tasks that merged with H3d.
+
+**The decision to build stands, on grounds that survive the correction:**
+
+1. **It is the work that was asked for.** The charter names H3c-3's remaining tasks, and **scaling that
+   down is the requester's call, not the implementer's.** This correction exists so the choice is visible
+   rather than defaulted into — which is what Ruling HH said it wanted and then got wrong about why.
+2. **Ruling II's fix is correct code either way.** `runner.execute_plan` composing an **arm-narrowed test
+   side** with a **roster-wide train side** is wrong on its own terms; the refusal is the only thing making
+   it unreachable, and *a guard whose correctness depends on a refusal nobody plans to keep is a defect
+   with a delay on it.* Narrowing `holdout_train` per arm is right whether or not the refusal is ever
+   retired.
+3. **A refusal a design cannot route around is worse than one it can.** § What isn't a repeat presents a
+   `groups` design and an evaluation split as ordinary and composable; today the pair is refused with no
+   route. That is a real gap even though the mark is honest about it.
+
+**What this correction costs if wrong**: the project spends its last slice on work no outside evidence
+needs, and the reachable-leak class Ruling II names is opened for the first time — **which is exactly why
+Ruling II is not deferrable and why no commit may exist with the assert gone and the train side still
+roster-wide.** *The last slice is the last chance to not ship that.*
