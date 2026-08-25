@@ -26308,21 +26308,41 @@ def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(c
 # Arm C is below; arm D is in `tests/test_scaffold.py`; arm F is below.
 # ---------------------------------------------------------------------------
 
+# RETIRED IN PART, 2026-08-25, by controller ruling — see the docstring below.
+# `docs/experimental-designs.md` left this dict when H3c-3 task 21 made a
+# sentence in it TRUE that had been false against the code. The arm fired, a
+# human looked, and what the look found was the arm's own premise expiring.
 _H9D_ARM_C_DIGESTS = {
     "docs/design-principles.md": (
         "cf03bdf476973a74c4365f6abdd78ee76aa7754ca2062d02b9c8b785edd80171"
-    ),
-    "docs/experimental-designs.md": (
-        "e4c90c597287a0de9cdbc7cf40980fe325569797bdb7edf9df0cc61b32eccc4d"
     ),
 }
 
 
 @pytest.mark.parametrize("relative_path", sorted(_H9D_ARM_C_DIGESTS))
 def test_h9d_arm_c_two_of_the_four_documents_are_byte_identical_at_merge(relative_path: str):
-    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** Both files must be
-    byte-identical at merge, so a red arm here is a FINDING — a hash to
-    investigate, never a hash to refresh.
+    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** The file must be
+    byte-identical, so a red arm here is a FINDING — a hash to investigate,
+    never a hash to refresh.
+
+    **RETIRED IN PART, 2026-08-25, by controller ruling, and the reason is the
+    finding.** This arm was captured over TWO files. H3c-3 task 21 then edited
+    `docs/experimental-designs.md` to replace a sentence that was **false
+    against the code** — it said a fold or a holdout within a cell *"is not
+    built"* and *"is refused outright"*, which H3c-3 had just made untrue — and
+    the arm went red exactly as designed. **The investigation it forced is what
+    retired it**: the arm asserts a fact about a PAST merge by hashing a LIVE
+    file, so it must break the first time any later slice legitimately edits
+    that file, and `experimental-designs.md` is a document whose whole job is to
+    describe behaviour that slices change. **A digest over it is a proxy for
+    "did the worked example move?", and the proxy fails whenever the document
+    does its job.**
+
+    **`design-principles.md` stays**, on the opposite ground: it carries the
+    shared worked example, nothing remaining in this project should touch it,
+    and for a file that should not move a whole-file digest **is** the direct
+    question rather than a proxy for one. Its parametrization passed throughout
+    H3c-3, which is the evidence for keeping it.
 
     `README.md` and `docs/reference.md` are deliberately NOT in this arm, and
     design § 8.2 says why: task 12 must edit README twice and task 14 must edit
