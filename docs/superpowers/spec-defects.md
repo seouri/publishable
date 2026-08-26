@@ -10811,3 +10811,32 @@ unmarked definition changes in one record's history is a different question from
 **Severity:** Minor. No number a run publishes is wrong, and no run is refused — a reader comparing
 two runs across the boundary is told the data differs when it does not, and the remedy in hand is to
 compare the per-file `sha256`s in the two `manifest/input.json` copies, which are unmoved.
+
+## OPEN — § `manifest/input.json`'s fenced example is a different shape from what `build_manifest` writes — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the artifact examples as its surface)**
+
+**Filed 2026-08-26 by the whole-project review's M2 fix, which did not cause it and links to the
+section.** The example shows `"files"` as a **list of objects each carrying a `"path"` key**, with
+`"mtime": "2026-08-01T09:12:44Z"` — an ISO-8601 string. `manifest.build_manifest` returns
+`{"policy": …, "files": {<relative path>: {"size": …, "mtime": <st_mtime_ns>, "sha256": …}}}`: a
+**mapping keyed by relative path**, with `mtime` an integer at nanosecond scale, pinned by
+`tests/test_manifest.py::test_stored_mtime_is_an_int_at_nanosecond_scale`.
+
+**Both halves reproduced rather than recalled:** `sed -n '/### `manifest\/input.json`/,+15p'
+docs/reference.md` for the example; `manifest.py`'s `files[rel] = {...}` and
+`return {"policy": policy, "files": files}` for the shape; and the test above for the int.
+
+**Why it is not closed here.** These four fixes changed the digest taken over the manifest and not
+the manifest, and the example is a *normative* artifact example — rewriting it is a decision about
+what the document promises, with `verify_manifest`'s own prose and the three
+`input_manifest_policy` rows reading against it, rather than a typo to correct in passing. The M2
+disclosure links to this section for the `mtime` fact, which the example does state correctly in
+substance (the manifest records one per file) and in the wrong type.
+
+**The check its closer must make:** whether the example becomes the dict-keyed, ns-int shape the code
+writes, or whether the code's shape is the one that should change — the list form carries `path`
+explicitly and is the friendlier thing to read, and nothing outside `manifest.py` and its own tests
+consumes the structure by key today (`verify_manifest` and `cli.py`'s two call sites are the whole
+reader set, grepped).
+
+**Severity:** Minor. A reader hand-writing a checker against the example gets the wrong parser; no
+published number is affected.

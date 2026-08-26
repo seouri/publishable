@@ -32,6 +32,14 @@ def environment_manager() -> str | None:
     warning here would be a registry seat for a fact that changes nothing a
     reader can act on: `manager` is a measurement, the way `git.code_dirty` is.
 
+    **Measured on the documented install path, not only under `uv run`.** README
+    installs globally with `uv tool install`, and a uv tool venv carries the
+    marker too: `~/.local/share/uv/tools/publishable/pyvenv.cfg` reads
+    `uv = 0.12.5`, and running this function from that environment's own
+    interpreter, outside the repository, returns `"uv"`. So the happy path a new
+    user follows records `manager: uv` rather than `None` — checked because the
+    `None` branch's cost is only acceptable if it is not the common case.
+
     Not gated on `sys.prefix != sys.base_prefix`. A non-virtual interpreter has
     no `pyvenv.cfg` at all, so the read already answers `None` for it, and a
     second predicate answering the same question is how two spellings of one

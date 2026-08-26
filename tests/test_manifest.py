@@ -1,4 +1,6 @@
 # tests/test_manifest.py
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -237,3 +239,26 @@ def test_the_policy_stays_in_the_payload_so_two_claims_cannot_collide(tmp_path: 
     index = build_manifest(tmp_path, "hash_index", {"index.csv"})
     assert all_["files"] == index["files"]
     assert manifest_hash(all_) != manifest_hash(index)
+
+
+def test_under_none_the_digest_is_byte_for_byte_the_old_definition(input_dir: Path):
+    """The one DOES-NOT-MOVE claim in M2's disclosure that no other test pinned.
+
+    "Under `policy: none` nothing moves at all" is a claim about **value
+    equality with the definition this change replaced**, not about a property —
+    `test_touch_still_moves_the_hash_under_none` pins the property and would
+    stay green under a projection that normalized the entry dict for every file
+    rather than only for a hashed one, which is exactly the tidy-up that would
+    break the disclosure silently.
+
+    So the right-hand side spells the OLD definition out rather than calling
+    `_hash_payload`: a test that recomputed the implementation would assert the
+    function equals itself.
+    """
+    m = build_manifest(input_dir, "none")
+    assert all(e["sha256"] is None for e in m["files"].values())
+    assert (
+        manifest_hash(m)
+        == "sha256:"
+        + hashlib.sha256(json.dumps(m, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    )
