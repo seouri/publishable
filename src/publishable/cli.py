@@ -163,7 +163,7 @@ from publishable.units import (
     thinnest_cell,
     units_hash,
 )
-from publishable.uv_support import uv_lock_info
+from publishable.uv_support import environment_manager, uv_lock_info
 from publishable.validate import load_document, validate_config
 
 if TYPE_CHECKING:
@@ -4894,7 +4894,12 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 "config_committed": git.config_committed,
             },
             "environment": {
-                "manager": "uv",
+                # Measured, not asserted: `pyvenv.cfg`'s own `uv` key, `None`
+                # when this environment was not created by uv. See
+                # `uv_support.environment_manager` for why that file rather
+                # than `shutil.which("uv")`, and why an absent uv warns about
+                # nothing.
+                "manager": environment_manager(),
                 "python_version": ".".join(str(v) for v in sys.version_info[:3]),
                 # NOT `platform.platform()`: measured, it reports the marketing
                 # name and version (`macOS-26.5.2-arm64-arm-64bit-Mach-O`) rather

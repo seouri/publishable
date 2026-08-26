@@ -809,6 +809,16 @@ run's own record of which distribution and version it resolved through, never th
 installed set. `cohort-pilot` uses a table source, so its `plugin_versions` stays `{}`, which is the
 honest record for a run that used no plugin artifact.
 
+`environment.manager` is **measured, not asserted**: it is `uv` when this interpreter's environment
+carries uv's own marker — the `uv = <version>` key uv writes into every `pyvenv.cfg` it creates — and
+`null` otherwise, which is what a `python -m venv` environment or a non-virtual interpreter records.
+`null` here is this format's spelling for never-captured, the same one `hardware.cpu_count` and
+`uv_lock`/`uv_lock_hash` use, and **nothing warns about it**: the actionable case — an environment no
+lockfile pins — already has [`W-ENV-UNLOCKED`](#warnings-core-reports), and `manager` is a measurement
+the way `git.code_dirty` is rather than a gate. The question asked is *what made this environment*,
+which is what the key claims; whether uv happens to be installed on the machine is a different fact
+and would report `uv` for an environment uv never touched.
+
 `environment.hardware` carries only what core can read on any machine — the CPU count
 `os.cpu_count()` answers, `None` included when the platform can't. A GPU, an instrument revision, or
 a hosted model deployment is not: core cannot name one without a dependency or a subprocess, so it is

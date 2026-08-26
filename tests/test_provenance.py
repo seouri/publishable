@@ -1,4 +1,5 @@
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from tests.conftest import git
 from publishable import ContractError
 from publishable.hashes import code_hash_of, hashed_files
 from publishable.provenance import find_repo_root, git_provenance, unignored_under_hashed_trees
-from publishable.uv_support import uv_lock_info
+from publishable.uv_support import environment_manager, uv_lock_info
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "publishable"
 
@@ -294,3 +295,76 @@ def test_h6b_fixture_g_e_git_no_repo_and_e_git_no_commit_have_one_row_and_one_ra
     for code in ("E-GIT-NO-REPO", "E-GIT-NO-COMMIT"):
         assert f"`{code}`" in section
         assert doc.count(f"`{code}`") >= 1
+
+
+# Whole-project review 2026-08-26, M3: `provenance.environment.manager` was the
+# literal `"uv"`, written unconditionally — a record asserting an environment
+# fact nothing measured. It is now `pyvenv.cfg`'s own `uv` key.
+#
+# Every arm below points `sys.prefix` at a directory this test built, so none of
+# them can pass by reading the ambient truth: the repo's own suite runs inside a
+# uv-created venv, so a test asserting `"uv"` against the real `sys.prefix`
+# would be green under the hardcoded literal it exists to replace.
+
+
+def _prefix(tmp_path: Path, name: str, text: str | None) -> Path:
+    root = tmp_path / name
+    root.mkdir()
+    if text is not None:
+        (root / "pyvenv.cfg").write_text(text)
+    return root
+
+
+_UV_CFG = """\
+home = /Users/x/.local/share/uv/python/cpython-3.13-macos-aarch64-none/bin
+implementation = CPython
+uv = 0.12.5
+version_info = 3.13
+include-system-site-packages = false
+prompt = decoy
+"""
+
+# `python -m venv`'s own file: every key uv's has except `uv`, so the arms differ
+# on exactly the key under test rather than on the file's shape.
+_VENV_CFG = """\
+home = /usr/local/bin
+implementation = CPython
+version_info = 3.13.0
+include-system-site-packages = false
+prompt = decoy
+"""
+
+
+def test_environment_manager_reads_pyvenv_cfgs_uv_key(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "prefix", str(_prefix(tmp_path, "uvmade", _UV_CFG)))
+    assert environment_manager() == "uv"
+
+
+def test_environment_manager_is_none_for_a_venv_uv_did_not_make(tmp_path: Path, monkeypatch):
+    """The arm the hardcoded literal got wrong. A `python -m venv` environment
+    carries no `uv` key, so the honest answer is `None`."""
+    monkeypatch.setattr(sys, "prefix", str(_prefix(tmp_path, "stdlib", _VENV_CFG)))
+    assert environment_manager() is None
+
+
+def test_environment_manager_is_none_with_no_pyvenv_cfg_at_all(tmp_path: Path, monkeypatch):
+    """A non-virtual interpreter, which is why no `sys.prefix != sys.base_prefix`
+    predicate is needed: the read already answers `None`."""
+    monkeypatch.setattr(sys, "prefix", str(_prefix(tmp_path, "system", None)))
+    assert environment_manager() is None
+
+
+def test_environment_manager_does_not_match_a_key_merely_containing_uv(tmp_path: Path, monkeypatch):
+    """`uv` is matched as a whole key, not as a substring — `uv_build` and a
+    `home` line naming a uv-installed interpreter are both present here, and
+    the second is what a real `python -m venv` off a uv-managed Python looks
+    like. Without the `partition("=")` split, that `home` line alone would
+    report `"uv"` for an environment uv never created."""
+    text = (
+        "home = /Users/x/.local/share/uv/python/cpython-3.13/bin\n"
+        "uv_build = 1.0\n"
+        "uvloop = 0.19\n"
+        "version_info = 3.13\n"
+    )
+    monkeypatch.setattr(sys, "prefix", str(_prefix(tmp_path, "lookalike", text)))
+    assert environment_manager() is None

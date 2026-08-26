@@ -27986,3 +27986,54 @@ def test_io_record_refuses_a_structural_value_end_to_end_at_both_branches(
 
     # (c) — the sweep in (b) ran over real cells of every type the good step wrote.
     assert {bool, int, float, str}.issubset(seen_types), seen_types
+
+
+# Whole-project review 2026-08-26, M3: the record itself, not the helper.
+def test_provenance_manager_is_null_for_an_environment_uv_did_not_make(tmp_path, monkeypatch):
+    """A real `run` whose `sys.prefix` names a `python -m venv` environment
+    records `provenance.environment.manager: null`.
+
+    The half that cannot pass under the literal this replaced, and the reason it
+    is an end-to-end arm rather than only a unit test: four existing pins in
+    this file assert the string `"uv"` — `test_h6b_arm_d_environment_key_order`,
+    the `environment ==` assertion in
+    `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty`, and two
+    guard-pin literal tables — and every one of them stays green under a
+    hardcoded literal, because the suite runs inside a uv-created venv. Nothing
+    in `src/` reads `sys.prefix` but `uv_support.environment_manager`, grepped
+    (`grep -rn "sys.prefix\\|base_prefix" src/publishable/*.py` — two hits, both
+    that function and its own docstring), so pointing it at a fixture directory
+    changes this one fact and nothing else about the run.
+
+    The positive control is in the same run: `uv_lock`/`uv_lock_hash` are the
+    keys beside `manager` that were already measured, and asserting `manager`
+    alone would pass identically if the whole `environment` block had gone
+    missing.
+    """
+    fake_prefix = tmp_path / "stdlib-venv"
+    fake_prefix.mkdir()
+    (fake_prefix / "pyvenv.cfg").write_text(
+        "home = /usr/local/bin\nimplementation = CPython\nversion_info = 3.13.0\n"
+    )
+    monkeypatch.setattr(sys, "prefix", str(fake_prefix))
+    doc = run_a_project(
+        tmp_path / "proj-root",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=4,
+    )
+    environment = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["provenance"][
+        "environment"
+    ]
+    assert environment["manager"] is None
+    # The control: the block is really there, and its other keys answered.
+    assert environment["uv_lock"] is None and environment["uv_lock_hash"] is None
+    assert isinstance(environment["python_version"], str) and environment["python_version"]
+    assert list(environment) == [
+        "manager",
+        "python_version",
+        "os",
+        "hostname",
+        "uv_lock",
+        "uv_lock_hash",
+        "hardware",
+    ]
