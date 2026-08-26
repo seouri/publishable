@@ -251,14 +251,19 @@ publishable generate experiment cohort-pilot \
   --input-dir ~/data/cohort-2026 \
   --output-dir ~/results/cohort-pilot
 
-# 3. Run it right away — the scaffold ships a working starter step.
+# 3. Fill in the two fields `init` leaves for you — metadata.description and
+#    metadata.authors — and put your data where the config points.
+#    `validate` names anything still missing, and costs nothing.
+publishable validate configs/cohort-pilot/config.yaml
+
+# 4. Run it. The scaffold's starter step records one number per unit, so this
+#    produces a real estimate with an interval — replace it with your own.
+git add -A && git commit -m "Scaffold cohort-pilot"
 publishable run configs/cohort-pilot/config.yaml
 
-# 4. Now make it yours: add steps, implement them, commit.
+# 5. Now make it yours: add steps, implement them, commit.
 publishable generate step cohort-pilot analyze
 git add src/ && git commit -m "Implement cohort analysis"
-
-# 5. Edit configs/cohort-pilot/config.yaml, then check before spending a run.
 publishable validate configs/cohort-pilot/config.yaml
 publishable dry-run  configs/cohort-pilot/config.yaml
 publishable run      configs/cohort-pilot/config.yaml
@@ -268,7 +273,7 @@ publishable study new ~/papers/triage/study --title "Cohort triage pilot"
 publishable study add ~/papers/triage/study ~/results/cohort-pilot/latest/run.yaml --as main
 ```
 
-Step 3 works before you've written any code, so you can see the whole loop before committing to it.
+Step 4 works before you've written any code — the starter step records a number, so a first run produces a real estimate with an interval — so you can see the whole loop before committing to it.
 
 ### The loop you'll actually live in
 
