@@ -16,7 +16,7 @@ Nothing about what ran ends up in a shell history, so nothing has to be reconstr
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Nothing else to configure:
 
 ```bash
-uv tool install publishable        # or: pipx install publishable, brew install publishable
+uv tool install publishable        # or: pipx install publishable
 publishable demo
 ```
 
@@ -97,11 +97,11 @@ clones the exact commit, restores the locked environment, writes the config back
 
 ## Is this for you?
 
-**A good fit if** you run experiments with parameters you sweep, repeats you average over, and results that end up in a paper — especially with data that can't live in your git repo. What a run executes is your pipeline over that data; measurements taken outside the pipeline arrive as input and are [pinned by hash, not produced](docs/design-principles.md#what-core-does-not-promise).
+**A good fit if** you run experiments with parameters you sweep, repeats you average over, and results that end up in a paper — especially with data that can't live in your git repo. What a run executes is your pipeline over that data; measurements taken outside the pipeline arrive as input and are [pinned by hash, not produced](https://github.com/seouri/publishable/blob/main/docs/design-principles.md#what-core-does-not-promise).
 
-**Probably not** if you want a pipeline scheduler, a live dashboard, or something to retrofit onto existing scripts. `publishable` is [greenfield only](docs/design-principles.md#greenfield-only).
+**Probably not** if you want a pipeline scheduler, a live dashboard, or something to retrofit onto existing scripts. `publishable` is [greenfield only](https://github.com/seouri/publishable/blob/main/docs/design-principles.md#greenfield-only).
 
-**Designs it speaks natively:** within- and between-subjects (with recorded randomization), factorial over parameters or over crossed arms, ablation, dose-response, train-test holdout, repeated cross-validation, bootstrap, permutation, technical-vs-biological replication, clustered units, matched case-control. The statistics follow the design — bootstrap resamples get percentile intervals, technical replicates never enter `n`, and a multi-condition sweep won't report uncorrected comparisons without warning you. Modelling beyond summary statistics is yours: see [Experimental designs](docs/experimental-designs.md) for what's supported, what needs an override, and the [errors core refuses to let you make](docs/experimental-designs.md#mistakes-core-prevents).
+**Designs it speaks natively:** within- and between-subjects (with recorded randomization), factorial over parameters or over crossed arms, ablation, dose-response, train-test holdout, repeated cross-validation, bootstrap, permutation, technical-vs-biological replication, clustered units, matched case-control. The statistics follow the design — bootstrap resamples get percentile intervals, technical replicates never enter `n`, and a multi-condition sweep won't report uncorrected comparisons without warning you. Modelling beyond summary statistics is yours: see [Experimental designs](https://github.com/seouri/publishable/blob/main/docs/experimental-designs.md) for what's supported, what needs an override, and the [errors core refuses to let you make](https://github.com/seouri/publishable/blob/main/docs/experimental-designs.md#mistakes-core-prevents).
 
 | Tool | Optimizes for | `publishable` differs by |
 |---|---|---|
@@ -173,7 +173,7 @@ run.yaml  ──►  publishable reproduce   ──►  a checkout anyone can ru
           └─►  publishable study add   ──►  a bundle beside your manuscript
 ```
 
-Full vocabulary: [Ontology](docs/design-principles.md#ontology).
+Full vocabulary: [Ontology](https://github.com/seouri/publishable/blob/main/docs/design-principles.md#ontology).
 
 ---
 
@@ -235,7 +235,7 @@ provenance:
   input_manifest_hash: sha256:3d8a…  # the data it actually read
 ```
 
-The `r` carrying an interval is the *derived* one: template `generic`'s `aggregate` recomputes it from the per-unit table the step recorded, and being recomputable on a resampled table is what earns it a `ci95`. The `r` the step returned sits beside it under `per_repeat`, without one. That is the whole rule — [an interval is over units, never over executions](docs/reference.md#the-unit-table-is-the-inference-base).
+The `r` carrying an interval is the *derived* one: template `generic`'s `aggregate` recomputes it from the per-unit table the step recorded, and being recomputable on a resampled table is what earns it a `ci95`. The `r` the step returned sits beside it under `per_repeat`, without one. That is the whole rule — [an interval is over units, never over executions](https://github.com/seouri/publishable/blob/main/docs/reference.md#the-unit-table-is-the-inference-base).
 
 ---
 
@@ -311,7 +311,7 @@ That's the payoff of hashing code and parameters separately: you get to *prove* 
 - **Intervals over units, not over executions.** `n` counts the things your claim generalizes over. Repeats are reported as pipeline stability, separately and labelled, because an interval across five seeds narrows as you add seeds and says nothing about your cohort. Where core can't compute an interval honestly, it reports the estimate and omits the interval.
 - **Statistics that match your design.** Declaring how units are allocated and how repeats are structured determines the analysis: paired or unpaired, t-based or percentile, clustered or not. A t-interval over bootstrap resamples is wrong, and core won't compute one — nor will it count technical replicates as `n`.
 - **Pre-registration for free.** The config is written and hashed *before* the run, so declared hypotheses can be checked against results — and after-the-fact additions don't match the hash.
-- **Stated limits.** Core documents what it [does not promise](docs/design-principles.md#what-core-does-not-promise) — bit-identical reruns against external services, verification of your Python, or scientific validity.
+- **Stated limits.** Core documents what it [does not promise](https://github.com/seouri/publishable/blob/main/docs/design-principles.md#what-core-does-not-promise) — bit-identical reruns against external services, verification of your Python, or scientific validity.
 
 ---
 
@@ -330,7 +330,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 | `study new` · `study add` | Assemble the runs a paper reports, outside the repo |
 | `docs` · `list-templates` | Rewrite the managed README regions; list every template this build knows, with its parameters where it can read them |
 
-Full details: [CLI reference](docs/reference.md#cli-reference) — which also carries the `Status` column saying which of these the current build executes.
+Full details: [CLI reference](https://github.com/seouri/publishable/blob/main/docs/reference.md#cli-reference) — which also carries the `Status` column saying which of these the current build executes.
 
 ---
 
@@ -353,19 +353,19 @@ The reference LLM plugin is [`publishable-llm`](https://github.com/someuser/publ
 
 ## Documentation
 
-- **[Experimental designs](docs/experimental-designs.md)** — how to express each design, and the mistakes core prevents
-- **[Reference](docs/reference.md)** — config schema, CLI, `io` API, templates, sweeps, artifact layout
-- **[Design principles](docs/design-principles.md)** — why the rules are what they are; read before proposing a change
-- **[Plugin guide](docs/reference.md#plugins-where-domain-knowledge-lives)** — building and sharing templates
+- **[Experimental designs](https://github.com/seouri/publishable/blob/main/docs/experimental-designs.md)** — how to express each design, and the mistakes core prevents
+- **[Reference](https://github.com/seouri/publishable/blob/main/docs/reference.md)** — config schema, CLI, `io` API, templates, sweeps, artifact layout
+- **[Design principles](https://github.com/seouri/publishable/blob/main/docs/design-principles.md)** — why the rules are what they are; read before proposing a change
+- **[Plugin guide](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives)** — building and sharing templates
 
 ## Contributing
 
-Most new templates should be a [plugin](docs/reference.md#plugins-where-domain-knowledge-lives), not a PR here — that's what `--plugin owner/repo` is for. Upstream contributions are for core mechanisms: the config envelope, provenance capture, the artifact model, the validation engine, the CLI.
+Most new templates should be a [plugin](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives), not a PR here — that's what `--plugin owner/repo` is for. Upstream contributions are for core mechanisms: the config envelope, provenance capture, the artifact model, the validation engine, the CLI.
 
 A good test of whether something belongs in core: **would it be identical for a wet-lab assay, a simulation sweep, and an LLM benchmark?** If not, it's a plugin.
 
-Design disagreements are welcome as issues. If a rule seems arbitrary, [design-principles.md](docs/design-principles.md) probably explains it — and if it doesn't, that's a documentation bug worth filing.
+Design disagreements are welcome as issues. If a rule seems arbitrary, [design-principles.md](https://github.com/seouri/publishable/blob/main/docs/design-principles.md) probably explains it — and if it doesn't, that's a documentation bug worth filing.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/seouri/publishable/blob/main/LICENSE).
