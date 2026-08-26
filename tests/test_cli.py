@@ -193,6 +193,17 @@ def run_a_project(
         roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
     )
     assert main(["new", str(root)]) == EXIT_OK
+    if capsys is not None:
+        # `new` prints the project path and a `next:` line (whole-project
+        # review, Minor), and this helper's `capsys` contract is that
+        # `doc["stdout"]`/`doc["stderr"]` are what the RUN printed — the
+        # docstring above says so, and guard-pin arm B asserts that stream
+        # line by line. Dropping the scaffold's own two lines here is what
+        # keeps both byte-identical to what every existing caller read before
+        # `new` printed anything. It drops those two lines and nothing else:
+        # everything written after this point — `generate_experiment`'s README
+        # notes on stderr included — is still captured exactly as before.
+        capsys.readouterr()
     if _env_file is not None:
         # The scaffold's own `.gitignore` opens with `.env`, so this never reaches
         # the commit below and never makes `src/**`+`templates/**` dirty.
@@ -6104,18 +6115,37 @@ def test_a_run_with_no_baseline_has_no_vs_baseline_block(tmp_path, capsys):
     assert "vs_baseline" not in text
 
 
+_BOOL_ONLY_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{}}
+"""
+
+
 def test_a_baseline_sweep_with_no_metric_has_no_vs_baseline_block(tmp_path, capsys):
     """The discriminating case `test_a_run_with_no_baseline_has_no_vs_baseline_
     block` can't reach: a declared baseline exists (comparisons are resolved),
-    but the scaffold's default step records only a bool, so every
-    `metric_block` this task builds is empty. This is what actually exercises
-    `_compute_vs_baseline`'s `return out or None` and `run_record.py`'s
-    `if block:` guard — with no baseline at all, both are already unreachable
-    for a different reason, and either could be silently dropped without this
-    test moving."""
+    but the step records only a bool, so every `metric_block` this task builds
+    is empty. This is what actually exercises `_compute_vs_baseline`'s `return
+    out or None` and `run_record.py`'s `if block:` guard — with no baseline at
+    all, both are already unreachable for a different reason, and either could
+    be silently dropped without this test moving.
+
+    The bool-only step is passed in rather than inherited from the scaffold:
+    the scaffold's own step records a number since whole-project review C1, and
+    a property about a metric-less run should never have rested on an
+    incidental fact about `STARTER_STEP` in the first place."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
+        _starter_step=_BOOL_ONLY_STARTER_STEP,
         sweep={
             "baseline": {"analysis.method": "pearson"},
             "grid": {"analysis.method": ["spearman"]},
@@ -7693,9 +7723,10 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     What a run does with it: nothing special. A step contract error is
     contained like any other step failure — the execution is marked `failed`
     with the identifier in its recorded `error`, the rest of the plan runs, and
-    the run ends `partial` at `EXIT_PARTIAL`. It is *not* printed on the
-    diagnostics channel: `run.yaml`'s `execution` block is the only place it
-    surfaces.
+    the run ends `partial` at `EXIT_PARTIAL`. It reaches no `Collector` — no
+    finding, no code on stdout — and since whole-project review M1 the run's
+    closing stderr line names it as the first error, which is the whole point
+    of that line: an exit `3` a shell swallows was the only signal before.
     """
     doc = run_a_project(
         tmp_path,
@@ -7713,11 +7744,14 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     entry = next(iter(steps.values()))
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-SCOPE" in entry["error"]
-    # Both channels: `test_an_unwritable_output_dir_is_a_diagnostic_not_a_
-    # traceback` reads stderr for `E-IO-FAILED`, so stderr is a real diagnostics
-    # channel here and "not printed" has to cover it.
+    # Both channels, and they now say different things. Stdout: still silent,
+    # which is the original claim — no `Collector` finding is built for a
+    # contained step failure. Stderr: M1's closing line, which names the first
+    # error and so must carry this identifier; asserting its absence here
+    # would be asserting M1 away.
     assert "E-STEP-ESTIMATE-SCOPE" not in doc["stdout"]
-    assert "E-STEP-ESTIMATE-SCOPE" not in doc["stderr"]
+    assert "run partial: " in doc["stderr"]
+    assert "E-STEP-ESTIMATE-SCOPE" in doc["stderr"]
 
 
 _ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = """\
@@ -7752,7 +7786,10 @@ def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-METHOD" in entry["error"]
     assert "E-STEP-ESTIMATE-METHOD" not in doc["stdout"]
-    assert "E-STEP-ESTIMATE-METHOD" not in doc["stderr"]
+    # Same split as the scope refusal above: silent on stdout, named by M1's
+    # closing stderr line as this run's first error.
+    assert "run partial: " in doc["stderr"]
+    assert "E-STEP-ESTIMATE-METHOD" in doc["stderr"]
     # A failed summary execution returns nothing, so no `reported` entry is
     # written from a step whose contract was refused.
     assert run["results"]["summary"]["step02_summarize"] == {}
@@ -17887,16 +17924,21 @@ def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_pat
 
 
 def test_fixture_b_the_scaffolds_own_run_is_unchanged_by_h5b(tmp_path, capsys):
-    """H5b task 4, Fixture B. `STARTER_STEP` unmodified records `{"present":
-    True}` for every unit — a bool, no numeric column at all.
+    """H5b task 4, Fixture B. A step recording `{"present": True}` for every
+    unit — a bool, no numeric column at all.
 
     `GenericTemplate` inherits `BaseTemplate.aggregate`, which returns `{}`
     regardless of what `collapsed` holds (Decision 12), so
     `aggregated.step01_summarize_units == {}` **before and after H5b** — the
-    scaffold's own symptom does not move, because there is no `aggregate` to
-    read the newly-carried `present` column at all.
+    symptom does not move, because there is no `aggregate` to read the
+    newly-carried `present` column at all.
+
+    The bool-only step is passed in rather than inherited from `STARTER_STEP`,
+    which records a number since whole-project review C1. H5b's claim is about
+    a bool column, not about what the scaffold happens to record, and the
+    fixture now says which.
     """
-    doc = run_a_project(tmp_path, capsys=capsys, units=6)
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_BOOL_ONLY_STARTER_STEP)
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert agg == {}
@@ -17928,11 +17970,16 @@ def test_fixture_b_a_project_local_template_now_sees_the_bool_column(tmp_path, c
     After H5b's task 4, `present` is carried for every admitted unit, so the
     same read reports `6.0`, and no `W-STATS-AGGREGATE-FAILED` appears on
     stdout — the stream every shipped assertion on a run finding reads.
+
+    The bool-only step is passed in for the same reason as the first half's:
+    `STARTER_STEP` records a number since whole-project review C1, and a
+    `present`-counting template needs a `present` column to count.
     """
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
         units=6,
+        _starter_step=_BOOL_ONLY_STARTER_STEP,
         _local_template=_FIXTURE_B_TEMPLATE,
         experiment_type="present_counter",
         parameters={},
@@ -20578,6 +20625,66 @@ def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
 # self-contained) was considered and rejected here because that precedent
 # restates a cheap key-list assertion, not a whole apparatus-plugin
 # fixture — the cost/benefit is the opposite way round.
+
+
+_M1_RAISING_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("m1 sentinel: the apparatus fell off the bench")
+"""
+
+
+def test_a_run_that_does_not_complete_names_its_status_and_first_error(tmp_path: Path, capsys):
+    """Whole-project review M1: a step raising on every execution printed only
+    `W-ENV-UNLOCKED` and `run.yaml → <path>`, and a shell swallows the `4`.
+
+    The sentinel string is distinctive on purpose — asserting on the word
+    `failed` alone is satisfiable by neighbouring output (a path segment, the
+    `max_failed_fraction` key) — and both halves are asserted on the stream
+    each belongs to: the line on stderr, its absence from stdout, which is
+    what keeps `run`'s pinned successful-run stdout out of the question.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 3}]},
+        units=4,
+        _starter_step=_M1_RAISING_STARTER_STEP,
+        expect_exit=EXIT_FAILED,
+        capsys=capsys,
+    )
+    err = doc["stderr"]
+    assert "run failed: 3 of 3 executions failed" in err
+    assert "m1 sentinel: the apparatus fell off the bench" in err
+    assert "step01_summarize_units" in err
+    assert "m1 sentinel" not in doc["stdout"]
+    assert "run failed" not in doc["stdout"]
+    # The record is untouched by the line: same status, same error, same exit.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+
+def test_a_completed_run_says_nothing_about_its_status(tmp_path: Path, capsys):
+    """The other half of M1, and it is not an absence-only control: this run
+    must reach `completed` and print its record's path, so a build that printed
+    the status line unconditionally fails here rather than passing quietly.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=4,
+        capsys=capsys,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    assert "run.yaml → " in doc["stdout"]
+    assert "run completed" not in doc["stderr"]
+    assert "executions failed" not in doc["stderr"]
+    assert "no execution recorded an error" not in doc["stderr"]
 
 
 def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
@@ -23349,7 +23456,10 @@ def test_h9b_a_scalar_only_step_records_an_empty_column_list_and_no_table(tmp_pa
     ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
     assert ledger["step02_tally"]["status"] == "completed"
     assert ledger["step02_tally"]["recorded_columns"] == []
-    assert ledger["step01_summarize_units"]["recorded_columns"] == ["present"]
+    # `placeholder_score` is what the scaffold's own step records since
+    # whole-project review C1; the claim here is non-empty versus empty, and
+    # only the recording step's column NAME moved with the scaffold.
+    assert ledger["step01_summarize_units"]["recorded_columns"] == ["placeholder_score"]
     # The distinction the empty list exists to carry, asserted rather than
     # assumed: the completed step wrote no table at all.
     step_dirs = {p.parent.name for p in doc["run_dir"].rglob("units.parquet")}

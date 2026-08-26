@@ -399,3 +399,86 @@ def test_the_scaffolded_gitignore_still_says_nothing_about_demo_progress(tmp_pat
     ignored = (root / ".gitignore").read_text()
     assert ".demo-progress" not in ignored
     assert ".env" in ignored and "__pycache__/" in ignored
+
+
+def test_new_prints_what_it_created_and_the_next_command(tmp_path: Path, capsys):
+    """Whole-project review, Minor: `new` printed zero bytes at exit 0.
+
+    The printed path is asserted to be one that exists and holds the scaffold,
+    not merely to appear — a line naming a path nothing wrote is the failure
+    this fix would otherwise trade for silence.
+    """
+    from publishable.cli import main
+
+    root = tmp_path / "my-study"
+    assert main(["new", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert f"project → {root}" in out
+    assert (root / "pyproject.toml").is_file()
+    next_line = next(line for line in out.splitlines() if line.startswith("next: "))
+    assert f"cd {root}" in next_line
+    # The command it names has to be one the CLI dispatches, not a name from
+    # the roadmap: `generate` is a built branch, and this reads the mapping
+    # rather than a literal so a command that becomes unbuilt fails here.
+    from publishable.cli import NOT_BUILT_COMMANDS
+
+    assert "generate experiment" in next_line
+    assert "generate" not in NOT_BUILT_COMMANDS
+
+
+def test_generate_experiment_prints_its_paths_and_a_next_command_that_works(
+    tmp_path: Path, capsys, monkeypatch
+):
+    """The other half of that Minor, and the `next:` line is RUN rather than
+    matched: a printed next command that does not dispatch is worse than none.
+
+    It is run twice, because the honest answer has two halves. On the config as
+    generated it exits `1` naming the two `metadata` fields `init` deliberately
+    leaves empty — `validate` doing its job, which is why `next:` points at it —
+    and with those two filled the same invocation exits `0`.
+    """
+    from publishable.cli import main
+
+    root = scaffold_project(tmp_path / "my-study")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\n")
+    monkeypatch.chdir(root)
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "cohort-pilot",
+                "--template",
+                "generic",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    config = root / "configs" / "cohort-pilot" / "config.yaml"
+    step = root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
+    assert f"config → {config}" in out
+    assert f"step   → {step}" in out
+    assert config.is_file() and step.is_file()
+    next_line = next(line for line in out.splitlines() if line.startswith("next: "))
+    assert next_line == f"next: uv run publishable validate {config}"
+    argv = next_line.removeprefix("next: uv run publishable ").split()
+    capsys.readouterr()
+    assert main(argv) == 1
+    reported = capsys.readouterr().out
+    assert "metadata.description" in reported and "metadata.authors" in reported
+
+    doc = yaml.safe_load(config.read_text())
+    doc["metadata"]["description"] = "the Minor's acceptance run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    config.write_text(yaml.safe_dump(doc))
+    capsys.readouterr()
+    assert main(argv) == 0
+    assert "✓ config valid" in capsys.readouterr().out

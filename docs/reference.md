@@ -3831,6 +3831,8 @@ Every command is scriptable, so what it returns is part of the interface:
 
 **`3`, `4` and `5` have their first `resume` reader**, and no code is minted for it: a resumed run's status is computed over the whole plan by the same function a straight-through run's is, so a resume ends `partial` at `3`, `failed` at `4`, and `5` when the [apparatus](#the-apparatus-core-can-only-observe) is unreachable, exactly as `run` does. `1` already anticipated the rest — *a `resume` whose hashes moved* is the row's own example, and it covers every one of `resume`'s own refusals, including a run directory that holds no `identity.json`. The one place worth reading twice is `1` versus `4` for a **changed apparatus fact**: `1`'s qualifying clause is *caught before the first execution ran, which leaves nothing to mark `failed` at all*, so it is the answer when the first attempt completed nothing, while a resume whose previous attempt did complete executions [publishes them and ends `failed`](#what-status-means-and-when-a-run-keeps-going) at `4`.
 
+**A `3`, `4` or `5` from a command that executes is also said out loud.** A run ending anything but `completed` prints one line to **stderr** naming its status and — when an execution reported one — the first error with the step, condition and repeat it came from; a status reached with every execution clean (a [changed input manifest](#errors-core-raises), an apparatus stop) says so and points at the record instead of naming an error there is none of. An exit code is invisible to whoever ran the command in a shell, and the cause otherwise lives only in `run.yaml`'s `execution.error`. It is a summary of what the record already says rather than a new fault, so it carries **no `E-` identifier**, changes no exit code and no `status`, and adds nothing to `run.yaml`. `run`'s **stdout** is unchanged by it: the warning block and the `run.yaml → <path>` line.
+
 **`partial` and `failed` get different codes because the whole point of separating them is that one is reportable.** Collapsing both into "didn't complete" would hand a script the same number for a run whose results belong in a paper and one that has none, which is exactly the judgement the two statuses exist to record. A pipeline that archives on `3` and pages on `4` is the shape this is for.
 
 Both belong to the commands that execute. **`report` of a `partial` run exits `0`** — it was asked to render a record and it rendered one, with the failures shown. A reader learns the run was partial from the report, which is where that belongs, not from the exit code of the command that printed it. `5` is separate from all of them because it is the class you retry, and the others are not — **so when both apply, `5` wins.** A run stopped by an [unreachable probe](#what-status-means-and-when-a-run-keeps-going) writes `status: partial` and exits `5`: the status says what the record contains, the code says what to do about it, and those are different questions. That exit code holds **whether or not a record was written** — a probe unreachable before the first execution leaves a run directory with no `run.yaml` to hold a status at all, and still exits `5`, the same code an unreachable probe mid-run gets alongside its `partial` record. A script keying on `3` archives a finished-with-failures run; the same script shouldn't archive one whose apparatus was merely offline for an hour.
@@ -3874,7 +3876,7 @@ Six stops. Stops 3 through 5 each have the same beat: print the next command exa
 | 2 | *(`demo` prints a file)* | Shows this config's `sweep` and `replication` blocks verbatim — the whole description of what is about to run |
 | 3 | `validate` | Reads the config and the input, creates nothing, reaches nothing off the machine |
 | 4 | `dry-run` | 3 conditions × 5 repeats = **15 repeat-scoped** executions and **19 in all** — the plan also runs `step01_load_cohort` once for the whole sweep and `step02_fit_model` once per condition, and 19 is what the command prints — plus the step directories and fixed files a run would write, and the unit-execution count. Still creates nothing |
-| 5 | `run` | The run itself. `run`'s own output is the warning block and the path to the record it wrote; the results table beneath it — estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline — is **`demo`'s**, rendered from that record, which is what "say what its output meant" is at this stop |
+| 5 | `run` | The run itself. `run`'s own output for a run that completes is the warning block and the path to the record it wrote (one that [does not complete](#exit-codes-and-diagnostics) adds a line on stderr); the results table beneath it — estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline — is **`demo`'s**, rendered from that record, which is what "say what its output meant" is at this stop |
 | 6 | *(nothing — `demo` prints a command)* | Opens the `run.yaml` this all produced and shows the `reproduce` invocation a collaborator would run against it. Hands off to [`publishable new`](#scaffolding-publishable-new) |
 
 Stop 2 invites you to read the config, not to edit a step. That asymmetry is deliberate: `code_hash` covers [`src/**` and `templates/**`](#three-hashes), so a step edited at stop 2 would dirty the tree and make stop 5 refuse — the first `run` a user ever issues would be an error. A config edit costs nothing but a different `parameters_hash`.
@@ -3915,6 +3917,8 @@ my-study/
 ```
 
 There's no `data/` or `results/` directory; input and output live outside the repo. Because the layout is fixed, core doesn't need `--repo` or `--templates-dir` flags.
+
+It prints the project path it wrote and one `next:` line — the [`generate experiment`](#generators) invocation, with the three values only you can supply left as placeholders.
 
 ### The generated README
 
@@ -3989,6 +3993,8 @@ The `<!-- publishable:begin ... -->` regions are **managed**: a generator that p
 | `template` | built | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Refuses if that file already exists, and takes a name `templates/<name>.py` can be imported under and not one prefixed with `__`, which [discovery skips](#templates-where-parameters-are-defined). Writes its parameter table into the README's managed `templates` region, and says so when the README declares none |
 | `report` | built | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment, with `format` seeded from `--format` (default `markdown` when omitted); see below. Refuses if that file already exists (`E-REPORT-EXISTS`) |
 
+**`experiment` says what it wrote and what to run next**, on stdout: a `<what> → <path>` line per file — printed only for a path it actually wrote — then one `next:` line, the [`validate`](#validation) invocation for the config it just wrote, which is also what reports the two `metadata` fields a generated config deliberately leaves empty. [`publishable new`](#scaffolding-publishable-new) does the same for the project it scaffolds. A creation command that prints nothing is indistinguishable from one that did nothing, and the next command is otherwise the one thing a reader has to look up; the other three generators here say nothing today.
+
 ```python
 # src/cohort_pilot/experiment.py — order, nothing else
 from publishable import BaseExperiment
@@ -4032,7 +4038,7 @@ It lives in `src/**` rather than in a plugin because it is one experiment's pres
 
 ### The starter step runs
 
-`generate experiment` writes a first step that works rather than one that raises `NotImplementedError`. It counts the units it was given, writes them out, and returns that count as a metric:
+`generate experiment` writes a first step that works rather than one that raises `NotImplementedError`. It records a placeholder number for every unit it was given — which is what earns a [metric block](#the-unit-table-is-the-inference-base): a value, a `ci95`, the four-way `n`, a `method` and a `repeat_spread` — and returns the unit count beside it as a [`basis: repeats`](#the-unit-table-is-the-inference-base) scalar:
 
 ```python
 # src/cohort_pilot/steps/step01_summarize_units.py — generated, and runnable as-is
@@ -4044,11 +4050,17 @@ class Step(BaseStep):
     def run(self, cfg, io):
         units = list(io.units)
         for unit in units:
-            io.record(unit.key, {"present": True})
-        return {"n_units": len(units)}          # TODO: replace with your analysis
+            # TODO: replace this placeholder draw with your own measurement of
+            # `unit`, and rename the column. It must be a NUMBER: a numeric
+            # column is what earns a metric block -- value, ci95, the four-way
+            # n, method and repeat_spread. A bool or a string column reaches
+            # the template's `aggregate` and earns no interval, so a step that
+            # records only those publishes nothing.
+            io.record(unit.key, {"placeholder_score": self.rng.random()})
+        return {"n_units": len(units)}
 ```
 
-Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready: the `TODO` marks the only line that *must* change, and a real pipeline usually renames the file and picks its own [scope](#step-scope) besides — the worked example's first step is `step01_load_cohort` at `scope = "run"`, which is what loading a cohort once should be.
+Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, a real set of provenance hashes, and a real interval over your own units — before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready: the `TODO` marks the only line that *must* change, and a real pipeline usually renames the file and picks its own [scope](#step-scope) besides — the worked example's first step is `step01_load_cohort` at `scope = "run"`, which is what loading a cohort once should be.
 
 **What "immediately" presumes is the `data.units` block `init` wrote** — a table at `input_dir/index.csv` whose key column is the one the config names — since [`io.units` raises when no units are declared](#steps-and-artifacts) and `validate` fails when they don't resolve. Input shaped some other way means editing that one declaration first, which is [one line and one `validate` away](#where-units-come-from); a pipeline with no unit table at all edits the step too, which is the `TODO` it already carries.
 
