@@ -1028,6 +1028,7 @@ def sweep_document(
     execution_order: list[tuple[int, str]],
     order_seed: int | None = None,
     partitions: list[list["Unit"]] | None = None,
+    partitions_within: list[str] | None = None,
     sample_seed: int | None = None,
 ) -> dict[str, Any]:
     """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
@@ -1077,6 +1078,26 @@ def sweep_document(
     keys on each side: `test` is that fold's own partition, `train` every
     other partition concatenated in fold order — the same train/test split
     `io.units`/`io.units.train` hand a repeat-scope step for that label.
+
+    `partitions_within` names the group axes the partitions were drawn
+    **inside**, and is written only when they were. Every `partitions` entry
+    keeps `fold`, `test` and `train` unchanged, because composing `train`
+    within the cell is arithmetically the same set: cells partition the roster
+    and the merge is index-wise, so partition *i* is still one block of a
+    partition of the whole roster, and *"every other partition concatenated"*
+    is `roster \\ partition_i` either way. What the key discloses is the thing
+    that is **not** the same: under cells the flat `train` names a side no
+    execution ever sees, because every condition is arm-narrowed first, so a
+    repeat-scope step in that cell is handed `cell ∩ (roster \\ partition_i)`.
+    A reader recovers that side by crossing this entry against
+    `allocation.json`'s `arms`; the key is what tells them they have to.
+
+    A disclosure key travelling beside the number it qualifies is
+    `weighted_by`'s and `n_paired_clusters`' shape, and omitting it when it
+    describes nothing is `build_allocation_document`'s own rule for `seed` and
+    `strata`. It is written **inside** the `partitions` branch rather than
+    beside it, so no document can carry a key describing partitions it does
+    not record — placement, rather than a comment claiming the pairing holds.
     """
     repeat_entries: list[dict[str, Any]] = []
     for lv in levels:
@@ -1131,4 +1152,6 @@ def sweep_document(
             }
             for member, part in zip(fold.members, partitions, strict=True)
         ]
+        if partitions_within:
+            doc["partitions_within"] = list(partitions_within)
     return doc

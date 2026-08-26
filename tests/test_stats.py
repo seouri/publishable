@@ -3,6 +3,7 @@ import math
 import random
 
 import pytest
+from tests.test_units import h3c3_per_cell_fixture
 
 from publishable.errors import ContractError
 from publishable.replication import resolve_repeats
@@ -6342,3 +6343,112 @@ def test_a_unit_that_recorded_no_column_at_all_is_still_admitted_as_a_row():
     # numeric subset is what publishes, and `p2` contributed nothing to it.
     out = summarize_step(collapsed, {"completed": 3}, seed=7)
     assert out["score"]["n"]["completed"] == 2
+
+
+# --- H3c-3 task 12: the four `stats.py` readers of a per-cell `fold_members` --
+
+
+def _h3c3_treatment_results(members, arms, step="analyze"):
+    """One execution per fold label, recording the `treatment` units THAT fold
+    was handed — the run that actually happened under `members`.
+
+    Built from `members` rather than from three literals, so the fixture cannot
+    quietly stop describing the draw it came from.
+    """
+    return [
+        _repeat_result(
+            step, label, 0, {key: {"s": 1.0} for key in sorted(keys & arms["treatment"])}
+        )
+        for label, keys in sorted(members.items())
+    ]
+
+
+def test_h3c3_handed_to_reads_the_flat_mapping_and_covers_every_fold():
+    """Reader 1 of 7. `handed_to` hands each `treatment` unit **exactly one**
+    label, and the three units between them cover all three folds — the
+    property the per-cell draw bought, read through the reader rather than off
+    the mapping.
+
+    Under the whole-roster mapping the same three units cover only `fold02` and
+    `fold03`: `fold01` was handed no `treatment` unit at all, so nothing this
+    reader can return names it. That is the discriminating half — the first
+    assertion alone passes under either draw.
+    """
+    from publishable.stats import handed_to
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    labels = sorted(per_cell)
+    for key in sorted(arms["treatment"]):
+        assert len(handed_to(key, labels, per_cell)) == 1
+    assert {lb for key in arms["treatment"] for lb in handed_to(key, labels, per_cell)} == set(
+        labels
+    )
+    assert {lb for key in arms["treatment"] for lb in handed_to(key, labels, whole)} == {
+        "fold02",
+        "fold03",
+    }
+
+
+def test_h3c3_gather_repeats_admits_every_unit_of_the_thin_arm():
+    """Reader 2 of 7. `_gather_repeats` walks the same flat mapping and admits
+    all three `treatment` units, one value each.
+
+    Read against the **whole-roster** mapping the identical executions admit
+    **one** unit: a unit recorded in the fold it was drawn into per cell is
+    handed a different fold by the mapping this slice replaced, and a unit with
+    no value in the label it was handed is dropped. Three against one is the
+    assertion; a test that only asserted the three would pass under both.
+    """
+    from publishable.stats import _gather_repeats
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    results = _h3c3_treatment_results(per_cell, arms)
+    assert sorted(_gather_repeats(results, "analyze", 0, per_cell)) == ["t0", "t1", "t2"]
+    assert sorted(_gather_repeats(results, "analyze", 0, whole)) == ["t2"]
+
+
+def test_h3c3_collapse_repeats_builds_one_row_per_unit_of_the_thin_arm():
+    """Reader 3 of 7 (H5b's split, one half). The collapsed table is one row per
+    `treatment` unit, each averaging the single value its own fold recorded —
+    and one row, not three, under the whole-roster mapping.
+    """
+    from publishable.stats import collapse_repeats
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    results = _h3c3_treatment_results(per_cell, arms)
+    table = collapse_repeats(results, "analyze", 0, per_cell)
+    assert table == {"t0": {"s": 1.0}, "t1": {"s": 1.0}, "t2": {"s": 1.0}}
+    assert sorted(collapse_repeats(results, "analyze", 0, whole)) == ["t2"]
+
+
+def test_h3c3_repeats_disagreeing_counts_the_units_the_flat_mapping_hands():
+    """Reader 4 of 7 (H5b's other half). Two seeds inside each fold, a
+    non-numeric column, and **two** of the three `treatment` units disagreeing
+    about it — the third recording `a` twice.
+
+    Under the whole-roster mapping only that agreeing unit survives the
+    membership walk, so the same executions report **nothing** disagreeing.
+    An agreeing unit is what makes the two answers differ rather than merely
+    shrink, and it is why this fixture is not the one the three tests above
+    share.
+    """
+    from publishable.stats import repeats_disagreeing
+
+    _, per_cell, whole, arms = h3c3_per_cell_fixture()
+    agreeing = sorted(per_cell["fold03"] & arms["treatment"])[0]
+    results = []
+    for label, keys in sorted(per_cell.items()):
+        for seed, tag in (("seed01", "a"), ("seed02", "b")):
+            results.append(
+                _repeat_result(
+                    "analyze",
+                    f"{label}_{seed}",
+                    0,
+                    {
+                        key: {"tag": "a" if key == agreeing else tag}
+                        for key in sorted(keys & arms["treatment"])
+                    },
+                )
+            )
+    assert repeats_disagreeing(results, "analyze", 0, per_cell) == {"tag": 2}
+    assert repeats_disagreeing(results, "analyze", 0, whole) == {}

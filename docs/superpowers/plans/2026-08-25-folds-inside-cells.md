@@ -321,6 +321,11 @@ exists — an assertion that only checks non-`None` passes with any draw.
 
 ## Task 6
 
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 2.** **C25 is undischargeable at tasks 2
+> and 3 — measured**: adding the imports with no caller fails `ruff` (F401 + I001). **The imports land with
+> their callers, here and at task 8.** Neither brief said so, and both experiments were edited back and
+> diffed identical, so nothing is owed but the landing.
+
 **Corrections that bind this task: C4, C5, C25.** **Ruling LL binds this task and is the reason it
 exists.**
 
@@ -345,6 +350,11 @@ would be evidence about the tests, not the code.
 **Must not touch:** `fold_basis`, `_check_resample`'s holdout narrowing, `_fold_k`.
 
 ## Task 7
+
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 4.** **Mutation MU-3's refusal half is
+> YOURS** — batch A declared it in advance and named it in the shipped test's docstring, because the code
+> it mutates did not exist yet. *Reporting a mutation blind is necessary and not sufficient; it owes a
+> replacement*, and the replacement is due here.
 
 **Corrections that bind this task: C12.**
 
@@ -380,6 +390,18 @@ and every hit attributed. **Report what you grepped, not a count without a noun.
 # Batch C — the fold half
 
 ## Task 8
+
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 1. This is the sharpest carry-forward in
+> the slice and this section did not carry it.** Guard-pin **arm D** constrains you two ways:
+>
+> 1. **You must keep CALLING `partition_units`** — the arm pins that, not merely its result.
+> 2. **You must compose the one-cell case BEFORE the loop.** `cells_of({})` returns **one EMPTY cell**, and
+>    Decision 7's loop **skips empty cells** — so passing a no-axis design through the loop calls
+>    `partition_units` **zero times and every fold silently vanishes.** Measured by batch A.
+>
+> **That is the bit-stability oracle's exact failure mode**: a design with no cells must come out
+> **bit-identical**, and the loop as designed would make it come out empty. **Build the no-axis case first
+> and pin it before you write the loop**, not after.
 
 **Corrections that bind this task: C10, C25, C26.**
 
@@ -449,6 +471,17 @@ that does not exist, in this build and every build — **there is no later slice
 saying so.
 
 ## Task 11
+
+> **AMENDED 2026-08-25 by the controller, from batch B's concerns 1 and 2.** Two obligations fell out of
+> earlier tasks and land on whichever of tasks 11, 14, 17 or 18 reaches them first — **check both before you
+> start, and if you are the first, they are yours:**
+>
+> 1. **`Prepared.cells` has NO `_execute_prepared` unpack line** — measured, `ruff` reports one `F841`, and
+>    C20 says the opposite. **The first task reading `cells` in phases 6–10 adds it.**
+> 2. **`units.cell_fold_basis` has ZERO production callers.** Task 7 needed the argmin cell and used
+>    `units.thinnest_cell` instead. **If no task calls it, the slice ships a tested function nothing calls**
+>    — which is *an unbuilt reader of a shipped surface* wearing its other face, in the row whose example
+>    list just ran out. **Either call it or delete it, and say which.**
 
 **Corrections that bind this task: C8, C13, C14.**
 
@@ -702,6 +735,9 @@ guards.
 
 ## Task 18
 
+> **AMENDED 2026-08-25 by the controller, from batch A's concern 4.** **Mutation MU-11 is YOURS**, declared
+> in advance by batch A and named in a shipped test's docstring because your code did not exist yet.
+
 **Corrections that bind this task: C16, C17.** **RULING JJ BINDS THIS TASK: `limits.min_units_per_cell`
 must be DECIDED, not declined, and there is no later slice.**
 
@@ -807,6 +843,13 @@ exist in `spec-defects.md`, and the report must quote its heading.
 # Batch F — documents and end to end
 
 ## Task 21
+
+> **AMENDED 2026-08-25 by the controller, from batch C's sweep.** **`E-REPL-FOLD-CELLS` survives at SIX
+> sites, not four**: `reference.md` 4 **and `CLAUDE.md` 2**, measured newline-insensitively with a can-fail
+> control. **M15's count phrase says "reference.md-only", so a task checking itself against M15 alone reads
+> 4 and stops** — which is how a documented refusal outlives the code that raised it. **The `CLAUDE.md`
+> pair is the controller's to edit; report them rather than taking them**, and treat M15's number as the
+> claim it is rather than the count it looks like.
 
 **Corrections that bind this task: C2, C18.**
 

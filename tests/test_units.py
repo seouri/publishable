@@ -1,5 +1,6 @@
 # tests/test_units.py
 import importlib
+import itertools
 import sys
 from collections import Counter
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from publishable import ContractError
+from publishable.replication import _fold_k
 from publishable.units import (
     DRAWN_ASSIGN_METHODS,
     HOLDOUT_METHODS_REALIZED,
@@ -23,6 +25,7 @@ from publishable.units import (
     arms_of,
     assign_seed_for,
     assignment_for,
+    cells_of,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -33,8 +36,10 @@ from publishable.units import (
     holdout_values_fault,
     null_test_level,
     partition_units,
+    partition_within_cells,
     resolve_units,
     stratum_varies_within_cluster,
+    thinnest_cell,
     units_hash,
 )
 
@@ -4515,3 +4520,736 @@ def test_index_names_covers_every_source_shape(tmp_path):
         "reads/a1.fq",
     }
     assert index_names({"from": "index.csv"}, None) == {"index.csv"}  # no roster, still the index
+
+
+# --- H3c-3 guard pin, arm A: the bit-stability oracle -------------------------
+
+
+def test_h3c3_pin_arm_a_the_three_partition_draws_are_byte_identical():
+    """**H3c-3 guard pin, arm A. Authorized editor: NONE.** No task in the
+    folds-inside-cells slice may edit this test; its post-edit state, specified
+    in advance, is *unchanged, byte for byte*.
+
+    The bit-stability oracle the whole slice rests on: a design with **no
+    cells** must draw exactly the partition it drew at `3d72910`. Cells are
+    drawn per cell only when a group axis resolves, and a one-cell design must
+    reduce to today's single call byte-identically — so a fold regression
+    bought for an arm feature is the one trade this slice must not make
+    (`_assign_whole_clusters_by_ratio`'s docstring states the same rule).
+
+    Three draws, not one, because `partition_units` has three paths and the
+    slice's per-cell loop passes `clusters=` and `strata=` through: the
+    unclustered draw (the existing oracle
+    `test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite`,
+    re-asserted here under this slice's name so a reader greps the slice and
+    finds it), the clustered draw at `sha256:abc`, and the clustered-stratified
+    draw at `sha256:0000`.
+
+    Every literal below was **computed** by calling `partition_units` at
+    `d17d402`, not read from another test: the sibling clustered tests pin
+    sizes (`{8, 7}`) and cluster identity, which a rewrite that reordered units
+    *inside* a fold would still satisfy. Membership in order is what this pins.
+    The size vectors are hand-derivable — largest-cluster-first into the
+    least-loaded fold — but the membership is not: `S4` and `S5` tie at size 1
+    and the shuffle breaks that tie, so only running produces the order.
+    """
+    unclustered = partition_units(_roster(50), 5, "d")
+    assert [[u.key for u in p] for p in unclustered] == [
+        ["u018", "u019", "u034", "u029", "u025", "u023", "u007", "u016", "u013", "u035"],
+        ["u036", "u000", "u043", "u040", "u026", "u032", "u003", "u031", "u022", "u041"],
+        ["u020", "u046", "u004", "u001", "u038", "u049", "u017", "u030", "u012", "u033"],
+        ["u039", "u021", "u028", "u010", "u045", "u048", "u009", "u024", "u014", "u042"],
+        ["u011", "u006", "u002", "u005", "u015", "u037", "u027", "u008", "u047", "u044"],
+    ]
+
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    clustered = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    assert [[u.key for u in p] for p in clustered] == [
+        ["S1_0", "S1_1", "S1_2", "S1_3", "S1_4", "S1_5", "S1_6", "S4_0"],
+        ["S3_0", "S3_1", "S3_2", "S2_0", "S2_1", "S2_2", "S5_0"],
+    ]
+
+    roster, clusters, strata = _clustered_by_stratum({"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]})
+    stratified = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [[u.key for u in p] for p in stratified] == [
+        ["Ac0_0", "Ac0_1", "Ac0_2", "Bc0_0", "Bc0_1", "Bc0_2", "Bc0_3", "Bc0_4"],
+        ["Ac2_0", "Ac2_1", "Ac1_0", "Ac1_1", "Bc3_0", "Bc1_0"],
+        ["Ac3_0", "Ac3_1", "Bc4_0", "Bc2_0"],
+    ]
+
+
+# --- H3c-3 task 2: `cells_of`, the design's cell decomposition ----------------
+
+
+def _plan(members: dict[str, list[str]]) -> ArmPlan:
+    """One realized `ArmPlan` from a level → keys mapping, `levels` in the
+    mapping's own order — the shape `assignment_for` produces and the only
+    input `cells_of` takes."""
+    return ArmPlan(
+        levels=tuple(members),
+        members={level: tuple(keys) for level, keys in members.items()},
+        seed=None,
+        strata=(),
+    )
+
+
+_CELLS_ROSTER = [f"u{i:02d}" for i in range(12)]
+
+
+def test_two_crossed_axes_give_one_cell_per_combination_in_declaration_order():
+    """12 units, `arm` × `sex`, two levels each → **4** cells whose keys are
+    `(axis, level)` pairs in **declaration order**: `arm` was declared first,
+    so it is the first pair of every key, and each axis's levels vary in the
+    order that axis declares them.
+
+    The two axes cut the roster differently on purpose — `arm` is the first
+    six against the last six, `sex` is even indices against odd — so the four
+    intersections are genuinely four different 3-unit sets. Two axes that
+    agreed would make the disjointness assertion below pass under a union as
+    well as under an intersection.
+    """
+    axes = {
+        "arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]}),
+        "sex": _plan({"f": _CELLS_ROSTER[::2], "m": _CELLS_ROSTER[1::2]}),
+    }
+    cells = cells_of(axes)
+    assert list(cells) == [
+        (("arm", "control"), ("sex", "f")),
+        (("arm", "control"), ("sex", "m")),
+        (("arm", "treatment"), ("sex", "f")),
+        (("arm", "treatment"), ("sex", "m")),
+    ]
+    assert cells[(("arm", "control"), ("sex", "f"))] == frozenset({"u00", "u02", "u04"})
+    assert cells[(("arm", "treatment"), ("sex", "m"))] == frozenset({"u07", "u09", "u11"})
+    # MU-2's catcher: a union in place of the intersection puts every unit in
+    # two cells. Asserted as a total over the cells against the roster size,
+    # which a union raises from 12 to 24, and as pairwise disjointness.
+    assert sum(len(keys) for keys in cells.values()) == 12
+    assert frozenset().union(*cells.values()) == frozenset(_CELLS_ROSTER)
+    for one, other in itertools.combinations(cells.values(), 2):
+        assert not (one & other), "cells partition the roster"
+
+
+def test_an_empty_intersection_is_kept_as_a_cell_rather_than_skipped():
+    """MU-1's catcher, and it is a **count**: `arm` × `site` where no `control`
+    unit sits at `s2` gives **4** cells, one of them empty — not 3.
+
+    The count is what a per-cell bound has to see. `cells_of`'s callers ask
+    *how many cells does this design declare* and *is any of them too thin*,
+    and a decomposition that silently dropped the empty one would answer the
+    second question with a cell that does not exist and the first with a
+    number the config does not declare.
+    """
+    axes = {
+        "arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]}),
+        "site": _plan({"s1": _CELLS_ROSTER[:8], "s2": _CELLS_ROSTER[8:]}),
+    }
+    cells = cells_of(axes)
+    assert len(cells) == 4
+    assert cells[(("arm", "control"), ("site", "s2"))] == frozenset()
+    # The can-fail half: the other three are populated, so the empty one is an
+    # empty cell in a real decomposition rather than four empty cells.
+    assert [len(cells[key]) for key in cells] == [6, 0, 2, 4]
+
+
+def test_one_axis_gives_one_cell_per_level():
+    axes = {"arm": _plan({"control": _CELLS_ROSTER[:6], "treatment": _CELLS_ROSTER[6:]})}
+    cells = cells_of(axes)
+    assert list(cells) == [(("arm", "control"),), (("arm", "treatment"),)]
+    assert cells[(("arm", "control"),)] == frozenset(_CELLS_ROSTER[:6])
+
+
+def test_no_axes_give_one_empty_cell_and_the_caller_composes_the_roster():
+    """`cells_of({}) == {(): frozenset()}`: one cell, holding nothing, because
+    this function has no roster to fall back on and takes none by design.
+
+    **A design with no group axis is one cell holding the whole roster, and
+    that composition is the caller's**, written once in the docstring and once
+    at the caller rather than invented at both. Asserted as an equality on the
+    whole mapping — one cell, whose key is the empty tuple — so a future edit
+    that returned `{}` for no axes (no cells at all, a different claim) fails
+    here.
+    """
+    assert cells_of({}) == {(): frozenset()}
+
+
+# --- H3c-3 task 3: `thinnest_cell`, the fold basis of the thinnest cell -------
+
+
+_F2_SPEC = {"control": {"A": 5, "B": 3}, "treatment": {"C": 4, "D": 3, "E": 1}}
+
+
+def _f2(control_level: str, treatment_level: str) -> tuple[UnitList, dict[str, tuple[str, ...]]]:
+    """F2: 16 units, `control` = clusters `A`×5 and `B`×3, `treatment` = `C`×4,
+    `D`×3 and `E`×1. **Every cluster nests inside one arm**, so no cluster
+    spans a cell — Decision 13's spanning-cluster question is deliberately kept
+    out of this fixture, which is about the per-cell basis alone.
+
+    The two cells carry **different** cluster counts, 2 against 3, which is
+    what makes "the minimum over cells" distinguishable from "the first cell's
+    count" at all: two elements only ever distinguish two answers, and two
+    cells of 2 and 2 would distinguish none.
+
+    The arm level names are parameters so a caller can put the thin cell on
+    either side of an alphabetical sort.
+    """
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {}
+    for arm, level in (("control", control_level), ("treatment", treatment_level)):
+        for site, n in _F2_SPEC[arm].items():
+            for i in range(n):
+                key = f"{site}{i}"
+                units.append(Unit(key=key, paths=(), attributes={"site": site, "arm": level}))
+                members.setdefault(level, []).append(key)
+    return UnitList(units), {level: tuple(keys) for level, keys in members.items()}
+
+
+def test_the_cell_wise_fold_basis_is_the_thinnest_cells_and_not_the_rosters():
+    """F2's four computed literals, each one produced by calling rather than
+    read from the design: per-cell cluster counts 2 and 3, so the clustered
+    cell basis is **2** and the unclustered one **8** — while the whole
+    roster's `fold_basis` is **5** clustered and **16** unclustered.
+
+    That gap is the point and the can-fail control at once. `{kind: fold,
+    k: 3}` clears the roster bound (5 ≥ 3) and exceeds the cell bound (2 < 3),
+    which is the discriminating literal a per-cell bound is built on. **The
+    refusal itself is not exercised here**: nothing consumed `thinnest_cell`
+    at this task, and wiring the bound into `_fold_k`'s three
+    `E-REPL-FOLD-K-TOO-LARGE` emit sites is task 7's. MU-3 (`max` for `min`) is
+    run against the `== 2` assertion below, where `max` gives 3.
+    """
+    roster, members = _f2("control", "treatment")
+    plan = ArmPlan(levels=("control", "treatment"), members=members, seed=None, strata=())
+    cells = cells_of({"arm": plan})
+    assert [len(keys) for keys in cells.values()] == [8, 8], "equal unit counts, unequal clusters"
+    assert [
+        len({u.attributes["site"] for u in roster if u.key in keys}) for keys in cells.values()
+    ] == [2, 3]
+
+    assert thinnest_cell(roster, "site", cells)[0] == 2
+    assert thinnest_cell(roster, None, cells)[0] == 8
+    # The roster's own answer, which is what a caller reaching for `fold_basis`
+    # under cells would get instead — and it is larger on both halves, so the
+    # per-cell answer cannot be coinciding with it.
+    assert fold_basis(roster, "site") == 5
+    assert fold_basis(roster, None) == 16
+
+
+@pytest.mark.parametrize("thin_level,thick_level", [("aaa", "zzz"), ("zzz", "aaa")])
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_the_minimum_holds_whichever_cell_comes_first(
+    thin_level: str, thick_level: str, thin_first: bool
+):
+    """MU-4's catcher: returning the **first** cell's basis instead of the
+    minimum.
+
+    Four arrangements, not one. The thin cell (2 clusters) is put first and
+    last in the mapping's own order, **and** its level is named `aaa` in one
+    pair and `zzz` in the other — so neither "first by insertion" nor "first
+    by sorted name" can coincide with the minimum in every arrangement. A
+    single order rules out only one wrong answer, and a decoy on one side only
+    rules out only one sort direction; this fixture has one on each side.
+    """
+    roster, members = _f2(thin_level, thick_level)
+    order = (thin_level, thick_level) if thin_first else (thick_level, thin_level)
+    cells = {((("arm", level),)): frozenset(members[level]) for level in order}
+    assert list(cells) == [(("arm", order[0]),), (("arm", order[1]),)]
+    assert thinnest_cell(roster, "site", cells)[0] == 2
+
+
+def test_an_empty_cell_is_skipped_rather_than_making_the_basis_zero():
+    """`cells_of` keeps an empty cell because the count of cells is
+    load-bearing; this is the one place that count is not the question. An
+    empty cell has no units to distribute, and counting it would make every
+    minimum 0 and refuse every `k` in every design that declares a level no
+    unit falls in.
+
+    Asserted against the same F2 answer with the empty cell present and
+    absent, so the skip is visible as an equality rather than as a value that
+    happens to be right.
+    """
+    roster, members = _f2("control", "treatment")
+    populated = {
+        (("arm", "control"),): frozenset(members["control"]),
+        (("arm", "treatment"),): frozenset(members["treatment"]),
+    }
+    with_empty = dict(populated)
+    with_empty[(("arm", "unresolved"),)] = frozenset()
+    assert (
+        thinnest_cell(roster, "site", with_empty)[0] == thinnest_cell(roster, "site", populated)[0]
+    )
+    assert thinnest_cell(roster, "site", with_empty)[0] == 2
+
+
+def test_a_decomposition_with_no_populated_cell_reduces_to_the_whole_roster():
+    """The one-cell reduction, which is what makes a design with **no group
+    axis** fall through this function unchanged rather than being branched
+    around at the caller: `cells_of({})` is one empty cell, and the answer is
+    the roster's own `fold_basis` — 5 clustered, 16 unclustered on F2.
+
+    The seam is asserted against `fold_basis`' live answer, not against a
+    literal, so the two derivations have to agree rather than each agreeing
+    with its own copy of the number. `{}` — no cells at all — is asserted
+    beside it, since an empty decomposition and a decomposition of empty cells
+    are two different inputs reaching the same rule.
+    """
+    roster, _ = _f2("control", "treatment")
+    for cells in (cells_of({}), {}):
+        assert thinnest_cell(roster, "site", cells)[0] == fold_basis(roster, "site") == 5
+        assert thinnest_cell(roster, None, cells)[0] == fold_basis(roster, None) == 16
+
+
+def test_a_level_the_plan_did_not_realize_is_a_core_defect():
+    """`cells_of` indexes `members`, it does not `.get` it — the rule
+    `arm_members`, `cluster_count_of` and `partition_units`' `strata` mapping
+    all follow, each with its own fixture (`test_a_unit_missing_from_the_
+    stratum_mapping_is_a_core_defect` is the nearest sibling).
+
+    `levels` and `members` come from **one** `ArmPlan`, so a level the first
+    declares and the second does not hold is one plan disagreeing with itself.
+    A `.get(level, ())` default would turn that into an empty cell — a cell
+    that looks like a level no unit resolved to, which is a different and
+    perfectly legal thing — and every per-cell bound would then be computed
+    over a decomposition nothing verified.
+    """
+    plan = ArmPlan(
+        levels=("control", "treatment"),
+        members={"control": tuple(_CELLS_ROSTER)},  # `treatment` never realized
+        seed=None,
+        strata=(),
+    )
+    with pytest.raises(KeyError):
+        cells_of({"arm": plan})
+
+
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_thinnest_cell_returns_the_cell_the_minimum_came_from(thin_first: bool):
+    """H3c-3 task 7: the number AND the cell it came from, so
+    `replication._fold_k` can name the declaration a reader must change.
+
+    F2 again, in both insertion orders: the label must follow the **minimum**,
+    not the position — so a mutation returning the first cell's key while
+    keeping the right number fails one of the two arms."""
+    roster, members = _f2("control", "treatment")
+    order = ("control", "treatment") if thin_first else ("treatment", "control")
+    cells = {(("arm", level),): frozenset(members[level]) for level in order}
+    assert thinnest_cell(roster, "site", cells) == (2, (("arm", "control"),))
+
+
+@pytest.mark.parametrize("thin_first", [True, False])
+def test_a_tie_between_two_cells_goes_to_the_first_in_key_order(thin_first: bool):
+    """The tie-break `reference.md`'s `E-REPL-FOLD-K-TOO-LARGE` row now states —
+    *ties go to the first cell in declaration order* — pinned rather than only
+    documented.
+
+    Two cells of **two clusters each**, so the bases are equal and only the
+    order can decide. Run in both insertion orders, and the level names are
+    chosen so `zzz` sorts after `aaa`: whichever cell is inserted first is the
+    one named, which rules out both "last wins" and "alphabetically first
+    wins" — a single order would rule out only one of the three."""
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {}
+    for level, sites in (("aaa", ("P", "Q")), ("zzz", ("R", "S"))):
+        for site in sites:
+            for i in range(3):
+                key = f"{site}{i}"
+                units.append(Unit(key=key, paths=(), attributes={"site": site, "arm": level}))
+                members.setdefault(level, []).append(key)
+    roster = UnitList(units)
+    order = ("aaa", "zzz") if thin_first else ("zzz", "aaa")
+    cells = {(("arm", level),): frozenset(members[level]) for level in order}
+    basis, cell = thinnest_cell(roster, "site", cells)
+    assert basis == 2
+    assert cell == (("arm", order[0]),)
+
+
+# --- H3c-3 task 8: `partition_within_cells`, the per-cell draw ----------------
+#
+# **The no-populated-cell reduction below was written and pinned BEFORE the loop
+# existed**, against a placeholder body that raised `NotImplementedError` for
+# every other shape. That order is the amendment's requirement rather than a
+# preference: `cells_of({})` returns one **empty** cell and Decision 7's loop
+# skips empty cells, so a design with no group axis passed through the loop
+# would draw **zero** times and every fold would silently vanish — the
+# bit-stability oracle's exact failure mode. A reduction written after the loop
+# is a reduction chosen to make the loop's tests pass.
+
+
+def test_h3c3_no_populated_cell_draws_the_whole_roster_in_one_bare_digest_call():
+    """The trivial reduction, pinned as **bytes** against a live
+    `partition_units` call rather than as a shape.
+
+    Two inputs reach it and they are different inputs: `{}` — what
+    `cli._prepare_run` passes when `cells` is `None`, i.e. a design with no
+    group axis at all — and `cells_of({})`, whose single cell is **empty**.
+    `thinnest_cell`' own docstring states the same rule for the same two
+    inputs, and two functions in one module answering one triviality question
+    differently is how `validate` bounds `k` against a number the run does not
+    draw against.
+
+    Asserted as the fold contents, key by key, not as sizes: the populated path
+    rebuilds each sub-roster in roster order, so what a reordering bug produces
+    is the right sizes over the wrong folds. The call is counted too — one
+    call, with the **bare** digest — which is the property guard-pin arm D
+    watches from `cli`'s side and the one MU-5 (a per-cell digest) breaks.
+    """
+    from publishable import units as units_mod
+
+    expected = [[u.key for u in part] for part in partition_units(_roster(50), 5, "d")]
+    for cells in ({}, cells_of({})):
+        calls: list[tuple[int, str]] = []
+        original = units_mod.partition_units
+
+        def counting(roster, k, digest, _calls=calls, _original=original, **kwargs):  # type: ignore[no-untyped-def]
+            _calls.append((len(list(roster)), digest))
+            return _original(roster, k, digest, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(units_mod, "partition_units", counting)
+            parts = units_mod.partition_within_cells(_roster(50), 5, "d", cells)
+        assert [[u.key for u in part] for part in parts] == expected, cells
+        assert calls == [(50, "d")], cells
+
+
+def _two_cells(
+    n_per_cell: int = 6,
+) -> tuple[UnitList, dict[tuple[tuple[str, str], ...], frozenset[str]]]:
+    """Two cells of `n_per_cell` units each, interleaved in roster order so a
+    sub-roster rebuilt in the wrong order is visible in the fold contents.
+
+    Sized so that **more than one unit competes for the same fold**: at `k = 3`
+    each cell contributes two units per fold, so a mutation that changes the
+    seed (MU-5's per-cell digest) changes *which* — with one unit per fold the
+    assignment is forced and the mutation would be silent, which is the
+    "mutation whose two branches cannot differ" trap.
+    """
+    units: list[Unit] = []
+    members: dict[str, list[str]] = {"control": [], "treatment": []}
+    for i in range(n_per_cell):
+        for arm in ("control", "treatment"):
+            key = f"{arm[0]}{i:02d}"
+            units.append(Unit(key=key, paths=(), attributes={"arm": arm}))
+            members[arm].append(key)
+    cells = {(("arm", arm),): frozenset(keys) for arm, keys in members.items()}
+    return UnitList(units), cells
+
+
+def test_h3c3_one_cell_holding_the_whole_roster_reduces_byte_identically():
+    """The other half of the reduction, and it goes **through the loop** rather
+    than around it: a single cell holding every key rebuilds the sub-roster in
+    roster order, restricts a total map to the same total map, and draws once.
+
+    Pinned as an equality against a live `partition_units` call, so "rebuild
+    then draw" and "draw" have to agree rather than each agreeing with its own
+    copy of the answer. A size assertion would pass under a reordered
+    sub-roster, which is exactly what a roster-order bug produces.
+    """
+    roster, _ = _two_cells()
+    whole = {(("arm", "either"),): frozenset(u.key for u in roster)}
+    expected = [[u.key for u in part] for part in partition_units(roster, 3, "sha256:abc")]
+    got = partition_within_cells(roster, 3, "sha256:abc", whole)
+    assert [[u.key for u in part] for part in got] == expected
+
+
+def test_h3c3_the_per_cell_draw_uses_the_bare_digest_and_merges_index_wise():
+    """MU-5's and MU-6's catcher: the **contents** of a two-cell draw at a
+    fixed digest, computed by running rather than derived.
+
+    Two properties in one pin, because they fail differently:
+
+    - **MU-5**, a per-cell digest (`digest + str(cell)`), changes which units
+      share a fold — two units of each cell compete for each fold here, so the
+      seed is visible in the answer. Arm A cannot see this: it is a one-cell
+      case.
+    - **MU-6**, concatenating whole cells instead of merging index-wise, makes
+      fold 0 hold one cell and nothing of the other. Asserted directly: every
+      fold holds units from **both** cells, which is what keeps fold *i*
+      meaning one thing across the design.
+
+    The per-cell literals are asserted against the two live `partition_units`
+    calls the loop is supposed to make, so the merge is checked as a
+    composition rather than against a hand-copied answer.
+    """
+    roster, cells = _two_cells()
+    parts = partition_within_cells(roster, 3, "sha256:abc", cells)
+    keys = [[u.key for u in part] for part in parts]
+
+    # Every fold holds two units of each cell — MU-6's catcher, and it is a
+    # membership claim, not a count: a whole-cell concatenation gives fold 0
+    # six `c` keys and no `t` key.
+    for fold in keys:
+        assert sum(1 for key in fold if key.startswith("c")) == 2, keys
+        assert sum(1 for key in fold if key.startswith("t")) == 2, keys
+
+    # The composition, against the two calls the loop makes: each cell's
+    # sub-roster in roster order, at the BARE digest, merged index-wise.
+    per_cell = [
+        [[u.key for u in part] for part in partition_units(sub, 3, "sha256:abc")]
+        for sub in (
+            UnitList([u for u in roster if u.key in cells[(("arm", arm),)]])
+            for arm in ("control", "treatment")
+        )
+    ]
+    assert keys == [per_cell[0][i] + per_cell[1][i] for i in range(3)]
+    # And the literals themselves, so a change to `partition_units` cannot move
+    # both sides of the equality above together.
+    assert keys == [
+        ["c02", "c01", "t02", "t01"],
+        ["c05", "c04", "t05", "t04"],
+        ["c03", "c00", "t03", "t00"],
+    ]
+
+
+def test_h3c3_the_cells_maps_are_restricted_to_each_cell_and_stay_total():
+    """C26: each cell's `clusters` and `strata` map is the run's map restricted
+    to that cell's keys and **total over its sub-roster**, indexed rather than
+    `.get`-ed — so `partition_units`' stated contract that a unit missing from
+    either map is a `KeyError` and a core defect survives the restriction.
+
+    The honouring half and the refusal half, both: a clustered two-cell draw
+    keeps every cluster whole inside its own fold, and a map with a hole raises
+    `KeyError` rather than inventing a cluster of one.
+    """
+    roster, cells = _two_cells()
+    clusters = {u.key: f"{u.key[0]}{int(u.key[1:]) // 2}" for u in roster}
+    parts = partition_within_cells(roster, 3, "sha256:abc", cells, clusters=clusters)
+    assert sorted(u.key for part in parts for u in part) == sorted(u.key for u in roster)
+    for part in parts:
+        # Each cell contributes one whole cluster of two to each fold.
+        assert len(part) == 4
+    seen: dict[str, set[int]] = {}
+    for i, part in enumerate(parts):
+        for u in part:
+            seen.setdefault(clusters[u.key], set()).add(i)
+    assert all(len(folds) == 1 for folds in seen.values()), "a cluster was split"
+
+    holed = {key: value for key, value in clusters.items() if key != "t03"}
+    with pytest.raises(KeyError):
+        partition_within_cells(roster, 3, "sha256:abc", cells, clusters=holed)
+
+
+def test_h3c3_a_decomposition_that_does_not_partition_the_roster_is_a_core_defect():
+    """`cells_of` intersects realized `ArmPlan`s and every unit carries exactly
+    one level per axis, so a unit in no cell or in two is core's resolved state
+    disagreeing with itself — `E-RUN-FOLD-UNRESOLVED`, the same code `cli`
+    raises for a fold with no roster and `sweep` for partitions with no fold
+    level.
+
+    Both shapes, because they lose differently: an uncovered unit **vanishes
+    from every fold**, and a doubled one is **tested twice**. Raised rather
+    than asserted, since an `assert` disappears under `python -O`.
+    """
+    roster, cells = _two_cells()
+    short = dict(cells)
+    short[(("arm", "control"),)] = frozenset(sorted(cells[(("arm", "control"),)])[1:])
+    with pytest.raises(ContractError) as uncovered:
+        partition_within_cells(roster, 3, "sha256:abc", short)
+    assert uncovered.value.code == "E-RUN-FOLD-UNRESOLVED"
+    assert "c00" in str(uncovered.value)
+
+    doubled = dict(cells)
+    doubled[(("arm", "treatment"),)] = frozenset(cells[(("arm", "treatment"),)] | {"c00"})
+    with pytest.raises(ContractError) as twice:
+        partition_within_cells(roster, 3, "sha256:abc", doubled)
+    assert twice.value.code == "E-RUN-FOLD-UNRESOLVED"
+    assert "c00" in str(twice.value)
+    # The can-fail control: the same roster and the same `k` under the real
+    # decomposition draws without raising, so neither assertion above is
+    # passing because this shape raises for some other reason.
+    assert len(partition_within_cells(roster, 3, "sha256:abc", cells)) == 3
+
+
+# --- H3c-3 task 9: F1, the empty-fold fixture and its can-fail control --------
+
+
+def _f1() -> tuple[UnitList, dict[str, str], dict[str, tuple[str, ...]]]:
+    """F1, the fixture C1 corrects, **with its mapping stated rather than
+    implied**: 15 units; clusters `S1`×7 → units 0-6, `S2`×3 → 7-9, `S3`×3 →
+    10-12, `S4`×1 → 13, `S5`×1 → 14; `arm = control` for units 0-7 and
+    `treatment` for 8-14, an 8/7 split by attribute.
+
+    **Cluster `S2` therefore SPANS both arms** — unit 7 is `control`, units 8
+    and 9 are `treatment` — which is the whole of the difference between this
+    table and `H3c-3-SCOPING.md`'s `[3, 3, 1, 0, 0]`: three *whole* clusters in
+    `treatment` requires a mapping in which no cluster crosses the boundary,
+    and neither scoping's prose determines its own mapping. Here `control`
+    holds 2 clusters and `treatment` 4.
+
+    A spanning cluster is legal today (design Decision 13 files it rather than
+    refusing it) and this fixture keeps one deliberately; F2, the per-cell
+    basis fixture, deliberately has none.
+    """
+    spec = (("S1", 7), ("S2", 3), ("S3", 3), ("S4", 1), ("S5", 1))
+    units: list[Unit] = []
+    index = 0
+    for site, n in spec:
+        for _ in range(n):
+            arm = "control" if index < 8 else "treatment"
+            units.append(Unit(key=f"u{index:02d}", paths=(), attributes={"site": site, "arm": arm}))
+            index += 1
+    roster = UnitList(units)
+    clusters = {u.key: str(u.attributes["site"]) for u in roster}
+    members = {
+        arm: tuple(u.key for u in roster if u.attributes["arm"] == arm)
+        for arm in ("control", "treatment")
+    }
+    return roster, clusters, members
+
+
+def _f1_cells() -> tuple[
+    UnitList, dict[str, str], dict[tuple[tuple[str, str], ...], frozenset[str]]
+]:
+    roster, clusters, members = _f1()
+    plan = ArmPlan(
+        levels=("control", "treatment"),
+        members={arm: tuple(keys) for arm, keys in members.items()},
+        seed=None,
+        strata=(),
+    )
+    return roster, clusters, cells_of({"arm": plan})
+
+
+def _sizes(roster: UnitList, keys: frozenset[str], k: int, clusters: dict[str, str]) -> list[int]:
+    sub = UnitList([u for u in roster if u.key in keys])
+    restricted = {key: value for key, value in clusters.items() if key in keys}
+    return [len(part) for part in partition_units(sub, k, "sha256:abc", clusters=restricted)]
+
+
+def test_h3c3_the_empty_fold_table_and_its_whole_roster_control():
+    """C1's table, **recomputed here rather than read from the design**: at
+    `k = 5` over F1 the whole roster gives `[7, 3, 3, 1, 1]` — no empty fold —
+    while the same fixture partitioned inside each arm gives `[7, 1, 0, 0, 0]`
+    in `control` and `[3, 2, 1, 1, 0]` in `treatment`.
+
+    **The whole-roster row is the can-fail control.** Same fixture, same `k`,
+    same clusters, no empty fold: without it the table would show only that
+    small rosters make small folds, and every empty fold below could be an
+    artefact of 15 units rather than of the split. The cluster counts are
+    asserted beside it (2 and 4, from `S2` spanning the boundary), because they
+    are what makes `control`'s row three-quarters empty at a `k` the roster's
+    own 5 clusters carry exactly.
+
+    This is the state before the slice: `partition_units` over the whole
+    roster is what `_prepare_run` called, and a condition then saw
+    `cell ∩ partition_i` — four of `control`'s five folds holding one unit or
+    none.
+    """
+    roster, clusters, cells = _f1_cells()
+    assert [len(keys) for keys in cells.values()] == [8, 7]
+    assert [len({clusters[key] for key in keys}) for keys in cells.values()] == [2, 4]
+    assert clusters["u07"] == "S2" and clusters["u08"] == "S2", "S2 spans the arm boundary"
+
+    whole = [len(part) for part in partition_units(roster, 5, "sha256:abc", clusters=clusters)]
+    assert whole == [7, 3, 3, 1, 1]
+    assert min(whole) > 0, "the control: the roster's own draw has no empty fold at k=5"
+
+    control, treatment = cells.values()
+    assert _sizes(roster, control, 5, clusters) == [7, 1, 0, 0, 0]
+    assert _sizes(roster, treatment, 5, clusters) == [3, 2, 1, 1, 0]
+
+
+def test_h3c3_the_bound_refuses_that_k_and_the_per_cell_draw_at_the_admitted_one_is_full():
+    """The other half: the `k` that produced those empty folds is refused, and
+    at the `k` the bound admits **no cell contributes an empty fold**.
+
+    The bound is `units.thinnest_cell`'s — 2, from `control`'s two clusters,
+    against the roster's 5 — so `k: 5` is refused by
+    `E-REPL-FOLD-K-TOO-LARGE` with the cell named, and `k: 2` is not. Both
+    directions, because testing the refusal and never the honouring proves
+    nothing about the honouring: at `k = 2` the per-cell draw gives `control`
+    `[7, 1]` and `treatment` `[4, 3]`, every fold populated in every cell, and
+    the merged partition is `[11, 4]` — still a partition of all 15 units.
+
+    `[11, 4]` is deliberately **not** balanced: F1's `S1` is 7 units of one
+    indivisible cluster, so `partition_units`' own at-most-one-cluster floor
+    sets it, per cell. An empty fold is what the bound is for; an uneven one is
+    what a cluster of 7 in a roster of 15 buys.
+    """
+    roster, clusters, cells = _f1_cells()
+    basis, cell = thinnest_cell(roster, "site", cells)
+    assert (basis, cell) == (2, (("arm", "control"),))
+    assert fold_basis(roster, "site") == 5, "the roster's own count clears k=5"
+
+    with pytest.raises(ContractError) as refused:
+        _fold_k({"kind": "fold", "k": 5}, basis, "site", cell)
+    assert refused.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "arm=control" in str(refused.value)
+    assert _fold_k({"kind": "fold", "k": 2}, basis, "site", cell) == 2
+
+    control, treatment = cells.values()
+    assert _sizes(roster, control, 2, clusters) == [7, 1]
+    assert _sizes(roster, treatment, 2, clusters) == [4, 3]
+    merged = partition_within_cells(roster, 2, "sha256:abc", cells, clusters=clusters)
+    assert [len(part) for part in merged] == [11, 4]
+    assert sorted(u.key for part in merged for u in part) == sorted(u.key for u in roster)
+
+
+# --- H3c-3 task 12: the flat `fold_members` mapping, and its seven readers ----
+
+
+def h3c3_per_cell_fixture() -> tuple[
+    UnitList, dict[str, frozenset[str]], dict[str, frozenset[str]], dict[str, frozenset[str]]
+]:
+    """F1's shape at the fold's own draw: 12 units, `control` 9 and `treatment`
+    3, `{kind: fold, k: 3}` at digest `"d"` — the roster, the **per-cell**
+    `fold_members`, the **whole-roster** `fold_members` the same declaration
+    produced before this slice, and the two arms.
+
+    **The two mappings are the fixture's discriminator**, and it is a real
+    difference rather than a hoped-for one: the whole-roster draw at this digest
+    puts 0, 1 and 2 of the three `treatment` units in its three folds, so
+    `fold01` holds **no** `treatment` unit at all, while the per-cell draw puts
+    exactly one in each. Every reader test below computes its answer under both
+    and pins them **unequal** — a reader tested under the per-cell mapping alone
+    would pass identically under the mapping this slice replaced, which is a
+    test of nothing.
+
+    Built by calling: `partition_within_cells` and `partition_units` for the two
+    draws, and `fold_members_for` for the labels, so no literal here restates a
+    production rule.
+    """
+    from tests.test_replication import cfg
+
+    from publishable.replication import fold_members_for, resolve_repeats
+
+    roster = UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(9)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(3)]
+    )
+    arms = {
+        "control": frozenset(f"c{i}" for i in range(9)),
+        "treatment": frozenset(f"t{i}" for i in range(3)),
+    }
+    cells = {(("arm", level),): keys for level, keys in arms.items()}
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", fold_basis=3)
+    per_cell = fold_members_for(levels, partition_within_cells(roster, 3, "d", cells))
+    whole = fold_members_for(levels, partition_units(roster, 3, "d"))
+    assert per_cell is not None and whole is not None
+    return roster, per_cell, whole, arms
+
+
+def test_h3c3_the_per_cell_fold_members_stay_a_flat_partition_of_the_roster():
+    """**Task 12's property, at the source**: each unit is in exactly one cell
+    and in exactly one partition, so `fold_members` is still the flat
+    `label -> frozenset(keys)` over the whole roster that
+    `fold_members_for` produced before — the same shape all seven readers rest
+    on, and the reason none of them needed a change.
+
+    Asserted as a partition, not as a shape: the union is the roster and the
+    folds are pairwise disjoint. The per-arm counts beside it are what the
+    draw bought — three `control` and one `treatment` in every fold — and the
+    whole-roster mapping's `[0, 1, 2]` is the same count under the draw this
+    slice replaced, which is what makes the seven reader tests discriminating
+    rather than decorative.
+    """
+    roster, per_cell, whole, arms = h3c3_per_cell_fixture()
+    assert sorted(per_cell) == ["fold01", "fold02", "fold03"]
+    assert frozenset().union(*per_cell.values()) == {u.key for u in roster}
+    assert sum(len(keys) for keys in per_cell.values()) == len(roster) == 12
+    assert [len(keys & arms["control"]) for keys in per_cell.values()] == [3, 3, 3]
+    assert [len(keys & arms["treatment"]) for keys in per_cell.values()] == [1, 1, 1]
+    # The draw this replaced, at the identical digest: `fold01` holds no
+    # `treatment` unit, which is the empty per-arm fold the slice exists for.
+    assert [len(keys & arms["treatment"]) for keys in whole.values()] == [0, 1, 2]

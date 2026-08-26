@@ -20,6 +20,7 @@ from publishable.validate import (
     _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
+    _resolved_cells,
     _warn_undeclared_cluster,
     validate_config,
 )
@@ -930,7 +931,7 @@ def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
 
-    def _boom(doc, digest, fold_basis=None):
+    def _boom(doc, digest, fold_basis=None, fold_cell=None):
         raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
 
     monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
@@ -13077,104 +13078,178 @@ def _cells(units_extra: dict, *, fold: bool) -> dict:
     return out
 
 
-def test_a_fold_beside_a_cell_structure_is_refused(write_config, tmp_path):
-    """A LIVE defect at `78bb794`: this config validates clean, and `k: 5` is
-    permitted because `fold_basis` answers 15 over the whole roster while arm
-    `b` holds 3 — so arm `b` gets two folds holding none of its units.
+def test_a_fold_beside_a_cell_structure_is_drawn_per_cell_and_bounded_by_it(write_config, tmp_path):
+    """**`E-REPL-FOLD-CELLS` is retired** (H3c-3 task 10), and this is the same
+    fixture the refusal was minted at, asserting what is now true instead.
 
-    Refused rather than disclosed: `sweep.yaml`'s partitions would record the
-    membership truthfully and no reader crosses it against the arms list by
-    hand."""
+    15 units, 12 in arm `a` and 3 in arm `b`. `k: 5` was permitted before the
+    refusal existed, because `fold_basis` answered 15 over the whole roster
+    while arm `b` holds 3 — the live defect that refusal was minted for. It is
+    now refused by `E-REPL-FOLD-K-TOO-LARGE` bounded over the **thinnest cell**
+    (`units.thinnest_cell`), which names the cell rather than the roster, and
+    the retired code is asserted absent from the same finding set so the
+    refusal cannot be arriving from where it used to.
+
+    The honouring half is the second config: at `k: 3`, the largest the thin
+    cell carries, neither code is reported. Testing the refusal and never the
+    honouring would leave "every fold beside a cell structure is refused"
+    indistinguishable from the bound."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_cells({}, fold=True)))
-    assert "E-REPL-FOLD-CELLS" in found
+    path = write_config(_cells({}, fold=True))
+    found = codes(path)
+    assert "E-REPL-FOLD-CELLS" not in found
+    assert "E-REPL-FOLD-K-TOO-LARGE" in found
+    assert "in cell arm=b" in messages_by_code(path)["E-REPL-FOLD-K-TOO-LARGE"]
+
+    fits = _cells({}, fold=True)
+    fits["replication"] = {"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"}
+    admitted = codes(write_config(fits))
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in admitted
+    assert "E-REPL-FOLD-CELLS" not in admitted
 
 
-def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
-    """The same fault, the same check site, the other split kind: a roster-wide
-    `frac: 0.2` over 15 units gives arm `b` zero test units."""
+def test_a_holdout_beside_a_cell_structure_is_drawn_per_cell_and_bounded_by_it(
+    write_config, tmp_path
+):
+    """**`E-DATA-HOLDOUT-CELLS` is retired** (H3c-3 task 16), and this is the
+    fixture the refusal was minted at, asserting what is now true instead.
+
+    15 units, 12 in arm `a` and 3 in arm `b`, `frac: 0.2`. The refusal's own
+    ground was that a roster-wide draw gives arm `b` zero test units. The split
+    is now drawn inside each cell (`units.holdout_within_cells`) and
+    `holdout_sizes(3, 0.2) == (2, 1)` — measured — so arm `b` gets exactly one
+    test unit and the config validates clean. The retired code is asserted
+    absent from the same finding set, so a clean verdict cannot be arriving
+    from where the refusal used to.
+
+    The refusing half is `frac: 0.2` over an 18/2 split, one sibling down:
+    testing the honouring and never the refusal would leave "the bound was
+    dropped" indistinguishable from "the bound moved to the cell"."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)))
-    assert "E-DATA-HOLDOUT-CELLS" in found
+    assert "E-DATA-HOLDOUT-CELLS" not in found
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
 
 
-def test_both_split_kinds_beside_a_cell_structure_report_both_codes(write_config, tmp_path):
-    """One check site, two codes — asserted together because a site that
-    returned after the first finding would pass both tests above and still
-    hide half the fault. `E-DATA-HOLDOUT-FOLD` rides along, which is correct:
-    the two declarations are also mutually exclusive with each other."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=True)))
-    assert "E-DATA-HOLDOUT-CELLS" in found
-    assert "E-REPL-FOLD-CELLS" in found
+# --- H3c-3 task 14: `E-DATA-HOLDOUT-EMPTY` is bounded by the thinnest cell ----
 
 
-def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(write_config, tmp_path):
-    """`allocation: between` and a non-empty `sweep.groups` are two spellings
-    of the same cell structure, and EITHER is enough. Without this row a check
-    reading only `sweep.groups` passes every test above.
-
-    The message is asserted, not just the code: `where` is a two-branch
-    ternary and BOTH branches emit the same code at the same path, so a
-    code-only assertion here and in its sibling below passes identically if
-    the ternary is collapsed to either branch."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
-    overrides["sweep"] = {}
-    path = write_config(overrides)
-    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "`data.units.allocation: between`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
+def _skewed_cell_roster(n_a: int, n_b: int) -> str:
+    """`n_a` units in arm `a` and `n_b` in arm `b`, as an `index.csv`."""
+    rows = "".join(f"p{i},a\n" for i in range(n_a)) + "".join(f"q{i},b\n" for i in range(n_b))
+    return "patient_id,arm\n" + rows
 
 
-def test_a_group_axis_alone_triggers_the_refusal_without_between(write_config, tmp_path):
-    """The other half of the same pair: without this row a check reading only
-    `allocation` passes every test above. The message is asserted for the
-    reason its sibling above states."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
-    overrides["data.units"]["allocation"] = "within"
-    path = write_config(overrides)
-    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "a non-empty `sweep.groups`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
+def test_the_empty_test_partition_is_bounded_by_the_thinnest_cell_not_the_roster(
+    write_config, tmp_path
+):
+    """**Fixture F7 and its can-fail control, paired in one test.**
+
+    20 units at `frac: 0.2`. Split **18/2** across the `arm` axis, the split is
+    drawn inside each cell (`units.holdout_within_cells`) and arm `b`'s two
+    units apportion `holdout_sizes(2, 0.2) == (2, 0)` — a test side of nothing,
+    which is `E-DATA-HOLDOUT-EMPTY`. The roster-wide arithmetic the check used
+    before this task clears at `holdout_sizes(20, 0.2) == (16, 4)`, so **only
+    the cell bound can report this config** and MU-13 (the bound left at
+    `len(roster)`) fails here.
+
+    The can-fail half is the **same 20 units at the same `frac`, split 10/10**:
+    `holdout_sizes(10, 0.2) == (8, 2)` and nothing is reported. Without it,
+    "every holdout beside a cell structure earns this code" would be
+    indistinguishable from the bound — the *testing the refusal and never the
+    honouring* shape.
+
+    Membership rather than an exact finding set, deliberately: this config
+    carries a cell structure, and what else `validate` may come to report about
+    one is not this test's claim.
+
+    The **message** is asserted, not only the code: `where` is a two-branch
+    ternary emitting one code at one path, so a code-only assertion passes
+    identically if the ternary is collapsed to the roster branch — which is
+    MU-13 in a different currency.
+    """
+    (tmp_path / "input" / "index.csv").write_text(_skewed_cell_roster(18, 2))
+    path = write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
+    found = codes(path)
+    assert "E-DATA-HOLDOUT-EMPTY" in found
+    message = messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
+    assert "the 2 resolved units in cell arm=b" in message
+    assert "thinnest of the design's cells" in message
+
+    (tmp_path / "input" / "index.csv").write_text(_skewed_cell_roster(10, 10))
+    even = write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
+    assert "E-DATA-HOLDOUT-EMPTY" not in codes(even)
 
 
-def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tmp_path):
-    """The emptiness half of the `cells` predicate: `sweep.groups: []` beside
-    `holdout` (no `allocation` declared) must NOT earn `E-DATA-HOLDOUT-CELLS`.
-    All three document sites (`reference.md`'s *One split, not one cell each*
-    and both § Errors rows) specify a *non-empty* `sweep.groups` — an empty
-    list is not a cell structure, and this row is what proves the code honours
-    that word rather than just `isinstance(groups, list)`.
+def test_the_thinnest_cell_bound_skips_an_EMPTY_cell_rather_than_bounding_on_zero():
+    """An **empty** cell is not the denominator, and this is the discriminating
+    fixture for that.
 
-    A `grid` axis is added so the empty `groups` doesn't leave the sweep
-    expanding to nothing on its own (which would earn its own unrelated
-    refusal and make this control roster-incidental). This is a control
-    asserting only an absence, so it cannot prove itself: its evidence is the
-    paired trigger test above (`test_a_holdout_beside_a_cell_structure_is_refused`,
-    identical roster and holdout, differing only in `sweep.groups` being
-    non-empty there and empty here)."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    overrides = _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
-    overrides["sweep"] = {
-        "groups": [],
-        "grid": {"analysis.method": ["pearson", "spearman"]},
+    `holdout_sizes(0, 0.2) == (0, 0)`, so a bound taken over
+    `min(cells.items(), key=len)` rather than over `populated_cells`' projection
+    would report `E-DATA-HOLDOUT-EMPTY` for a design whose every drawn cell
+    splits perfectly — and would name a cell no unit is in. The check's
+    predicate is `units.populated_cells`', the same projection
+    `units.holdout_within_cells` loops over, so the cell this names is a cell
+    the draw really enters.
+
+    Called directly rather than through a config: `_resolved_cells` cannot
+    produce an empty cell from a clean config — `units.arms_of` raises
+    `E-DATA-ASSIGN-LEVELS` for a declared level no unit's value names, and the
+    `try` turns that into `None` — so the only way to instantiate the seam is
+    to hand `_check_holdout` the decomposition. C9's empty-cell raise is the
+    same shape at the run-time end, pinned by
+    `test_h3c3_a_thin_cells_holdout_raises_naming_the_cell_on_both_sides`.
+    """
+    from publishable.validate import _check_holdout
+
+    roster = _h3c3_arm_roster(10, 10)
+    units_decl = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "holdout": {"method": "random", "frac": 0.2},
     }
-    found = codes(write_config(overrides))
-    assert "E-DATA-HOLDOUT-CELLS" not in found
+    cells = {
+        (("arm", "control"),): frozenset(f"c{i}" for i in range(10)),
+        (("arm", "treatment"),): frozenset(f"t{i}" for i in range(10)),
+        (("arm", "placebo"),): frozenset(),
+    }
+    c = Collector()
+    _check_holdout(_CELLS_DOC, units_decl, roster, None, cells, c)
+    assert [f.code for f in c.findings] == []
+
+    # The can-fail half: the same call with a POPULATED thin cell does report,
+    # so the absence above is an absence from a check that ran.
+    thin = dict(cells)
+    thin[(("arm", "placebo"),)] = frozenset({"c0", "c1"})
+    c2 = Collector()
+    _check_holdout(_CELLS_DOC, units_decl, roster, None, thin, c2)
+    assert [f.code for f in c2.findings] == ["E-DATA-HOLDOUT-EMPTY"]
+    assert "cell arm=placebo" in c2.findings[0].message
 
 
-def test_an_evaluation_split_without_a_cell_structure_is_not_refused(write_config, tmp_path):
-    """The control. `allocation: within`, no `sweep.groups` — the shape all
-    nine feasibility configs declare, and the shape this refusal must leave
-    alone.
+def test_the_empty_test_partition_message_still_names_the_roster_with_no_cells(
+    write_config, tmp_path
+):
+    """The no-cell path is byte-identical to what it printed before task 14.
 
-    A control over a check that correctly reports nothing cannot prove
-    itself; what proves this one is the pair of trigger tests above, which
-    differ from it only in the cell structure."""
-    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(write_config(_holdout({"method": "random", "frac": 0.2}, attributes=["arm"])))
-    assert "E-DATA-HOLDOUT-CELLS" not in found
-    assert "E-REPL-FOLD-CELLS" not in found
+    Two units at `frac: 0.2` — `holdout_sizes(2, 0.2) == (2, 0)`, measured, and
+    `holdout_sizes(4, 0.2)` is `(3, 1)` rather than the `(4, 0)` a first draft
+    of this fixture assumed — with no
+    `sweep.groups` and `allocation: within`, so `_resolved_cells` answers
+    `None` and the bound is the roster's own. Paired here rather than left to
+    the sibling above because a widening that silently renamed the roster
+    branch's message would otherwise be invisible: this asserts the whole
+    message, by equality."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(2))
+    )
+    path = write_config(_holdout({"method": "random", "frac": 0.2}))
+    assert messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"] == (
+        "is 0.2 over 2 resolved units, which apportions the test side zero of "
+        "them — every metric would be over nothing. Widen `frac`, or resolve a "
+        "larger roster"
+    )
 
 
 _FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
@@ -13290,6 +13365,74 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(write_config, 
         )
     )
     assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
+
+
+_NESTED_CLUSTER_ROSTER = "patient_id,arm,cl\n" + "".join(
+    f"u{a}{i:02d},{arm},c{a}_{i % 6}\n"
+    for a, arm in enumerate(("control", "treatment"))
+    for i in range(12)
+)
+
+
+def _cells_holdout_resample(min_clusters: int) -> dict:
+    """A `groups` × `holdout` × `cluster_by` config, differing only in the floor.
+
+    24 units in two arms of 12, six clusters nested inside each arm, so the
+    cell decomposition is legal (no cluster spans two cells) and the roster
+    carries twelve clusters in all. `frac: 0.2` with a **pinned** seed so the
+    partition is a fixture value rather than a digest-dependent one.
+    """
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "allocation": "between",
+            "attributes": ["arm", "cl"],
+            "cluster_by": "cl",
+            "assign": {"arm": {"method": "by_attribute", "from": "arm"}},
+            "holdout": {"method": "random", "frac": 0.2, "seed": 1},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "limits": {"min_clusters": min_clusters},
+        "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+    }
+
+
+def test_the_resample_cluster_count_is_over_the_PER_CELL_holdout_draw(write_config, tmp_path):
+    """`_holdout_test_roster`'s `cells` argument, pinned by the one number it
+    moves.
+
+    The docstring's own argument is that passing the decomposition here and
+    not at the run's draw "would bound `limits.min_clusters` against a test
+    partition no run produces" — and until this test that argument was
+    untested: wiring the forward at `_check_holdout`'s neighbour to the
+    constant `None` left the whole suite green (whole-branch review, Check 2).
+
+    **The fixture discriminates the two readings rather than exercising the
+    path.** On this roster at `seed: 1` the per-cell draw's test side is
+    **4 units in 2 clusters** — one cluster per arm, which is what drawing
+    inside each cell buys — while the flat whole-roster draw's is **6 units in
+    3 clusters**. So:
+
+    - at `min_clusters: 5` both readings warn and the message's own count is
+      the discriminator: `2` under the shipped code, `3` under the mutant;
+    - at `min_clusters: 3` only the per-cell reading warns (2 < 3), and the
+      flat one is silent (3 < 3 is false).
+
+    Both arms assert something PRESENT under the shipped code, so neither
+    passes on "nothing ran"."""
+    (tmp_path / "input" / "index.csv").write_text(_NESTED_CLUSTER_ROSTER)
+
+    loud = messages_by_code(write_config(_cells_holdout_resample(5)))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in loud
+    assert loud["W-STATS-RESAMPLE-CLUSTERS"] == (
+        "is 5, and `data.units.cluster_by: cl` puts this holdout's test partition in "
+        "2 clusters — `resample` draws whole clusters, so the percentile interval "
+        "rests on 2 independent draws however many units they hold"
+    )
+
+    tight = codes(write_config(_cells_holdout_resample(3)))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in tight
 
 
 _CRED_TOTALITY_TEMPLATE = """\
@@ -14606,3 +14749,686 @@ def test_h6a_w_param_unset_message_agrees_with_the_path_it_carries(write_config)
         "reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: "
         "analysis.confidence"
     )
+
+
+# --- `_resolved_cells`: validate's own view of the design's cells -----------
+#
+# H3c-3 task 5. The precedent is `_holdout_test_roster`: a real draw at the real
+# `design_digest(doc)`, inside a `try` that swallows every fault, because a
+# second answer computed here would be a check aimed at a partition the run does
+# not use.
+
+
+def _h3c3_arm_roster(n_control: int, n_treatment: int, cluster: str | None = None) -> UnitList:
+    """A roster carrying an `arm` attribute, and optionally a cluster label."""
+    units = []
+    for i in range(n_control):
+        attrs = {"arm": "control"}
+        if cluster is not None:
+            attrs[cluster] = f"S{i}"
+        units.append(Unit(key=f"c{i}", paths=(), attributes=attrs))
+    for i in range(n_treatment):
+        attrs = {"arm": "treatment"}
+        if cluster is not None:
+            attrs[cluster] = f"T{i}"
+        units.append(Unit(key=f"t{i}", paths=(), attributes=attrs))
+    return UnitList(units)
+
+
+_CELLS_DOC = {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+
+
+def test_resolved_cells_decomposes_a_by_attribute_axis():
+    """The `by_attribute` case: no draw at all, and the memberships are the
+    attribute's own split.
+
+    Asserted as an exact mapping rather than as "two cells exist": a count of 2
+    is satisfied by any decomposition that happens to produce two keys,
+    including one that read the wrong column."""
+    cells = _resolved_cells(
+        _CELLS_DOC,
+        {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+        _h3c3_arm_roster(3, 3),
+        None,
+    )
+    assert cells == {
+        (("arm", "control"),): frozenset({"c0", "c1", "c2"}),
+        (("arm", "treatment"),): frozenset({"t0", "t1", "t2"}),
+    }
+
+
+def test_resolved_cells_draws_a_random_axis_at_the_real_digest_and_matches_the_run(
+    tmp_path: Path, monkeypatch
+):
+    """The `random` case, and the load-bearing half of this task: the cells
+    `validate` sees are byte-for-byte the cells the run draws.
+
+    A `random` axis is a real draw seeded from `design_digest(doc)`, so this is
+    the one fixture that can tell the real digest from `_check_assign`'s
+    placeholder `"validate"` — and it is the mutation that fails this test
+    alone. The memberships are compared against `cli._prepare_run`'s own
+    `Prepared.cells` for the **same config**, not against a literal: two
+    sources that must agree, rather than each agreeing with itself.
+
+    **The membership, not the existence.** An assertion that only checked
+    `cells is not None` passes under any draw whatsoever, including one seeded
+    from the empty string."""
+    from publishable.cli import Prepared, _prepare_run
+
+    control_rows = "\n".join(f"c{i},control" for i in range(6))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(6))
+    doc_paths = run_a_project(
+        tmp_path,
+        roster_csv=f"patient_id,arm\n{control_rows}\n{treatment_rows}\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    prepared = _prepare_run(Path(doc_paths["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+
+    config = yaml.safe_load(Path(doc_paths["cfg"]).read_text())
+    cells = _resolved_cells(
+        config,
+        config["data"]["units"],
+        prepared.roster,
+        None,
+    )
+    assert cells == prepared.cells
+    # The half that must REPORT: a real draw happened and it is not the
+    # attribute's own split, so an equality against `prepared.cells` cannot pass
+    # by both sides being `None` or both being the `by_attribute` answer.
+    assert cells is not None
+    assert set(cells) == {(("arm", "control"),), (("arm", "treatment"),)}
+    assert cells[(("arm", "control"),)] != frozenset(f"c{i}" for i in range(6))
+
+
+def test_resolved_cells_is_none_when_the_draw_raises_and_validate_still_reports(
+    write_config, tmp_path
+):
+    """`blocked` beside a declared `cluster_by`: `units.assignment_for` raises
+    `NotImplementedError`, the `try` swallows it, and **`validate` still
+    reports `E-DATA-ASSIGN-BLOCKED-CLUSTER` from its own check** — the swallow
+    hides no finding.
+
+    **The `None` is attributed, not counted.** The same doc, the same roster and
+    the same cluster declaration under `method: random` resolve to two real
+    cells, so the `None` above belongs to the method rather than to anything
+    incidental about this fixture."""
+    roster = _h3c3_arm_roster(3, 3, cluster="site")
+    units_decl = {"allocation": "between", "cluster_by": "site", "assign": {}}
+
+    assert (
+        _resolved_cells(
+            _CELLS_DOC, {**units_decl, "assign": {"arm": {"method": "blocked"}}}, roster, "site"
+        )
+        is None
+    )
+    drawn = _resolved_cells(
+        _CELLS_DOC, {**units_decl, "assign": {"arm": {"method": "random"}}}, roster, "site"
+    )
+    assert drawn is not None
+    assert set(drawn) == {(("arm", "control"),), (("arm", "treatment"),)}
+
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    assert _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked"}}, attributes=["site"], cluster_by="site")
+        )
+    ) == {"E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        pytest.param("nonsense", id="not-a-list"),
+        pytest.param([], id="empty-list"),
+        pytest.param(["arm"], id="entry-not-a-mapping"),
+        pytest.param([{"by": "", "levels": ["control", "treatment"]}], id="empty-axis-name"),
+        pytest.param([{"by": "arm", "levels": [1, 2]}], id="levels-not-strings"),
+        pytest.param([{"by": "arm", "levels": []}], id="levels-empty"),
+    ],
+)
+def test_resolved_cells_is_none_for_a_declaration_with_no_resolvable_axis(groups):
+    """Every skip `cli._resolved_group_axes` makes, made here too — and each
+    means *no cells resolved* rather than one empty cell.
+
+    Deliberately the same skips: two loops that skipped different axes would
+    give `validate` and `run` different decompositions of one declaration,
+    which is the fault this function exists not to introduce.
+
+    **The control is the same call with a resolvable axis**, below, so a
+    parametrized test asserting `None` for six shapes cannot pass by the
+    function returning `None` for everything."""
+    assert (
+        _resolved_cells(
+            {"sweep": {"groups": groups}},
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            _h3c3_arm_roster(3, 3),
+            None,
+        )
+        is None
+    )
+    assert (
+        _resolved_cells(
+            _CELLS_DOC,
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            _h3c3_arm_roster(3, 3),
+            None,
+        )
+        is not None
+    )
+
+
+def test_resolved_cells_is_none_without_a_roster():
+    """No roster, no decomposition — an allocation is a partition of a resolved
+    roster, `_resolved_group_axes`' own rule."""
+    assert (
+        _resolved_cells(
+            _CELLS_DOC,
+            {"allocation": "between", "assign": {"arm": {"method": "by_attribute"}}},
+            None,
+            None,
+        )
+        is None
+    )
+
+
+# --- Ruling LL: the `min_clusters` denominator stays roster-wide ------------
+
+_H3C3_THIN_CELL_ROSTER = (
+    "patient_id,arm,site\n"
+    + "".join(f"c{i},control,S{i // 2}\n" for i in range(6))
+    + "".join(f"t{i},treatment,T{i // 2}\n" for i in range(10))
+)
+
+
+def _h3c3_thin_cell_config(write_config, min_clusters: int) -> Path:
+    """16 units in 8 clusters, in two arms: `control` holds 3 clusters and
+    `treatment` 5.
+
+    The numbers are chosen so the roster-wide cluster count (8) and the
+    smallest cell's (3) fall on **opposite sides** of a floor of 4 — which a
+    fixture with equal arms could not distinguish at all."""
+    return write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["arm", "site"],
+                "cluster_by": "site",
+                "allocation": "between",
+                "assign": {"arm": {"method": "by_attribute"}},
+            },
+            "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+            "limits": {"min_clusters": min_clusters},
+            "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+        }
+    )
+
+
+def test_the_min_clusters_denominator_is_roster_wide_not_the_thinnest_cell(write_config, tmp_path):
+    """**Ruling LL, pinned: `_check_resample`'s `limits.min_clusters` call keeps
+    `units.fold_basis` and does not become the cell-wise `thinnest_cell`.**
+
+    That call asks *how many independent draws does a percentile interval rest
+    on* — and `statistics.resample` draws over the per-unit table, which holds
+    every condition's units across every cell, so the denominator is the whole
+    test roster's clusters. The fold's basis is a different question and is the
+    one H3c-3 task 6 threaded cells into.
+
+    **The mutation this test exists for:** replace that site's `fold_basis` with
+    `thinnest_cell(roster, cluster_by, cells)[0]`. The thinnest cell holds 3
+    clusters, below the floor of 4, so the mutant warns against a denominator no
+    interval used and the first half below fails. Without this test the
+    substitution is silent, and silence is evidence about the tests rather than
+    about the code.
+
+    **Both directions, in one test.** The second half declares `min_clusters:
+    20`, which the roster-wide count of 8 really is below, so the check is shown
+    to be live on this exact config rather than merely quiet — an absence-only
+    assertion passes identically if nothing ran."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_THIN_CELL_ROSTER)
+
+    silent = codes(_h3c3_thin_cell_config(write_config, 4))
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in silent
+
+    warned = messages_by_code(_h3c3_thin_cell_config(write_config, 20))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in warned
+    # The roster-wide count, named in the message: 8 clusters, not the 3 of the
+    # thinnest cell and not the 16 units.
+    assert "8" in warned["W-STATS-RESAMPLE-CLUSTERS"]
+    assert "3" not in warned["W-STATS-RESAMPLE-CLUSTERS"]
+
+
+# --- `E-REPL-FOLD-K-TOO-LARGE` at `validate`'s own emit site ----------------
+
+_F2_ROSTER = (
+    "patient_id,arm,site\n"
+    + "".join(f"c{i},control,{'A' if i < 5 else 'B'}\n" for i in range(8))
+    + "".join(f"t{i},treatment,{'C' if i < 4 else 'D' if i < 7 else 'E'}\n" for i in range(8))
+)
+
+
+def test_the_fold_bound_is_the_thinnest_cells_and_validate_names_that_cell(write_config, tmp_path):
+    """**Emit site 1 of 3, and MU-3's refusal half, owed by this task.**
+
+    Fixture F2, from the design's § Fixtures as claims: 16 units; `control` is
+    clusters `A`×5 and `B`×3, `treatment` is `C`×4, `D`×3 and `E`×1, and no
+    cluster spans an arm. Cell cluster counts are **2** and **3**; the whole
+    roster's is **5**.
+
+    `{kind: fold, k: 3}` is therefore the discriminating declaration: 3 ≤ 5
+    clears the roster bound and 3 > 2 fails the cell bound. Batch A ran MU-3
+    (`max` for `min` in the cell basis) against a direct `== 2` assertion
+    because nothing consumed the number yet, and **declared the refusal half
+    owed here**. This is it: under `max` the basis is 3, `k: 3` clears, and
+    `E-REPL-FOLD-K-TOO-LARGE` disappears from the finding set below.
+
+    `validate.py`'s `c.error` prints `str(exc)` from `_fold_k`, so this site's
+    own work is **forwarding the label** through `_check_replication` into
+    `resolve_repeats`. **The mutation that fails this test alone**: drop
+    `fold_cell=fold_cell` from that `resolve_repeats` call — the code still
+    fires and only the message loses the cell.
+
+    Task 10 has since retired `E-REPL-FOLD-CELLS`, so the bound is the only
+    thing refusing this config: when this test was written the roster-wide-split
+    refusal was reported beside it."""
+    (tmp_path / "input" / "index.csv").write_text(_F2_ROSTER)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["arm", "site"],
+                "cluster_by": "site",
+                "allocation": "between",
+                "assign": {"arm": {"method": "by_attribute"}},
+            },
+            "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+            "replication": {"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        }
+    )
+    messages = messages_by_code(path)
+    assert "E-REPL-FOLD-K-TOO-LARGE" in messages
+    message = messages["E-REPL-FOLD-K-TOO-LARGE"]
+    assert "in cell arm=control" in message
+    # That cell's cluster count, 2 — not the roster's 5 and not its 8 units.
+    assert "over 2 clusters of `site`" in message
+    assert "5" not in message
+
+    # The honouring half, on the same fixture: `k: 2` fits the thinnest cell and
+    # is NOT refused, so the bound is shown to be the cell's basis rather than
+    # a refusal of every clustered fold beside a cell structure.
+    fits = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["arm", "site"],
+                    "cluster_by": "site",
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+                "replication": {"repeats": [{"kind": "fold", "k": 2}], "rationale": "two folds"},
+            }
+        )
+    )
+    # No `E-REPL-FOLD-*` code at all: the bound is the cell's basis rather than
+    # a refusal of every clustered fold beside a cell structure, and the retired
+    # `E-REPL-FOLD-CELLS` is not standing in for one either.
+    assert [code for code in fits if code.startswith("E-REPL-FOLD")] == []
+
+
+def test_the_k_all_budget_is_sized_from_the_same_cell_basis_the_bound_uses(write_config, tmp_path):
+    """**C5's seam, instantiated.** `_check_sweep`'s `k: all` execution budget
+    and `_check_replication`'s `k` bound read the **same** `basis` local, and
+    under a cell structure that local is the thinnest cell's.
+
+    F2 again, with `{kind: fold, k: all}`: the thinnest cell holds 2 clusters
+    and the whole roster 5, and the axis gives 2 conditions. So the budget
+    arithmetic is `2 × 2 = 4` on the cell basis and `2 × 5 = 10` on the
+    roster's, and a `limits.max_executions: 5` separates them — the only
+    fixture shape that can, since a design with equal arms would give the same
+    product either way.
+
+    **Both directions.** At a budget of 5 the check is silent; at 3 it warns and
+    the message names `2 repeats` and `4 executions`, so the silence above is
+    the check clearing rather than the check being dead. Without this test C5 is
+    a seam named in a brief and instantiated by no fixture: **the mutation** is
+    to resolve a second, roster-wide basis for `_check_sweep` while
+    `_check_replication` keeps the cell one, which changes nothing observable
+    unless a config's two products straddle a declared budget."""
+    (tmp_path / "input" / "index.csv").write_text(_F2_ROSTER)
+
+    def cfg(budget: int) -> Path:
+        return write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["arm", "site"],
+                    "cluster_by": "site",
+                    "allocation": "between",
+                    "assign": {"arm": {"method": "by_attribute"}},
+                },
+                "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+                "replication": {
+                    "repeats": [{"kind": "fold", "k": "all"}],
+                    "rationale": "leave one cluster out",
+                },
+                "limits": {"max_executions": budget},
+            }
+        )
+
+    assert "W-EXEC-BUDGET" not in codes(cfg(5))
+    warned = messages_by_code(cfg(3))
+    assert "W-EXEC-BUDGET" in warned
+    assert "2 conditions × 2 repeats = 4 executions exceeds 3" in warned["W-EXEC-BUDGET"]
+
+
+# --- H3c-3 task 18: `W-DATA-CELL-THIN`, the thin-cell floor ------------------
+
+
+def _h3c3_thin_config(n_control: int, n_treatment: int, floor: int | None) -> dict:
+    """A two-arm `between` design over `n_control + n_treatment` units, with
+    `limits.min_units_per_cell` set to `floor`.
+
+    The `limits` block is written whole because `base_config` carries none —
+    every other limit stays absent, so any finding this fixture produces is
+    attributable to `min_units_per_cell` and to nothing beside it."""
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["arm"],
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute"}},
+    }
+    doc: dict = {
+        "data.units": units,
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    }
+    if floor is not None:
+        doc["limits"] = {"min_units_per_cell": floor}
+    return doc
+
+
+def _h3c3_write_arms(tmp_path: Path, n_control: int, n_treatment: int) -> None:
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,arm\n"
+        + "".join(f"c{i},control\n" for i in range(n_control))
+        + "".join(f"t{i},treatment\n" for i in range(n_treatment))
+    )
+
+
+def test_a_thin_cell_warns_once_and_names_the_cell(write_config, tmp_path):
+    """**F3.** 12 units, two arms of 6, `min_units_per_cell: 20`, no fold and no
+    holdout: exactly one `W-DATA-CELL-THIN`, naming a cell and its count.
+
+    Six and six rather than an uneven split on purpose — this fixture's job is
+    the *presence* and the message, and MU-12's job (the sibling below) is the
+    minimum, which equal arms cannot discriminate. The finding list is asserted
+    **by equality** so a second diagnostic arriving from anywhere else in this
+    config fails here rather than being filtered out of a membership test."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    path = write_config(_h3c3_thin_config(6, 6, 20))
+    c = Collector()
+    validate_config(path, c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert c.findings[0].path == "limits.min_units_per_cell"
+    assert c.findings[0].message == (
+        "is 20, and the design's thinnest cell (`arm=control`) holds 6 of 12 "
+        "resolved units. Every interval a condition in that cell reports rests "
+        "on those, and attrition can only make the number smaller"
+    )
+
+
+def test_a_cell_at_or_above_the_floor_earns_no_thin_warning(write_config, tmp_path):
+    """**Control 1**: the identical 12-unit design at `min_units_per_cell: 5`.
+
+    Paired with F3 above, which differs from it in the floor alone, so the
+    warning's absence here is attributable to the floor rather than to the
+    roster or to the shape of the design. 6 ≥ 5 in both cells, and equality is
+    deliberately not the boundary tested here — the `>=` boundary is the sibling
+    at floor 6 below, where the thinnest cell holds 5."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    assert codes(write_config(_h3c3_thin_config(6, 6, 5))) == set()
+
+
+def test_the_thin_cell_warning_reads_the_SMALLEST_cell_not_the_largest(write_config, tmp_path):
+    """**MU-12's discriminating fixture**: arms of **7 and 5** at
+    `min_units_per_cell: 6`.
+
+    The two readings differ here and only here: the smallest cell holds 5 and
+    must warn, the largest holds 7 and would not. F3's equal 6/6 arms are blind
+    to that mutation by construction, which is why this fixture is uneven and
+    why the floor sits between the two counts rather than above both.
+
+    It also pins the `>=` boundary from the reporting side: 5 < 6 warns, and the
+    control above has 6 ≥ 5 silent."""
+    _h3c3_write_arms(tmp_path, 7, 5)
+    c = Collector()
+    validate_config(write_config(_h3c3_thin_config(7, 5, 6)), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "(`arm=treatment`) holds 5 of 12 resolved units" in c.findings[0].message
+
+
+def test_the_thin_cell_warning_is_gated_on_a_cell_structure_resolving(write_config, tmp_path):
+    """**Control 2, the gate (C16), as a config**: the same 12 units and the
+    same `min_units_per_cell: 20`, with **no** `sweep.groups` axis.
+
+    `materialize.py` writes `min_units_per_cell: 20` into every config `init`
+    produces, so an ungated floor fires on every generated project holding
+    fewer than twenty units. Guard-pin arm E
+    (`test_h3c3_pin_arm_e_a_six_unit_no_axis_config_validates_with_no_findings_at_all`)
+    is the same control over a really generated project and is where **MU-11**
+    is caught; this one is the same claim over a config that differs from F3 in
+    the group axis alone, so the silence is attributable to the gate.
+
+    Paired with a can-fail half in the same test: adding the axis back to this
+    very document reports, which is what shows `validate_config` reached the
+    check at all."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    flat = _h3c3_thin_config(6, 6, 20)
+    flat["sweep"] = {}
+    flat["data.units"] = {**flat["data.units"], "allocation": "within"}
+    flat["data.units"].pop("assign")
+    assert codes(write_config(flat)) == set()
+
+    with_axis = _h3c3_thin_config(6, 6, 20)
+    assert codes(write_config(with_axis)) == {"W-DATA-CELL-THIN"}
+
+
+def test_the_thin_cell_floor_counts_UNITS_where_the_fold_bound_counts_clusters(
+    write_config, tmp_path
+):
+    """`units.thinnest_cell` is **not** reused, and this is the fixture where
+    the two answers differ.
+
+    That helper returns a *fold basis* — the cluster count under a declared
+    `data.units.cluster_by` — because `replication._fold_k` bounds `k` against
+    indivisible things. `limits.min_units_per_cell` counts units. Here each arm
+    holds 10 units in 2 clusters of 5: at `min_units_per_cell: 6` the unit
+    count clears (10 ≥ 6) and the cluster count would not (2 < 6), so a check
+    built on `thinnest_cell(roster, cluster_by, cells)` warns here and names a
+    cluster count as though it were a unit count.
+
+    The can-fail half is the same clustered design at `min_units_per_cell: 20`,
+    where the unit count itself is thin: the silence above is an absence from a
+    check that runs on exactly this shape."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,arm,site\n"
+        + "".join(f"c{i},control,CS{i // 5}\n" for i in range(10))
+        + "".join(f"t{i},treatment,TS{i // 5}\n" for i in range(10))
+    )
+
+    def doc(floor: int) -> dict:
+        out = _h3c3_thin_config(10, 10, floor)
+        out["data.units"] = {
+            **out["data.units"],
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+        }
+        return out
+
+    assert "W-DATA-CELL-THIN" not in codes(write_config(doc(6)))
+    c = Collector()
+    validate_config(write_config(doc(20)), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "holds 10 of 20 resolved units" in c.findings[0].message
+
+
+def test_a_wrongly_typed_thin_cell_floor_drives_no_warning(write_config, tmp_path):
+    """`check_envelope` is what REPORTS a wrong-typed `min_units_per_cell`, and
+    a second reader here would report a derived fault on top of it.
+
+    `_check_report_by`'s guard, for its reason. `True` is the case the bare
+    `isinstance(..., int)` misses — `isinstance(True, int)` is `True` in Python
+    — and it is asserted beside a `str`, which is the shape that would raise
+    `TypeError` comparing a count against it."""
+    _h3c3_write_arms(tmp_path, 6, 6)
+    for bad in ("twenty", True):
+        found = codes(write_config(_h3c3_thin_config(6, 6, bad)))  # type: ignore[arg-type]
+        assert "W-DATA-CELL-THIN" not in found
+        assert "E-CONFIG-TYPE" in found
+
+
+# --- H3c-3 task 19: the empty cell × the per-cell fold bound -----------------
+
+
+_H3C3_EMPTY_CELL_ROSTER = (
+    "patient_id,sex,arm\n"
+    + "".join(f"m{i},m,{'control' if i < 3 else 'treatment'}\n" for i in range(6))
+    + "".join(f"f{i},f,control\n" for i in range(4))
+)
+"""Ten units over two crossed `by_attribute` axes, and `sex=f × arm=treatment`
+is a combination **no unit carries**.
+
+A single axis cannot instantiate an empty cell from a clean config —
+`units.arms_of` raises `E-DATA-ASSIGN-LEVELS` for a declared level no unit's
+value names, which `_resolved_cells`' `try` turns into `None` — so the empty
+cell has to come from an intersection. Each axis here resolves every one of its
+own declared levels; only the crossing is empty, which is legal and which no
+check refuses. Measured: `cells_of` gives 3 / 3 / 4 / **0**."""
+
+
+def _h3c3_empty_cell_config(**extra: object) -> dict:
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["sex", "arm"],
+        "allocation": "between",
+        "assign": {
+            "sex": {"method": "by_attribute"},
+            "arm": {"method": "by_attribute"},
+        },
+    }
+    doc: dict = {
+        "data.units": units,
+        "sweep": {
+            "groups": [
+                {"by": "sex", "levels": ["m", "f"]},
+                {"by": "arm", "levels": ["control", "treatment"]},
+            ]
+        },
+    }
+    doc.update(extra)  # type: ignore[arg-type]
+    return doc
+
+
+def test_an_empty_cell_does_not_bound_k_at_zero(write_config, tmp_path):
+    """**An empty cell is skipped, not counted zero** — and the brief this task
+    was written from says the opposite, so it was measured.
+
+    The brief states *"a cell that is empty makes the bound `0`, so any `k ≥ 1`
+    is refused"*. `units.thinnest_cell` explicitly skips cells holding no
+    units, so the bound here is the thinnest **populated** cell's 3, and `k: 3`
+    validates clean on the fold side. If it were 0, this config would be
+    refused and the sibling below could not distinguish which cell the bound
+    came from.
+
+    The refusing half is the sibling below, so this is not "the bound was
+    dropped" read as "the bound skipped the empty cell"."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    path = write_config(
+        _h3c3_empty_cell_config(
+            replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"}
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in codes(path)
+
+
+def test_a_k_past_the_thinnest_POPULATED_cell_is_refused_naming_that_cell(write_config, tmp_path):
+    """The refusing half of the pair above, at `k: 4` over the same roster.
+
+    The message must name a cell a reader can make thicker. `sex=m,
+    arm=control` holds 3 and is the bound; `sex=f, arm=treatment` holds none,
+    is below every bound, and is asserted **absent** from the message — a check
+    that counted the empty cell would name it here and send the reader to a
+    combination nobody can enrol into."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    path = write_config(
+        _h3c3_empty_cell_config(
+            replication={"repeats": [{"kind": "fold", "k": 4}], "order": "as_declared"}
+        )
+    )
+    message = messages_by_code(path)["E-REPL-FOLD-K-TOO-LARGE"]
+    assert "in cell sex=m, arm=control" in message
+    assert "sex=f, arm=treatment" not in message
+
+
+def test_an_empty_cell_beside_a_holdout_is_bounded_by_the_populated_cells(write_config, tmp_path):
+    """The same reading at the holdout end, which is a different code and a
+    different loop.
+
+    `holdout_sizes(3, 0.2) == (2, 1)` — measured — so the thinnest populated
+    cell splits and the config is clean. An empty cell taken as the bound would
+    give `holdout_sizes(0, 0.2) == (0, 0)` and `E-DATA-HOLDOUT-EMPTY`; C9's
+    own shape is that an empty sub-roster fails on the **train** side, so a
+    check reaching it would also print a message about the wrong side.
+
+    The can-fail half is the same design at `frac: 0.1`, where the populated
+    bound really does bite: `holdout_sizes(3, 0.1) == (3, 0)`."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    clean = _h3c3_empty_cell_config()
+    clean["data.units"] = {
+        **clean["data.units"],
+        "holdout": {"method": "random", "frac": 0.2},
+    }
+    assert "E-DATA-HOLDOUT-EMPTY" not in codes(write_config(clean))
+
+    thin = _h3c3_empty_cell_config()
+    thin["data.units"] = {**thin["data.units"], "holdout": {"method": "random", "frac": 0.1}}
+    path = write_config(thin)
+    assert "E-DATA-HOLDOUT-EMPTY" in codes(path)
+    assert "sex=f, arm=treatment" not in messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
+
+
+def test_an_empty_cell_with_no_evaluation_split_is_not_an_error_at_all(write_config, tmp_path):
+    """**Recorded where it cannot be refused.** With no `fold` level and no
+    `holdout`, an empty cell earns nothing: it is a legal design whose one
+    condition measures nobody, and no check in this build refuses it.
+
+    Two arms of the same fixture. At no declared floor the finding set is
+    **empty** — asserted by equality, so a diagnostic arriving under any
+    spelling fails here. With `limits.min_units_per_cell: 20` the only finding
+    is task 18's warning, and it names the thinnest **populated** cell rather
+    than the empty one: the warning's own remedy is enrol more units, which is
+    advice about a cell somebody is in.
+
+    Stated plainly because there is no later slice: an empty crossed cell ships
+    silent, and `spec-defects.md` records it as a fact rather than a
+    deferral."""
+    (tmp_path / "input" / "index.csv").write_text(_H3C3_EMPTY_CELL_ROSTER)
+    assert codes(write_config(_h3c3_empty_cell_config())) == set()
+
+    c = Collector()
+    validate_config(write_config(_h3c3_empty_cell_config(limits={"min_units_per_cell": 20})), c)
+    assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
+    assert "(`sex=m, arm=control`) holds 3 of 10 resolved units" in c.findings[0].message

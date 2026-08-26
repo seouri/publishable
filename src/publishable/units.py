@@ -8,6 +8,7 @@ directory and no step for an `io` to belong to.
 
 import csv
 import hashlib
+import itertools
 import json
 import math
 import random
@@ -1763,8 +1764,8 @@ def holdout_for(
             # than each stratum in isolation. `_stratum_groups` is handed no
             # `resolved`: a holdout's `stratify_by` admits only a unit
             # attribute, never a `sweep.groups` axis (§ Validation,
-            # *Stratification attribute exists*), and a holdout beside a group
-            # axis is refused outright as `E-DATA-HOLDOUT-CELLS`.
+            # *Stratification attribute exists*), which `validate` refuses as
+            # `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`.
             groups = _stratum_groups(list(roster), strata, "data.units.holdout.stratify_by")
             for stratum_units in groups.values():
                 if clusters is not None:
@@ -1827,6 +1828,111 @@ def holdout_for(
         "this, and an allowlist is what keeps a method added to that enum and to "
         "nothing else from validating clean and then partitioning on something core "
         "never drew"
+    )
+
+
+def holdout_within_cells(
+    roster: UnitList,
+    block: Mapping[str, Any] | None,
+    *,
+    seed: int,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]] | None,
+    clusters: Mapping[str, str] | None = None,
+) -> HoldoutPlan:
+    """`holdout_for`, drawn **inside each cell** and merged in cell order —
+    `partition_within_cells`' sibling for the other evaluation split, and the
+    **single producer** `validate` and `run` both call.
+
+    `data.units.holdout` partitions the roster once, and a `sweep.groups` axis
+    divides that same roster into cells. A split drawn across the cells gives
+    them unequal test sizes and, once `frac` is fine enough, a cell holding
+    none of its own units at all — a cell-level metric computed from nothing.
+    That combination was refused outright (`E-DATA-HOLDOUT-CELLS`, retired by
+    H3c-3 task 16) until this function existed; drawing within each cell is the
+    design that lifted it.
+
+    **One seed per run, not per cell**, and the bare one — `partition_within_cells`'
+    rule in the holdout's currency. `holdout_seed_for` is computed once over the
+    **whole** roster and handed to every cell's draw, so a **pinned**
+    `data.units.holdout.seed` is returned literally and survives a roster that
+    grows, shrinks or reorders. The draws still differ between cells because the
+    sub-rosters differ, which is what `random.Random(seed)` over different key
+    lists gives; mixing the cell label into the seed would buy nothing and would
+    be safe only while the no-cell path never touched it.
+
+    **No populated cell at all reduces to the single whole-roster call**, and
+    byte-identically — `None` and `{}` (what `cli._prepare_run` and
+    `validate._resolved_cells` pass for a design with no group axis) and
+    `cells_of({})`'s one empty cell all reach that one rule, which is
+    `partition_within_cells`' own reduction stated for the same two inputs. Two
+    functions in one module answering one triviality question differently is
+    exactly the drift single derivation exists to prevent, so the predicate is
+    `populated_cells`' rather than a second spelling of it.
+
+    Each sub-roster is rebuilt from `roster` in **roster order**, the order
+    `clusters_of` preserves deliberately and `units_hash` pins as reproducible,
+    and each cell's `clusters` map is the run's map **restricted to that cell's
+    keys and total over its sub-roster** — indexed, not `.get`-ed, so
+    `_assign_whole_clusters_by_ratio`'s contract that a unit missing from the map
+    is a `KeyError` and a core defect survives the restriction rather than being
+    softened by it. `partition_within_cells` restricts the same way for the same
+    reason.
+
+    **A cell's own raise is re-raised with the cell named, under the same
+    code.** `holdout_for` over an empty sub-roster raises
+    `E-DATA-HOLDOUT-EMPTY` reading *"over 0 resolved units leaves the **train**
+    side empty"* — the **train** side, not the test side, since `holdout_sizes(0,
+    frac)` is `(0, 0)` and train is checked first — and over a 2-unit cell at
+    `frac: 0.2` it raises for the test side. Either message names a count that
+    is the **cell's** while its wording says *resolved units*, which sends a
+    reader to the roster when the fault is a crossed combination nothing in the
+    config carries. The code is preserved rather than re-minted: the remedy is
+    unchanged, and a second code would give one remedy two names. `holdout_for`
+    gains no cell parameter for this — it has no other use for one, and the
+    caller is where the label lives.
+
+    **The empty cell is not skipped**, unlike `partition_within_cells`' loop,
+    and the difference is real rather than an inconsistency: an empty cell
+    contributes `k` empty lists to a fold merge and nothing else, where an empty
+    cell's *holdout* is a cell that will be evaluated against nothing. Only
+    `populated_cells` drops cells here, and it drops them before this loop sees
+    them — so what reaches the re-raise is a **thin** cell, not an empty one.
+    `validate._check_holdout` bounds `frac` over the thinnest non-empty cell so
+    most of these never reach a run at all.
+
+    `seed` and `strata` on the merged plan are a cell's own, which is every
+    cell's: the seed is the one argument above, identical by construction, and
+    `strata` is `stratum_names(block["stratify_by"])`, a function of the
+    declaration alone. Taking them from the last cell rather than recomputing
+    them is one derivation rather than two.
+    """
+    populated = populated_cells(cells or {})
+    if not populated:
+        return holdout_for(roster, block, seed=seed, clusters=clusters)
+    train_keys: list[str] = []
+    test_keys: list[str] = []
+    merged_seed: int | None = None
+    merged_strata: tuple[str, ...] = ()
+    for key, keys in populated:
+        sub = UnitList([unit for unit in roster if unit.key in keys])
+        sub_clusters = None if clusters is None else {u.key: clusters[u.key] for u in sub}
+        try:
+            plan = holdout_for(sub, block, seed=seed, clusters=sub_clusters)
+        except ContractError as exc:
+            raise ContractError(
+                f"`data.units.holdout` is drawn within cell {cell_label(key)}, which holds "
+                f"{len(sub)} of the roster's {len(roster)} resolved units, and there: {exc}",
+                code=exc.code,
+            ) from exc
+        train_keys.extend(plan.train)
+        test_keys.extend(plan.test)
+        merged_seed = plan.seed
+        merged_strata = plan.strata
+    return HoldoutPlan(
+        train=tuple(train_keys),
+        test=tuple(test_keys),
+        seed=merged_seed,
+        strata=merged_strata,
     )
 
 
@@ -1979,8 +2085,8 @@ def _stratum_groups(
     `data.units.assign.holdout.stratify_by` for a holdout — a path no config
     can hold. **The tail of the "every other name" raise is caller-aware too**:
     a holdout's `stratify_by` admits only a unit attribute — no already-drawn
-    `sweep.groups` axis, since `E-DATA-HOLDOUT-CELLS` refuses a holdout beside
-    a group axis outright — so a holdout reader is sent to
+    `sweep.groups` axis, § Validation's *Stratification attribute exists* — so
+    a holdout reader is sent to
     `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` and told nothing about a forward
     declaration or a `sweep.groups` path their declaration cannot take.
     """
@@ -1998,8 +2104,7 @@ def _stratum_groups(
             raise NotImplementedError(
                 f"`{declaration}` names {name!r}, which no resolved unit carries "
                 "as an attribute — a holdout's `stratify_by` admits only a unit "
-                "attribute, never a `sweep.groups` axis (a holdout beside one is "
-                "refused outright, as `E-DATA-HOLDOUT-CELLS`), so there is no "
+                "attribute, never a `sweep.groups` axis, so there is no "
                 "forward-declared axis this could instead be naming. `validate` "
                 "refuses this as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`"
             )
@@ -2538,6 +2643,89 @@ def arm_members(
     return result
 
 
+def cells_of(
+    axes: Mapping[str, ArmPlan],
+) -> dict[tuple[tuple[str, str], ...], frozenset[str]]:
+    """The design's **cells**: every combination of one level from each group
+    axis, mapped to the unit keys that combination holds.
+
+    The cartesian product of every axis's declared `levels`, in **declaration
+    order** — `axes` is an ordered mapping and that order is
+    `cli._resolved_group_axes`' contract — with each key a tuple of
+    `(axis, level)` pairs in that same order and each value the intersection of
+    those arms' keys. `sex × arm` over two levels each gives four cells, keyed
+    `(("sex", "f"), ("arm", "control"))` and so on.
+
+    **Empty cells are kept.** A cell no unit falls in is a fact about the
+    design, and dropping it here would make the count of cells disagree with
+    the count of combinations the config declares — which is what every caller
+    that bounds something per cell has to see. The one caller that must not
+    draw over an empty cell skips it at its own loop and says so there.
+
+    **Derived from the realized `ArmPlan`s, not from `arm_members`**, which is
+    the wrong shape twice over: it is keyed by **condition index**, so under
+    `groups × grid` several conditions share one cell and the mapping would
+    hand back the same cell several times; and a condition selecting no axis is
+    absent from it entirely. Deriving cells from it would draw one partition
+    per condition and break *"Partitions are computed once per run, not once
+    per condition"* for real — the property `reference.md` § Clustered units
+    states and this decomposition exists to keep.
+
+    **This function takes no roster**, for `arm_members`' own reason and
+    `build_allocation_document`'s: with nothing to read membership *from*, no
+    future edit here can quietly become the second producer of it. It returns
+    key sets, and a caller composes sub-rosters from its own roster in roster
+    order.
+
+    `cells_of({}) -> {(): frozenset()}` — one cell, holding nothing, because
+    with no plans there are no keys to intersect and this function has no
+    roster to fall back on. **A design with no group axis is one cell holding
+    the whole roster, and composing that is the caller's job**, stated here and
+    once at the caller rather than invented at both. It falls out of the
+    product rather than being branched around: `itertools.product()` over no
+    axes yields exactly one empty combination.
+
+    A level a plan did not realize raises a bare `KeyError`, the rule
+    `arm_members` follows: `levels` and `members` come from one `ArmPlan`, so a
+    gap between them is a core defect to see rather than one to absorb by
+    handing back a cell nothing verified.
+    """
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] = {}
+    for combination in itertools.product(*(plan.levels for plan in axes.values())):
+        key = tuple(zip(axes, combination, strict=True))
+        members: frozenset[str] | None = None
+        for axis, level in key:
+            # `axes[axis].members[level]`, not `.get`: see the docstring — a
+            # level `levels` declares and `members` does not hold is one plan
+            # disagreeing with itself.
+            arm = frozenset(axes[axis].members[level])
+            members = arm if members is None else members & arm
+        cells[key] = members if members is not None else frozenset()
+    return cells
+
+
+def cell_label(cell: tuple[tuple[str, str], ...]) -> str:
+    """A cell's `(axis, level)` pairs, as a reader wrote them.
+
+    `(("sex", "f"), ("arm", "control"))` renders `sex=f, arm=control` — the
+    axes in `sweep.groups` declaration order, which is `cells_of`' key order,
+    and the same `axis=level` spelling `sweep.expand` gives a condition label.
+    A cell with no pairs at all cannot reach here: it is the no-axis
+    decomposition, which every caller represents as `None` rather than `()`.
+
+    **One rendering, three callers**, which is why it lives beside `cells_of`
+    rather than in the first module that needed it. It was
+    `replication._cell_label` while `replication._fold_k`'s refusal was the only
+    message naming a cell; `holdout_within_cells` and
+    `validate._check_holdout` now name one too, and `replication` imports this
+    module while this module cannot import it — so a second spelling at either
+    new site is how two messages describing one decomposition come to disagree
+    about how a cell is written. `fold_basis`' single-derivation rule, applied
+    to a rendering.
+    """
+    return ", ".join(f"{axis}={level}" for axis, level in cell)
+
+
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
     """How many distinct clusters a given set of unit keys falls in.
 
@@ -2593,6 +2781,92 @@ def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
     treats the basis as unresolved.
     """
     return cluster_count(roster, cluster_by) if cluster_by else len(roster)
+
+
+def thinnest_cell(
+    roster: UnitList,
+    cluster_by: str | None,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+) -> tuple[int, tuple[tuple[str, str], ...] | None]:
+    """The fold basis of the **thinnest non-empty cell**, and the cell
+    it came from — one walk, two readers, and the number `fold_basis` returns
+    asked of a design whose folds are drawn inside its cells.
+
+    **One number, not a mapping**, `fold_basis`' own return shape and for its
+    reason: a `k` checked against one number while the partition is drawn
+    against another is the disagreement single derivation exists to prevent,
+    and a per-cell mapping would hand every caller the job of deciding which
+    entry its own check meant. The minimum is the answer because a fold level
+    runs in **every** cell: the cell that cannot carry `k` is what makes the
+    whole declaration unaffordable, not the cell that can. The second element
+    is the key of the cell that produced it, or `None` when there was no
+    non-empty cell to produce it and the answer fell back to the whole
+    roster's `fold_basis`.
+
+    Only **non-empty** cells are counted. An empty cell has no units to
+    distribute and would make every minimum zero, which is a fact about the
+    decomposition rather than a bound on `k`; `cells_of` keeps empty cells
+    because the count of cells is itself load-bearing, and this is the one
+    place that count is not the question. An empty `cells`, or one whose cells
+    are all empty, falls back to `fold_basis(roster, cluster_by)` — the
+    **one-cell reduction**, which is what makes a design with no group axis
+    fall through this function unchanged rather than being branched around at
+    the caller.
+
+    Each sub-roster is built from `roster` **in roster order**, the order
+    `clusters_of` preserves deliberately and the one `units_hash` pins as
+    reproducible.
+
+    **`fold_basis` is deliberately not touched, and does not gain a `cells`
+    argument.** It has three call sites and only two of them ask this
+    question. The third is `validate._check_resample`'s `limits.min_clusters`
+    denominator, which asks *how many independent draws does a percentile
+    interval rest on* — and `statistics.resample` draws over the **per-unit
+    table**, which holds every condition's units across every cell, so its
+    answer is over the whole roster — or the holdout's test side, when one is
+    declared — and does not decompose by cell. Giving `fold_basis` a
+    `cells=None` default would make it a helper that ignores an argument at one
+    of its callers, which hides what that caller stopped testing; passing it
+    the cells there would warn against a denominator no interval used. A
+    function whose name fits one of its three callers is a proxy waiting to be
+    believed.
+
+    **`fold_basis`' raise propagates, per cell.** `cluster_count` raises
+    `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no value for the cluster
+    attribute, and nothing here catches it — a caller that collects rather than
+    raises (`validate`) wraps this call in the `try`/`except ContractError` its
+    roster-wide call already sits in, and treats the basis as unresolved. One
+    unreadable cell makes the whole answer unresolved, which is the honest
+    reading: the minimum over cells cannot be known while one of them cannot be
+    counted.
+
+    **Why the label travels at all.** `replication._fold_k` refuses a `k` past
+    the basis and its message has to name the declaration a reader must change.
+    Under a cell structure the count it refused is one cell's, so a message
+    naming only the number sends the reader to the whole roster's count when
+    the fault is one arm's. `_fold_k` sees a declaration and a count and never
+    a roster (by design), so the label reaches it as an argument — and it has
+    to be the label of the cell the *minimum* came from, which is knowable only
+    where the minimum is taken. A caller that re-derived it by looking for a
+    cell whose basis equals the number would be a second derivation of exactly
+    the thing `fold_basis`' single-derivation rule exists to keep single.
+
+    **Ties go to the first cell in `cells_of`' key order**, which is
+    declaration order of the axes and of their levels. Any of the tied cells is
+    equally true of the bound, so the rule exists to make the message
+    deterministic rather than to prefer one cell on its merits. No fixture in
+    this slice tests a tie: F2's cells are 2 and 3.
+    """
+    thinnest: tuple[int, tuple[tuple[str, str], ...]] | None = None
+    for key, keys in cells.items():
+        if not keys:
+            continue
+        basis = fold_basis(UnitList([unit for unit in roster if unit.key in keys]), cluster_by)
+        # Strict `<`, which is what makes the tie-break the FIRST cell in key
+        # order rather than the last.
+        if thinnest is None or basis < thinnest[0]:
+            thinnest = (basis, key)
+    return thinnest if thinnest is not None else (fold_basis(roster, cluster_by), None)
 
 
 def stratum_varies_within_cluster(
@@ -2837,6 +3111,134 @@ def _assign_whole_clusters_by_ratio(
     return buckets
 
 
+def populated_cells(
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+) -> list[tuple[tuple[tuple[str, str], ...], frozenset[str]]]:
+    """The cells that hold at least one unit, in `cells`' own key order.
+
+    **One derivation, two callers, because the two must never disagree.**
+    `partition_within_cells` loops over exactly this list and reduces to a
+    single whole-roster `partition_units` call when it is empty; `cli` writes
+    `sweep.yaml`'s `partitions_within` exactly when it is **not** empty. A
+    second spelling of the same predicate at the second site is a record that
+    can claim a draw that did not happen — the disclosure key saying the folds
+    were drawn inside the cells while the draw took the reduction, or the
+    reverse. `fold_basis`' single-derivation rule, applied to a predicate
+    rather than to a number.
+
+    Empty cells are what this drops and `cells_of` deliberately keeps: a cell
+    no unit falls in is a fact about the design, and every caller that counts
+    cells has to see it. This is the projection for the callers that draw in
+    them.
+    """
+    return [(key, keys) for key, keys in cells.items() if keys]
+
+
+def partition_within_cells(
+    roster: UnitList,
+    k: int,
+    digest: str,
+    cells: Mapping[tuple[tuple[str, str], ...], frozenset[str]],
+    clusters: dict[str, str] | None = None,
+    strata: dict[str, str] | None = None,
+) -> list[list[Unit]]:
+    """`partition_units`, drawn **inside each cell** and merged **index-wise** —
+    partition *i* is every cell's partition *i*, concatenated in cell order.
+
+    A `fold` level runs inside every cell (`reference.md` § Group axes), so a
+    partition drawn over the whole roster hands a condition `cell ∩
+    partition_i`, whose size nothing bounded and which can come out empty while
+    the flat partition looks even. Drawing inside the cell is what makes each
+    arm's own folds the size the declaration asked for.
+
+    **The bare `digest` goes to every call**, never `digest|cell`.
+    `partition_units` builds its own `random.Random(_seed_from(digest))` per
+    call, so per-cell draws are already independent of cell order and of how
+    many cells there are — nothing is gained by mixing the label in, and a
+    per-cell digest is safe only while the no-cell path never touches it, which
+    is a guard the bare digest does not need. The reduction below is what makes
+    that concrete: a design with no cells draws the byte-identical partition it
+    drew before this function existed.
+
+    Each sub-roster is rebuilt from `roster` in **roster order**, the order
+    `clusters_of` preserves deliberately and `units_hash` pins as reproducible,
+    and each cell's `clusters`/`strata` map is the run's map **restricted to
+    that cell's keys and total over its sub-roster** — indexed, not `.get`-ed,
+    so `partition_units`' contract that a unit missing from either map is a
+    `KeyError` and a core defect survives the restriction rather than being
+    softened by it.
+
+    **Empty cells are skipped inside this loop, and that is not a bound.** A
+    cell too thin to carry `k` is refused at `validate`, by
+    `E-REPL-FOLD-K-TOO-LARGE` bounded over the thinnest cell
+    (`units.thinnest_cell`), before this runs. What the skip avoids is a cell
+    with no units at all — a level no unit resolved to, which is legal — whose
+    `partition_units` call would contribute `k` empty lists and nothing else.
+
+    **No populated cell at all reduces to the single whole-roster call**, with
+    the bare digest and byte-identically: that is `{}` (what `cli._prepare_run`
+    passes for a design with no group axis, since `cells_of` takes no roster
+    and its `cells_of({})` is one *empty* cell) and `cells_of({})` itself, both
+    reaching one rule. `thinnest_cell` states the same rule for the same two
+    inputs; two functions in one module answering one triviality question
+    differently is exactly the drift `fold_basis`' single derivation exists to
+    prevent. A populated decomposition of a **non-empty** roster is not
+    reachable any other way — `assignment_for` over an empty roster raises
+    before a plan exists (measured), and `arms_of` raises
+    `E-DATA-ASSIGN-LEVELS` for a unit whose value names no declared level — so
+    the reduction cannot be masking a real cell structure that came out empty.
+
+    **The cells must partition the roster, and that is checked rather than
+    assumed.** A unit in no populated cell would vanish from every fold, and a
+    unit in two would be tested twice, either of which stops `fold_members`
+    being the flat `label → keys` partition every reader downstream of it
+    treats it as. `cells_of` guarantees both by construction (it intersects
+    realized `ArmPlan`s, and each unit carries exactly one level per axis), so
+    a violation here is core's resolved state disagreeing with itself —
+    `E-RUN-FOLD-UNRESOLVED`, the code `cli` and `sweep` already raise for that
+    disagreement's other two shapes. Raised rather than asserted, for
+    `_prepare_run`'s own stated reason: an `assert` disappears under
+    `python -O`, which is the wrong property for the only guard on a condition
+    nothing else detects.
+    """
+    populated = populated_cells(cells)
+    if not populated:
+        return partition_units(roster, k, digest, clusters=clusters, strata=strata)
+    covered: set[str] = set()
+    for _, keys in populated:
+        overlap = covered & keys
+        if overlap:
+            raise ContractError(
+                f"the cell decomposition puts {sorted(overlap)[0]!r} in more than one cell, "
+                "so a fold drawn inside the cells would test that unit twice; cells are "
+                "disjoint by construction, so core's resolved state disagrees with itself",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
+        covered |= keys
+    missing = [unit.key for unit in roster if unit.key not in covered]
+    if missing:
+        raise ContractError(
+            f"the cell decomposition holds no cell for {missing[0]!r} "
+            f"({len(missing)} of {len(roster)} resolved units), so a fold drawn inside "
+            "the cells would leave those units out of every partition; every unit falls "
+            "in exactly one cell, so core's resolved state disagrees with itself",
+            code="E-RUN-FOLD-UNRESOLVED",
+        )
+    merged: list[list[Unit]] = [[] for _ in range(k)]
+    for _, keys in populated:
+        sub = UnitList([unit for unit in roster if unit.key in keys])
+        sub_clusters = None if clusters is None else {u.key: clusters[u.key] for u in sub}
+        sub_strata = None if strata is None else {u.key: strata[u.key] for u in sub}
+        for i, part in enumerate(
+            partition_units(sub, k, digest, clusters=sub_clusters, strata=sub_strata)
+        ):
+            # Index-wise, the rule `partition_units` already follows for its own
+            # strata: fold `i` means the same thing in every cell, which is what
+            # keeps the merge a partition of the roster and `fold_members` flat.
+            merged[i].extend(part)
+    return merged
+
+
 def partition_units(
     roster: UnitList,
     k: int,
@@ -2911,8 +3313,8 @@ def partition_units(
     than a defect — stated here because it contradicts the at-most-one above, which
     holds for an unstratified split only.
 
-    **`k` is checked against the whole roster's basis, not against each stratum's,
-    and a fold can therefore come out EMPTY — not merely short of one stratum.**
+    **`k` is checked against one basis, never against each stratum's, and a fold
+    can therefore come out EMPTY — not merely short of one stratum.**
     Each stratum fills only as many folds as it has clusters, and the merge is
     index-wise, so when every stratum has fewer than `k` the high-index folds hold
     **nothing at all**. Six units as three plus three under `{k: all,
@@ -2925,8 +3327,22 @@ def partition_units(
     document states. **A weaker earlier version of this paragraph said a fold could
     hold none of a *stratum*; that understated it.** The
     partition stays total and says so rather than dividing a cluster or dropping the
-    stratification; `reference.md` § Validation bounds `k` by the roster's basis
-    today, and a per-stratum bound is a check that does not exist yet.
+    stratification; `reference.md` § Validation bounds `k` by one basis today, and
+    a per-stratum bound is a check that does not exist.
+
+    **H3c-3 moved the basis and multiplied the lists; it did NOT add that bound.**
+    Under a cell structure `k` is bounded by the thinnest **populated** cell's
+    basis (`units.thinnest_cell`) rather than the whole roster's, and
+    `partition_within_cells` calls this function once per populated cell — so the
+    independent partition lists are now **cells × strata** where they were strata
+    alone, and the empty-high-index-fold shape above survives inside each cell
+    exactly as it did over the roster. Three strata of three units at `k = 2`
+    behave the same whether that roster is the whole one or one arm of it. The
+    per-stratum bound is **still a check that does not exist**, its denominator is
+    now one multiplier further from the number `validate` reads, and **no slice
+    follows this one** — it is recorded in `docs/superpowers/spec-defects.md` as a
+    fact rather than as a deferral. Inventing one here would still be a rule no
+    document states.
 
     The mapping must be **total over the roster**, like `clusters`: a unit missing
     from it raises `KeyError` as a core defect rather than being given a stratum of

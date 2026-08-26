@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from publishable.errors import ContractError
-from publishable.units import Unit
+from publishable.units import Unit, cell_label
 
 SUPPORTED_KINDS = ("seed", "batch", "fold")
 LABEL_JOIN = "_"
@@ -86,7 +86,12 @@ def _seed_members(digest: str, kind: str, n: int) -> tuple[RepeatMember, ...]:
     return tuple(RepeatMember(label=lb, seed=s) for lb, s in zip(labels, seeds, strict=True))
 
 
-def _fold_k(level: dict[str, Any], fold_basis: int | None, cluster_by: str | None = None) -> int:
+def _fold_k(
+    level: dict[str, Any],
+    fold_basis: int | None,
+    cluster_by: str | None = None,
+    cell: tuple[tuple[str, str], ...] | None = None,
+) -> int:
     """`k` is an integer >= 2, or `all` for leave-one-out.
 
     `all` needs the roster, because "as many folds as there are things to leave
@@ -102,6 +107,24 @@ def _fold_k(level: dict[str, Any], fold_basis: int | None, cluster_by: str | Non
     `cluster_by` names the attribute only so the refusal says which things it
     counted. It comes from the same `config` the levels do, so it cannot introduce
     a second count; nothing here reads a value from it.
+
+    `cell` is the same kind of argument: the `(axis, level)` label of the cell
+    `fold_basis` was counted over, when the caller counted over a cell at all —
+    `units.thinnest_cell`'s second return, since the bound bites on the cell
+    that has fewest and that is knowable only where the minimum is taken. It
+    names; it never counts. Under a declared `cluster_by` the count in the
+    message **is** that cell's cluster count, because that is what
+    `units.fold_basis` returns for a sub-roster.
+
+    **`cell=None` means "no cells resolved", not "cells resolved and
+    unnamed".** The distinction is the whole point of the argument: a caller
+    that resolved a cell structure and then omitted the label would produce a
+    message about the whole roster's count for a bound taken over one arm, and
+    a helper that quietly ignored the argument would hide exactly which callers
+    stopped testing it. Both callers that pass a cell-derived `fold_basis` pass
+    the label with it (`validate.validate_config` and `cli._prepare_run`); a
+    caller with no cell structure passes neither and gets today's messages,
+    byte for byte.
     """
     # `stratify_by` was refused here, above every check below it, until
     # `partition_units` learned to balance a stratum across the folds. Its
@@ -129,18 +152,29 @@ def _fold_k(level: dict[str, Any], fold_basis: int | None, cluster_by: str | Non
             code="E-REPL-FOLD-K",
         )
     if fold_basis is not None and k > fold_basis:
+        # Empty for a caller that resolved no cells, which is what makes both
+        # messages below byte-identical to the ones this build has always
+        # printed for a design with no cell structure.
+        in_cell = f" in cell {cell_label(cell)}" if cell is not None else ""
+        because = (
+            ""
+            if cell is None
+            else " — the count is that cell's rather than the whole roster's, "
+            "because a fold is drawn inside each cell and the cell with fewest "
+            "is what makes the declaration unaffordable"
+        )
         if cluster_by:
             raise ContractError(
                 f"`{{kind: fold, k: {k}}}` over {fold_basis} clusters of "
-                f"`{cluster_by}` would leave a fold with no cluster to test; a cluster "
-                "is indivisible, so `k` may not exceed the cluster count — the units "
-                "inside one cannot be dealt out to make the folds up",
+                f"`{cluster_by}`{in_cell} would leave a fold with no cluster to test; "
+                "a cluster is indivisible, so `k` may not exceed the cluster count — "
+                f"the units inside one cannot be dealt out to make the folds up{because}",
                 code="E-REPL-FOLD-K-TOO-LARGE",
             )
         raise ContractError(
-            f"`{{kind: fold, k: {k}}}` over {fold_basis} resolved units would leave a "
-            "fold with nothing to test; a fold with no units is a declaration error, "
-            "not a small fold",
+            f"`{{kind: fold, k: {k}}}` over {fold_basis} resolved units{in_cell} would "
+            "leave a fold with nothing to test; a fold with no units is a declaration "
+            f"error, not a small fold{because}",
             code="E-REPL-FOLD-K-TOO-LARGE",
         )
     return k
@@ -202,13 +236,21 @@ def _check_batch_keys(kind: str, level: dict[str, Any]) -> None:
 
 
 def resolve_repeats(
-    config: dict[str, Any], digest: str, fold_basis: int | None = None
+    config: dict[str, Any],
+    digest: str,
+    fold_basis: int | None = None,
+    fold_cell: tuple[tuple[str, str], ...] | None = None,
 ) -> list[RepeatLevel]:
     """`fold_basis` is how many indivisible things a `fold` may be drawn from —
     `units.fold_basis` of the resolved roster, which is the unit count unless
     `data.units.cluster_by` is declared and the cluster count when it is. The
     caller resolves it because the roster lives there; this reads `cluster_by`
     from `config` only to say which of the two a refusal counted.
+
+    `fold_cell` travels with it and is `_fold_k`'s `cell`: the `(axis, level)`
+    label of the cell that count was taken over, when the caller counted over
+    a cell. `None` means **no cells resolved**, not "cells resolved and
+    unnamed" — see `_fold_k`, which states the rule and is the only reader.
     """
     levels = ((config.get("replication") or {}).get("repeats")) or []
     cluster_by = ((config.get("data") or {}).get("units") or {}).get("cluster_by")
@@ -239,7 +281,7 @@ def resolve_repeats(
         _check_count_field(kind, level)
         _check_batch_keys(kind, level)
         if kind == "fold":
-            n = _fold_k(level, fold_basis, cluster_by)
+            n = _fold_k(level, fold_basis, cluster_by, fold_cell)
         else:
             n = int(level.get("n", 1))
             if n < 1:

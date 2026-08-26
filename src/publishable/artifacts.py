@@ -321,6 +321,30 @@ def build_allocation_document(
     it as one, and `reference.md` § `allocation.json` prints the shape this
     produces.
 
+    **`within` is the holdout block's third own key**, and it names the group
+    axes the split was drawn inside — present only when there were any
+    (H3c-3 Decision 11). `train` and `test` stay **flat lists over the whole
+    roster**: a per-cell holdout's union is still a partition of that roster
+    and each cell is split to the same proportion, so the imbalance
+    `E-DATA-HOLDOUT-CELLS` was minted against does not exist for a nested shape
+    to expose. What a reader cannot get from flat lists alone is *which
+    question the split answered* — one draw over the roster, or one per cell —
+    and a key whose meaning changes silently with the design's shape is the
+    silently-wrong class. So the fact **travels beside** the lists it
+    qualifies, `weighted_by` and `n_paired_clusters`' own arrangement, and the
+    per-arm membership is recoverable by crossing `train`/`test` against `arms`
+    in this same file.
+
+    **Derived from `group_axes`, this function's own argument** — not from a
+    field on `HoldoutPlan`, which gains none. The axes are what the
+    decomposition IS (`units.cells_of` takes nothing else), so deriving the
+    disclosure here keeps this function's *"takes no roster, records what it is
+    handed"* rule intact and keeps `cli._resumed_allocation`'s rebuild of this
+    document byte-identical to the recorded one: it overrides `group_axes`
+    consistently, so it rebuilds the same `within`. Omitted rather than written
+    `null` or `[]` when no axis is declared, `seed` and `strata`'s own rule one
+    key over — an empty list would claim a per-cell draw over no cells.
+
     **This function still takes no roster**, and the holdout arrives realized
     for the same reason the arms do: `cli._resolved_holdout` draws it once, and
     a second draw here would be a second allocation.
@@ -376,6 +400,12 @@ def build_allocation_document(
             block["seed"] = holdout.seed
         if holdout.strata:
             block["strata"] = list(holdout.strata)
+        # Gated on there BEING axes, not written unconditionally: with none,
+        # `units.holdout_within_cells` takes its one-cell reduction and the
+        # draw is the whole-roster one this document has always recorded, so a
+        # `within: []` would disclose a draw that did not happen.
+        if group_axes:
+            block["within"] = list(group_axes)
         document["holdout"] = block
     document["strata"] = strata
     return document

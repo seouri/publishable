@@ -24435,12 +24435,15 @@ def _h9b_swapped(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
-    """A committed project with a DRAWN holdout and **no group axis**, which is
-    not a choice: `data.units.holdout` beside a cell structure is refused by
-    name (`E-DATA-HOLDOUT-CELLS`, H3d's, owned by H3c-3's remaining 14), so
-    the two halves of `allocation.json` cannot be exercised by one config on
-    this build. Measured — the combined fixture was written first and refused
-    at `validate`."""
+    """A committed project with a DRAWN holdout and **no group axis**.
+
+    That was not a choice when this fixture was written — `data.units.holdout`
+    beside a cell structure was refused by name (`E-DATA-HOLDOUT-CELLS`), so
+    the two halves of `allocation.json` could not be exercised by one config.
+    H3c-3 task 16 retired that refusal and the combined shape is now
+    constructible; this fixture stays as it is, because what it exists to pin
+    is the **holdout-only** document — the shape whose `holdout` block carries
+    no `within` key."""
     return run_a_project(
         tmp_path,
         roster_csv="patient_id\n" + "\n".join(_H9B_DRAWN_KEYS) + "\n",
@@ -24452,20 +24455,19 @@ def _h9b_holdout_project(tmp_path: Path) -> dict[str, Any]:
 def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest(
     tmp_path: Path,
 ):
-    """`dataclasses.replace` must round-trip all **36** fields (plan
-    § Corrections, correction 17), so the field count is asserted here: a
-    future field added to `Prepared` and forgotten by this override fails
-    loudly rather than travelling as whatever `_prepare_run` computed.
+    """`dataclasses.replace` must round-trip all **37** fields — 36 when this
+    test was written (plan § Corrections, correction 17), plus `cells`, added
+    by H3c-3 task 4 — so the field count is asserted here: a future field
+    added to `Prepared` and forgotten by this override fails loudly rather
+    than travelling as whatever `_prepare_run` computed.
 
-    Four fields move and thirty-two are the same objects, asserted field by
+    Four fields move and thirty-three are the same objects, asserted field by
     field rather than by a count — `group_axes` and `holdout_plan` are the
     record, `eval_roster` is `_evaluation_roster` re-derived from the
     overridden holdout, and `arm_members_map` is `units.arm_members` called
     AGAIN on the overridden axes. That second call is overriding a *result*,
-    not moving a call: `_resolved_group_axes` and `arm_members` stay exactly
-    where they are inside `_prepare_run` (Ruling S), and re-deriving the
-    per-condition mapping here by hand would make this function a second
-    producer of arm membership.
+    not moving a call, and re-deriving the per-condition mapping here by hand
+    would make this function a second producer of arm membership.
 
     **And the rebuilt document equals the recorded one**, which is what makes
     `provenance.allocation_hash` cover the file on disk: a resume never
@@ -24481,7 +24483,7 @@ def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_re
     edited = _h9b_swapped(recorded)
     prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
     assert isinstance(prepared, Prepared)
-    assert len(dataclasses.fields(Prepared)) == 36
+    assert len(dataclasses.fields(Prepared)) == 37
 
     overridden = _resumed_allocation(prepared, edited)
     moved = {"group_axes", "holdout_plan", "eval_roster", "arm_members_map"}
@@ -26306,21 +26308,41 @@ def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(c
 # Arm C is below; arm D is in `tests/test_scaffold.py`; arm F is below.
 # ---------------------------------------------------------------------------
 
+# RETIRED IN PART, 2026-08-25, by controller ruling — see the docstring below.
+# `docs/experimental-designs.md` left this dict when H3c-3 task 21 made a
+# sentence in it TRUE that had been false against the code. The arm fired, a
+# human looked, and what the look found was the arm's own premise expiring.
 _H9D_ARM_C_DIGESTS = {
     "docs/design-principles.md": (
         "cf03bdf476973a74c4365f6abdd78ee76aa7754ca2062d02b9c8b785edd80171"
-    ),
-    "docs/experimental-designs.md": (
-        "e4c90c597287a0de9cdbc7cf40980fe325569797bdb7edf9df0cc61b32eccc4d"
     ),
 }
 
 
 @pytest.mark.parametrize("relative_path", sorted(_H9D_ARM_C_DIGESTS))
 def test_h9d_arm_c_two_of_the_four_documents_are_byte_identical_at_merge(relative_path: str):
-    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** Both files must be
-    byte-identical at merge, so a red arm here is a FINDING — a hash to
-    investigate, never a hash to refresh.
+    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** The file must be
+    byte-identical, so a red arm here is a FINDING — a hash to investigate,
+    never a hash to refresh.
+
+    **RETIRED IN PART, 2026-08-25, by controller ruling, and the reason is the
+    finding.** This arm was captured over TWO files. H3c-3 task 21 then edited
+    `docs/experimental-designs.md` to replace a sentence that was **false
+    against the code** — it said a fold or a holdout within a cell *"is not
+    built"* and *"is refused outright"*, which H3c-3 had just made untrue — and
+    the arm went red exactly as designed. **The investigation it forced is what
+    retired it**: the arm asserts a fact about a PAST merge by hashing a LIVE
+    file, so it must break the first time any later slice legitimately edits
+    that file, and `experimental-designs.md` is a document whose whole job is to
+    describe behaviour that slices change. **A digest over it is a proxy for
+    "did the worked example move?", and the proxy fails whenever the document
+    does its job.**
+
+    **`design-principles.md` stays**, on the opposite ground: it carries the
+    shared worked example, nothing remaining in this project should touch it,
+    and for a file that should not move a whole-file digest **is** the direct
+    question rather than a proxy for one. Its parametrization passed throughout
+    H3c-3, which is the evidence for keeping it.
 
     `README.md` and `docs/reference.md` are deliberately NOT in this arm, and
     design § 8.2 says why: task 12 must edit README twice and task 14 must edit
@@ -26379,3 +26401,1438 @@ def test_the_not_built_machinery_is_retained_with_no_row_marked(capsys):
     # it rather than by eye — a diagnostic citing a section this document does
     # not have sends a reader nowhere.
     assert "Operation commands" in _cited_sections()
+
+
+# --- H3c-3 task 16 follow-up: the combined document, newly constructible -----
+
+
+def test_h3c3_a_real_run_with_both_partitions_records_within_and_round_trips(tmp_path: Path):
+    """**The `groups × holdout` `allocation.json`, end to end — the only shape
+    in production that ever carries `holdout.within`, and no test could build
+    it before `d22268d`.**
+
+    `_h9b_drawn_project` has drawn arms and no holdout; `_h9b_holdout_project`
+    has a drawn holdout and no axes; guard-pin arm C rides the first and F5 is
+    `groups × fold` (C27). So every existing fixture sees one half of this file.
+    The combination was refused at `validate` as `E-DATA-HOLDOUT-CELLS` until
+    task 16 retired it — `E-DATA-HOLDOUT-FOLD` forbids only the **fold**
+    pairing, so seed repeats make it legal.
+
+    **Two properties, and the second is the load-bearing one.**
+
+    First, a real run writes `within` naming the axis, **beside a populated
+    `arms` block** — asserted together, because `within` over an empty `arms`
+    would be the disclosure claiming a decomposition the file does not show.
+
+    Second, the **round trip on this shape**, which is what guard-pin arm C
+    asserts for the shape it can reach and cannot assert for this one.
+    `_resumed_allocation` rebuilds `HoldoutPlan` from `train`/`test`/`seed`/
+    `strata` and **drops `within`** — it is not a field — and the rebuild
+    re-derives it from the overridden `group_axes`. If those two ever
+    disagreed, `provenance.allocation_hash` would publish the hash of a
+    document no file holds, and a resume never rewrites `allocation.json`. The
+    recorded arms are swapped first (`_h9b_swapped`), so the equality is over a
+    document that differs from a fresh draw rather than one that agrees with it
+    by construction.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+            "holdout": {"method": "random", "frac": 0.5, "seed": 4321},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert recorded["holdout"]["within"] == ["arm"]
+    assert sorted(recorded["arms"]["arm"]) == ["control", "treatment"]
+    assert all(recorded["arms"]["arm"][level] for level in ("control", "treatment"))
+    # Drawn INSIDE each cell: each arm contributes half of its own units to the
+    # test side, which a roster-wide draw at this `frac` need not do. Sizes are
+    # the discriminator that is available here; membership is pinned at the
+    # producer by `tests/test_cli.py`'s task 13 fixtures.
+    test_side = set(recorded["holdout"]["test"])
+    for level in ("control", "treatment"):
+        arm = set(recorded["arms"]["arm"][level])
+        assert len(arm & test_side) == len(arm) // 2, level
+
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
+# --- H3c-3 task 17 (Ruling KK): the resume re-derives the fold partitions ----
+
+
+_H3C3_KK_KEYS = [f"p{i:02d}" for i in range(12)]
+
+
+def _h3c3_kk_project(tmp_path: Path) -> dict[str, Any]:
+    """A committed `groups × fold` project with a **DRAWN** arm axis.
+
+    `random`, not `by_attribute`, and that is the whole fixture: under a read
+    axis the recorded membership and a fresh re-read coincide, so a
+    re-derivation and its absence give the same answer — the
+    correct-and-buggy-readings-coincide trap pointed the other way (design
+    § 9). No holdout: `E-DATA-HOLDOUT-FOLD` still refuses that pair (C27).
+    """
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+
+def test_h3c3_a_resumed_allocation_redraws_the_folds_inside_the_RECORDED_cells(tmp_path: Path):
+    """**Fixture F5 — Ruling KK.**
+
+    `_resumed_allocation` used to decline to override the fold partitions,
+    because *"`partition_units` is a pure function of the roster and the design
+    digest"*. Under cells it is also a function of the **cell decomposition**,
+    and the decomposition is exactly what this function overrides one call
+    later. So a resume whose recorded arms differ from the fresh draw would
+    execute against the recorded cells and evaluate folds drawn inside the
+    fresh ones.
+
+    **The guards cannot see it, and that is why this needs a fixture rather
+    than a sentence.** `_resumed_allocation` compares the axis SET, each axis's
+    level SET, and each axis's recorded key set against the roster's — in both
+    directions, and nothing about membership within a level or about roster
+    ORDER. `_h9b_swapped` moves one unit between the two arms, which changes
+    every one of those comparisons by nothing (C11 measures the same blindness
+    through a reversed roster: same keys, same levels, a different realized
+    membership and a different `units_hash`).
+
+    **The assertion is on MEMBERSHIP, not on sizes.** Both decompositions are
+    6/6 and both give three folds of four, so a size assertion passes under
+    either reading. The re-derived partitions are compared against
+    `units.partition_within_cells` called on the OVERRIDDEN axes — the same
+    single producer `_prepare_run` calls, two sources that must agree — and
+    against `prepared`'s own pre-override partitions, which must **differ**:
+    without that inequality the equality above would be satisfied by a
+    re-derivation that changed nothing.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+    from publishable.units import cells_of, partition_within_cells
+
+    doc = _h3c3_kk_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.partitions is not None and prepared.fold_members is not None
+    fresh = {label: set(keys) for label, keys in prepared.fold_members.items()}
+
+    overridden = _resumed_allocation(prepared, edited)
+
+    expected = partition_within_cells(
+        overridden.roster,
+        len(prepared.partitions),
+        overridden.digest,
+        cells_of(overridden.group_axes),
+    )
+    assert overridden.partitions is not None
+    assert [[u.key for u in part] for part in overridden.partitions] == [
+        [u.key for u in part] for part in expected
+    ]
+
+    # The discriminator: the recorded decomposition really does move the folds,
+    # so the equality above is not satisfied by "nothing changed".
+    assert overridden.fold_members is not None
+    resumed = {label: set(keys) for label, keys in overridden.fold_members.items()}
+    assert resumed != fresh
+    # ...and it moves them by MEMBERSHIP rather than by size, which is what a
+    # count assertion could never tell apart.
+    assert sorted(len(v) for v in resumed.values()) == sorted(len(v) for v in fresh.values())
+    # The whole roster is still partitioned — a re-derivation that dropped or
+    # duplicated a unit would satisfy both assertions above.
+    assert sorted(k for keys in resumed.values() for k in keys) == sorted(_H3C3_KK_KEYS)
+    # And the allocation round trip is untouched by the re-derivation, which is
+    # what guard-pin arm C asserts for a design with no fold.
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
+def test_h3c3_a_no_axis_resume_still_calls_the_producer_and_gets_the_same_folds(
+    tmp_path: Path,
+):
+    """**MU-10's replacement, and it is owed rather than optional.**
+
+    MU-10 is "add an `if group_axes` gate to the re-derivation". It is **blind**
+    to every byte-identical-partition assertion, because the no-axis arm of the
+    producer IS the identical partition — that is precisely the proof the gate
+    is a no-op — and it is blind to guard-pin arm D, which wraps `_prepare_run`
+    and never enters this function. So the only check that can tell
+    "unconditional" from "gated" is whether the producer was **called**, and
+    that is what this asserts, with arm D's own counting technique: the wrapper
+    goes on BOTH `cli`'s imported binding and `units`' own, and the assertion
+    is on the sum, so it survives either resolution.
+
+    **Called directly, and the reason is worth stating.** A no-axis, no-holdout
+    design writes no `allocation.json` at all (`build_allocation_document`
+    returns `None` when neither partition is declared), and `command_resume`
+    calls this function only when `lineage.read_allocation` returned one — so
+    the no-axis arm is unreachable through a real resume, and a gate on
+    `group_axes` would ship untested rather than wrong. That is an argument for
+    a direct call, not for leaving the arm unpinned.
+
+    The recorded document is the empty-arms shape this design would write, and
+    every guard passes on it: the axis set is empty on both sides, and neither
+    side declares a holdout.
+    """
+    from publishable import cli as cli_mod
+    from publishable import units as units_mod
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.group_axes == {}, "no group axis, so no cell structure"
+    assert prepared.partitions is not None, "a fold level, so there are partitions to replace"
+    before = [[u.key for u in part] for part in prepared.partitions]
+
+    calls: list[int] = []
+    original = cli_mod.partition_within_cells
+
+    def counting(roster, k, digest, cells, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(k)
+        return original(roster, k, digest, cells, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli_mod, "partition_within_cells", counting)
+        mp.setattr(units_mod, "partition_within_cells", counting)
+        overridden = _resumed_allocation(prepared, {"arms": {}, "seed": {}, "strata": {}})
+
+    assert calls == [5], "the producer is called once, with the recorded fold count"
+    assert overridden.partitions is not None
+    assert [[u.key for u in part] for part in overridden.partitions] == before
+    assert overridden.fold_members == prepared.fold_members
+
+
+# --- H3c-3 guard pin, arms B, C, D and E -------------------------------------
+
+
+def test_h3c3_pin_arm_b_a_no_axis_sweep_document_carries_only_the_flat_partitions(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm B. Authorized editor: NONE**, post-edit state
+    *unchanged*.
+
+    A run with **no group axis** records its folds flat: every `partitions`
+    entry carries exactly `fold`, `test` and `train`, and the document carries
+    **no** `partitions_within` key. Decision 11 gives the cell disclosure key
+    to designs that have cells; MU-14 is the mutation that writes it
+    unconditionally, and this arm is what reports it.
+
+    The key-set assertion is by equality, not by membership: `train` present is
+    itself pinned (C8 — under cells the flat `train` would name a side no
+    execution sees, and dropping the key rather than composing it is the shape
+    this forbids), and an *added* per-entry key fails the same assertion.
+    """
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [sorted(p) for p in sweep["partitions"]] == [["fold", "test", "train"]] * 5
+    assert "partitions_within" not in sweep
+    # The can-fail half: the document really was read and really holds folds,
+    # so the absence above is an absence from a populated document rather than
+    # from a shape this test failed to reach.
+    assert [p["fold"] for p in sweep["partitions"]] == [f"fold{i:02d}" for i in range(1, 6)]
+
+
+def test_h3c3_pin_arm_c_the_resumed_allocation_round_trips_to_the_recorded_document(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm C. Authorized editor: task 17, and only task 17.**
+    Post-edit state, specified in advance: **unchanged**. Decision 11 derives
+    that `holdout.within` is not written for this design, so the rebuilt
+    document equals the recorded one after the slice exactly as before it. If
+    task 17 measures otherwise it edits this arm **once**, appends the recorded
+    document's `holdout.within` to the expected value, **reorders nothing**,
+    and reports the measurement (C23).
+
+    One property and one only: what `_execute_prepared` hashes is what the file
+    on disk holds. `provenance.allocation_hash` covers `allocation.json`, and a
+    resume never rewrites it, so a `seed`, a `strata` or a `within` block taken
+    from the recomputed plans instead of the record would publish a hash of a
+    document no file holds.
+
+    Deliberately **not** a copy of
+    `test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest`:
+    that test also pins `Prepared`'s field count and a field-by-field identity
+    loop, both of which this slice moves (C20 adds a field; Ruling KK re-derives
+    the partitions). Those assertions stay where they already live, with their
+    own editors; this arm pins the round trip alone.
+    """
+    from publishable.artifacts import build_allocation_document
+    from publishable.cli import Prepared, _prepare_run, _resumed_allocation
+
+    doc = _h9b_drawn_project(tmp_path)
+    recorded = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    edited = _h9b_swapped(recorded)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    overridden = _resumed_allocation(prepared, edited)
+    assert build_allocation_document(overridden.group_axes, overridden.holdout_plan) == edited
+
+
+def test_h3c3_pin_arm_d_a_no_axis_prepare_makes_exactly_one_bare_digest_partition_call(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm D. Authorized editor: NONE**, post-edit state
+    *unchanged*.
+
+    A design with no group axis calls `partition_units` **exactly once**, over
+    the whole roster, with the **bare** design digest. That is the oracle arm A
+    pins the output of, seen from the call side: MU-5 (a per-cell digest,
+    `digest + cell_label`) and any second draw both fail here, and neither is
+    visible to arm A, which calls the function directly.
+
+    **The counting wrapper is installed at BOTH names, and the assertion is on
+    the sum.** `cli.py` does `from publishable.units import partition_units`,
+    so `cli` holds its own binding: a patch on `publishable.cli.partition_units`
+    alone counts zero the moment task 8 reroutes the call site through
+    `units.partition_within_cells`, whose inner call resolves `units`' binding —
+    and this arm has no authorized editor, so it may not be repaired then.
+    Patching both and summing is invariant under either shape. **The constraint
+    this arm imposes on task 8** is therefore only that the per-cell loop keep
+    *calling* `partition_units` rather than inlining its body; where it is
+    called from is free.
+
+    Measured before the literal was written: `validate_config`, which
+    `_prepare_run` runs first, contributes **no** call of its own today, so the
+    count is 1 and not 2.
+    """
+    from publishable import cli as cli_mod
+    from publishable import units as units_mod
+    from publishable.cli import Prepared, _prepare_run
+
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "fold", "k": 5}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+
+    calls: list[dict[str, Any]] = []
+    original = cli_mod.partition_units
+
+    def counting(roster, k, digest, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"n": len(list(roster)), "k": k, "digest": digest})
+        return original(roster, k, digest, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli_mod, "partition_units", counting)
+        mp.setattr(units_mod, "partition_units", counting)
+        prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+
+    assert len(calls) == 1, calls
+    # The whole roster, undivided — a per-cell loop over this design would draw
+    # once per cell over sub-rosters, and there is exactly one cell here.
+    assert calls[0]["n"] == 10
+    assert calls[0]["k"] == 5
+    # The BARE digest: the same string `sweep.yaml` records, with nothing
+    # appended. Compared against the recorded value rather than a literal, so
+    # the two sources have to agree rather than each agreeing with itself.
+    assert calls[0]["digest"] == sweep["design_digest"]
+
+
+def test_h3c3_pin_arm_e_a_six_unit_no_axis_config_validates_with_no_findings_at_all(
+    tmp_path: Path,
+):
+    """**H3c-3 guard pin, arm E. Authorized editor: NONE**, post-edit state
+    *unchanged* — and in particular it must never gain `W-DATA-CELL-THIN`.
+
+    Captured **before** Decision 3's warning exists, which is what makes it a
+    pin rather than a restatement of the code. `materialize.py` writes
+    `min_units_per_cell: 20` into every config `init` produces, so an ungated
+    thin-cell check warns on every small generated project — this one included,
+    at 6 units. MU-11 (the cell-structure gate removed) is caught here.
+    **MU-11 cannot be run at task 1**: the code it mutates does not exist yet,
+    and task 18 owes the run.
+
+    The finding set is asserted **exactly** (`== []`), not as
+    `"W-DATA-CELL-THIN" not in codes`: a set assertion catches a warning
+    arriving under any spelling, and an absence-only assertion would pass
+    identically if nothing ran.
+
+    **The half that must report, paired here rather than in a separate test so
+    `pytest -k h3c3_pin_arm_e` runs both:** the same six units and the same
+    generated config under `allocation: between` earns
+    `E-DATA-ALLOCATION-NO-ARMS`. That is C17's other half of the cell-structure
+    question, and it is what shows `validate_config` reaches the allocation
+    block of *this* config rather than returning before it.
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text(
+        "patient_id,cohort,arm\n"
+        + "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, 7))
+        + "\n"
+    )
+
+    def findings_for(allocation: str, project: str) -> list[str]:
+        root = tmp_path / project
+        assert main(["new", str(root)]) == EXIT_OK
+        cfg = generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(tmp_path / f"results-{project}"),
+        )
+        doc = yaml.safe_load(cfg.read_text())
+        doc["metadata"]["description"] = "the arm E guard pin"
+        doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+        doc["data"]["units"]["allocation"] = allocation
+        assert doc["limits"]["min_units_per_cell"] == 20, "the value `init` writes"
+        assert doc["sweep"] == {}, "no group axis, so no cell structure exists"
+        cfg.write_text(yaml.safe_dump(doc))
+        collector = Collector()
+        validate_config(cfg, collector)
+        return [f.code for f in collector.findings]
+
+    assert findings_for("within", "within-proj") == []
+    assert findings_for("between", "between-proj") == ["E-DATA-ALLOCATION-NO-ARMS"]
+
+
+_H3C3_ARM_ROSTER = (
+    "patient_id,arm\n"
+    + "".join(f"c{i},control\n" for i in range(6))
+    + "".join(f"t{i},treatment\n" for i in range(6))
+)
+
+
+def _h3c3_cell_project(tmp_path: Path, monkeypatch) -> dict[str, Any]:
+    """A real two-arm `between` design, run end to end — 6 `control` units and
+    6 `treatment` units.
+
+    Equal arms on purpose here, unlike
+    `test_a_group_axis_actually_narrows_end_to_end`'s 8/3: nothing in the
+    hoist's tests reads an arm *size*, and what they do read — the cell
+    memberships — are two disjoint six-key sets that no count could be
+    confused for."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+    return run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+
+def test_h3c3_the_hoisted_axes_and_reduction_are_each_realized_exactly_once(
+    tmp_path: Path, monkeypatch
+):
+    """H3c-3 task 4, the half that is asserted rather than assumed.
+
+    `_resolved_group_axes` documents itself as realized **once per run** —
+    *"under a draw a second call is a second allocation"* — and `arm_members`
+    is the single authority for the per-condition reduction. Task 4 moves both
+    calls above the fold region, and a hoist that *copies* a call rather than
+    moving it is the one way that move can be wrong: the run would then narrow
+    conditions by one draw while `allocation.json` recorded another.
+
+    Counted through a real `command_run`, not a direct `_prepare_run` call, so
+    the count covers every path the command takes. **MU-16** is the mutation
+    that fails this and nothing else: leave a second `arm_members(...)` call
+    behind at the old position, which changes no output for this
+    `by_attribute` design and is invisible to every other assertion in the
+    suite.
+
+    A count rather than a membership, deliberately: two draws of one
+    `by_attribute` axis agree, so a membership assertion cannot see the second
+    call at all."""
+    from publishable import cli as cli_mod
+
+    axes_calls: list[int] = []
+    reduce_calls: list[int] = []
+    original_axes = cli_mod._resolved_group_axes
+    original_reduce = cli_mod.arm_members
+
+    def counting_axes(*args, **kwargs):  # type: ignore[no-untyped-def]
+        axes_calls.append(1)
+        return original_axes(*args, **kwargs)
+
+    def counting_reduce(*args, **kwargs):  # type: ignore[no-untyped-def]
+        reduce_calls.append(1)
+        return original_reduce(*args, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "_resolved_group_axes", counting_axes)
+    monkeypatch.setattr(cli_mod, "arm_members", counting_reduce)
+
+    doc = _h3c3_cell_project(tmp_path, monkeypatch)
+
+    # The half that must REPORT: the run really happened and really narrowed,
+    # so a patch that silently stopped the command reaching either call cannot
+    # pass this test by asserting two absences.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert [c["label"] for c in run["results"]["conditions"]] == [
+        "arm=control",
+        "arm=treatment",
+    ]
+    assert len(axes_calls) == 1, axes_calls
+    assert len(reduce_calls) == 1, reduce_calls
+
+
+def test_h3c3_prepared_carries_the_cell_decomposition_and_none_without_an_axis(
+    tmp_path: Path, monkeypatch
+):
+    """H3c-3 task 4: `Prepared.cells`, the thirty-seventh field.
+
+    Two halves, because *"a design with no group axis is one cell holding the
+    whole roster"* is composed at this caller rather than inside
+    `units.cells_of` (which takes no roster and so answers `{(): frozenset()}`
+    for `{}` axes). `None` is that composition, and the mutation that fails
+    this alone is dropping the `cells=` argument from the `Prepared(...)` call
+    — which `mypy` also catches, and which the field-count assertion in
+    `test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_rest`
+    catches from the other end at **37**.
+
+    The memberships are asserted, not the cell *count*: two cells of six is a
+    fact a count of 2 is satisfied by under any decomposition of the roster,
+    including one that put every unit in one cell."""
+    from publishable.cli import Prepared, _prepare_run
+
+    doc = _h3c3_cell_project(tmp_path, monkeypatch)
+    prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
+    assert isinstance(prepared, Prepared)
+    assert prepared.cells == {
+        (("arm", "control"),): frozenset(f"c{i}" for i in range(6)),
+        (("arm", "treatment"),): frozenset(f"t{i}" for i in range(6)),
+    }
+
+    flat = run_a_project(tmp_path / "flat", replication={"repeats": [{"kind": "seed", "n": 2}]})
+    flat_prepared = _prepare_run(Path(flat["cfg"]), allow_dirty=False)
+    assert isinstance(flat_prepared, Prepared)
+    assert flat_prepared.cells is None
+
+
+# --- H3c-3 task 10: `E-REPL-FOLD-CELLS` retired, and the property it stood in
+# --- for pinned where the refusal used to sit -------------------------------
+
+
+_H3C3_ARM_9_3_ROSTER = (
+    "patient_id,arm\n"
+    + "".join(f"c{i},control\n" for i in range(9))
+    + "".join(f"t{i},treatment\n" for i in range(3))
+)
+
+
+def test_h3c3_a_fold_inside_the_cells_hands_every_arm_units_in_every_fold(tmp_path: Path):
+    """**What `E-REPL-FOLD-CELLS` was standing in for**, now that the refusal
+    is retired: every (arm, fold) pair is handed units, so no arm's
+    denominator for any fold label is zero.
+
+    The fixture is the shape that refusal was minted at — 12 units, `control`
+    9 and `treatment` 3 — with `{kind: fold, k: 3}`, the largest `k` the
+    thinnest cell admits (3 units, unclustered). The roster's own basis is 12,
+    so the roster-wide bound would have permitted `k: 12` here, and the
+    per-cell draw is what makes each arm's three folds hold 3 and 1 units
+    rather than treatment's holding 1, 1, 1 by luck or 0 by arithmetic.
+
+    Asserted through `runner._handed_keys` — the function whose answer
+    `runner.attrition` divides by — over the run's **own recorded state**:
+    `sweep.yaml`'s partitions and `allocation.json`'s arms, crossed. The
+    per-condition denominators from `run.yaml` are asserted beside it, because
+    `_handed_keys` non-empty and the recorded `resolved` count are two
+    different readers of the same property.
+
+    **The refusal half is the second run in this test**, and it is what a
+    mutation removing the cell clause from the bound fails: at `k: 5` — which
+    the roster's basis of 12 clears and the thinnest cell's 3 does not — no run
+    directory is created at all. Under the roster-wide bound that config runs,
+    and `control`'s folds 4 and 5 are drawn over nothing, which is the zero
+    denominator this test exists to keep unreachable.
+    """
+    from publishable.runner import _handed_keys
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    allocation = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    fold_members = {entry["fold"]: frozenset(entry["test"]) for entry in sweep["partitions"]}
+    assert sorted(fold_members) == ["fold01", "fold02", "fold03"]
+    arms = {level: set(keys) for level, keys in allocation["arms"]["arm"].items()}
+    assert {level: len(keys) for level, keys in arms.items()} == {"control": 9, "treatment": 3}
+
+    for level, keys in arms.items():
+        handed = {label: _handed_keys(label, set(keys), fold_members) for label in fold_members}
+        assert all(handed.values()), (level, {k: sorted(v) for k, v in handed.items()})
+        # Every unit of the arm is handed exactly once across the arm's folds:
+        # the merge is index-wise over cells, so the flat partition is still a
+        # partition of each arm as well as of the roster.
+        assert sorted(key for got in handed.values() for key in got) == sorted(keys)
+        assert sorted(len(got) for got in handed.values()) == (
+            [3, 3, 3] if level == "control" else [1, 1, 1]
+        )
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # The record's own per-fold denominators, which is the same property seen
+    # from the artifact rather than from `_handed_keys`: not one zero, in either
+    # arm, at any fold label. Under a roster-wide bound at `k: 5` this block is
+    # where the defect shows — `treatment` reports `n_units: 0` for two of the
+    # five labels, an interval computed over nothing.
+    per_repeat = [
+        cond["per_repeat"]["step01_summarize_units"] for cond in run["results"]["conditions"]
+    ]
+    assert [cond["label"] for cond in run["results"]["conditions"]] == [
+        "arm=control",
+        "arm=treatment",
+    ]
+    assert per_repeat == [
+        {"fold01": {"n_units": 3}, "fold02": {"n_units": 3}, "fold03": {"n_units": 3}},
+        {"fold01": {"n_units": 1}, "fold02": {"n_units": 1}, "fold03": {"n_units": 1}},
+    ]
+
+    # The refusal half, on the identical fixture: `k: 5` clears the roster's
+    # basis of 12 and fails the thinnest cell's 3, so `validate` refuses and no
+    # run directory exists to hold an empty fold.
+    refused = run_a_project(
+        tmp_path / "at_k_5",
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        replication={"repeats": [{"kind": "fold", "k": 5}], "rationale": "five folds"},
+        expect_exit=EXIT_WRONG,
+    )
+    assert refused["run_dir"] is None
+
+
+# --- H3c-3 task 11: `sweep.yaml` discloses the cells the folds were drawn in --
+
+
+_H3C3_TWO_AXIS_ROSTER = "patient_id,arm,site\n" + "".join(
+    f"u{i:02d},{arm},{site}\n"
+    for i, (arm, site) in enumerate(
+        [(a, s) for a in ("control", "treatment") for s in ("north", "south") for _ in range(3)]
+    )
+)
+
+_H3C3_TWO_AXIS_UNITS = {
+    "allocation": "between",
+    "assign": {
+        "arm": {"method": "by_attribute"},
+        "site": {"method": "by_attribute"},
+    },
+    "attributes": ["arm", "site"],
+}
+
+_H3C3_TWO_AXIS_GROUPS = {
+    "groups": [
+        {"by": "arm", "levels": ["control", "treatment"]},
+        {"by": "site", "levels": ["north", "south"]},
+    ]
+}
+
+
+def test_h3c3_partitions_within_names_the_axes_the_folds_were_drawn_inside(tmp_path: Path):
+    """**The honouring direction of the disclosure key** — guard-pin arm B is
+    the refusing one, and pins the absence for a design with no cells.
+
+    **Two axes, deliberately.** `arm` × `site` over 12 units is four cells of
+    three, and it is the smallest fixture that can tell the axis *names* apart
+    from the axis *levels* (`control`/`north` are neither `arm` nor `site`),
+    from a truncation to the first axis, and from a reversal — one axis
+    distinguishes none of the three, since its name is also the whole list, the
+    first element, and the reverse of itself.
+
+    Three assertions, and the second is what the key exists for. The
+    `partitions` entries are **unchanged** — still exactly `fold`, `test` and
+    `train`, still a partition of the whole roster — because composing `train`
+    inside the cell is the same set (C8). The flat `train` nevertheless names a
+    side **no execution ever sees**: every condition is narrowed to its cell
+    first, so what a repeat-scope step is handed is `cell ∩ train`, three
+    quarters smaller here, and the assertion below computes both and pins them
+    unequal. `partitions_within` is what tells a reader to cross `partitions`
+    against `allocation.json` to recover it.
+    """
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_TWO_AXIS_ROSTER,
+        units_overrides=_H3C3_TWO_AXIS_UNITS,
+        sweep=_H3C3_TWO_AXIS_GROUPS,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert sweep["partitions_within"] == ["arm", "site"]
+    assert [sorted(p) for p in sweep["partitions"]] == [["fold", "test", "train"]] * 3
+
+    allocation = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = {
+        axis: {level: frozenset(keys) for level, keys in levels.items()}
+        for axis, levels in allocation["arms"].items()
+    }
+    assert {level: len(keys) for level, keys in arms["arm"].items()} == {
+        "control": 6,
+        "treatment": 6,
+    }
+    cell = arms["arm"]["control"] & arms["site"]["north"]
+    assert len(cell) == 3
+    for entry in sweep["partitions"]:
+        flat_train = frozenset(entry["train"])
+        # The whole roster's other partitions: eight of the twelve units.
+        assert len(flat_train) == 8
+        # And the side an execution in this cell is actually handed: two.
+        assert len(cell & flat_train) == 2
+        assert cell & flat_train != flat_train
+        # Each cell contributes one unit to each fold, which is what drawing
+        # inside the cell bought and what makes the two numbers differ.
+        assert len(cell & frozenset(entry["test"])) == 1
+
+
+def test_h3c3_a_design_with_cells_and_no_fold_level_discloses_nothing(tmp_path: Path):
+    """**The key describes partitions, so with no partitions there is no key** —
+    the second half of *written only when the partitions were drawn within
+    cells*, and the half arm B cannot see (arm B has folds and no cells; this
+    has cells and no folds).
+
+    The same four-cell design, its `fold` level replaced by a `seed` level.
+    `sweep.yaml` carries neither `partitions` nor `partitions_within`, and the
+    control that the document was really read and really holds this design is
+    the `conditions` assertion: four cells, four conditions.
+    """
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_TWO_AXIS_ROSTER,
+        units_overrides=_H3C3_TWO_AXIS_UNITS,
+        sweep=_H3C3_TWO_AXIS_GROUPS,
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert "partitions" not in sweep
+    assert "partitions_within" not in sweep
+    assert [c["label"] for c in sweep["conditions"]] == [
+        "arm=control__site=north",
+        "arm=control__site=south",
+        "arm=treatment__site=north",
+        "arm=treatment__site=south",
+    ]
+
+
+def _h3c3_f6_roster() -> Any:
+    """F6's roster: 20 units, two arms of 10, `arm` on the unit itself.
+
+    `by_attribute`-shaped rather than drawn: the only draw this fixture may
+    contain is the **holdout's**, or a pinned per-cell membership would depend
+    on the arm draw too and MU-17's discrimination would be entangled with it.
+    """
+    from publishable.units import Unit, UnitList
+
+    return UnitList(
+        [
+            Unit(
+                key=f"u{i:03d}",
+                paths=(),
+                attributes={"arm": "control" if i <= 10 else "treatment"},
+            )
+            for i in range(1, 21)
+        ]
+    )
+
+
+_H3C3_F6_CELLS = {
+    (("arm", "control"),): frozenset(f"u{i:03d}" for i in range(1, 11)),
+    (("arm", "treatment"),): frozenset(f"u{i:03d}" for i in range(11, 21)),
+}
+
+
+def test_h3c3_f6_the_holdout_is_drawn_inside_each_cell_pinned_by_membership():
+    """**F6 (task 13), and the rule it establishes: a per-arm COUNT cannot
+    discriminate a proportional holdout split — only MEMBERSHIP at a pinned
+    seed can (C28).**
+
+    The pre-slice draw is one shuffle of the whole roster and two slices — a
+    uniform 4-subset of 20 — so over two arms of 10 at `frac: 0.2` it lands on
+    2 units per arm with probability C(10,2)²/C(20,4) = 2025/4845 ≈ **0.42**.
+    A `len(test ∩ arm) == 2` assertion is therefore a coin flip on whether it
+    sees the bug at all: *a fixture whose numbers agree with the bug*, which is
+    this repo's most common dead check.
+
+    **That is not argued here, it is exhibited.** At seed 7 the roster-wide
+    draw really does land 2/2 — asserted below — so a count assertion at this
+    fixture's own seed would pass under MU-17 while the membership assertion
+    fails. The two draws are computed at the **same** seed and asserted to
+    differ, which is what makes MU-17 discriminating rather than assumed to be;
+    the check was run at four seeds (7, 11, 4321, 99) and all four differ, so
+    no seed change was needed.
+
+    `len(test) == 4` is a shape check and is **not** counted as
+    discrimination: the roster-wide draw gives 4 as well.
+    """
+    from publishable.units import holdout_for
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2, "seed": 7}
+    plan = _resolved_holdout({"holdout": block}, roster, "d", None, _H3C3_F6_CELLS)
+    assert plan is not None
+
+    # THE discriminating assertion: which units, not how many.
+    assert sorted(plan.test) == ["u003", "u006", "u013", "u016"]
+    assert set(plan.train) | set(plan.test) == {f"u{i:03d}" for i in range(1, 21)}
+    assert len(plan.test) == 4  # shape only — the roster-wide draw gives 4 too
+    # A pinned seed is returned literally and is the seed the merged plan
+    # records: one seed per run, handed to every cell's draw.
+    assert plan.seed == 7
+
+    # The same declaration drawn roster-wide at the SAME seed — the pre-slice
+    # answer, and MU-17's. Different membership, and the check that the
+    # mutation can be seen at all rather than a claim that it can.
+    wide = holdout_for(roster, block, seed=7)
+    assert sorted(wide.test) == ["u002", "u005", "u011", "u013"]
+    assert set(wide.test) != set(plan.test)
+    # And the count a careless fixture would have asserted, at this very seed:
+    # 2 per arm under the BUG, which is what makes the count blind here.
+    assert len([k for k in wide.test if k <= "u010"]) == 2
+    assert len([k for k in wide.test if k > "u010"]) == 2
+    # While the per-cell draw's own counts are 2 and 2 as well — the two
+    # readings agree on every count available and disagree only on identity.
+    assert len([k for k in plan.test if k <= "u010"]) == 2
+    assert len([k for k in plan.test if k > "u010"]) == 2
+
+
+def test_h3c3_f6_no_cells_reduces_to_the_byte_identical_whole_roster_draw():
+    """The can-fail control and the reduction in one: the **same** declaration,
+    the **same** roster, `cells=None` — the answer is `holdout_for`'s own,
+    element for element and in order.
+
+    Without this, F6 above shows only that two functions give different
+    answers, not that the no-axis path is unmoved. `None` is what
+    `_prepare_run` passes for a design with no group axis, and `{}` and
+    `cells_of({})`'s one empty cell reach the same reduction.
+    """
+    from publishable.units import cells_of, holdout_for
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2, "seed": 7}
+    wide = holdout_for(roster, block, seed=7)
+    for cells in (None, {}, cells_of({})):
+        plan = _resolved_holdout({"holdout": block}, roster, "d", None, cells)
+        assert plan is not None
+        assert list(plan.test) == list(wide.test), cells
+        assert list(plan.train) == list(wide.train), cells
+
+
+def test_h3c3_a_thin_cells_holdout_raises_naming_the_cell_on_both_sides():
+    """**C9 and C22, made to happen rather than described.** `holdout_for` over
+    an **empty** sub-roster raises on the **TRAIN** side — `holdout_sizes(0,
+    0.2) == (0, 0)` and train is checked first — and over a 2-unit cell at
+    `frac: 0.2` it raises on the **test** side. A per-cell message that
+    hard-coded "test" would be wrong for the first shape.
+
+    The loop does not swallow either: the code is preserved (one remedy, one
+    name) and the cell is named, because a message reading *"over 0 resolved
+    units"* sends a reader to the roster when the fault is a crossed
+    combination nothing in the config carries.
+
+    **An empty cell reaches the raise only through `holdout_for` directly** —
+    `populated_cells` drops it before the loop sees it, so what
+    `holdout_within_cells` re-raises for is a **thin** cell. Both halves are
+    asserted: the empty cell's train-side raise at the source, and the thin
+    cell's re-raise through the loop.
+    """
+    from publishable.errors import ContractError
+    from publishable.units import UnitList, holdout_for, holdout_within_cells
+
+    roster = _h3c3_f6_roster()
+    block = {"method": "random", "frac": 0.2}
+
+    # C9's train side, at the source, over an EMPTY sub-roster.
+    with pytest.raises(ContractError) as empty:
+        holdout_for(UnitList([]), block, seed=7)
+    assert empty.value.code == "E-DATA-HOLDOUT-EMPTY"
+    assert "over 0 resolved units leaves the train side empty" in str(empty.value)
+
+    # C22's test side, through the loop, with the cell named. 18/2.
+    cells = {
+        (("arm", "control"),): frozenset(f"u{i:03d}" for i in range(1, 19)),
+        (("arm", "treatment"),): frozenset(f"u{i:03d}" for i in range(19, 21)),
+    }
+    with pytest.raises(ContractError) as thin:
+        holdout_within_cells(roster, block, seed=7, cells=cells)
+    assert thin.value.code == "E-DATA-HOLDOUT-EMPTY"
+    message = str(thin.value)
+    assert "cell arm=treatment" in message
+    assert "which holds 2 of the roster's 20 resolved units" in message
+    assert "leaves the test side empty" in message
+    # The can-fail half: the 18-unit cell does NOT raise, so the refusal above
+    # is the thin cell's rather than the declaration's over any cell at all.
+    assert "arm=control" not in message
+    ok = holdout_within_cells(
+        roster, block, seed=7, cells={(("arm", "control"),): cells[(("arm", "control"),)]}
+    )
+    assert len(ok.test) == 4
+
+
+# --- H3c-3 task 22: two real runs, and a STEP that reads `io.units.train` ----
+
+
+_H3C3_TRAIN_SEEING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        train = sorted(u.key for u in io.units.train)
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": train,
+        }})
+        for unit in io.units:
+            if unit.key == "c7":
+                # Ineligible, not failed — gives `arm=control` `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "c8":
+                # Neither recorded nor skipped — gives `arm=control` `failed: 1`.
+                continue
+            io.record(unit.key, {{"score": 1.0, "n_train": len(train)}})
+        return {{}}
+"""
+"""A step that **reads `io.units.train`** and writes what it was handed.
+
+This is the debt batch D's concern 4 names: task 15 proved the arm-narrowed
+training side by a **direct `execute_plan` call**, which is the only way that
+property could be reached two commits earlier, and *"an end-to-end claim nobody
+ran"* is the defect this project has found in five slices. Asserting
+`allocation.json`'s own `train` list proves what **core wrote**; it says nothing
+about what the step **saw**. So the evidence here is produced from the object
+core handed the step: `split.json` from `io.units`/`io.units.train`, and
+`n_train` recorded per unit into the per-unit table so the count survives in an
+artifact core did not write from the plan.
+
+**`c7` and `c8` exist to make the attrition identity able to fail**, on
+`_ARM_STEP`'s own precedent — one unit `io.skip`ped and one silently dropped, so
+`resolved == completed + ineligible + failed` has three live terms in the
+`arm=control` condition rather than reducing to `resolved == completed`, which no
+accounting bug could falsify. Both keys are `control`'s and both exist **only in
+the 9/3 roster**, so the holdout fixture (whose roster is 6/6, keys `c0`..`c5`)
+reaches neither branch and says so in its own docstring. `control` then loses 1
+of 9 to failure, below `limits.max_failed_fraction`'s scaffolded `0.2`, so the
+plan is not truncated; and every unit that *is* recorded still records the same
+`n_train`, so the aggregated value is unmoved."""
+
+
+def _h3c3_split_files_by_condition(run_dir: Path) -> dict[str, list[dict[str, list[str]]]]:
+    """Every `split.json` the run wrote, grouped by the condition directory it
+    sits under.
+
+    The condition is read from the path rather than from the file, because the
+    file is what is under test: a step that wrote the wrong arm's units would
+    still label itself correctly if the label came from its own contents."""
+    out: dict[str, list[dict[str, list[str]]]] = {}
+    for path in sorted(run_dir.rglob("split.json")):
+        parts = path.relative_to(run_dir).parts
+        assert parts[0] == "conditions", parts
+        # `sweep.condition_dir_name` is `<nn>_<label>`, so the index prefix is
+        # stripped here and the key is the label itself — the same string
+        # `run.yaml`'s conditions carry, which is what a caller crossing the
+        # two has in hand.
+        label = re.sub(r"^\d+_", "", parts[1])
+        out.setdefault(label, []).append(json.loads(path.read_text()))
+    return out
+
+
+def _h3c3_attrition_holds(run_dir: Path) -> list[str]:
+    """`resolved == completed + ineligible + failed`, per condition and per
+    metric block, as a list of the labels checked.
+
+    Returned rather than asserted so a caller can assert the list is non-empty:
+    an identity checked over zero blocks holds vacuously, which is the
+    *control asserting only absences* shape."""
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    checked: list[str] = []
+    for condition in run["results"]["conditions"]:
+        for step_name, step in (condition.get("aggregated") or {}).items():
+            for metric, block in step.items():
+                n = block.get("n")
+                if not isinstance(n, dict) or "resolved" not in n:
+                    continue
+                assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"], (
+                    condition["label"],
+                    step_name,
+                    metric,
+                    n,
+                )
+                checked.append(f"{condition['label']}/{step_name}/{metric}")
+    return checked
+
+
+def test_h3c3_a_real_groups_by_fold_run_draws_folds_inside_the_arms(tmp_path, monkeypatch):
+    """**End to end, through `main(["run", ...])`, outside the repository.**
+    12 units, two `by_attribute` arms of 6, `{kind: fold, k: 3}`.
+
+    Four claims, and the third is the one no artifact assertion can make:
+
+    1. `sweep.yaml` carries `partitions_within: ["arm"]` — written only when
+       `units.populated_cells` is non-empty, so its presence is the record's
+       own statement that the draw took the per-cell path rather than the
+       one-cell reduction.
+    2. **Per-cell membership is recoverable by crossing** `partitions` against
+       `allocation.json`'s `arms`: each arm's share of each fold is exactly 2,
+       which is 6 units drawn in 3 folds *inside the arm*. A roster-wide draw
+       of 12 into 3 folds of 4 need not split 2/2 by arm — it is free to put 4
+       of one arm in one fold — so the even split is the discriminator, and it
+       is asserted for **every** (arm, fold) pair rather than for one.
+    3. **The step read `io.units.train` and it was inside its own arm** — from
+       `split.json`, which the step wrote from the object core handed it. The
+       train side is asserted **non-empty and equal to `arm − test`**, not
+       merely contained: a subset assertion alone passes on `[]`, which is the
+       exact shape task 15's brief would have shipped.
+    4. The attrition identity holds per condition, over a non-empty set of
+       blocks.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H3C3_TRAIN_SEEING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_9_3_ROSTER,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = {level: set(keys) for level, keys in alloc["arms"]["arm"].items()}
+
+    # (1)
+    assert sweep["partitions_within"] == ["arm"]
+
+    # (2) — every (arm, fold) pair, not one, over UNEVEN arms.
+    partitions = [set(entry["test"]) for entry in sweep["partitions"]]
+    assert len(partitions) == 3
+    sizes = {level: len(arm) for level, arm in arms.items()}
+    assert sizes == {"control": 9, "treatment": 3}
+    for level, arm in sorted(arms.items()):
+        for i, fold in enumerate(partitions):
+            assert len(arm & fold) == sizes[level] // 3, (level, i)
+        assert set().union(*partitions) >= arm
+
+    # (3) — what the STEP saw, per condition.
+    by_condition = _h3c3_split_files_by_condition(doc["run_dir"])
+    assert len(by_condition) == 2, sorted(by_condition)
+    for condition, seen in sorted(by_condition.items()):
+        level = condition.split("=")[-1]
+        arm = arms[level]
+        assert len(seen) == 3, condition  # one per fold
+        for split in seen:
+            test, train = set(split["test"]), set(split["train"])
+            assert train, (condition, "an empty train side is not containment")
+            assert test <= arm and train <= arm, condition
+            assert train == arm - test, condition
+            assert len(test) == len(arm) // 3, condition
+
+    # (3b) — the same fact carried by the PER-UNIT TABLE rather than by a file
+    # the step wrote for this test's convenience. `n_train` is the arm's own
+    # size minus its share of the fold: 6 for `control` (9 − 3), 2 for
+    # `treatment` (3 − 1). A roster-wide train side would be 8 in both
+    # (12 − 4), which is the number these assertions rule out — and it is a
+    # single number for both arms, which is the shape of the defect.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    expected_train = {"arm=control": 6.0, "arm=treatment": 2.0}
+    for condition in run["results"]["conditions"]:
+        block = condition["aggregated"]["step01_summarize_units"]["n_train"]
+        assert block["value"] == expected_train[condition["label"]], condition["label"]
+        assert block["basis"] == "units", condition["label"]
+
+    # (4) — the identity, over three LIVE terms rather than over a run in which
+    # `ineligible` and `failed` are structurally zero. `c7` is `io.skip`ped and
+    # `c8` is silently dropped, both in `control`, so an accounting bug in
+    # either term is visible here; the exact counts are asserted rather than
+    # only the identity, because `9 == 7 + 1 + 1` and `9 == 9 + 0 + 0` are both
+    # true identities and only one of them is this fixture.
+    control = next(c for c in run["results"]["conditions"] if c["label"] == "arm=control")
+    n = control["aggregated"]["step01_summarize_units"]["score"]["n"]
+    assert (n["resolved"], n["completed"], n["ineligible"], n["failed"]) == (9, 7, 1, 1), n
+    assert _h3c3_attrition_holds(doc["run_dir"])
+
+
+def test_h3c3_a_real_groups_by_holdout_run_trains_inside_the_arm(tmp_path, monkeypatch):
+    """**End to end, through `main(["run", ...])`, outside the repository** —
+    the `groups × holdout` half, a **separate fixture** from the fold one
+    because `E-DATA-HOLDOUT-FOLD` still refuses the pair (C27).
+
+    Batch D's own follow-up already pinned `allocation.json`'s `within`, the
+    per-arm test fraction and the round trip on this shape. **What it recorded
+    as still owed is paid here**: a real run whose *step* reads
+    `io.units.train` under a group axis. Task 15's F4 is a direct
+    `execute_plan` call by Ruling II's own design, so nothing until now had run
+    that path through the command.
+
+    The step's own view is the evidence, and it is compared against
+    `allocation.json`'s recorded `train` **restricted to the arm** — the two
+    are computed by different code (`runner.execute_plan`'s narrowing and this
+    test's set arithmetic over the record), so agreement is a check rather than
+    a tautology. The un-narrowed whole-roster train side is asserted **larger**
+    than what the step saw, which is what makes the narrowing visible: without
+    it, "the step saw the training units" is satisfied by the pre-slice leak.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _H3C3_TRAIN_SEEING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_H3C3_ARM_ROSTER,
+        replication={"repeats": [{"kind": "seed", "n": 2}], "rationale": "two seeds"},
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+            "holdout": {"method": "random", "frac": 0.5, "seed": 4321},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert alloc["holdout"]["within"] == ["arm"]
+    arms = {level: set(keys) for level, keys in alloc["arms"]["arm"].items()}
+    recorded_train = set(alloc["holdout"]["train"])
+    recorded_test = set(alloc["holdout"]["test"])
+
+    by_condition = _h3c3_split_files_by_condition(doc["run_dir"])
+    assert len(by_condition) == 2, sorted(by_condition)
+    for condition, seen in sorted(by_condition.items()):
+        level = condition.split("=")[-1]
+        arm = arms[level]
+        assert len(seen) == 2, condition  # one per seed repeat
+        for split in seen:
+            test, train = set(split["test"]), set(split["train"])
+            # Drawn inside the cell: half of THIS arm, not half of the roster.
+            assert test == arm & recorded_test, condition
+            assert len(test) == len(arm) // 2, condition
+            # The property task 15 proved by direct call, now through `run`.
+            assert train, (condition, "an empty train side is not containment")
+            assert train <= arm, condition
+            assert train == arm & recorded_train, condition
+            # …and it is genuinely NARROWER than the roster-wide train side,
+            # which is the leak this narrowing closed.
+            assert train < recorded_train, condition
+
+    # The attrition identity, and its terms here are honestly weaker than the
+    # fold fixture's: this roster is 6/6, so `_H3C3_TRAIN_SEEING_STEP`'s `c7`
+    # and `c8` branches are unreachable and the identity reduces to
+    # `resolved == completed`. Stated rather than left to look like the same
+    # check — the three-term version is asserted in the fold sibling, whose
+    # roster carries those keys.
+    #
+    # The same fact through the per-unit table: `n_train` is 3 in every arm —
+    # 6 units in the arm at `frac: 0.5`. A roster-wide train side would be 6
+    # (12 − 6), which is the number this assertion rules out.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    for condition in run["results"]["conditions"]:
+        block = condition["aggregated"]["step01_summarize_units"]["n_train"]
+        assert block["value"] == 3.0, condition["label"]
+        assert block["basis"] == "units", condition["label"]
+
+    assert _h3c3_attrition_holds(doc["run_dir"])
+
+
+# --- H3c-3 task 23: the resume, end to end ----------------------------------
+
+
+_H3C3_RESUME_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+_TRIP = __TRIP__
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == _TRIP:
+        os._exit(9)
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _tick()
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": sorted(u.key for u in io.units.train),
+        }})
+        for unit in io.units:
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+"""
+
+
+def _h3c3_resume_project(
+    tmp_path: Path, control: Path, *, units_extra: dict[str, Any], replication: dict[str, Any]
+) -> dict[str, Any]:
+    """A committed `groups × …` project with a **DRAWN** arm axis, run straight
+    through once with the crash control absent."""
+    return run_a_project(
+        tmp_path,
+        roster_csv="patient_id\n" + "\n".join(_H3C3_KK_KEYS) + "\n",
+        replication=replication,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+            **units_extra,
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        _starter_step=(
+            _H3C3_RESUME_STEP.replace("__CONTROL__", repr(str(control))).replace("__TRIP__", "2")
+        ),
+    )
+
+
+def _h3c3_crash(doc: dict[str, Any], control: Path) -> Path:
+    """A second `run` of the same project, crashed mid-plan, in a subprocess.
+
+    `_h9b_crash_run`'s mechanism, copied because that helper bakes H9b's own
+    trip count and project into its assertions; the `os._exit(9)` and the
+    counter-file removal are the parts that matter and they are the parts
+    reproduced."""
+    control.write_text("0")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main; sys.exit(main(['run', sys.argv[1]]))",
+            str(doc["cfg"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(doc["root"].parent),
+    )
+    assert completed.returncode == 9, (completed.returncode, completed.stderr)
+    control.unlink()
+    (crashed,) = [p for p in sorted(doc["results_dir"].glob("run_*")) if p != doc["run_dir"]]
+    assert (crashed / "run.yaml").exists() is False
+    return crashed
+
+
+def test_h3c3_the_roster_ORDER_lever_is_blocked_by_the_input_manifest_gate(tmp_path, capsys):
+    """**The risk task 23's brief states in advance, measured rather than
+    discovered.**
+
+    The brief's lever for making the second attempt's fresh draw differ from
+    the recorded one is **roster order** (C11): reorder the rows of
+    `index.csv` between attempts, which moves `units_hash`, hence
+    `assign_seed_for`, hence the draw — while `_resumed_allocation`'s
+    set-equality guards pass. The brief also says to check first whether the
+    input-manifest gate blocks it.
+
+    **It does, and here is the measurement.** `resume` compares
+    `manifest_hash(recorded)` against `manifest_hash(prepared.manifest)` and
+    refuses with `E-RESUME-INPUT-MOVED`; under `input_manifest_policy:
+    hash_all` a reordered `index.csv` is a different file content, so the gate
+    fires before `_resumed_allocation` is reached at all.
+
+    Pinned rather than left as a note, because this refusal is **correct** and
+    a later reader wondering why the resume fixture below edits
+    `allocation.json` instead needs the reason to be a fact rather than a
+    story. The can-fail half is in the same test: the *unmodified* roster
+    resumes to `EXIT_OK`.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    index = doc["root"].parent / "data" / "index.csv"
+    original = index.read_text()
+    header, *rows = original.strip().split("\n")
+    index.write_text(header + "\n" + "\n".join(reversed(rows)) + "\n")
+    capsys.readouterr()
+    code = main(["resume", str(crashed)])
+    printed = capsys.readouterr()
+    assert code != EXIT_OK, printed.out + printed.err
+    assert "E-RESUME-INPUT-MOVED" in printed.out + printed.err
+
+    # The can-fail half: restore the roster and the same resume succeeds, so
+    # the refusal above is attributable to the reordering and not to the
+    # fixture being unresumable.
+    # The can-fail half: restore the roster and the same resume succeeds, so
+    # the refusal above is attributable to the reordering and not to the
+    # fixture being unresumable. **The content is not enough** — `manifest`
+    # records `size` and `mtime_ns` beside the content hash, so a
+    # byte-identical rewrite still moves `manifest_hash`. Measured, not
+    # assumed: without the `os.utime` below this control fails with the same
+    # code, which is a second reason the roster-order lever is unavailable.
+    index.write_text(original)
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    entry = recorded["files"]["index.csv"]
+    os.utime(index, ns=(entry["mtime"], entry["mtime"]))
+    capsys.readouterr()
+    again = main(["resume", str(crashed)])
+    printed_again = capsys.readouterr()
+    assert again == EXIT_OK, printed_again.out + printed_again.err
+
+
+def test_h3c3_a_real_resume_executes_against_the_RECORDED_cells_end_to_end(tmp_path, capsys):
+    """**Ruling KK, end to end through `main(["resume", …])`** — the fixture
+    § 6.2 of the re-scoping says H9b could not build, and which task 17's F5
+    proves by direct call.
+
+    **Which lever, measured.** The brief's roster-order lever is **blocked**,
+    pinned by the sibling above: `manifest` records `size` and `mtime_ns`
+    beside the content hash, so a reordered — or even a byte-identical
+    rewritten — `index.csv` earns `E-RESUME-INPUT-MOVED` before
+    `_resumed_allocation` is reached. The lever that works is the one F5
+    already uses, `_h9b_swapped`: **edit the crashed run's own
+    `allocation.json`**, which is the artifact `resume` treats as
+    authoritative and which no hash on the resume path covers. It instantiates
+    the identical blindness — the guards compare axis sets, level sets and key
+    sets, and a swap moves none of them — through the command rather than
+    through a direct call.
+
+    **What it asserts, and why a size is the discriminator here.** The arm
+    axis is drawn with `method: random`, so the recorded arms and a fresh
+    re-draw genuinely differ; `_h9b_swapped` then makes them differ by one
+    more unit. `_prepare_run` computes `partitions` from the **fresh** cells
+    and `_resumed_allocation` replaces `group_axes` from the record — so
+    without Ruling KK's re-derivation the run executes against recorded cells
+    while `arm ∩ fold_i` is taken from partitions drawn inside different ones,
+    and those intersections are **not** the arm's own thirds. Every execution
+    that ran after the crash therefore has `|test| == 2` (6 units per arm, 3
+    folds inside the arm) only if the folds were re-derived inside the
+    recorded decomposition.
+
+    The swap is asserted to have actually moved a unit's condition, which is
+    what stops the whole test passing on an edit the run ignored.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={},
+        replication={"repeats": [{"kind": "fold", "k": 3}], "rationale": "three folds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    alloc_path = crashed / "allocation.json"
+    recorded = json.loads(alloc_path.read_text())
+    edited = _h9b_swapped(recorded)
+    alloc_path.write_text(json.dumps(edited, indent=2))
+    edited_arms = {level: set(keys) for level, keys in edited["arms"]["arm"].items()}
+    moved = set(edited_arms["control"]) - set(recorded["arms"]["arm"]["control"])
+    assert len(moved) == 1, moved
+
+    capsys.readouterr()
+    assert main(["resume", str(crashed)]) == EXIT_OK, capsys.readouterr()
+
+    # `resume` never rewrites `allocation.json`: the record it honoured is the
+    # record still on disk.
+    assert json.loads(alloc_path.read_text()) == edited
+
+    by_condition = _h3c3_split_files_by_condition(crashed)
+    assert sorted(by_condition) == ["arm=control", "arm=treatment"], sorted(by_condition)
+    seen_moved = False
+    for condition, splits in sorted(by_condition.items()):
+        arm = edited_arms[condition.split("=")[-1]]
+        for split in splits:
+            test, train = set(split["test"]), set(split["train"])
+            if test | train != arm:
+                # An execution completed BEFORE the edit, under the arms the
+                # first attempt drew. Skipped rather than asserted on: the
+                # claim is about what the resume executed.
+                continue
+            assert len(test) == 2, (condition, sorted(test))
+            assert train == arm - test, condition
+            if moved & (test | train):
+                seen_moved = True
+    assert seen_moved, "no post-edit execution saw the swapped unit in its new arm"
+
+
+def test_h3c3_a_real_resume_honours_the_RECORDED_holdout_rather_than_redrawing(tmp_path, capsys):
+    """The `groups × holdout` resume, a **separate fixture** from the fold one
+    (C27), asserting the recorded split is honoured rather than redrawn.
+
+    The lever is the same edit and for the same reason: the crashed run's own
+    `allocation.json`, whose `holdout.test`/`holdout.train` are moved by one
+    unit **within one arm**, so every guard the resume applies to the axes is
+    untouched and the sizes are unchanged. A resume that redrew the split from
+    the seed would hand the step the original membership; a resume that reads
+    the record hands it the edited one.
+
+    Asserted on what the **step** saw (`split.json`), not on the file the test
+    itself wrote — `allocation.json` agreeing with itself is a tautology.
+    """
+    control = tmp_path / "crash_control"
+    doc = _h3c3_resume_project(
+        tmp_path,
+        control,
+        units_extra={"holdout": {"method": "random", "frac": 0.5, "seed": 4321}},
+        replication={"repeats": [{"kind": "seed", "n": 3}], "rationale": "three seeds"},
+    )
+    crashed = _h3c3_crash(doc, control)
+
+    alloc_path = crashed / "allocation.json"
+    recorded = json.loads(alloc_path.read_text())
+    assert recorded["holdout"]["within"] == ["arm"]
+    control_arm = set(recorded["arms"]["arm"]["control"])
+    test_side = set(recorded["holdout"]["test"])
+    # One unit of `control` out of the test side, one in — a swap inside the
+    # arm, so no axis guard can see it and no size changes.
+    out_unit = sorted(control_arm & test_side)[0]
+    in_unit = sorted(control_arm - test_side)[0]
+    edited = json.loads(json.dumps(recorded))
+    edited["holdout"]["test"] = sorted((test_side - {out_unit}) | {in_unit})
+    edited["holdout"]["train"] = sorted(
+        (set(recorded["holdout"]["train"]) - {in_unit}) | {out_unit}
+    )
+    assert edited != recorded
+    alloc_path.write_text(json.dumps(edited, indent=2))
+
+    capsys.readouterr()
+    assert main(["resume", str(crashed)]) == EXIT_OK, capsys.readouterr()
+    assert json.loads(alloc_path.read_text()) == edited
+
+    expected_test = control_arm & set(edited["holdout"]["test"])
+    splits = _h3c3_split_files_by_condition(crashed)["arm=control"]
+    honoured = [split for split in splits if set(split["test"]) == expected_test]
+    assert honoured, [split["test"] for split in splits]
+    for split in honoured:
+        assert in_unit in split["test"]
+        assert out_unit in split["train"]
+        assert set(split["test"]) | set(split["train"]) == control_arm

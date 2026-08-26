@@ -57,7 +57,8 @@ retired that 8 of 9 configs hit, a regression preserved, and **zero experiments 
 is the honest form of that number. **H3d (`holdout`) merged on 2026-08-16, in the identical honest form**:
 one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one live defect closed (a
 `fold` beside a cell structure validated clean and produced empty per-arm folds; both that and a holdout
-beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
+beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS` — **both
+retired by H3c-3 on 2026-08-25, which built the drawing-within-a-cell the refusals were waiting for**), and
 **zero experiments newly executing** — all nine still declare a resolver and still earn
 `E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. That
@@ -787,10 +788,12 @@ a live defect** — `groups` + `between` + `fold` validates clean today and prod
 because `fold_basis` answers over the whole roster. That refusal ships with H3d; the other 14 tasks wait
 for a design that needs folds inside cells.
 
-The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
+The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owned
 retrofitting the holdout to cells and retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`, both
 already named on H3d's branch, once drawing within a cell is built** — acceptable only because no
-experiment in that analysis declares a group axis. The reasoning lives in the spine design's *Order,
+experiment in that analysis declares a group axis. **Discharged: H3c-3 merged on 2026-08-25 and both
+refusals are retired**, so a fold or a holdout beside a cell structure is now drawn per cell rather than
+refused. The reasoning lives in the spine design's *Order,
 amended against outside evidence*, which is now tracked — cite it rather than restating it.
 
 **H7d Part A (the apparatus: observe and record) merged on 2026-08-19.** A template declaring an

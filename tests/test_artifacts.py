@@ -2069,6 +2069,43 @@ def test_a_drawn_unstratified_holdout_records_its_seed_and_no_strata():
     }
 
 
+def test_a_holdout_drawn_within_cells_discloses_the_axes_it_was_drawn_inside():
+    """**H3c-3 task 16, Decision 11.** `within` names the group axes the split
+    was drawn inside, and it is present exactly when there are any.
+
+    `train` and `test` stay **flat lists over the whole roster** — a per-cell
+    holdout's union is still a partition of that roster — so `within` is the
+    only thing in the file that says which question the split answered. The
+    axis NAMES are asserted, in `group_axes`' own order: an assertion that only
+    checked the key's presence passes under a `within` derived from the wrong
+    mapping, and a two-axis document is what tells order from set.
+
+    The can-fail half is the same holdout with **no** axes, one line down: the
+    key is absent, not `[]`, because an empty list would claim a per-cell draw
+    over no cells. `test_a_drawn_holdout_writes_its_own_seed_and_strata_inside_its_block`
+    and its two siblings assert that block by equality and so report the same
+    mutation from the other side.
+    """
+    axes = {
+        "arm": ArmPlan(
+            levels=("a", "b"), members={"a": ("P1",), "b": ("P2",)}, seed=None, strata=()
+        ),
+        "site": ArmPlan(
+            levels=("n", "s"), members={"n": ("P1",), "s": ("P2",)}, seed=None, strata=()
+        ),
+    }
+    plan = HoldoutPlan(train=("P1",), test=("P2",), seed=7, strata=())
+    doc = build_allocation_document(axes, plan)
+    assert doc is not None
+    assert doc["holdout"] == {
+        "train": ["P1"],
+        "test": ["P2"],
+        "seed": 7,
+        "within": ["arm", "site"],
+    }
+    assert "within" not in build_allocation_document({}, plan)["holdout"]
+
+
 def test_the_document_is_written_when_either_partition_is_declared():
     """§ The other files a run writes: "present when either is declared". The
     four combinations, because a gate reading only one of the two passes three

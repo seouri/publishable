@@ -897,3 +897,59 @@ only tasks 1–7 — but **this is the last slice**, so a split leaves a remaind
 build in which one evaluation split is drawn within cells and the other is still refused, with
 `reference.md` § A fixed holdout split and § Clustered units disagreeing about the same rule. Build
 all twenty-three or none.
+
+---
+
+## Correction to Ruling HH, 2026-08-25 — its stated premise is false, and the decision stands on a different one
+
+**Correction C2 measured that Ruling HH's premise does not hold at HEAD.** The ruling argued the slice must
+be built because *"two normative documents describe folds and holdouts inside cells in the present tense,
+and where the code cannot follow the documents, the document changes first"* — so shipping the refusal
+permanently would mean a larger document change than building it. **Measured: all three sites are marked
+"not built".** The documents and the code already agree, and *an unbuilt reader of an unbuilt surface is
+specification* — which is this project's own rule, cited against the ruling that forgot it.
+
+**So the honest position is this.** Shipping the refusal permanently is **consistent**, requires no
+document change, and the re-scoping's grounds for it are sound: the slice unblocks **zero** configs,
+retires two refusals **no outside evidence hits**, and its original justification was consumed by the
+three tasks that merged with H3d.
+
+**The decision to build stands, on grounds that survive the correction:**
+
+1. **It is the work that was asked for.** The charter names H3c-3's remaining tasks, and **scaling that
+   down is the requester's call, not the implementer's.** This correction exists so the choice is visible
+   rather than defaulted into — which is what Ruling HH said it wanted and then got wrong about why.
+2. **Ruling II's fix is correct code either way.** `runner.execute_plan` composing an **arm-narrowed test
+   side** with a **roster-wide train side** is wrong on its own terms; the refusal is the only thing making
+   it unreachable, and *a guard whose correctness depends on a refusal nobody plans to keep is a defect
+   with a delay on it.* Narrowing `holdout_train` per arm is right whether or not the refusal is ever
+   retired.
+3. **A refusal a design cannot route around is worse than one it can.** § What isn't a repeat presents a
+   `groups` design and an evaluation split as ordinary and composable; today the pair is refused with no
+   route. That is a real gap even though the mark is honest about it.
+
+**What this correction costs if wrong**: the project spends its last slice on work no outside evidence
+needs, and the reachable-leak class Ruling II names is opened for the first time — **which is exactly why
+Ruling II is not deferrable and why no commit may exist with the assert gone and the train side still
+roster-wide.** *The last slice is the last chance to not ship that.*
+
+---
+
+## Correction to Decision 8, 2026-08-25 (task 6) — the swallow list is six, not five
+
+Decision 8 enumerates the faults `validate._resolved_cells` swallows as *"`ContractError`,
+`NotImplementedError`, `KeyError`, `TypeError` and `ValueError`"*. **That list is one short, and the sixth
+is `ZeroDivisionError`** — measured at task 6, when the function was first wired into `validate_config`,
+by `tests/test_validate.py::test_a_ratio_whose_values_are_not_usable_shares_is_refused[all-zero]`.
+
+An `assign.<axis>.ratio` whose weights are all zero reaches `units._apportion`'s `n * weight / total`
+with `total == 0`. `ZeroDivisionError` is an `ArithmeticError` and so is caught by none of the five, and
+before this wiring nothing in `validate` drew that shape for real — `_check_assign` refuses it from the
+declaration as `E-DATA-ASSIGN-RATIO`. Without the sixth entry a config `validate` is supposed to
+**refuse** raises a traceback instead: the collecting-to-raising fault the whole `try` exists to prevent,
+reached through a config the suite already had.
+
+**This replaces the five-item list in Decision 8 and nothing else in it.** The list stays an enumeration
+rather than a bare `except Exception`, for `REPL_DECLARATION_CODES`' reason: a fault outside it is a
+genuine core defect, and absorbing all of them is how a real error becomes a silent pass. The pin is that
+existing test, which fails with the entry removed.

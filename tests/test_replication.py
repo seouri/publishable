@@ -4,6 +4,7 @@ from publishable import ContractError
 from publishable.replication import (
     LABEL_JOIN,
     RepeatMember,
+    _fold_k,
     cross_levels,
     fold_members_for,
     realize_order,
@@ -498,3 +499,89 @@ def test_the_key_closure_does_not_reach_a_seed_level():
     with pytest.raises(ContractError) as e:
         resolve_repeats(cfg([{"kind": "batch", "n": 2, "stratify_by": "label"}]), "d")
     assert e.value.code == "E-REPL-LEVEL-FIELD"
+
+
+# --- `E-REPL-FOLD-K-TOO-LARGE` names the cell, at each of its emit sites ----
+#
+# H3c-3 task 7. C12: three emit sites, not two — `validate.py`'s `c.error` and
+# `_fold_k`'s two raises. `validate`'s message IS `str(exc)` from one of those
+# raises, so its site's work is *forwarding the label*; the two tests below cover
+# the raises, and `tests/test_validate.py` covers the forwarding. Each mutation
+# reaches the clause at only two of three sites and fails exactly one test.
+
+_CELL = (("arm", "control"),)
+
+
+def test_the_fold_bound_names_the_cell_through_resolve_repeats_under_a_cluster():
+    """Emit site 2 of 3: `_fold_k`'s **clusters** raise, reached through
+    `resolve_repeats`, which is the hop that carries `fold_cell` at all.
+
+    The count in the message is that cell's cluster count, because that is what
+    `units.fold_basis` returns for a sub-roster — 2 here, not the roster's.
+    Asserted as the message text, not just the code: a mutation that drops the
+    clause from this message alone leaves every code assertion in the suite
+    passing.
+
+    **The mutation that fails this test alone**: delete `{in_cell}` from the
+    clustered message in `_fold_k`."""
+    config = {
+        "replication": {"repeats": [{"kind": "fold", "k": 3}]},
+        "data": {"units": {"cluster_by": "site"}},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(config, "d", fold_basis=2, fold_cell=_CELL)
+    assert e.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "in cell arm=control" in str(e.value)
+    assert "over 2 clusters of `site`" in str(e.value)
+
+    # The no-cells control, in the same test so `pytest -k` runs both: the
+    # message is what it has always been, with no cell clause anywhere in it.
+    with pytest.raises(ContractError) as bare:
+        resolve_repeats(config, "d", fold_basis=2)
+    assert "in cell" not in str(bare.value)
+    assert "that cell's" not in str(bare.value)
+
+
+def test_the_fold_bound_names_the_cell_at_the_unclustered_raise():
+    """Emit site 3 of 3: `_fold_k`'s **units** raise, called directly.
+
+    A direct call because this raise is the one a caller with no `cluster_by`
+    reaches, and `resolve_repeats` reads `cluster_by` off the config — so the
+    two raises are two arguments to one function, and a test that exercised
+    only the clustered path would leave this message's clause unpinned.
+
+    **The mutation that fails this test alone**: delete `{in_cell}` from the
+    unclustered message in `_fold_k`."""
+    level = {"kind": "fold", "k": 3}
+    with pytest.raises(ContractError) as e:
+        _fold_k(level, 2, None, _CELL)
+    assert e.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "over 2 resolved units in cell arm=control" in str(e.value)
+    assert "the count is that cell's rather than the whole roster's" in str(e.value)
+
+    # `None` means *no cells resolved*, not *cells resolved and unnamed* — the
+    # rule `_fold_k`'s docstring states, asserted rather than described.
+    with pytest.raises(ContractError) as bare:
+        _fold_k(level, 2, None, None)
+    assert str(bare.value) == (
+        "`{kind: fold, k: 3}` over 2 resolved units would leave a fold with nothing "
+        "to test; a fold with no units is a declaration error, not a small fold"
+    )
+
+    # Several axes render in declaration order, joined the way a condition
+    # label renders them.
+    with pytest.raises(ContractError) as crossed:
+        _fold_k(level, 2, None, (("sex", "f"), ("arm", "control")))
+    assert "in cell sex=f, arm=control" in str(crossed.value)
+
+
+def test_a_k_within_the_cell_basis_is_accepted_with_a_cell_named():
+    """The honouring half: a `cell` argument changes no bound.
+
+    `k: 2` against a cell basis of 2 resolves to 2 whether or not a label
+    travels, so the label is proved to name rather than to count — a mutation
+    that made `cell is not None` narrow the bound by one would fail here and
+    nowhere else."""
+    assert _fold_k({"kind": "fold", "k": 2}, 2, None, _CELL) == 2
+    assert _fold_k({"kind": "fold", "k": 2}, 2, None, None) == 2
+    assert _fold_k({"kind": "fold", "k": "all"}, 2, "site", _CELL) == 2

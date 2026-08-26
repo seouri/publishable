@@ -147,16 +147,20 @@ from publishable.units import (
     UnitList,
     arm_members,
     assignment_for,
+    cells_of,
     cluster_count_of,
     clusters_of,
     fold_basis,
-    holdout_for,
     holdout_seed_for,
+    holdout_within_cells,
     index_names,
     null_test_level,
-    partition_units,
+    partition_units,  # noqa: F401 — see `partition_within_cells` below
+    partition_within_cells,
+    populated_cells,
     resolve_units,
     stratum_names,
+    thinnest_cell,
     units_hash,
 )
 from publishable.uv_support import uv_lock_info
@@ -532,6 +536,7 @@ def _resolved_holdout(
     roster: "UnitList | None",
     digest: str,
     clusters: dict[str, str] | None,
+    cells: "dict[tuple[tuple[str, str], ...], frozenset[str]] | None" = None,
 ) -> "HoldoutPlan | None":
     """`data.units.holdout`, realized **once per run** — or `None` when the
     design declares none.
@@ -559,18 +564,39 @@ def _resolved_holdout(
 
     `clusters` is `cli.command_run`'s single cluster map, the same one the fold
     partition and the arm draw are handed — not re-derived here, `clusters_of`
-    being the single authority. `group_axes` is deliberately not a parameter: a
-    holdout beside a group axis is refused at this commit as
-    `E-DATA-HOLDOUT-CELLS`, so there is no cell structure for a split to be
-    drawn inside of.
+    being the single authority.
+
+    `cells` is the design's realized decomposition, and the split is drawn
+    **inside each cell** through `units.holdout_within_cells` — the same single
+    producer `validate._holdout_test_roster` calls, so the partition `validate`
+    bounds `limits.min_clusters` against and the partition the run executes are
+    one answer rather than two. `None` is a design with no group axis and takes
+    that function's own one-cell reduction, which is the byte-identical
+    whole-roster draw.
+
+    **The decomposition arrives as `cells`, not as `group_axes`.**
+    `_prepare_run` already holds `units.cells_of`'s answer in one local, and
+    calling `cells_of` a second time here would be a second derivation of the
+    decomposition — the thing that local exists to prevent, and the same
+    argument `build_allocation_document`'s docstring makes for being handed the
+    plans rather than the roster. The fold partition beside it is handed the
+    same object.
     """
     if roster is None:
         return None
     block = (units_decl or {}).get("holdout")
     if not isinstance(block, dict) or not block:
         return None
-    return holdout_for(
-        roster, block, seed=holdout_seed_for(block, digest, roster), clusters=clusters
+    # `holdout_seed_for` over the WHOLE roster, computed once and handed to
+    # every cell's draw — see `units.holdout_within_cells` for why the seed is
+    # one per run rather than one per cell, and why a pinned integer survives a
+    # roster that reorders.
+    return holdout_within_cells(
+        roster,
+        block,
+        seed=holdout_seed_for(block, digest, roster),
+        cells=cells,
+        clusters=clusters,
     )
 
 
@@ -2052,7 +2078,9 @@ def command_validate(config_path: Path) -> int:
 class Prepared:
     """Everything phases 1-5 of `command_run` produce that phases 6-10 read.
 
-    Thirty-SIX values, and the count is the argument FOR the seam: nothing in
+    Thirty-SIX values when this docstring's measurement was taken, and
+    thirty-SEVEN since H3c-3 task 4 (the paragraph below). The count is the
+    argument FOR the seam: nothing in
     phases 6-10 can be re-entered without them, so a second entry either
     receives them or recomputes them, and recomputing is what `resume` (H9b)
     must not do.
@@ -2078,9 +2106,19 @@ class Prepared:
     because a second entry into phases 1-5 needs the diagnostic channel those
     phases rendered from. **No statement in phases 6-10 reads it at this
     commit** -- every post-seam `c` is a comprehension target, and phase 9's
-    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`. It is
-    therefore the one field `_execute_prepared` does not unpack -- so of the
-    thirty-six, thirty-five are read in phases 6-10 and `c` is not.
+    `warn_c`, `aggregate_c` and `drift_c` are each a fresh `Collector`, so
+    `_execute_prepared` does not unpack it. Every other field is read in
+    phases 6-10.
+
+    **Thirty-SEVEN since H3c-3 task 4**, and the `ast` walk above is not
+    re-run: it measured what `command_run` assigned before the seam and loaded
+    after it, and that measurement stays what it was. `cells` is the
+    thirty-seventh, ADDED by that task rather than found by the walk — the
+    design's cell decomposition, realized once beside `group_axes` because
+    `_resumed_allocation` and `_execute_prepared` both need it and a second
+    derivation of a decomposition is a second producer of it. Its reader in
+    phases 6-10 is `sweep.yaml`'s `partitions_within` (H3c-3 task 11), which
+    is written exactly when this decomposition has a populated cell.
 
     Frozen on purpose: phases 6-10 must not write back into what phases 1-5
     pinned. That is the property `resume` will rest on. `plan` is the one name
@@ -2129,6 +2167,7 @@ class Prepared:
     lock_hash: str | None
     upstream_ledger: UpstreamLedger
     upstream_resolver: UpstreamResolver
+    cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2352,17 +2391,39 @@ def _stale(detail: str) -> "ContractError":
     )
 
 
+def _fold_strata(
+    fold_level: "RepeatLevel | None", roster: "UnitList | None"
+) -> dict[str, str] | None:
+    """A `fold` level's `stratify_by` as a `{unit key: stratum}` map, or `None`
+    when the level declares none — `units.partition_within_cells`' `strata`
+    argument.
+
+    **One derivation, two callers**, and the second is the reason it is a
+    function at all: `_prepare_run` builds this map before drawing the
+    partitions, and `_resumed_allocation` re-draws them on the overridden cells
+    and needs the same map. Two spellings would be two answers to what a
+    stratum is, over one declaration.
+
+    Indexed, not `.get`-ed, and total over the roster because it has to be —
+    `units.partition_units` raises `KeyError` on a gap, by contract, and
+    `validate` guarantees the name is a declared attribute
+    (`E-REPL-FOLD-STRATIFY-UNKNOWN`), so a missing key is a core defect rather
+    than something to soften here. Stringified for `clusters_of`'s reason: a
+    stratum is a label, nothing downstream does arithmetic on it, and one type
+    keeps a hand-built roster and a table-sourced one giving the same split.
+    """
+    if fold_level is None or roster is None or not fold_level.stratify_by:
+        return None
+    return {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+
+
 def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prepared":
     """`allocation.json` **read rather than re-drawn** (H9b Decision 10): the
     arm memberships and the holdout partition `_prepare_run` just resolved are
     replaced by the ones the first attempt recorded, through
     `dataclasses.replace` on the frozen `Prepared`.
 
-    **Ruling S is honoured by overriding results, never by moving calls.**
-    `_resolved_group_axes`, `units.arm_members` and `_resolved_holdout` stay
-    exactly where they are, in their current order inside `_prepare_run`;
-    H3c-3's remaining 14 owns the hoist, because folds and holdouts *inside
-    cells* need the axes realized before the cell decomposition. What happens
+    **This function overrides results; it moves no call.** What happens
     here is one step later and on the other side of the seam: the plans are
     rebuilt from the record and `arm_members` is called **again**, on the
     overridden axes, so that the per-condition mapping is a reduction of the
@@ -2398,12 +2459,33 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
     legitimate resume, and the fix would then be here rather than in the
     method.
 
-    **Fold partitions are deliberately not touched here.** They are recorded
-    in `sweep.yaml`'s own `partitions` block rather than in this file, and
-    `partition_units` is a pure function of the roster and the design digest
-    — so correct and buggy readings coincide for every fixture this slice can
-    build, and a fold override would be an untested derivation. Named as
-    resolved narrowly rather than left silent.
+    **Fold partitions ARE re-derived here** (H3c-3, Ruling KK). A partition is
+    a function of the roster, the design digest **and the cell decomposition**;
+    the decomposition is what this function overrides, one call above; so the
+    partitions drawn from the fresh decomposition are stale the moment the
+    override lands. They are re-derived through `units.partition_within_cells`
+    — the **same single producer** `_prepare_run` calls, on the **overridden**
+    axes — and never by hand here, which would make this function a second
+    producer of fold membership, the fault its own docstring exists to prevent
+    a third instance of. `partition_units` itself is still not called from this
+    function.
+
+    **The gate is "a fold level exists", never "an axis exists".** With no
+    axis the producer takes its own one-cell reduction and returns the
+    byte-identical partition, so gating on `group_axes` would be a branch whose
+    no-axis arm is provably a no-op — one more thing to get wrong than a proof.
+    `prepared.partitions is None` is a different question: it means the design
+    declares no `fold` level at all, so there is no `k` to draw and nothing to
+    replace. `fold_members` follows from the partitions through
+    `replication.fold_members_for`, exactly as it does in `_prepare_run`.
+
+    **`Prepared.cells` is deliberately left as `_prepare_run` derived it.** Its
+    one reader below the override is `sweep.yaml`'s `partitions_within`, which
+    projects the AXIS NAMES out of the first populated cell — and the guards
+    above force the recorded axis set and each axis's level set to equal this
+    tree's, so the stale object and a re-derived one give that projection the
+    same answer. The decomposition the partitions are drawn inside is
+    `cells_of(axes)`, computed here from the overridden plans.
     """
     from publishable.units import arm_members
 
@@ -2466,6 +2548,25 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
             strata=tuple(recorded_holdout.get("strata") or ()),
         )
 
+    # The folds, re-drawn inside the RECORDED cells. See this function's own
+    # docstring for why this is not gated on `axes` and why it goes through the
+    # same producer `_prepare_run` calls rather than being computed here.
+    partitions = prepared.partitions
+    fold_members = prepared.fold_members
+    if partitions is not None and prepared.roster is not None:
+        partitions = partition_within_cells(
+            prepared.roster,
+            len(partitions),
+            prepared.digest,
+            cells_of(axes) if axes else {},
+            clusters=prepared.clusters,
+            strata=_fold_strata(
+                next((lv for lv in prepared.levels if lv.kind == "fold"), None),
+                prepared.roster,
+            ),
+        )
+        fold_members = fold_members_for(prepared.levels, partitions)
+
     eval_roster = _evaluation_roster(prepared.roster, holdout)
     # `_prepare_run`'s own invariant, restated on this path because this path
     # has no counterpart of it: a narrowing that returned `None` for a real
@@ -2475,6 +2576,8 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
         prepared,
         group_axes=axes,
         holdout_plan=holdout,
+        partitions=partitions,
+        fold_members=fold_members,
         eval_roster=eval_roster,
         # `None` stays `None`: whether a per-condition mapping exists at all
         # is `_prepare_run`'s decision (it gates on `selector_paths`), and a
@@ -2691,6 +2794,55 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     clusters: dict[str, str] | None = None
     if isinstance(cluster_by, str) and cluster_by and roster is not None:
         clusters = clusters_of(roster, cluster_by)
+    # Hoisted above the fold region (H3c-3 task 4, discharging H9a Ruling S).
+    # The fold is drawn INSIDE the cells (`reference.md` § Group axes), and a
+    # cell is an intersection of realized arms, so the axes have to be realized
+    # before the basis `k` is bounded against and before the partition is drawn
+    # — not after. The move resolves nothing new: `expand(doc)` already sits
+    # above this whole region and `clusters` two lines up. `sweep_block` travels
+    # with them because both read it; `swept_paths` does not, and stays beside
+    # its own reader.
+    sweep_block = doc.get("sweep") or {}
+    # One frozenset of unit keys per condition that selects a group axis — `None`
+    # for a design declaring none. Reachable now that task 17 retired
+    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
+    # subset view through a real `command_run`.
+    #
+    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
+    # already used `selector_paths` to decide which paths are group cells, so
+    # `conditions` below carries `Condition.selectors` naming every axis
+    # `selector_paths` names — regardless of whether that axis's `levels` also
+    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
+    # requirement `validate._check_assign`'s own `by_attribute` branch applies
+    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
+    # axis this function skips but `selector_paths`/`expand` still treat as one
+    # silently skip arm narrowing entirely. `by: ""` is the live case:
+    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
+    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
+    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
+    # string is falsy) skips it — every condition on that axis would then get
+    # the whole roster, exactly the outcome two declared arms exist to make
+    # impossible. Gating on `selector_paths` instead means `arm_members` is
+    # still called whenever `expand` treated the config as having a group axis,
+    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+    # caller-disagreement bug to see, not a config to silently accept — rather
+    # than as a silently unnarrowed run.
+    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+    arm_members_map = (
+        arm_members(group_axes, conditions)
+        if selector_paths(sweep_block) and roster is not None
+        else None
+    )
+    # The design's cells, realized once from the axes just above — `None` for a
+    # design with no group axis at all. **A design with no group axis is one
+    # cell holding the whole roster**, and composing that is this caller's job
+    # rather than `units.cells_of`'s: that function takes no roster (see its
+    # docstring), so `cells_of({})` is one cell holding *nothing*. `None` here
+    # IS that composition — every reader below falls back to the roster-wide
+    # answer rather than looping over a cell that holds no units.
+    cells = cells_of(group_axes) if group_axes else None
+
     # `fold_basis` is what turns `{kind: fold, k: all}` into a real count and what
     # `_fold_k` checks a declared `k` against — the resolved roster's units, or its
     # clusters when `data.units.cluster_by` declares the units are not independent
@@ -2699,10 +2851,34 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # clusters* and *Leave-one-out is affordable*). `units.fold_basis` is the one
     # derivation, the same `validate` bounded `k` with, applied here to the roster
     # `run` re-resolves fresh rather than trusted from the earlier pass.
+    #
+    # **Under a cell structure the basis is the SMALLEST CELL's**, resolved by
+    # `units.thinnest_cell` from the `cells` just above — because the fold is
+    # drawn inside each cell, so the cell that cannot carry `k` is what makes
+    # the declaration unaffordable. `cells is None` means no cell structure and
+    # takes the roster-wide answer, which is the identical predicate
+    # `validate_config` applies to its own `basis` local: `validate` bounding
+    # `k` against one number while this draws against another is the drift
+    # `fold_basis`' single derivation exists to prevent. The third caller of
+    # `fold_basis` — `validate._check_resample`'s `limits.min_clusters`
+    # denominator — asks a different question and stays roster-wide (Ruling LL,
+    # and Decision 4's three-site table in
+    # `docs/superpowers/specs/2026-08-25-folds-inside-cells-design.md`).
+    fold_level_basis: int | None = None
+    # The cell that basis was counted over, travelling with it so a refused `k`
+    # names the declaration a reader must change. `None` means *no cells
+    # resolved*; see `replication._fold_k`.
+    fold_level_cell: tuple[tuple[str, str], ...] | None = None
+    if roster is not None:
+        if cells is not None:
+            fold_level_basis, fold_level_cell = thinnest_cell(roster, cluster_by, cells)
+        else:
+            fold_level_basis = fold_basis(roster, cluster_by)
     levels = resolve_repeats(
         doc,
         digest,
-        fold_basis=fold_basis(roster, cluster_by) if roster is not None else None,
+        fold_basis=fold_level_basis,
+        fold_cell=fold_level_cell,
     )
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
@@ -2772,45 +2948,38 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
         # nothing downstream does arithmetic on it, and one type keeps a hand-built
         # roster and a table-sourced one giving the same split.
-        strata: dict[str, str] | None = None
-        if fold_level.stratify_by:
-            strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
-        partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
+        strata = _fold_strata(fold_level, roster)
+        # Drawn INSIDE each cell when the design has one, merged index-wise
+        # (`units.partition_within_cells`), and reducing to the identical single
+        # whole-roster call with the bare digest when it does not — `cells` is
+        # `None` for a design with no group axis, and `{}` is the input that
+        # reduction answers. `partition_units` is still what draws, from inside
+        # that function, so the count and the digest a no-axis run makes are
+        # unchanged.
+        #
+        # **`partition_units` stays imported above, unused, with a `noqa`.**
+        # H3c-3's guard-pin arm D installs a counting wrapper at BOTH
+        # `cli.partition_units` and `units.partition_units` and asserts on the
+        # sum, precisely so it survives this reroute — and it has no authorized
+        # editor in the slice, so removing the name here would break a pin that
+        # may not be repaired. The import is the pin's surface rather than a
+        # leftover, which is why it is annotated rather than deleted.
+        partitions = partition_within_cells(
+            roster,
+            fold_level.n,
+            digest,
+            cells or {},
+            clusters=clusters,
+            strata=strata,
+        )
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
-    sweep_block = doc.get("sweep") or {}
     swept_paths = wide_swept_paths(sweep_block)
-    # One frozenset of unit keys per condition that selects a group axis — `None`
-    # for a design declaring none. Reachable now that task 17 retired
-    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
-    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
-    # subset view through a real `command_run`.
-    #
-    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
-    # already used `selector_paths` to decide which paths are group cells, so
-    # `conditions` below carries `Condition.selectors` naming every axis
-    # `selector_paths` names — regardless of whether that axis's `levels` also
-    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
-    # requirement `validate._check_assign`'s own `by_attribute` branch applies
-    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
-    # axis this function skips but `selector_paths`/`expand` still treat as one
-    # silently skip arm narrowing entirely. `by: ""` is the live case:
-    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
-    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
-    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
-    # string is falsy) skips it — every condition on that axis would then get
-    # the whole roster, exactly the outcome two declared arms exist to make
-    # impossible. Gating on `selector_paths` instead means `arm_members` is
-    # still called whenever `expand` treated the config as having a group axis,
-    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
-    # caller-disagreement bug to see, not a config to silently accept — rather
-    # than as a silently unnarrowed run.
-    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
     # Realized here, once, and before anything reads it — the runner's
     # narrowing, the denominators and `allocation.json` are all handed this one
     # object. See `_resolved_holdout` for why not calling twice is the only
     # thing that can promise the run and the record agree.
-    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
+    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters, cells)
     # One narrowing, six readers. `roster` itself stays whole below this line —
     # `provenance.units.n` and `units_hash` are the roster's identity rather
     # than a metric's denominator, and rebinding the name would narrow every
@@ -2822,11 +2991,6 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     # first execution runs, not after — a crash once executions are already
     # paid for loses the record along with the money (see `4b1aebf`).
     assert (eval_roster is None) == (roster is None)
-    arm_members_map = (
-        arm_members(group_axes, conditions)
-        if selector_paths(sweep_block) and roster is not None
-        else None
-    )
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
@@ -2949,6 +3113,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         holdout_plan=holdout_plan,
         eval_roster=eval_roster,
         arm_members_map=arm_members_map,
+        cells=cells,
         plan=plan,
         cfgs=cfgs,
         ch=ch,
@@ -3049,6 +3214,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     lock_hash = prepared.lock_hash
     upstream_ledger = prepared.upstream_ledger
     upstream_resolver = prepared.upstream_resolver
+    cells = prepared.cells
 
     # phase 6: the run directory. `resume` re-enters an EXISTING one, which is
     # why `E-RUN-ID-EXHAUSTED` is unreachable from it — it allocates nothing.
@@ -3157,6 +3323,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # Written by the FIRST attempt only, and read back by the branch above
         # rather than re-derived (Decision 9).
         if resumed is None:
+            # `partitions_within` — the axes the folds were drawn inside, when
+            # they were. The predicate is `units.populated_cells`', the same
+            # list `partition_within_cells` loops over and reduces on, called
+            # rather than re-spelled: a second spelling here is a record
+            # claiming a draw that did not happen. The axis NAMES come from a
+            # populated cell's own key, which is what was handed to the draw,
+            # rather than from `group_axes` — every key carries the same axes
+            # in the same order, `cells_of` building them from one product.
+            populated = populated_cells(cells or {})
+            partitions_within = [axis for axis, _ in populated[0][0]] if populated else None
             (run_dir / "sweep.yaml").write_text(
                 yaml.safe_dump(
                     sweep_document(
@@ -3168,6 +3344,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                         execution_order,
                         order_seed,
                         partitions=partitions,
+                        partitions_within=partitions_within,
                         sample_seed=sample_seed_for(doc),
                     ),
                     sort_keys=False,
