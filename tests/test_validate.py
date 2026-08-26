@@ -13367,6 +13367,74 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(write_config, 
     assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
 
 
+_NESTED_CLUSTER_ROSTER = "patient_id,arm,cl\n" + "".join(
+    f"u{a}{i:02d},{arm},c{a}_{i % 6}\n"
+    for a, arm in enumerate(("control", "treatment"))
+    for i in range(12)
+)
+
+
+def _cells_holdout_resample(min_clusters: int) -> dict:
+    """A `groups` × `holdout` × `cluster_by` config, differing only in the floor.
+
+    24 units in two arms of 12, six clusters nested inside each arm, so the
+    cell decomposition is legal (no cluster spans two cells) and the roster
+    carries twelve clusters in all. `frac: 0.2` with a **pinned** seed so the
+    partition is a fixture value rather than a digest-dependent one.
+    """
+    return {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "allocation": "between",
+            "attributes": ["arm", "cl"],
+            "cluster_by": "cl",
+            "assign": {"arm": {"method": "by_attribute", "from": "arm"}},
+            "holdout": {"method": "random", "frac": 0.2, "seed": 1},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        "limits": {"min_clusters": min_clusters},
+        "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+    }
+
+
+def test_the_resample_cluster_count_is_over_the_PER_CELL_holdout_draw(write_config, tmp_path):
+    """`_holdout_test_roster`'s `cells` argument, pinned by the one number it
+    moves.
+
+    The docstring's own argument is that passing the decomposition here and
+    not at the run's draw "would bound `limits.min_clusters` against a test
+    partition no run produces" — and until this test that argument was
+    untested: wiring the forward at `_check_holdout`'s neighbour to the
+    constant `None` left the whole suite green (whole-branch review, Check 2).
+
+    **The fixture discriminates the two readings rather than exercising the
+    path.** On this roster at `seed: 1` the per-cell draw's test side is
+    **4 units in 2 clusters** — one cluster per arm, which is what drawing
+    inside each cell buys — while the flat whole-roster draw's is **6 units in
+    3 clusters**. So:
+
+    - at `min_clusters: 5` both readings warn and the message's own count is
+      the discriminator: `2` under the shipped code, `3` under the mutant;
+    - at `min_clusters: 3` only the per-cell reading warns (2 < 3), and the
+      flat one is silent (3 < 3 is false).
+
+    Both arms assert something PRESENT under the shipped code, so neither
+    passes on "nothing ran"."""
+    (tmp_path / "input" / "index.csv").write_text(_NESTED_CLUSTER_ROSTER)
+
+    loud = messages_by_code(write_config(_cells_holdout_resample(5)))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in loud
+    assert loud["W-STATS-RESAMPLE-CLUSTERS"] == (
+        "is 5, and `data.units.cluster_by: cl` puts this holdout's test partition in "
+        "2 clusters — `resample` draws whole clusters, so the percentile interval "
+        "rests on 2 independent draws however many units they hold"
+    )
+
+    tight = codes(write_config(_cells_holdout_resample(3)))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in tight
+
+
 _CRED_TOTALITY_TEMPLATE = """\
 from publishable import BaseTemplate, Param, register_template
 
