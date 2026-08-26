@@ -20580,6 +20580,66 @@ def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
 # fixture — the cost/benefit is the opposite way round.
 
 
+_M1_RAISING_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("m1 sentinel: the apparatus fell off the bench")
+"""
+
+
+def test_a_run_that_does_not_complete_names_its_status_and_first_error(tmp_path: Path, capsys):
+    """Whole-project review M1: a step raising on every execution printed only
+    `W-ENV-UNLOCKED` and `run.yaml → <path>`, and a shell swallows the `4`.
+
+    The sentinel string is distinctive on purpose — asserting on the word
+    `failed` alone is satisfiable by neighbouring output (a path segment, the
+    `max_failed_fraction` key) — and both halves are asserted on the stream
+    each belongs to: the line on stderr, its absence from stdout, which is
+    what keeps `run`'s pinned successful-run stdout out of the question.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 3}]},
+        units=4,
+        _starter_step=_M1_RAISING_STARTER_STEP,
+        expect_exit=EXIT_FAILED,
+        capsys=capsys,
+    )
+    err = doc["stderr"]
+    assert "run failed: 3 of 3 executions failed" in err
+    assert "m1 sentinel: the apparatus fell off the bench" in err
+    assert "step01_summarize_units" in err
+    assert "m1 sentinel" not in doc["stdout"]
+    assert "run failed" not in doc["stdout"]
+    # The record is untouched by the line: same status, same error, same exit.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+
+def test_a_completed_run_says_nothing_about_its_status(tmp_path: Path, capsys):
+    """The other half of M1, and it is not an absence-only control: this run
+    must reach `completed` and print its record's path, so a build that printed
+    the status line unconditionally fails here rather than passing quietly.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=4,
+        capsys=capsys,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    assert "run.yaml → " in doc["stdout"]
+    assert "run completed" not in doc["stderr"]
+    assert "executions failed" not in doc["stderr"]
+    assert "no execution recorded an error" not in doc["stderr"]
+
+
 def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
     """H9a guard-pin ARM D. **RE-AUTHORIZED as H9b guard-pin arm C: SOLE
     AUTHORIZED EDITOR: H9b task 6, by controller ruling recorded in the H9b

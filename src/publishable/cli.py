@@ -99,7 +99,7 @@ from publishable.runner import (
 )
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
-from publishable.secrets import credential_values, load_env
+from publishable.secrets import credential_values, load_env, redact
 from publishable.stats import (
     UnitTable,
     _is_numeric,
@@ -4997,6 +4997,45 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")
+    # Whole-project review M1: a run whose every execution raised printed
+    # nothing but its warning block and the line above, and a shell swallows
+    # the `4` — so the only signal was an exit code nobody sees. The cause is
+    # already in the record (`results.conditions[].executions[].error`); this
+    # names it on the way out and changes nothing else: not the exit code
+    # below, not `status`, not a byte of `run.yaml`.
+    #
+    # A plain line on stderr, not a `Collector` finding. It is a summary of
+    # what the record already says rather than a new fault, so it mints no
+    # code and owes no § Errors row — and stderr is where `_execute_prepared`
+    # already sends a stop diagnostic and `draft` its relaxation notice, while
+    # `run`'s stdout for a SUCCESSFUL run is pinned as the warning block plus
+    # one `run.yaml → <path>` line (`reference.md` § What `demo` walks you
+    # through, whose row 5 this change narrows to a completing run, and
+    # `test_demo.py::test_run_itself_prints_no_table_banner_or_progress_bar`).
+    # Redacted with the same credential set every diagnostic on this path uses.
+    if status != "completed":
+        errored = [r for r in results if r.error]
+        if errored:
+            first = errored[0]
+            where = first.execution.step_name
+            if first.execution.condition_index is not None:
+                where += f" · condition {first.execution.condition_index}"
+            if first.execution.repeat_label is not None:
+                where += f" · {first.execution.repeat_label}"
+            print(
+                f"run {status}: {len(errored)} of {len(results)} executions failed; "
+                f"first error at {where}: {redact(first.error, credentials)}",
+                file=sys.stderr,
+            )
+        else:
+            # `status` can be non-`completed` with every execution clean —
+            # `E-INPUT-CHANGED` sets `failed` after the fact, and an apparatus
+            # stop sets its own. Saying "0 of 5 failed" there would name the
+            # wrong fact, so this half names none and points at the record.
+            print(
+                f"run {status}: no execution recorded an error; see {run_dir / 'run.yaml'}",
+                file=sys.stderr,
+            )
     # H7d Part B task 8 (Decision 6): an unreachable apparatus wins over
     # whatever status it wrote — `5` is the class you retry, so it takes
     # precedence over `3`/`4` the same reason a dirty tree or a missing
