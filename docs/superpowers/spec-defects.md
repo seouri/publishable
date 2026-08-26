@@ -1,3 +1,32 @@
+# Specification defects — gaps found and deliberately not closed
+
+**Read this first. As of 2026-08-25 the charter is complete: every hardening slice H1–H9 and every
+sub-slice has merged, and no slice is chartered after them.**
+
+**So an `## OPEN` entry here is not deferred work. It is what this project ships with.** That is the whole
+of this file's job now, and it changes how three things read:
+
+- **`Owner: unassigned` means nobody, permanently** — not "the next slice to pass by". Where an entry says
+  *"no remaining slice (H5, H6, H9, H3c-3's remaining 14) has this surface"*, the enumeration is a **dated
+  record of the reasoning**, not a claim that those slices are pending. They are all merged.
+- **An owner reading *"whichever slice next touches X"* resolves to a closed slice**, and is dead as
+  written. This file rejects that form by name at its own `RE-OWNED 2026-08-19` entry; the instances that
+  survive predate it. Twenty-four remain.
+- **A struck heading (`~~OPEN~~`) means CLOSED BY CODE**, with the reader that closes it named in the
+  paragraph beneath. A whole-project review sampled thirteen of these, weighted to the oldest, and found
+  **zero false closures** — every one cited a specific reader and every reader existed.
+
+**What to trust, from that same review.** Of thirty-three open entries checked against the code,
+twenty-eight were accurate and several reproduced every clause including their nuances. **The bodies are
+evidence; the headings and owner lines are not.** Five entries were found stating something false at HEAD —
+four of them closed by the last two slices and left standing — and those five are now struck or amended.
+**Before building on an entry, grep the symbol it names.**
+
+**Reopening this file's work means chartering a slice**: a dated scoping measured against the code first,
+because every charter re-scoped in this project was stale in the same direction.
+
+---
+
 
 ## `Config.raw` shadows a config key named `raw`
 
@@ -6362,7 +6391,7 @@ but `resample_columns and seed is not None` — are pinned by this test and by
 `test_the_undeclared_resample_shape_is_pinned_absent_key` respectively; both were run and confirmed
 to fail before being reverted.
 
-## `percentile_of_derived` reported a zero-width interval for a near-unique stratum — CLOSED; and a report_by asymmetry deferred beside it
+## `percentile_of_derived` reported a zero-width interval for a near-unique stratum — CLOSED; and a report_by asymmetry that is a DOCUMENTED LIMITATION, not deferred work
 
 Found during task 15's review (2026-08-15, H4a). Two related findings, recorded together because
 the fix for the first is what makes the second visible rather than merely theoretical.
@@ -6528,6 +6557,27 @@ as "H4 owns closing this" is false for the reason H4d's own task 24 gives — H4
 closed it in the only way its own ruling allowed, by converting it rather than fixing the code.
 **This entry needs no further owner of either kind.**
 
+
+**RECONCILED 2026-08-26 by the whole-project review — the `report_by` half is not deferred work and this
+entry's heading said it was.** `reference.md` § Statistical reporting addresses it directly: *"A
+`statistics.report_by` level's recorded-column interval is a `t_over_units` one even under a declared
+`resample`, and that is a documented limitation rather than a gap awaiting a slice."* **Both grounds that
+paragraph rests on were measured and hold:**
+
+- **It is self-disclosing.** A level's column block carries **no `resample_draws` key at all** when
+  `resample_columns` is false — `stats.py` states the absence is deliberate, because *"a `null` there
+  would claim otherwise"* — so a record shows which construction produced which number rather than
+  presenting two designs as one.
+- **It cannot reach a verdict.** A `report_by` level **joins no correction family**, which is a
+  `CLAUDE.md` § Invariants rule and not merely a comment, so the asymmetry never touches an interval a
+  hypothesis rests on. A level is a description; a contrast is the comparison.
+
+**So the technical description above stays accurate and its character changes**: this is a bounded, marked
+limitation of a shipped design, not a defect awaiting an owner. **Closing it would change published
+`ci95` values and `method` strings on a shipped surface** and would flow into `corrected_from_pool` —
+H5b's exact class of change, which needed a scoping, a nine-arm guard pin and a disclosure. **Two slices
+that had the context (H4c, H5b) declined it in writing rather than fold it in**, and this reconciliation
+agrees with them rather than reversing them.
 ## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
@@ -6876,7 +6926,9 @@ bound. Each is its own entry below, each `unassigned`, and **no slice follows th
 config produced empty folds per arm — and is now closed as a refusal rather than as a
 capability.
 
-## OPEN — the generated README's `credentials` region does not exist, so nothing can merge into it
+## ~~OPEN — the generated README's `credentials` region does not exist, so nothing can merge into it~~
+
+**CLOSED by H9d, struck 2026-08-26.** H9d built the `credentials` region: a freshly scaffolded README carries `<!-- publishable:begin credentials -->` and a `cp .env.example .env` line, `docs` is no longer in `NOT_BUILT_COMMANDS` (which is empty), and `generate experiment`'s `required_env` merge shipped in commit `085ae68`. **All four of this entry's claims are false at HEAD.**
 
 `reference.md` § The generated README shows a scaffolded README carrying a
 `<!-- publishable:begin credentials -->` region with a *"(none yet — added as experiments declare
@@ -6911,7 +6963,9 @@ config is affected — this is scaffolding output, not validation — but a read
 § Reproducing on another device or § Secrets & credentials today gets instructions for a file
 region that was never written.
 
-## OPEN — two specified readers of `required_env` belong to unbuilt commands
+## ~~OPEN — two specified readers of `required_env` belong to unbuilt commands~~
+
+**CLOSED, struck 2026-08-26.** `NOT_BUILT_COMMANDS` is `{}` — there are no unbuilt commands. The body's own 2026-08-24 amendment already said the `dry-run` half landed with H9a and the `reproduce` half is a document narrowing rather than work outstanding; **the heading a reader skims stayed false.**
 
 H7c made `BaseTemplate.required_env` readable and gave it its first reader, at `validate`. Two more
 readers are specified and cannot be built here, because each belongs to a command in
@@ -6948,7 +7002,9 @@ outstanding; the `dry-run` half of the table above landed with H9a. Pinned by
 `test_an_installed_template_names_its_plugin_and_defers_to_validate` and its control,
 `test_a_name_no_template_claims_is_reported_as_such_rather_than_as_a_plugin`.
 
-## OPEN — `BaseTemplate.field_convention` is declarable and read by nothing
+## ~~OPEN — `BaseTemplate.field_convention` is declarable and read by nothing~~
+
+**CLOSED by H9d, struck 2026-08-26.** `docs.template_details` reads it — `docs.py:511` renders ``Convention class `{cls.field_convention}` `` for both the `docs` templates region and `list-templates`. The closure was known: commit `844d526`'s own message announced it and updated `CLAUDE.md`'s § Misreadings row, **and did not strike this entry.**
 
 Measured at `478c1f3` and re-confirmed on 2026-08-16: `grep -rn "field_convention" src/publishable/`
 returns two declarations (`templates/base.py`, `templates/builtin/generic.py`) and one comment in
@@ -10129,7 +10185,9 @@ ever loaded in the body: **one hit in `tests/`** (this helper, before the fix) a
 The sweep was proven able to fail by running it against the unfixed helper first, and it is an `ast`
 walk rather than a grep because a wrapped signature defeats a line-oriented one.
 
-## OPEN — `_dispatch`'s branch order is documented as load-bearing and is constrained by no test — **Owner: unassigned, with the reason (no remaining slice owns `_dispatch`'s ordering)**
+## ~~OPEN — `_dispatch`'s branch order is documented as load-bearing and is constrained by no test — **Owner: unassigned, with the reason (no remaining slice owns `_dispatch`'s ordering)**~~
+
+**CLOSED, struck 2026-08-26.** The entry describes a mapping holding four keys (`demo`, `docs`, `list-templates`, `reproduce`); H9c and H9d built all four and `NOT_BUILT_COMMANDS` is empty, so **the branch order this describes no longer exists.** Its own closing instruction — *"whichever runs first should close this"* — fired twice and neither did.
 
 **Filed 2026-08-24 by H9b's whole-branch fix round (review Minor 4).** `cli._dispatch` handles every
 built command before consulting `NOT_BUILT_COMMANDS`, and its two-token lookup
@@ -10500,6 +10558,8 @@ rather than building it. No remaining slice has `run`'s output as its surface.
 
 ## OPEN — `reference.md` § Package layout names `examples/generic/`, which does not exist and which nothing consumes — **Owner: unassigned, with the reason**
 
+**AMENDED 2026-08-26 — the residue stands, the stated ground does not.** The entry's ground is *"the row carries no `— not yet built` marker"*. **It does** — commit `844d526` added it at 05:31 on 2026-08-25, three and a half hours after this entry landed in the same slice. `examples/generic/` still does not exist, so the residue is real; **the reason given for filing it is false.**
+
 **Found by:** H9d correction 20; `ls examples/` says no such directory, at HEAD.
 
 The row carries no `— not yet built` marker, so it reads as describing a directory that ships. The S1
@@ -10774,3 +10834,71 @@ document states, which is why the docstring records rather than fixes.
 **Severity:** Minor-to-Major depending on the design — an empty fold is a paid execution over no
 units, disclosed by `n.resolved: 0` rather than hidden, but nothing refuses it. Reachable only under a
 declared `fold.stratify_by`, which no config in `docs/feasibility-llm-growth-studies.md` declares.
+
+## OPEN — `input_manifest_hash`'s definition changed and only `uv.lock` carries why, so `diff` prints `input_manifest DIFFERS` for identical data — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the record's schema as its surface)**
+
+**Filed 2026-08-26 by the whole-project review's M2 fix.** `manifest_hash` was narrowed to the content
+it can address — a hashed file's `mtime` no longer reaches the digest — so
+`provenance.input_manifest_hash` moves for every past run whose policy hashed at least one file.
+Nothing in a record says which definition produced its figure, and
+[`diff`](../reference.md#operation-commands) accordingly prints `input_manifest DIFFERS` for two runs
+over byte-identical data taken on either side of the change.
+
+**This is the same shape H6a shipped for `code_hash` and it is the same refusal, taken for the same
+reason rather than by analogy.** A `provenance.hash_definition` key, a fourth hash, or a
+`schema_version` bump were each considered and refused there: a bump makes
+`lineage.read_record_file` reject **every record already on disk**, which is strictly worse than an
+unmarked value change. The carrier is `provenance.environment.uv_lock_hash` — core's own version is
+pinned in that lockfile — and the honest statement of the cost is the one H5b wrote for its own
+value change: **being *able* to derive a definition change from a lockfile digest is not being
+told.**
+
+**What is measured and what is not.** Measured: the value moves under `hash_all` and under
+`hash_index` whenever it named at least one file, and does **not** move under `none` (no file is
+hashed, so the digest's input is byte-identical); `manifest/input.json` is byte-identical across the
+change and its per-file `sha256`s are unmoved; nothing derived from `code_hash` moves, and
+`provenance.upstream[]` copies `code_hash`/`parameters_hash` and never a manifest hash, so no record
+can carry two manifest-hash definitions the way one can carry two `code_hash` definitions. Not
+measured, and the reason this is filed rather than closed: **how many records already on disk this
+affects is unknowable from here**, which is exactly what a marker would have answered.
+
+**The check its closer must make** is not "add a marker" — that is refused above. It is whether
+`diff` should grow a line distinguishing *a definition boundary* from *a data change* for **both**
+hashes at once, which needs something in the record to read and therefore reopens the refusal on
+different grounds than either slice argued it on: H6a refused a marker for one hash, and two
+unmarked definition changes in one record's history is a different question from one.
+
+**Severity:** Minor. No number a run publishes is wrong, and no run is refused — a reader comparing
+two runs across the boundary is told the data differs when it does not, and the remedy in hand is to
+compare the per-file `sha256`s in the two `manifest/input.json` copies, which are unmoved.
+
+## ~~OPEN — § `manifest/input.json`'s fenced example is a different shape from what `build_manifest` writes — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the artifact examples as its surface)**~~
+
+**CLOSED, struck 2026-08-26 by the whole-project review's own fix round.** The fenced example now shows `files` as a **mapping keyed by the relative path** with `mtime` as an integer `st_mtime_ns`, measured against `build_manifest`'s actual return, and the surrounding sentence says both facts outright — so the M2 disclosure that links to this section no longer links to a false example.
+
+**Filed 2026-08-26 by the whole-project review's M2 fix, which did not cause it and links to the
+section.** The example shows `"files"` as a **list of objects each carrying a `"path"` key**, with
+`"mtime": "2026-08-01T09:12:44Z"` — an ISO-8601 string. `manifest.build_manifest` returns
+`{"policy": …, "files": {<relative path>: {"size": …, "mtime": <st_mtime_ns>, "sha256": …}}}`: a
+**mapping keyed by relative path**, with `mtime` an integer at nanosecond scale, pinned by
+`tests/test_manifest.py::test_stored_mtime_is_an_int_at_nanosecond_scale`.
+
+**Both halves reproduced rather than recalled:** `sed -n '/### `manifest\/input.json`/,+15p'
+docs/reference.md` for the example; `manifest.py`'s `files[rel] = {...}` and
+`return {"policy": policy, "files": files}` for the shape; and the test above for the int.
+
+**Why it is not closed here.** These four fixes changed the digest taken over the manifest and not
+the manifest, and the example is a *normative* artifact example — rewriting it is a decision about
+what the document promises, with `verify_manifest`'s own prose and the three
+`input_manifest_policy` rows reading against it, rather than a typo to correct in passing. The M2
+disclosure links to this section for the `mtime` fact, which the example does state correctly in
+substance (the manifest records one per file) and in the wrong type.
+
+**The check its closer must make:** whether the example becomes the dict-keyed, ns-int shape the code
+writes, or whether the code's shape is the one that should change — the list form carries `path`
+explicitly and is the friendlier thing to read, and nothing outside `manifest.py` and its own tests
+consumes the structure by key today (`verify_manifest` and `cli.py`'s two call sites are the whole
+reader set, grepped).
+
+**Severity:** Minor. A reader hand-writing a checker against the example gets the wrong parser; no
+published number is affected.

@@ -25,8 +25,14 @@ class Step(BaseStep):
     def run(self, cfg, io):
         units = list(io.units)
         for unit in units:
-            io.record(unit.key, {{"present": True}})
-        return {{"n_units": len(units)}}    # TODO: replace with your analysis
+            # TODO: replace this placeholder draw with your own measurement of
+            # `unit`, and rename the column. It must be a NUMBER: a numeric
+            # column is what earns a metric block -- value, ci95, the four-way
+            # n, method and repeat_spread. A bool or a string column reaches
+            # the template's `aggregate` and earns no interval, so a step that
+            # records only those publishes nothing.
+            io.record(unit.key, {{"placeholder_score": self.rng.random()}})
+        return {{"n_units": len(units)}}
 """
 
 EXPERIMENT_PY = """\

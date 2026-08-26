@@ -496,9 +496,19 @@ swallows, which is why a config outside every repository prints `✓ config vali
 `run`. **The undocumented-codes filing's heading goes from nine to five, derived rather than carried**:
 nine, minus `E-CODE-DIRTY` (H6a batch 4), minus `E-EXPERIMENT-UNKNOWN` (H8c task 16), minus H6b's two —
 and `E-STEP-EXISTS` was **never one of the nine**, which is what filled the sixth slot in both the
-design's and the plan's first drafts. The five that stay filed are `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
+design's and the plan's first drafts. The five that stayed filed were `E-INPUT-CHANGED`, `E-RUN-LOCKED`,
 `E-RUN-ID-EXHAUSTED`, `E-PROJECT-EXISTS` and `E-EXPERIMENT-EXISTS`, **unassigned with the reason**: no
-remaining chartered slice has `run_identity.py`, the manifest path or `generators/` as its surface.
+remaining chartered slice had `run_identity.py`, the manifest path or `generators/` as its surface.
+**CORRECTED 2026-08-26 by the whole-project review — that list named the wrong codes, and it is now
+empty.** `E-RUN-LOCKED` and `E-RUN-ID-EXHAUSTED` gained § Errors rows under H9b's Ruling X and
+`E-EXPERIMENT-EXISTS` gained one too, so three of the five were already documented when the list was
+written; and `E-PROJECT-EXISTS` was never undocumented at all, because **§ Exit codes documents the whole
+generator-refusal family in one passage** — `new`/`plugin new`, `generate experiment`/`step`/`template`/
+`report`, `study new` — deliberately, with an argument against minting *"a namespace per command"*. **Only
+`E-INPUT-CHANGED` was genuinely uncovered, and it now has a row of its own** as the third `Collector`
+refusal beside `E-CODE-DIRTY` and `E-CODE-EMPTY`. **The lesson is this file's own: row-presence is a proxy
+for documented-ness, and here the proxy is wrong** — a class documented as a class has no row per member
+by design, so an audit counting rows finds five defects where there is one.
 **RULING P: no seat** — § Templates' *"goes dirty at `validate`"* sentence measures **true** and gains
 no `W-` code, because a `W-` is a registry seat and `E-CODE-DIRTY` already catches the condition at
 `run`. **And DECISION 12 DECLINES** the root-`.gitignore` filing H6a's gate left with H6b's name on it,
@@ -753,9 +763,16 @@ or by absolute path, and every read is accumulated into `provenance.upstream`. `
 `run.yaml` reader **nothing in `src/` had**, eleven `E-UPSTREAM-*` refusals, and a containment rule now
 enforced on **three** readers — `reuse_from`, `read_upstream` and `read_condition`, the last two having
 enforced **no name rule at all**. **It moves exactly one row of the feasibility analysis' table, 6 → 0**,
-and mints no new number; the `report_by`-under-`resample` gap still meets **seven** configs and is **unassigned** — it was H4's,
-and the 2026-08-19 re-owning after H4d merged moved it, along with four others, to *unassigned with a
-reason*: no remaining slice has the `statistics` block as its surface.
+and mints no new number; the `report_by`-under-`resample` **limitation** still meets **seven** configs. It
+was H4's, and the 2026-08-19 re-owning after H4d merged moved it, along with four others, to *unassigned
+with a reason*: no remaining slice has the `statistics` block as its surface. **RECONCILED 2026-08-26:
+this is a documented limitation, not pending work**, and `reference.md` § Statistical reporting says so in
+those words. The two grounds it rests on both measure true — a level's block carries **no
+`resample_draws` key at all** when `resample_columns` is false (`stats.py` calls the absence deliberate,
+because *"a `null` there would claim otherwise"*), so a reader can see which construction produced which
+number; and **a level joins no correction family**, which is a § Invariants rule, so the asymmetry cannot
+reach an interval a verdict rests on. **The count stays** — seven configs really do meet it, and that is a
+useful figure — but the word *gap* was doing work the facts do not support.
 **H8 was scoped at 30 tasks against a one-row charter**, split 10/8/12 — H8b is `diff`/`freeze`, H8c is
 `report`/`study`, and **`BaseReport` is H8c's** (§ Package layout makes `report.py` *be* `BaseReport`).
 

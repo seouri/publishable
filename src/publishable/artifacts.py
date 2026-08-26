@@ -429,10 +429,15 @@ def allocation_hash(document: dict[str, Any]) -> str:
     all three hash something the caller already has lying around (the repo
     tree, the config), not something this module built for them.
     `manifest_hash` sits in `manifest.py`, next to `build_manifest`, for the
-    matching reason: it hashes the exact document its own module just
-    constructed, so the construction and the hash of what it constructs stay
-    one property of one artifact rather than two modules that have to agree
-    on a shape from a distance. `allocation_hash` follows `manifest_hash`'s
+    matching reason: it hashes the document its own module just constructed, so
+    the construction and the hash of what it constructs stay one property of one
+    artifact rather than two modules that have to agree on a shape from a
+    distance. (`manifest_hash` narrows what it digests — a hashed file's `mtime`
+    is dropped, since `input_manifest_hash` answers *was the data identical?* —
+    which is the same argument for co-locating them, one step further: the
+    narrowing is a property of that artifact and lives with it. `allocation_hash`
+    narrows nothing and digests `build_allocation_document`'s return as it
+    stands.) `allocation_hash` follows `manifest_hash`'s
     placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
     own return value, and that function lives in `artifacts.py` because
     `allocation.json` is an artifact `cli.command_run` writes alongside the

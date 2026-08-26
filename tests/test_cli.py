@@ -193,6 +193,17 @@ def run_a_project(
         roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
     )
     assert main(["new", str(root)]) == EXIT_OK
+    if capsys is not None:
+        # `new` prints the project path and a `next:` line (whole-project
+        # review, Minor), and this helper's `capsys` contract is that
+        # `doc["stdout"]`/`doc["stderr"]` are what the RUN printed — the
+        # docstring above says so, and guard-pin arm B asserts that stream
+        # line by line. Dropping the scaffold's own two lines here is what
+        # keeps both byte-identical to what every existing caller read before
+        # `new` printed anything. It drops those two lines and nothing else:
+        # everything written after this point — `generate_experiment`'s README
+        # notes on stderr included — is still captured exactly as before.
+        capsys.readouterr()
     if _env_file is not None:
         # The scaffold's own `.gitignore` opens with `.env`, so this never reaches
         # the commit below and never makes `src/**`+`templates/**` dirty.
@@ -6104,18 +6115,37 @@ def test_a_run_with_no_baseline_has_no_vs_baseline_block(tmp_path, capsys):
     assert "vs_baseline" not in text
 
 
+_BOOL_ONLY_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{}}
+"""
+
+
 def test_a_baseline_sweep_with_no_metric_has_no_vs_baseline_block(tmp_path, capsys):
     """The discriminating case `test_a_run_with_no_baseline_has_no_vs_baseline_
     block` can't reach: a declared baseline exists (comparisons are resolved),
-    but the scaffold's default step records only a bool, so every
-    `metric_block` this task builds is empty. This is what actually exercises
-    `_compute_vs_baseline`'s `return out or None` and `run_record.py`'s
-    `if block:` guard — with no baseline at all, both are already unreachable
-    for a different reason, and either could be silently dropped without this
-    test moving."""
+    but the step records only a bool, so every `metric_block` this task builds
+    is empty. This is what actually exercises `_compute_vs_baseline`'s `return
+    out or None` and `run_record.py`'s `if block:` guard — with no baseline at
+    all, both are already unreachable for a different reason, and either could
+    be silently dropped without this test moving.
+
+    The bool-only step is passed in rather than inherited from the scaffold:
+    the scaffold's own step records a number since whole-project review C1, and
+    a property about a metric-less run should never have rested on an
+    incidental fact about `STARTER_STEP` in the first place."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
+        _starter_step=_BOOL_ONLY_STARTER_STEP,
         sweep={
             "baseline": {"analysis.method": "pearson"},
             "grid": {"analysis.method": ["spearman"]},
@@ -7693,9 +7723,10 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     What a run does with it: nothing special. A step contract error is
     contained like any other step failure — the execution is marked `failed`
     with the identifier in its recorded `error`, the rest of the plan runs, and
-    the run ends `partial` at `EXIT_PARTIAL`. It is *not* printed on the
-    diagnostics channel: `run.yaml`'s `execution` block is the only place it
-    surfaces.
+    the run ends `partial` at `EXIT_PARTIAL`. It reaches no `Collector` — no
+    finding, no code on stdout — and since whole-project review M1 the run's
+    closing stderr line names it as the first error, which is the whole point
+    of that line: an exit `3` a shell swallows was the only signal before.
     """
     doc = run_a_project(
         tmp_path,
@@ -7713,11 +7744,14 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     entry = next(iter(steps.values()))
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-SCOPE" in entry["error"]
-    # Both channels: `test_an_unwritable_output_dir_is_a_diagnostic_not_a_
-    # traceback` reads stderr for `E-IO-FAILED`, so stderr is a real diagnostics
-    # channel here and "not printed" has to cover it.
+    # Both channels, and they now say different things. Stdout: still silent,
+    # which is the original claim — no `Collector` finding is built for a
+    # contained step failure. Stderr: M1's closing line, which names the first
+    # error and so must carry this identifier; asserting its absence here
+    # would be asserting M1 away.
     assert "E-STEP-ESTIMATE-SCOPE" not in doc["stdout"]
-    assert "E-STEP-ESTIMATE-SCOPE" not in doc["stderr"]
+    assert "run partial: " in doc["stderr"]
+    assert "E-STEP-ESTIMATE-SCOPE" in doc["stderr"]
 
 
 _ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = """\
@@ -7752,7 +7786,10 @@ def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-METHOD" in entry["error"]
     assert "E-STEP-ESTIMATE-METHOD" not in doc["stdout"]
-    assert "E-STEP-ESTIMATE-METHOD" not in doc["stderr"]
+    # Same split as the scope refusal above: silent on stdout, named by M1's
+    # closing stderr line as this run's first error.
+    assert "run partial: " in doc["stderr"]
+    assert "E-STEP-ESTIMATE-METHOD" in doc["stderr"]
     # A failed summary execution returns nothing, so no `reported` entry is
     # written from a step whose contract was refused.
     assert run["results"]["summary"]["step02_summarize"] == {}
@@ -17887,16 +17924,21 @@ def test_the_correction_family_measurement_arm_e_no_editor_except_task_4(tmp_pat
 
 
 def test_fixture_b_the_scaffolds_own_run_is_unchanged_by_h5b(tmp_path, capsys):
-    """H5b task 4, Fixture B. `STARTER_STEP` unmodified records `{"present":
-    True}` for every unit — a bool, no numeric column at all.
+    """H5b task 4, Fixture B. A step recording `{"present": True}` for every
+    unit — a bool, no numeric column at all.
 
     `GenericTemplate` inherits `BaseTemplate.aggregate`, which returns `{}`
     regardless of what `collapsed` holds (Decision 12), so
     `aggregated.step01_summarize_units == {}` **before and after H5b** — the
-    scaffold's own symptom does not move, because there is no `aggregate` to
-    read the newly-carried `present` column at all.
+    symptom does not move, because there is no `aggregate` to read the
+    newly-carried `present` column at all.
+
+    The bool-only step is passed in rather than inherited from `STARTER_STEP`,
+    which records a number since whole-project review C1. H5b's claim is about
+    a bool column, not about what the scaffold happens to record, and the
+    fixture now says which.
     """
-    doc = run_a_project(tmp_path, capsys=capsys, units=6)
+    doc = run_a_project(tmp_path, capsys=capsys, units=6, _starter_step=_BOOL_ONLY_STARTER_STEP)
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert agg == {}
@@ -17928,11 +17970,16 @@ def test_fixture_b_a_project_local_template_now_sees_the_bool_column(tmp_path, c
     After H5b's task 4, `present` is carried for every admitted unit, so the
     same read reports `6.0`, and no `W-STATS-AGGREGATE-FAILED` appears on
     stdout — the stream every shipped assertion on a run finding reads.
+
+    The bool-only step is passed in for the same reason as the first half's:
+    `STARTER_STEP` records a number since whole-project review C1, and a
+    `present`-counting template needs a `present` column to count.
     """
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
         units=6,
+        _starter_step=_BOOL_ONLY_STARTER_STEP,
         _local_template=_FIXTURE_B_TEMPLATE,
         experiment_type="present_counter",
         parameters={},
@@ -19152,11 +19199,12 @@ limits:
 hypotheses: []
 """
 
-# `input_manifest_hash` covers each input file's `mtime` in nanoseconds, so it
-# is a literal only if the mtime is one. Fixed here rather than left to the
-# clock — a figure arm C asserts must be the same on every machine and every
-# run, and a recomputation from the record would assert the function equals
-# itself.
+# Fixed rather than left to the clock — a figure arm C asserts must be the same
+# on every machine and every run, and a recomputation from the record would
+# assert the function equals itself. `input_manifest_hash` was the figure that
+# needed this: it covered each input file's `mtime` in nanoseconds until the
+# whole-project review's M2 (2026-08-26) narrowed `manifest_hash` to content.
+# Kept because it costs nothing and this helper is shared by several arms.
 _H6A_FIXED_MTIME_NS = 1_700_000_000_000_000_000
 
 
@@ -19369,9 +19417,20 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     digests" is one digest and is asserted as one — the plural in the design's
     list is not coverage this arm has.
 
-    **`input_manifest_hash` covers `mtime` in nanoseconds**, which is why the
-    roster's mtime is fixed by `_h6a_pin_project`. Without that the figure is
-    not a literal on any machine, and the arm would have had to recompute it.
+    **`input_manifest_hash` no longer covers a hashed file's `mtime`** — the
+    whole-project review's M2 (2026-08-26) narrowed `manifest_hash` to the
+    content it can address — so the fixed mtime `_h6a_pin_project` installs is
+    no longer what makes this figure a literal; the roster's own bytes are. The
+    fixture keeps fixing it regardless: it is read by every arm that shares that
+    helper, and removing it buys nothing while risking a figure elsewhere.
+
+    **This arm's `input_manifest_hash` literal MOVED for M2**, and that is this
+    change's own disclosed value move rather than a weakened pin. The arm's H6a
+    property is untouched: the `code_hash` assertion below reads
+    `_H6A_RUN_WITH_ENV_DIGEST` by name, so *exactly one hash moves under H6a*
+    still holds, and the per-file `sha256` in `manifest/input.json` — asserted
+    further down — is byte-identical, because M2 changed only the digest taken
+    over the manifest and not the manifest.
 
     **One line here reads arm B's constant by NAME, and that is deliberate.**
     The `code_hash` assertion below is `_H6A_RUN_WITH_ENV_DIGEST`, arm B's own
@@ -19409,7 +19468,7 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
         "sha256:0e55a047167d30e2caa3acefe8cff398e391a19d801add5932f95b1e2eb7232e"
     )
     assert provenance["input_manifest_hash"] == (
-        "sha256:15d29dcab933c4824f78ff18c7ed7a3b2b83fe693c2faaa405cd54e92bdc3dc1"
+        "sha256:82fccc76b9be0b67557259ee869f82791aaa35ba6dbd9cc5b8d6edb847e4d1e1"
     )
     assert provenance["environment"]["uv_lock_hash"] == (
         "sha256:c0b8db057b9b36718982fea80396ba000fd75dd36ff2262bbbca881af07e341e"
@@ -20578,6 +20637,66 @@ def test_h9a_arm_c_partial_status_and_exit(tmp_path: Path):
 # self-contained) was considered and rejected here because that precedent
 # restates a cheap key-list assertion, not a whole apparatus-plugin
 # fixture — the cost/benefit is the opposite way round.
+
+
+_M1_RAISING_STARTER_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("m1 sentinel: the apparatus fell off the bench")
+"""
+
+
+def test_a_run_that_does_not_complete_names_its_status_and_first_error(tmp_path: Path, capsys):
+    """Whole-project review M1: a step raising on every execution printed only
+    `W-ENV-UNLOCKED` and `run.yaml → <path>`, and a shell swallows the `4`.
+
+    The sentinel string is distinctive on purpose — asserting on the word
+    `failed` alone is satisfiable by neighbouring output (a path segment, the
+    `max_failed_fraction` key) — and both halves are asserted on the stream
+    each belongs to: the line on stderr, its absence from stdout, which is
+    what keeps `run`'s pinned successful-run stdout out of the question.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 3}]},
+        units=4,
+        _starter_step=_M1_RAISING_STARTER_STEP,
+        expect_exit=EXIT_FAILED,
+        capsys=capsys,
+    )
+    err = doc["stderr"]
+    assert "run failed: 3 of 3 executions failed" in err
+    assert "m1 sentinel: the apparatus fell off the bench" in err
+    assert "step01_summarize_units" in err
+    assert "m1 sentinel" not in doc["stdout"]
+    assert "run failed" not in doc["stdout"]
+    # The record is untouched by the line: same status, same error, same exit.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "failed"
+
+
+def test_a_completed_run_says_nothing_about_its_status(tmp_path: Path, capsys):
+    """The other half of M1, and it is not an absence-only control: this run
+    must reach `completed` and print its record's path, so a build that printed
+    the status line unconditionally fails here rather than passing quietly.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        units=4,
+        capsys=capsys,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    assert "run.yaml → " in doc["stdout"]
+    assert "run completed" not in doc["stderr"]
+    assert "executions failed" not in doc["stderr"]
+    assert "no execution recorded an error" not in doc["stderr"]
 
 
 def test_h9a_arm_d_the_executions_jsonl_line_key_set(tmp_path: Path):
@@ -23349,7 +23468,10 @@ def test_h9b_a_scalar_only_step_records_an_empty_column_list_and_no_table(tmp_pa
     ledger = {entry["step"]: entry for entry in _h9b_ledger(doc["run_dir"])}
     assert ledger["step02_tally"]["status"] == "completed"
     assert ledger["step02_tally"]["recorded_columns"] == []
-    assert ledger["step01_summarize_units"]["recorded_columns"] == ["present"]
+    # `placeholder_score` is what the scaffold's own step records since
+    # whole-project review C1; the claim here is non-empty versus empty, and
+    # only the recording step's column NAME moved with the scaffold.
+    assert ledger["step01_summarize_units"]["recorded_columns"] == ["placeholder_score"]
     # The distinction the empty list exists to carry, asserted rather than
     # assumed: the completed step wrote no table at all.
     step_dirs = {p.parent.name for p in doc["run_dir"].rglob("units.parquet")}
@@ -24734,12 +24856,11 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     attempt's figure.
 
     **Why this cannot be pinned through `command_resume`**, and it is the
-    reason this test hand-assembles a `Resumed`: `manifest_hash` covers each
-    file's `st_mtime_ns`, and the pre-lock comparison is an equality between
-    the fresh manifest and the recorded one — so on every directory a resume
-    accepts, the two hashes are equal and an assertion comparing
-    `run.yaml`'s figure against `manifest/input.json`'s digest passes under
-    both readings. The existing assertion in
+    reason this test hand-assembles a `Resumed`: the pre-lock comparison is an
+    equality between the fresh manifest and the recorded one — so on every
+    directory a resume accepts, the two hashes are equal and an assertion
+    comparing `run.yaml`'s figure against `manifest/input.json`'s digest passes
+    under both readings. The existing assertion in
     `test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest`
     is exactly that shape and is blind to this mutation (grepped:
     `input_manifest_hash` appears in that test at one line, comparing against
@@ -24748,11 +24869,20 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     what discriminates.
 
     The recorded manifest handed in differs from the fresh one in ONE file's
-    `mtime` and nothing else, which `manifest_hash` covers and
-    `verify_manifest` does not read under `hash_all` (it compares `sha256`
-    when one is recorded) — so phase 8 stays clean and `status` stays
-    `completed`, and the only observable difference is which manifest the
-    record was assembled from.
+    `size` and nothing else. That field is chosen because it is the one thing
+    `manifest_hash` covers and `verify_manifest` does **not** read for a hashed
+    file: under `hash_all` the detector compares `sha256` alone and falls back
+    to size and mtime only for a file the policy left unhashed. So phase 8 stays
+    clean and `status` stays `completed`, and the only observable difference is
+    which manifest the record was assembled from.
+
+    **`mtime` was this discriminator until the whole-project review's M2**, and
+    the field moved for a reason rather than for convenience: `manifest_hash` no
+    longer covers a hashed file's `mtime` at all, so `mtime += 1` now produces
+    two EQUAL digests and could not discriminate anything. The property this
+    test pins is byte-unchanged — the RECORDED manifest travels into phases
+    6-10, not the fresh one — and only the field carrying the difference moved,
+    onto the one that still separates the digest from the detector.
     """
     from publishable.cli import Prepared, Resumed, _execute_prepared, _prepare_run, _reconstitute
     from publishable.lineage import attempt_counts, read_execution_ledger
@@ -24770,7 +24900,7 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     assert manifest_hash(recorded) == manifest_hash(prepared.manifest)  # the two agree today
     doctored = json.loads(json.dumps(recorded))
     name = sorted(doctored["files"])[0]
-    doctored["files"][name]["mtime"] += 1
+    doctored["files"][name]["size"] += 1
     assert manifest_hash(doctored) != manifest_hash(prepared.manifest)
 
     records = read_execution_ledger(crashed)
@@ -27692,13 +27822,17 @@ def test_h3c3_the_roster_ORDER_lever_is_blocked_by_the_input_manifest_gate(tmp_p
     # The can-fail half: restore the roster and the same resume succeeds, so
     # the refusal above is attributable to the reordering and not to the
     # fixture being unresumable.
-    # The can-fail half: restore the roster and the same resume succeeds, so
-    # the refusal above is attributable to the reordering and not to the
-    # fixture being unresumable. **The content is not enough** — `manifest`
-    # records `size` and `mtime_ns` beside the content hash, so a
-    # byte-identical rewrite still moves `manifest_hash`. Measured, not
-    # assumed: without the `os.utime` below this control fails with the same
-    # code, which is a second reason the roster-order lever is unavailable.
+    #
+    # **The `os.utime` below is no longer load-bearing, and the claim that used
+    # to justify it was made false by the whole-project review's M2
+    # (2026-08-26).** It read: "the content is not enough — `manifest` records
+    # `size` and `mtime_ns` beside the content hash, so a byte-identical
+    # rewrite still moves `manifest_hash`", and that is now wrong for a hashed
+    # file: `manifest_hash` covers content and size, never a hashed file's
+    # mtime. Restoring the bytes is sufficient on its own. The call is kept
+    # because it makes the restoration exact rather than approximately exact,
+    # and because it is harmless — but it is no longer the reason this control
+    # passes, and a reader must not take it for one.
     index.write_text(original)
     recorded = json.loads((crashed / "manifest" / "input.json").read_text())
     entry = recorded["files"]["index.csv"]
@@ -27715,10 +27849,15 @@ def test_h3c3_a_real_resume_executes_against_the_RECORDED_cells_end_to_end(tmp_p
     proves by direct call.
 
     **Which lever, measured.** The brief's roster-order lever is **blocked**,
-    pinned by the sibling above: `manifest` records `size` and `mtime_ns`
-    beside the content hash, so a reordered — or even a byte-identical
-    rewritten — `index.csv` earns `E-RESUME-INPUT-MOVED` before
-    `_resumed_allocation` is reached. The lever that works is the one F5
+    pinned by the sibling above: a reordered `index.csv` is different content
+    under `input_manifest_policy: hash_all`, so it earns
+    `E-RESUME-INPUT-MOVED` before `_resumed_allocation` is reached. (The
+    sibling's stronger claim — that even a *byte-identical* rewrite moves
+    `manifest_hash`, because the manifest records `mtime_ns` — was true when it
+    was written and was made false by the whole-project review's M2
+    (2026-08-26); the reordering half, which is what blocks the lever, stands.)
+
+    The lever that works is the one F5
     already uses, `_h9b_swapped`: **edit the crashed run's own
     `allocation.json`**, which is the artifact `resume` treats as
     authoritative and which no hash on the resume path covers. It instantiates
@@ -27836,3 +27975,328 @@ def test_h3c3_a_real_resume_honours_the_RECORDED_holdout_rather_than_redrawing(t
         assert in_unit in split["test"]
         assert out_unit in split["train"]
         assert set(split["test"]) | set(split["train"]) == control_arm
+
+
+# ---------------------------------------------------------------------------
+# Whole-project review 2026-08-26, M6: `io.record`'s scalar contract had two
+# structurally identical enforcement sites — the plain branch and the
+# `measurement=` branch — and deleting the coercion from either cost 2 failures
+# out of 3417, both hand-constructing a `StepIO` and asserting on `io.rows()`.
+# Every end-to-end run test passed with a `list` accepted into a recorded
+# column. The pin below runs a REAL project through `main(["run", ...])` and
+# asserts on the ARTIFACT rather than on the accessor.
+#
+# **What this pin can and cannot see, measured rather than assumed.** A
+# `numpy.float64` reaching `units.parquet` uncoerced is NOT observable at the
+# artifact: `_encode_parquet` calls `_coerced_rows(rows, keep_structural=True)`
+# on its way out, which unwraps a NumPy scalar independently of `io.record`, and
+# `pq.read_table(...).to_pylist()` yields Python scalars either way. So the
+# discriminating value is a STRUCTURAL one — `.parquet` keeps a structural cell
+# byte-faithfully by its own documented capability, so with the coercion gone a
+# `list` reaches `units.parquet` and comes back as a `list`. The NumPy half is
+# still recorded here, in the good step, as the positive control that the
+# artifact carries real exact-typed cells rather than being vacuously empty.
+_M6_GOOD_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        import numpy as np
+
+        for i, unit in enumerate(io.units):
+            io.record(
+                unit.key,
+                {{
+                    "score": np.float64(i) / 2,
+                    "count": np.int64(i),
+                    "valid": np.bool_(i % 2 == 0),
+                    "label": np.str_("m" + str(i)),
+                }},
+            )
+        return {{}}
+"""
+
+_M6_BAD_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"trace": [1, 2]}}MEASUREMENT)
+        return {{}}
+"""
+
+_M6_SCALARS = (bool, int, float, str, type(None))
+
+
+@pytest.mark.parametrize(
+    ("arm", "measurement", "units_overrides"),
+    [
+        ("plain", "", None),
+        (
+            "measured",
+            ", measurement='r1'",
+            {"measurements": {"by": "read_id", "collapse": "first"}},
+        ),
+    ],
+)
+def test_io_record_refuses_a_structural_value_end_to_end_at_both_branches(
+    tmp_path: Path, arm: str, measurement: str, units_overrides: dict[str, Any] | None
+):
+    """A real `run` whose second step records a `list`; parametrized over both
+    `io.record` enforcement sites so neither can be narrowed alone.
+
+    Three properties, and each is non-vacuous on the side it pins:
+
+    (a) **the execution fails with `E-STEP-RETURN-TYPE`, and the run still
+        writes its record.** Delete the coercion at this arm's site and the
+        execution *completes* — this assertion is what catches it, and it is
+        the half that cannot pass by absence.
+
+    (b) **every cell of every `units.parquet`/`measurements.parquet` under the
+        run directory is an exact Python scalar type.** With the coercion in
+        place the bad step raises before `io.finalize()` — `runner.execute_plan`
+        calls `finalize` INSIDE the `try`, after the step returns — so it writes
+        no table at all and this sweep sees only the good step's. With the
+        coercion gone the bad step completes and its `list` lands in the
+        artifact, which is what this assertion reads back. Asserted on
+        `_decode_parquet` of the file's own bytes, never on `io.rows()`.
+
+        **(b) is proven able to fail, and it is NOT the assertion that catches
+        the mutation.** Under either deletion, `run_a_project`'s own
+        `expect_exit` assertion fires first (the run exits `0` rather than
+        `EXIT_PARTIAL`), and then (a). To reach (b) at all the mutation probe
+        had to neuter both: with the plain branch's `coerce_scalars` deleted,
+        `expect_exit=EXIT_OK` and (a) commented out, (b) failed naming
+        `seed40/step02_trace/units.parquet`, column `trace`, `<class 'list'>`,
+        `[1, 2]`. So (a) is the catching assertion and (b) is the one that says
+        what shipped — recorded this way round rather than the reverse, because
+        an assertion whose failure is unreachable behind an earlier one is a
+        claim about the artifact that no mutation has yet exercised.
+
+    (c) **the good step's table is non-empty and carries all four exact types**,
+        so (b) is a sweep over something rather than a control asserting only
+        absences.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _starter_step=_M6_GOOD_STEP,
+        extra_steps=["trace"],
+        extra_step_source=_M6_BAD_STEP.replace("MEASUREMENT", measurement),
+        units_overrides=units_overrides,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run_dir = doc["run_dir"]
+    assert (run_dir / "run.yaml").is_file()
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert run["status"] == "partial"
+
+    ledger = [json.loads(line) for line in (run_dir / "executions.jsonl").read_text().splitlines()]
+    bad = [e for e in ledger if e["step"] == "step02_trace"]
+    good = [e for e in ledger if e["step"] == "step01_summarize_units"]
+    assert bad and good, [e["step"] for e in ledger]
+    # (a) — the half that cannot pass by absence.
+    assert {e["status"] for e in bad} == {"failed"}
+    assert {e["status"] for e in good} == {"completed"}
+    for entry in bad:
+        assert "E-STEP-RETURN-TYPE" in (entry["error"] or ""), entry["error"]
+        assert "'trace'" in (entry["error"] or ""), entry["error"]
+
+    # (b) — the artifact, not the accessor.
+    tables = sorted(run_dir.rglob("units.parquet")) + sorted(run_dir.rglob("measurements.parquet"))
+    seen_types: set[type] = set()
+    for table in tables:
+        assert "step02_trace" not in table.parts, f"the refused step wrote {table}"
+        for row in _decode_parquet(table.read_bytes()):
+            for column, value in row.items():
+                assert type(value) in _M6_SCALARS, (table, column, type(value), value)
+                seen_types.add(type(value))
+
+    # (c) — the sweep in (b) ran over real cells of every type the good step wrote.
+    assert {bool, int, float, str}.issubset(seen_types), seen_types
+
+
+# Whole-project review 2026-08-26, M3: the record itself, not the helper.
+def test_provenance_manager_is_null_for_an_environment_uv_did_not_make(tmp_path, monkeypatch):
+    """A real `run` whose `sys.prefix` names a `python -m venv` environment
+    records `provenance.environment.manager: null`.
+
+    The half that cannot pass under the literal this replaced, and the reason it
+    is an end-to-end arm rather than only a unit test: four existing pins in
+    this file assert the string `"uv"` — `test_h6b_arm_d_environment_key_order`,
+    the `environment ==` assertion in
+    `test_h8a_arm_b_the_provenance_key_list_and_upstream_empty`, and two
+    guard-pin literal tables — and every one of them stays green under a
+    hardcoded literal, because the suite runs inside a uv-created venv. Nothing
+    in `src/` reads `sys.prefix` but `uv_support.environment_manager`, grepped
+    (`grep -rn "sys.prefix\\|base_prefix" src/publishable/*.py` — two hits, both
+    that function and its own docstring), so pointing it at a fixture directory
+    changes this one fact and nothing else about the run.
+
+    The positive control is in the same run: `uv_lock`/`uv_lock_hash` are the
+    keys beside `manager` that were already measured, and asserting `manager`
+    alone would pass identically if the whole `environment` block had gone
+    missing.
+    """
+    fake_prefix = tmp_path / "stdlib-venv"
+    fake_prefix.mkdir()
+    (fake_prefix / "pyvenv.cfg").write_text(
+        "home = /usr/local/bin\nimplementation = CPython\nversion_info = 3.13.0\n"
+    )
+    monkeypatch.setattr(sys, "prefix", str(fake_prefix))
+    doc = run_a_project(
+        tmp_path / "proj-root",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=4,
+    )
+    environment = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())["provenance"][
+        "environment"
+    ]
+    assert environment["manager"] is None
+    # The control: the block is really there, and its other keys answered.
+    assert environment["uv_lock"] is None and environment["uv_lock_hash"] is None
+    assert isinstance(environment["python_version"], str) and environment["python_version"]
+    assert list(environment) == [
+        "manager",
+        "python_version",
+        "os",
+        "hostname",
+        "uv_lock",
+        "uv_lock_hash",
+        "hardware",
+    ]
+
+
+# ===========================================================================
+# Whole-project review 2026-08-26, M2 — the VALUE CHANGE, at the artifact and
+# at the one shipped command whose behaviour it moves.
+
+
+def test_input_manifest_hash_is_content_addressed_in_a_real_record(tmp_path: Path):
+    """Two real runs over byte-identical data whose mtimes differ publish the
+    SAME `provenance.input_manifest_hash`.
+
+    Asserted on `run.yaml` rather than on `manifest_hash`, because the record is
+    what ships: `manifest.manifest_hash` has its own unit arms in
+    `tests/test_manifest.py`, and none of them proves the projection is what
+    `command_run` actually writes into `provenance`.
+
+    The mtime difference is forced with `os.utime` rather than left to the clock:
+    two runs a second apart would differ anyway on most filesystems, but a
+    coarse-grained one could put both writes in the same tick and make this pass
+    for the wrong reason. The pre-assertions below check the two manifests really
+    do differ on mtime and really do agree on content, so a green result cannot
+    mean "the two manifests were identical".
+    """
+    from publishable.manifest import manifest_hash
+
+    first = run_a_project(
+        tmp_path / "a", replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4
+    )
+    second_root = tmp_path / "b"
+    second = run_a_project(
+        second_root, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4
+    )
+    roster = second_root / "data" / "index.csv"
+    ns = roster.stat().st_mtime_ns + 86_400_000_000_000
+    os.utime(roster, ns=(ns, ns))
+    # A third run of the SAME project as `second`, after the touch — same
+    # config, same repo, same bytes, a different mtime.
+    assert main(["run", str(second["cfg"])]) == EXIT_OK
+    third_dir = sorted(second["results_dir"].glob("run_*"))[-1]
+    assert third_dir != second["run_dir"]
+
+    def manifest_of(run_dir: Path) -> dict:
+        return json.loads((run_dir / "manifest" / "input.json").read_text())
+
+    m2, m3 = manifest_of(second["run_dir"]), manifest_of(third_dir)
+    # The two halves that make this test able to fail: the mtimes moved, the
+    # content did not, and the mtime is still RECORDED (only the digest drops
+    # it, so `verify_manifest`'s fallback keeps its operand).
+    assert m3["files"]["index.csv"]["mtime"] != m2["files"]["index.csv"]["mtime"]
+    assert m3["files"]["index.csv"]["sha256"] == m2["files"]["index.csv"]["sha256"]
+    assert m3["files"]["index.csv"]["size"] == m2["files"]["index.csv"]["size"]
+
+    def published(run_dir: Path) -> str:
+        return yaml.safe_load((run_dir / "run.yaml").read_text())["provenance"][
+            "input_manifest_hash"
+        ]
+
+    assert published(third_dir) == published(second["run_dir"])
+    assert published(third_dir) == manifest_hash(m3)
+    # And across two unrelated projects over the same input bytes, which is the
+    # question `input_manifest_hash` exists to answer: was the data identical?
+    assert published(first["run_dir"]) == published(second["run_dir"])
+    # The control on that last assertion: the two runs really are two different
+    # projects, in two different repositories, over two separately written
+    # copies of the roster. **`code_hash` is NOT the control here and was
+    # measured, not assumed**: two freshly scaffolded projects hash IDENTICALLY,
+    # because `code_hash` covers `src/**` and `templates/**` by repo-relative
+    # path and the generated trees are byte-identical — the first draft of this
+    # test asserted they differ and failed with the same digest on both sides.
+    # `provenance.git.repo_root` is the field that actually separates them.
+    first_doc = yaml.safe_load((first["run_dir"] / "run.yaml").read_text())
+    second_doc = yaml.safe_load((second["run_dir"] / "run.yaml").read_text())
+    assert (
+        first_doc["provenance"]["git"]["repo_root"] != second_doc["provenance"]["git"]["repo_root"]
+    )
+
+
+def test_m2_a_resume_after_a_bare_touch_is_no_longer_refused(tmp_path: Path, capsys):
+    """**The one behaviour change M2 makes to a shipped command.**
+
+    `command_resume` gates on `manifest_hash(recorded) != manifest_hash(fresh)`
+    and refuses `E-RESUME-INPUT-MOVED`. Before M2 a bare `touch` of one input
+    file between the crash and the resume was enough to trip that gate — while
+    `verify_manifest`, the detector the run itself uses in phase 8, correctly
+    reported nothing changed. An operator whose backup tool restamped an mtime
+    lost the whole crashed run for a reason no artifact could justify.
+
+    Now it resumes. Asserted with the two halves that make it attributable:
+
+    (a) the mtime really moved and the content really did not, read off the
+        recorded manifest and the file on disk;
+    (b) `E-RESUME-INPUT-MOVED` is absent from what the command printed, and the
+        resume reaches `EXIT_OK` with a `run.yaml` — an exit code alone would
+        pass if the gate had fired and some later phase had returned `0`.
+
+    The refusal itself stays pinned, on the faults it is really about, by
+    `test_h9b_the_input_manifest_gate` (content moved, file added, manifest
+    unreadable) — grepped rather than assumed: `E-RESUME-INPUT-MOVED` appears in
+    this file at six lines, and none of the three arms there turns on an mtime.
+    """
+    from publishable.manifest import verify_manifest
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    input_dir = Path(yaml.safe_load(Path(doc["cfg"]).read_text())["data"]["input_dir"]).expanduser()
+
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert recorded["policy"] == "hash_all"
+    roster = input_dir / "index.csv"
+    ns = recorded["files"]["index.csv"]["mtime"] + 86_400_000_000_000
+    os.utime(roster, ns=(ns, ns))
+
+    # (a)
+    assert roster.stat().st_mtime_ns != recorded["files"]["index.csv"]["mtime"]
+    assert verify_manifest(input_dir, recorded) == []
+
+    # (b)
+    capsys.readouterr()
+    code = main(["resume", str(crashed)])
+    printed = capsys.readouterr()
+    assert "E-RESUME-INPUT-MOVED" not in printed.out + printed.err
+    assert code == EXIT_OK, printed.out + printed.err
+    assert (crashed / "run.yaml").is_file()
