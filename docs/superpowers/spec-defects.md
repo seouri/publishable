@@ -1,3 +1,32 @@
+# Specification defects — gaps found and deliberately not closed
+
+**Read this first. As of 2026-08-25 the charter is complete: every hardening slice H1–H9 and every
+sub-slice has merged, and no slice is chartered after them.**
+
+**So an `## OPEN` entry here is not deferred work. It is what this project ships with.** That is the whole
+of this file's job now, and it changes how three things read:
+
+- **`Owner: unassigned` means nobody, permanently** — not "the next slice to pass by". Where an entry says
+  *"no remaining slice (H5, H6, H9, H3c-3's remaining 14) has this surface"*, the enumeration is a **dated
+  record of the reasoning**, not a claim that those slices are pending. They are all merged.
+- **An owner reading *"whichever slice next touches X"* resolves to a closed slice**, and is dead as
+  written. This file rejects that form by name at its own `RE-OWNED 2026-08-19` entry; the instances that
+  survive predate it. Twenty-four remain.
+- **A struck heading (`~~OPEN~~`) means CLOSED BY CODE**, with the reader that closes it named in the
+  paragraph beneath. A whole-project review sampled thirteen of these, weighted to the oldest, and found
+  **zero false closures** — every one cited a specific reader and every reader existed.
+
+**What to trust, from that same review.** Of thirty-three open entries checked against the code,
+twenty-eight were accurate and several reproduced every clause including their nuances. **The bodies are
+evidence; the headings and owner lines are not.** Five entries were found stating something false at HEAD —
+four of them closed by the last two slices and left standing — and those five are now struck or amended.
+**Before building on an entry, grep the symbol it names.**
+
+**Reopening this file's work means chartering a slice**: a dated scoping measured against the code first,
+because every charter re-scoped in this project was stale in the same direction.
+
+---
+
 
 ## `Config.raw` shadows a config key named `raw`
 
