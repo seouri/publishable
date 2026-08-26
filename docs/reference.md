@@ -1038,17 +1038,17 @@ Unit keys, never row numbers — a roster that gains a unit renumbers rows and w
 
 ### `manifest/input.json` — what was read
 
-Written at run start, re-verified after the run, and carried into a [reproduction](#reproducing-on-another-device) as the manifest its own `run` is checked against. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
+Written at run start, re-verified after the run, and carried into a [reproduction](#reproducing-on-another-device) as the manifest its own `run` is checked against. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim. **`files` is a mapping keyed by the path relative to `input_dir`**, and **`mtime` is `st_mtime_ns`** — an integer, not a formatted timestamp — because it is compared for equality rather than read by a person:
 
 ```json
 {
   "policy": "hash_all",
-  "files": [
-    {"path": "index.csv",         "size": 20481, "mtime": "2026-08-01T09:12:44Z",
-     "sha256": "b1c2..."},
-    {"path": "scans/P0002.nii.gz", "size": 8402113, "mtime": "2026-07-30T22:04:01Z",
-     "sha256": "77aa..."}
-  ]
+  "files": {
+    "index.csv":          {"size": 20481,   "mtime": 1785935564000000000,
+                           "sha256": "b1c2..."},
+    "scans/P0002.nii.gz": {"size": 8402113, "mtime": 1785787441000000000,
+                           "sha256": "77aa..."}
+  }
 }
 ```
 

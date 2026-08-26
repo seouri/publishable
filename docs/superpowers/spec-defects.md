@@ -10851,7 +10851,9 @@ unmarked definition changes in one record's history is a different question from
 two runs across the boundary is told the data differs when it does not, and the remedy in hand is to
 compare the per-file `sha256`s in the two `manifest/input.json` copies, which are unmoved.
 
-## OPEN — § `manifest/input.json`'s fenced example is a different shape from what `build_manifest` writes — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the artifact examples as its surface)**
+## ~~OPEN — § `manifest/input.json`'s fenced example is a different shape from what `build_manifest` writes — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the artifact examples as its surface)**~~
+
+**CLOSED, struck 2026-08-26 by the whole-project review's own fix round.** The fenced example now shows `files` as a **mapping keyed by the relative path** with `mtime` as an integer `st_mtime_ns`, measured against `build_manifest`'s actual return, and the surrounding sentence says both facts outright — so the M2 disclosure that links to this section no longer links to a false example.
 
 **Filed 2026-08-26 by the whole-project review's M2 fix, which did not cause it and links to the
 section.** The example shows `"files"` as a **list of objects each carrying a `"path"` key**, with
