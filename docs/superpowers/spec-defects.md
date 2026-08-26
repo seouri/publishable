@@ -6876,7 +6876,9 @@ bound. Each is its own entry below, each `unassigned`, and **no slice follows th
 config produced empty folds per arm — and is now closed as a refusal rather than as a
 capability.
 
-## OPEN — the generated README's `credentials` region does not exist, so nothing can merge into it
+## ~~OPEN — the generated README's `credentials` region does not exist, so nothing can merge into it~~
+
+**CLOSED by H9d, struck 2026-08-26.** H9d built the `credentials` region: a freshly scaffolded README carries `<!-- publishable:begin credentials -->` and a `cp .env.example .env` line, `docs` is no longer in `NOT_BUILT_COMMANDS` (which is empty), and `generate experiment`'s `required_env` merge shipped in commit `085ae68`. **All four of this entry's claims are false at HEAD.**
 
 `reference.md` § The generated README shows a scaffolded README carrying a
 `<!-- publishable:begin credentials -->` region with a *"(none yet — added as experiments declare
@@ -6911,7 +6913,9 @@ config is affected — this is scaffolding output, not validation — but a read
 § Reproducing on another device or § Secrets & credentials today gets instructions for a file
 region that was never written.
 
-## OPEN — two specified readers of `required_env` belong to unbuilt commands
+## ~~OPEN — two specified readers of `required_env` belong to unbuilt commands~~
+
+**CLOSED, struck 2026-08-26.** `NOT_BUILT_COMMANDS` is `{}` — there are no unbuilt commands. The body's own 2026-08-24 amendment already said the `dry-run` half landed with H9a and the `reproduce` half is a document narrowing rather than work outstanding; **the heading a reader skims stayed false.**
 
 H7c made `BaseTemplate.required_env` readable and gave it its first reader, at `validate`. Two more
 readers are specified and cannot be built here, because each belongs to a command in
@@ -6948,7 +6952,9 @@ outstanding; the `dry-run` half of the table above landed with H9a. Pinned by
 `test_an_installed_template_names_its_plugin_and_defers_to_validate` and its control,
 `test_a_name_no_template_claims_is_reported_as_such_rather_than_as_a_plugin`.
 
-## OPEN — `BaseTemplate.field_convention` is declarable and read by nothing
+## ~~OPEN — `BaseTemplate.field_convention` is declarable and read by nothing~~
+
+**CLOSED by H9d, struck 2026-08-26.** `docs.template_details` reads it — `docs.py:511` renders ``Convention class `{cls.field_convention}` `` for both the `docs` templates region and `list-templates`. The closure was known: commit `844d526`'s own message announced it and updated `CLAUDE.md`'s § Misreadings row, **and did not strike this entry.**
 
 Measured at `478c1f3` and re-confirmed on 2026-08-16: `grep -rn "field_convention" src/publishable/`
 returns two declarations (`templates/base.py`, `templates/builtin/generic.py`) and one comment in
@@ -10129,7 +10135,9 @@ ever loaded in the body: **one hit in `tests/`** (this helper, before the fix) a
 The sweep was proven able to fail by running it against the unfixed helper first, and it is an `ast`
 walk rather than a grep because a wrapped signature defeats a line-oriented one.
 
-## OPEN — `_dispatch`'s branch order is documented as load-bearing and is constrained by no test — **Owner: unassigned, with the reason (no remaining slice owns `_dispatch`'s ordering)**
+## ~~OPEN — `_dispatch`'s branch order is documented as load-bearing and is constrained by no test — **Owner: unassigned, with the reason (no remaining slice owns `_dispatch`'s ordering)**~~
+
+**CLOSED, struck 2026-08-26.** The entry describes a mapping holding four keys (`demo`, `docs`, `list-templates`, `reproduce`); H9c and H9d built all four and `NOT_BUILT_COMMANDS` is empty, so **the branch order this describes no longer exists.** Its own closing instruction — *"whichever runs first should close this"* — fired twice and neither did.
 
 **Filed 2026-08-24 by H9b's whole-branch fix round (review Minor 4).** `cli._dispatch` handles every
 built command before consulting `NOT_BUILT_COMMANDS`, and its two-token lookup
@@ -10499,6 +10507,8 @@ rather than building it. No remaining slice has `run`'s output as its surface.
 ---
 
 ## OPEN — `reference.md` § Package layout names `examples/generic/`, which does not exist and which nothing consumes — **Owner: unassigned, with the reason**
+
+**AMENDED 2026-08-26 — the residue stands, the stated ground does not.** The entry's ground is *"the row carries no `— not yet built` marker"*. **It does** — commit `844d526` added it at 05:31 on 2026-08-25, three and a half hours after this entry landed in the same slice. `examples/generic/` still does not exist, so the residue is real; **the reason given for filing it is false.**
 
 **Found by:** H9d correction 20; `ls examples/` says no such directory, at HEAD.
 

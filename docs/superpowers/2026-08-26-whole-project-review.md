@@ -201,3 +201,31 @@ slices that owned them, and one contract pinned in the wrong place.
 **That is the expected shape for a project whose charter was written slice by slice.** Each slice verified
 its own surface exhaustively and none owned the seam between them — which is precisely what the four
 whole-branch gates kept catching within slices, and what nothing was positioned to catch across them.
+
+---
+
+## Correction to this review, 2026-08-26, made while fixing it
+
+**M4 was mostly wrong, and the way it was wrong is the finding.** It reported five codes "raised with no
+§ Errors row" and treated that as five undocumented codes. Measured while writing the fix:
+
+- **`E-IO-FAILED` is thoroughly documented** — § Exit codes enumerates **every** site it reaches, names the
+  exit code each takes, and states outright why it has no row (*"It is not a `ContractError`"*, and
+  *"a second identifier per surface would be a namespace per command"*). Adding a row would have created
+  the second source of truth that passage exists to refuse.
+- **`E-PROJECT-EXISTS`, `E-STEP-EXISTS` and `E-TEMPLATE-EXISTS` are documented as a class**, in one
+  sentence of that same passage that names the whole generator-refusal family — `new`/`plugin new`,
+  `generate experiment`/`step`/`template`/`report`, `study new` — deliberately, as *"one rule shared by
+  every generator with something to protect, not a rule per file it writes."*
+- **Only `E-INPUT-CHANGED` was genuinely uncovered**: zero mentions in any of the four documents. It now
+  has a row, as the **third** `Collector` refusal beside `E-CODE-DIRTY` and `E-CODE-EMPTY`.
+
+**So the audit's list-1 was measuring row-presence and calling it documented-ness — a proxy, and the wrong
+one.** A class documented as a class has no row per member by design, so a row-counting audit finds five
+defects where there is one. That is this project's own most-repeated failure — *answering a question with
+something correlated rather than with the fact* — committed by the review written to find it, and it is
+recorded here rather than quietly corrected because **an audit that miscounts in the direction of alarm is
+as misleading as one that miscounts the other way.**
+
+**What survives from M4 unchanged**: `CLAUDE.md`'s standing five-code filing named the wrong codes — three
+of its five had rows by the time it was written — and that correction stands.
