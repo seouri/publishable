@@ -327,9 +327,17 @@ def test_manifest_drift_mid_run_names_the_changed_path(tmp_path: Path, capsys):
     )
 
     assert main(["run", str(cfg)]) == EXIT_FAILED
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert "E-INPUT-CHANGED" in out
     assert "index.csv" in out
+    # Whole-project review M1's OTHER branch, and this is the one fixture that
+    # reaches it: `status` is `failed` while every execution completed, so the
+    # closing line names no error rather than reporting "0 of 5 executions
+    # failed" — a count that would name the wrong fact. Both halves asserted,
+    # because the absence alone passes for a build that prints nothing at all.
+    assert "run failed: no execution recorded an error" in captured.err
+    assert "executions failed" not in captured.err
 
     run_dir = next(results.glob("run_*"))
     doc = yaml.safe_load((run_dir / "run.yaml").read_text())
