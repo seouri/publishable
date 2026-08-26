@@ -646,16 +646,14 @@ review's own baseline, so nothing else moved in either direction. The mutation
 was reverted **by editing back** and the file `diff`-ed byte-identical against a
 copy taken before it.
 
-**And the collection check a `-k` run cannot make.** The mutated full run
-collected 3417 where the baseline collected 3416 + 1 skipped + 2 xfailed = 3419
-→ 3420 at HEAD: collection rose by exactly one, so the module-scope names this
-test adds (`_NESTED_CLUSTER_ROSTER`, `_cells_holdout_resample`) shadow nothing
-in a 787-test module.
-
-One thing the review's own suggestion would have got wrong and this fixture
-does not: at `min_clusters: 4` (the gate's measured discriminator) the shipped
-code is **silent** and the mutant warns, so the only available assertion is an
-absence. Both floors here were chosen so the shipped code is the loud one.
+**And the collection check a `-k` run cannot make**, read off the three runs'
+own summary lines rather than from a `--collect-only` this round did not run:
+the review's baseline collected 3416 + 1 + 2 = **3419**, the clean HEAD run
+3417 + 1 + 2 = **3420**, and the mutated HEAD run 1 + 3416 + 1 + 2 = **3420**.
+Collection rose by exactly one against the baseline, and the mutated run
+collected the same 3420 as the clean one — a module-scope name collision would
+have held it at 3419. So the names this test adds (`_NESTED_CLUSTER_ROSTER`,
+`_cells_holdout_resample`) shadow nothing in a 787-test module.
 
 ### Finding 2 — MAJOR, the `min_clusters` filing's false claims: **CLOSED**
 
@@ -767,11 +765,11 @@ throughout.
 
 Not a count of zero disagreements — what was searched, and what each hit was:
 
-- `grep -n "_holdout_test_roster" src/publishable/validate.py` → **6** hits:
-  the call site, the definition, and **four** prose mentions
+- `grep -n "_holdout_test_roster" src/publishable/validate.py` → **5** hits:
+  one call site (`:748`), one definition (`:6114`), and **three** prose mentions
   (`:3230` `_check_holdout`'s docstring, `:5924` and `:5941` `_resolved_cells`'
-  docstring citing it as precedent, and its own docstring). No second call site,
-  which is what makes one pin sufficient.
+  docstring citing it as precedent). No second call site, which is what makes
+  one pin sufficient.
 - `awk` over `_check_units`' body for `cells` → **8** hits: the assignment, two
   comment lines, the `is not None` gate, and the **four** consumer calls above.
   This is the enumeration the corrected filing states, and it is exhaustive by
@@ -791,6 +789,12 @@ Not a count of zero disagreements — what was searched, and what each hit was:
 - A fence-aware walk for `kind: fold` over the feasibility analysis → **0**
   inside a fence, all hits prose (the original sentence plus the correction's
   own mention).
+- `grep -rn "whole-branch-review" tests/` → **0** hits. This file is the one
+  edit made after the last green suite run, so it is the one that needed its own
+  sweep rather than the run's evidence.
+- The two greps above reconcile exactly, which is the arithmetic that makes them
+  enumerations rather than samples: `cells: ` → 5 + 4 + 1 + 2 = 12, and the
+  `awk` walk → 1 + 2 + 1 + 4 = 8.
 - `cat .superpowers/sdd/.gitignore` → intact, not clobbered to a bare `*`.
 
 ### Concerns carried forward, unclosed
