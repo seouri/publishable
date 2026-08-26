@@ -25,12 +25,17 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H3c-3's remaining 14, and nothing else — the H4, H5, H6, H7, H8
-and H9 families are all complete.** H6a, H6b and H9a merged on 2026-08-23, H9b, H9c and H9d on
-2026-08-24. **The command surface is finished**: every row of `reference.md` § CLI reference reads
-`built`, and the one remaining slice's surface is `units.py` and `stats.py` rather than a command — which
-means **anything left open in a command has no later slice that would naturally reach it**, and the
-`spec-defects.md` entries owned by *unassigned* are now the whole of that list.
+**NOTHING REMAINS ON THE CHARTER. Every hardening slice — H1 through H9, and every sub-slice of H3, H4,
+H5, H6, H7, H8 and H9 — has merged**, the last of them (H3c-3) on 2026-08-25. H6a, H6b and H9a merged on
+2026-08-23; H9b, H9c and H9d on 2026-08-24. **The command surface is finished**: every row of
+`reference.md` § CLI reference reads `built`.
+
+**What that changes for anyone reading this file next.** There is **no later slice**, so a
+`spec-defects.md` entry owned by *unassigned* is not deferred work — **it is what this project ships
+with**, and every such entry now says so in those words. A gap found from here is a new slice's charter,
+scoped and designed the way every one of these was: **a dated scoping measured against the code first**,
+because every charter re-scoped in this project was stale in the same direction — H8 at 30 tasks against
+one row, H5 at 19, H6 at 20, H9 at **49**, and H3c-3's own remainder at 23 against a charter of 14.
 H5 split two ways on the write/downstream seam, and the split's own framing was corrected twice: the
 exposure was never H5b's alone (H5a's task 9 changed a shipped surface too), and what the split actually
 rested on is narrower — **H5b changes what an existing key may contain and report (`aggregated`), and
@@ -200,6 +205,51 @@ without that, two entries with bit-identical p-values got corrected values diffe
 declaration order. And **six fixtures across this slice failed their own constraints** — one asserting
 `b = 0` where 66 hits were expected, one asserting the very value it existed to reject — every one
 caught by computing rather than by reading, which is what *a fixture is a claim too* means in practice.
+
+**H3c-3 (folds and holdouts inside cells) merged on 2026-08-25 — the last slice in the project.** A
+`{kind: fold}` level's partitions and a `data.units.holdout` are now drawn **inside each cell** rather
+than across the roster, so every cell contributes the declared fraction of **itself** and `k` is bounded
+by the **thinnest populated cell**; `E-REPL-FOLD-CELLS` and `E-DATA-HOLDOUT-CELLS` are both retired, and
+`limits.min_units_per_cell` gains its first reader as **`W-DATA-CELL-THIN`**. It **unblocks zero configs**
+— no experiment in the feasibility analysis declares a group axis, which is why H3d was allowed to precede
+it in the first place.
+
+Five things worth carrying, and the first is the one to read twice.
+
+**Retiring a refusal can open a defect the refusal was silently holding shut.** `runner.execute_plan`
+composed an **arm-narrowed test side** with a **roster-wide train side**, and the only thing preventing a
+model from being trained on units it is then evaluated against — **across arms, with no diagnostic** — was
+one assert whose own comment justified it by `E-DATA-HOLDOUT-CELLS`. The fold path fifty lines below got
+it right. **So the ordering was ruled before any task ran**: *no commit exists in which the assert is gone
+and the train side still comes from the roster*, and that was checked **commit by commit**, not claimed.
+**A guard whose correctness depends on a refusal nobody plans to keep is a defect with a delay on it.**
+
+**A ruling's premise can be false while the ruling is right.** Ruling HH ordered the slice built because
+two normative documents described the behaviour *in the present tense* — measured, **all three sites read
+"not built"**, so the documents and the code already agreed and *an unbuilt reader of an unbuilt surface
+is specification*. The decision was **re-grounded rather than rewritten**, on three grounds that survive.
+**Append the correction; do not retro-fit the argument.**
+
+**The accepted-and-never-forwarded defect landed TWICE in one slice — the fourth and fifth instances in
+four slices.** A `cells` parameter was added to `_resolved_holdout`, documented at length, and wired to
+`cells=None`; the same shape then turned up at `validate._holdout_test_roster`, forwarded and **pinned by
+nothing**. **Both were caught only by fixtures built to discriminate two readings rather than exercise a
+path** — the first because it asserts **membership** where a per-arm count would have passed by chance
+with probability **≈0.42**, the second because the gate wired the argument to a constant and watched the
+whole suite stay green. **A count is not a discriminator; a path exercised is not a property pinned.**
+
+**The oracle was measured against the other tree, not read off an arm.** 336 no-cell cases — folds and
+holdouts across rosters, digests, `k`, clusters, strata, methods and seeds — run under both HEAD and a
+real `main` worktree and compared **byte for byte**, with the comparison proven able to fail. *That is what
+"bit-identical where nothing should change" costs to actually know.*
+
+**And a guard pin can expire rather than break.** H9d's arm C hashed two live documents to assert a fact
+about a **past merge**, so it had to go red the first time a later slice legitimately edited either — and
+it did, when this slice replaced a sentence that was **false against the code**. The investigation it
+forced **retired half of it**: a digest over a document whose job is to describe behaviour slices change
+is a **proxy that fails whenever the document does its job**, while the half over `design-principles.md`
+stays, because for a file that should not move a digest **is** the direct question. **The arm worked
+exactly as designed — its firing was information, and the information was about itself.**
 
 **H9d (`demo`, `docs`, `list-templates`) merged on 2026-08-24 — the last of H9's four, and the last of
 the command surface.** `demo` walks the whole arc and **prints what it actually prints**: `run`'s stdout is
@@ -924,6 +974,8 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | The test's **reader** normalising the defect away | A resolved-values echo shipped as a YAML alias — one anchor, five `*id001` pointers — and **both tests used `yaml.safe_load`, which resolves aliases**. The defect lived in the serialization and the reader undid it before the assertion. When a defect could live in *how* a value is written, assert on the raw text |
 | A sweep whose **triage** discards a true hit | Two sweeps of one file missed a false clause **eight lines** from one they found, because the hits were reconciled against a design decision's table of *three known homes* instead of being attributed one at a time — so a fourth hit in an already-accounted-for file read as noise. *Every hit must be attributed before it is counted*, which this repo first wrote about refusals that fire and which applies identically to grep hits |
 | Proving an arm **cannot move** offered as proof the line is **pinned** | A change to the shared worked example was declared safe because a guard-pin arm was *measured unable to see the edited line* — and that is exactly why nothing pinned it: reinstating the removed value left **626 doc-reading tests green**. Those are opposite facts wearing one sentence. **Ask what fails if the value comes back**, and prove it by neutering the new pin's own assertions and watching the suite stay green |
+| A parameter **added, documented, and wired to a constant** | Four slices in a row shipped one: `draft` accepted and never forwarded to `assemble_run_yaml`; `cells` documented as *drawn inside each cell* and passed `None`; the same again one function away, **forwarded and pinned by nothing** — wiring it to a constant left the whole suite green. **The docstring is not the wiring**, and *an unread parameter is an unbuilt reader of a shipped surface*. Grep every new parameter's call sites for a literal |
+| A **count** where the property needs **membership** | A proportional holdout over two arms of ten lands 2/2 **by chance with probability ≈0.42**, so `len(test ∩ arm) == 2` passes with the per-cell wiring dropped. The fixture that caught it asserts **which units**. **Before asserting a number, ask what fraction of wrong implementations produce that same number** |
 | A sweep that has never been shown to fail | Two of three sweeps written in one batch were **incapable of failing** when first run — by their authors, while checking for exactly that; one had inverted fence-skip logic, one a broken slugger. A third could not match its target because the phrase wrapped. **Run every sweep against a string you know is present before believing a zero**, and report that proof rather than the zero |
 | A mutation's **result** reported as a count nobody read | Three batches of one slice recorded `1 failed` against a true 4, `375` against 376, and *"six raise sites"* against eight. None changed a conclusion — and the first was **better** pinned than reported, because widening a `try` broke three `pytest.raises` pins nobody had looked for. **A number offered as verification evidence has to be the number the command printed**, or the reader who trusts it is the one who later moves a pin it was supposed to guard |
 | A mutation whose **prediction** went stale under a later task in its own slice | Deleting roster coercion once raised inside `finalize`; after a later task gave `.parquet` its capability, the same mutant **completed at exit 0 and silently published a structural attribute**. The pin still failed, so nothing was weakened — but the *shape* the brief predicted was gone. **A whole-branch re-run is not a formality**: the branch under each mutation changed after the mutation was written |
@@ -1048,6 +1100,13 @@ made by the author of the rule forbidding it, while measuring for it.
   because the phrase spanned a newline in exactly the files nobody had listed. **Sweep for a distinctive
   short fragment, or normalise newlines first** — and when a claim has already been found twice, assume
   the next home is one your last sweep *could not* have matched rather than one you forgot to include.
+- **A guard pin can EXPIRE rather than break.** An arm hashing live documents to assert *"byte-identical at
+  merge"* must go red the first time a later slice legitimately edits one — and when it did, the edit was
+  replacing a sentence that was **false against the code**. **A digest over a document whose job is to
+  describe behaviour slices change is a proxy that fails whenever the document does its job**; a digest
+  over one that should never move is the direct question. **When an arm fires, ask whether the finding is
+  about the code or about the arm** — retiring it with the reason recorded is a legitimate outcome, and
+  refreshing the hash is not.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
 - **`ruff format` does not touch `*.md`** — it processes `.py`, `.pyi` and `.ipynb`, and this repo adds no
