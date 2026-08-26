@@ -51,3 +51,29 @@ Run in the foreground, whole suite, after clearing `pytest-of-joon` and every
 `__pycache__`. `main`'s 3338 → **+78** collected-and-passing, 1 skipped and
 2 xfailed unchanged. Delta accounted for below (Check 10a).
 
+### Check 10a — the delta against `main`'s 3338, accounted for
+
+`pytest --collect-only` under both trees, ids sorted and `comm`-ed:
+`main` collects **3341**, HEAD collects **3419** (= 3416 passed + 1 skipped +
+2 xfailed, so nothing is silently deselected).
+
+**9 ids removed, 87 added**, 3341 − 9 + 87 = 3419.
+
+The 9 removals are each accounted for and none is a lost guarantee:
+
+- 8 are the refusal tests of the two codes this slice retires —
+  `test_a_fold_beside_a_cell_structure_is_refused`,
+  `test_a_holdout_beside_a_cell_structure_is_refused`,
+  `test_both_split_kinds_beside_a_cell_structure_report_both_codes`,
+  `test_a_group_axis_alone_triggers_the_refusal_without_between`,
+  `test_allocation_between_alone_triggers_the_refusal_without_a_group_axis`,
+  `test_an_empty_group_axis_alone_does_not_trigger_the_refusal`,
+  `test_an_evaluation_split_without_a_cell_structure_is_not_refused`
+  (all `test_validate.py`) and
+  `test_a_holdout_beside_a_cell_structure_is_core_defect_not_a_silent_choice`
+  (`test_runner.py`). A retired refusal's tests going with it is the point.
+- 1 is the `docs/experimental-designs.md` parameter of H9d guard-pin arm C,
+  retired by the controller ruling in `ff53cf4`.
+
+The 87 additions land in 8 files; no test file lost a test other than the 9.
+
