@@ -3,7 +3,7 @@
 Branch `h3c3-folds-inside-cells` at `ff53cf4`, against `main` at `dfc6b7d`.
 Written incrementally; each section is appended as its check completes.
 
-**VERDICT: HOLD** — four findings, two Major and three Minor; see § VERDICT at the end. Every finding is one site or one sentence, and no later slice exists to route any of them to.
+**VERDICT: HOLD** — five findings, two Major and three Minor; see § VERDICT at the end. Every finding is one site or one sentence, and no later slice exists to route any of them to.
 
 ---
 
@@ -593,7 +593,7 @@ crash-and-resume with a group axis, `W-DATA-CELL-THIN` does not fire on a
 generated project, § Errors carries one row per code covering every emit site,
 the worked example did not move, and the development record is append-only.
 
-Four findings, none of which requires a design change:
+Five findings, none of which requires a design change:
 
 | # | Sev | Finding |
 |---|---|---|
