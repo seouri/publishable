@@ -19152,11 +19152,12 @@ limits:
 hypotheses: []
 """
 
-# `input_manifest_hash` covers each input file's `mtime` in nanoseconds, so it
-# is a literal only if the mtime is one. Fixed here rather than left to the
-# clock — a figure arm C asserts must be the same on every machine and every
-# run, and a recomputation from the record would assert the function equals
-# itself.
+# Fixed rather than left to the clock — a figure arm C asserts must be the same
+# on every machine and every run, and a recomputation from the record would
+# assert the function equals itself. `input_manifest_hash` was the figure that
+# needed this: it covered each input file's `mtime` in nanoseconds until the
+# whole-project review's M2 (2026-08-26) narrowed `manifest_hash` to content.
+# Kept because it costs nothing and this helper is shared by several arms.
 _H6A_FIXED_MTIME_NS = 1_700_000_000_000_000_000
 
 
@@ -19369,9 +19370,20 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
     digests" is one digest and is asserted as one — the plural in the design's
     list is not coverage this arm has.
 
-    **`input_manifest_hash` covers `mtime` in nanoseconds**, which is why the
-    roster's mtime is fixed by `_h6a_pin_project`. Without that the figure is
-    not a literal on any machine, and the arm would have had to recompute it.
+    **`input_manifest_hash` no longer covers a hashed file's `mtime`** — the
+    whole-project review's M2 (2026-08-26) narrowed `manifest_hash` to the
+    content it can address — so the fixed mtime `_h6a_pin_project` installs is
+    no longer what makes this figure a literal; the roster's own bytes are. The
+    fixture keeps fixing it regardless: it is read by every arm that shares that
+    helper, and removing it buys nothing while risking a figure elsewhere.
+
+    **This arm's `input_manifest_hash` literal MOVED for M2**, and that is this
+    change's own disclosed value move rather than a weakened pin. The arm's H6a
+    property is untouched: the `code_hash` assertion below reads
+    `_H6A_RUN_WITH_ENV_DIGEST` by name, so *exactly one hash moves under H6a*
+    still holds, and the per-file `sha256` in `manifest/input.json` — asserted
+    further down — is byte-identical, because M2 changed only the digest taken
+    over the manifest and not the manifest.
 
     **One line here reads arm B's constant by NAME, and that is deliberate.**
     The `code_hash` assertion below is `_H6A_RUN_WITH_ENV_DIGEST`, arm B's own
@@ -19409,7 +19421,7 @@ def test_h6a_arm_c_the_seven_other_present_figures_are_unmoved(tmp_path: Path, m
         "sha256:0e55a047167d30e2caa3acefe8cff398e391a19d801add5932f95b1e2eb7232e"
     )
     assert provenance["input_manifest_hash"] == (
-        "sha256:15d29dcab933c4824f78ff18c7ed7a3b2b83fe693c2faaa405cd54e92bdc3dc1"
+        "sha256:82fccc76b9be0b67557259ee869f82791aaa35ba6dbd9cc5b8d6edb847e4d1e1"
     )
     assert provenance["environment"]["uv_lock_hash"] == (
         "sha256:c0b8db057b9b36718982fea80396ba000fd75dd36ff2262bbbca881af07e341e"
@@ -24734,12 +24746,11 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     attempt's figure.
 
     **Why this cannot be pinned through `command_resume`**, and it is the
-    reason this test hand-assembles a `Resumed`: `manifest_hash` covers each
-    file's `st_mtime_ns`, and the pre-lock comparison is an equality between
-    the fresh manifest and the recorded one — so on every directory a resume
-    accepts, the two hashes are equal and an assertion comparing
-    `run.yaml`'s figure against `manifest/input.json`'s digest passes under
-    both readings. The existing assertion in
+    reason this test hand-assembles a `Resumed`: the pre-lock comparison is an
+    equality between the fresh manifest and the recorded one — so on every
+    directory a resume accepts, the two hashes are equal and an assertion
+    comparing `run.yaml`'s figure against `manifest/input.json`'s digest passes
+    under both readings. The existing assertion in
     `test_h9b_a_resume_keeps_every_units_result_and_the_recorded_manifest`
     is exactly that shape and is blind to this mutation (grepped:
     `input_manifest_hash` appears in that test at one line, comparing against
@@ -24748,11 +24759,20 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     what discriminates.
 
     The recorded manifest handed in differs from the fresh one in ONE file's
-    `mtime` and nothing else, which `manifest_hash` covers and
-    `verify_manifest` does not read under `hash_all` (it compares `sha256`
-    when one is recorded) — so phase 8 stays clean and `status` stays
-    `completed`, and the only observable difference is which manifest the
-    record was assembled from.
+    `size` and nothing else. That field is chosen because it is the one thing
+    `manifest_hash` covers and `verify_manifest` does **not** read for a hashed
+    file: under `hash_all` the detector compares `sha256` alone and falls back
+    to size and mtime only for a file the policy left unhashed. So phase 8 stays
+    clean and `status` stays `completed`, and the only observable difference is
+    which manifest the record was assembled from.
+
+    **`mtime` was this discriminator until the whole-project review's M2**, and
+    the field moved for a reason rather than for convenience: `manifest_hash` no
+    longer covers a hashed file's `mtime` at all, so `mtime += 1` now produces
+    two EQUAL digests and could not discriminate anything. The property this
+    test pins is byte-unchanged — the RECORDED manifest travels into phases
+    6-10, not the fresh one — and only the field carrying the difference moved,
+    onto the one that still separates the digest from the detector.
     """
     from publishable.cli import Prepared, Resumed, _execute_prepared, _prepare_run, _reconstitute
     from publishable.lineage import attempt_counts, read_execution_ledger
@@ -24770,7 +24790,7 @@ def test_h9b_the_recorded_manifest_is_what_travels_into_phases_6_to_10(tmp_path:
     assert manifest_hash(recorded) == manifest_hash(prepared.manifest)  # the two agree today
     doctored = json.loads(json.dumps(recorded))
     name = sorted(doctored["files"])[0]
-    doctored["files"][name]["mtime"] += 1
+    doctored["files"][name]["size"] += 1
     assert manifest_hash(doctored) != manifest_hash(prepared.manifest)
 
     records = read_execution_ledger(crashed)
@@ -27692,13 +27712,17 @@ def test_h3c3_the_roster_ORDER_lever_is_blocked_by_the_input_manifest_gate(tmp_p
     # The can-fail half: restore the roster and the same resume succeeds, so
     # the refusal above is attributable to the reordering and not to the
     # fixture being unresumable.
-    # The can-fail half: restore the roster and the same resume succeeds, so
-    # the refusal above is attributable to the reordering and not to the
-    # fixture being unresumable. **The content is not enough** — `manifest`
-    # records `size` and `mtime_ns` beside the content hash, so a
-    # byte-identical rewrite still moves `manifest_hash`. Measured, not
-    # assumed: without the `os.utime` below this control fails with the same
-    # code, which is a second reason the roster-order lever is unavailable.
+    #
+    # **The `os.utime` below is no longer load-bearing, and the claim that used
+    # to justify it was made false by the whole-project review's M2
+    # (2026-08-26).** It read: "the content is not enough — `manifest` records
+    # `size` and `mtime_ns` beside the content hash, so a byte-identical
+    # rewrite still moves `manifest_hash`", and that is now wrong for a hashed
+    # file: `manifest_hash` covers content and size, never a hashed file's
+    # mtime. Restoring the bytes is sufficient on its own. The call is kept
+    # because it makes the restoration exact rather than approximately exact,
+    # and because it is harmless — but it is no longer the reason this control
+    # passes, and a reader must not take it for one.
     index.write_text(original)
     recorded = json.loads((crashed / "manifest" / "input.json").read_text())
     entry = recorded["files"]["index.csv"]
@@ -27715,10 +27739,15 @@ def test_h3c3_a_real_resume_executes_against_the_RECORDED_cells_end_to_end(tmp_p
     proves by direct call.
 
     **Which lever, measured.** The brief's roster-order lever is **blocked**,
-    pinned by the sibling above: `manifest` records `size` and `mtime_ns`
-    beside the content hash, so a reordered — or even a byte-identical
-    rewritten — `index.csv` earns `E-RESUME-INPUT-MOVED` before
-    `_resumed_allocation` is reached. The lever that works is the one F5
+    pinned by the sibling above: a reordered `index.csv` is different content
+    under `input_manifest_policy: hash_all`, so it earns
+    `E-RESUME-INPUT-MOVED` before `_resumed_allocation` is reached. (The
+    sibling's stronger claim — that even a *byte-identical* rewrite moves
+    `manifest_hash`, because the manifest records `mtime_ns` — was true when it
+    was written and was made false by the whole-project review's M2
+    (2026-08-26); the reordering half, which is what blocks the lever, stands.)
+
+    The lever that works is the one F5
     already uses, `_h9b_swapped`: **edit the crashed run's own
     `allocation.json`**, which is the artifact `resume` treats as
     authoritative and which no hash on the resume path covers. It instantiates
@@ -28037,3 +28066,127 @@ def test_provenance_manager_is_null_for_an_environment_uv_did_not_make(tmp_path,
         "uv_lock_hash",
         "hardware",
     ]
+
+
+# ===========================================================================
+# Whole-project review 2026-08-26, M2 — the VALUE CHANGE, at the artifact and
+# at the one shipped command whose behaviour it moves.
+
+
+def test_input_manifest_hash_is_content_addressed_in_a_real_record(tmp_path: Path):
+    """Two real runs over byte-identical data whose mtimes differ publish the
+    SAME `provenance.input_manifest_hash`.
+
+    Asserted on `run.yaml` rather than on `manifest_hash`, because the record is
+    what ships: `manifest.manifest_hash` has its own unit arms in
+    `tests/test_manifest.py`, and none of them proves the projection is what
+    `command_run` actually writes into `provenance`.
+
+    The mtime difference is forced with `os.utime` rather than left to the clock:
+    two runs a second apart would differ anyway on most filesystems, but a
+    coarse-grained one could put both writes in the same tick and make this pass
+    for the wrong reason. The pre-assertions below check the two manifests really
+    do differ on mtime and really do agree on content, so a green result cannot
+    mean "the two manifests were identical".
+    """
+    from publishable.manifest import manifest_hash
+
+    first = run_a_project(
+        tmp_path / "a", replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4
+    )
+    second_root = tmp_path / "b"
+    second = run_a_project(
+        second_root, replication={"repeats": [{"kind": "seed", "n": 1}]}, units=4
+    )
+    roster = second_root / "data" / "index.csv"
+    ns = roster.stat().st_mtime_ns + 86_400_000_000_000
+    os.utime(roster, ns=(ns, ns))
+    # A third run of the SAME project as `second`, after the touch — same
+    # config, same repo, same bytes, a different mtime.
+    assert main(["run", str(second["cfg"])]) == EXIT_OK
+    third_dir = sorted(second["results_dir"].glob("run_*"))[-1]
+    assert third_dir != second["run_dir"]
+
+    def manifest_of(run_dir: Path) -> dict:
+        return json.loads((run_dir / "manifest" / "input.json").read_text())
+
+    m2, m3 = manifest_of(second["run_dir"]), manifest_of(third_dir)
+    # The two halves that make this test able to fail: the mtimes moved, the
+    # content did not, and the mtime is still RECORDED (only the digest drops
+    # it, so `verify_manifest`'s fallback keeps its operand).
+    assert m3["files"]["index.csv"]["mtime"] != m2["files"]["index.csv"]["mtime"]
+    assert m3["files"]["index.csv"]["sha256"] == m2["files"]["index.csv"]["sha256"]
+    assert m3["files"]["index.csv"]["size"] == m2["files"]["index.csv"]["size"]
+
+    def published(run_dir: Path) -> str:
+        return yaml.safe_load((run_dir / "run.yaml").read_text())["provenance"][
+            "input_manifest_hash"
+        ]
+
+    assert published(third_dir) == published(second["run_dir"])
+    assert published(third_dir) == manifest_hash(m3)
+    # And across two unrelated projects over the same input bytes, which is the
+    # question `input_manifest_hash` exists to answer: was the data identical?
+    assert published(first["run_dir"]) == published(second["run_dir"])
+    # The control on that last assertion: the two runs really are two different
+    # projects, in two different repositories, over two separately written
+    # copies of the roster. **`code_hash` is NOT the control here and was
+    # measured, not assumed**: two freshly scaffolded projects hash IDENTICALLY,
+    # because `code_hash` covers `src/**` and `templates/**` by repo-relative
+    # path and the generated trees are byte-identical — the first draft of this
+    # test asserted they differ and failed with the same digest on both sides.
+    # `provenance.git.repo_root` is the field that actually separates them.
+    first_doc = yaml.safe_load((first["run_dir"] / "run.yaml").read_text())
+    second_doc = yaml.safe_load((second["run_dir"] / "run.yaml").read_text())
+    assert (
+        first_doc["provenance"]["git"]["repo_root"] != second_doc["provenance"]["git"]["repo_root"]
+    )
+
+
+def test_m2_a_resume_after_a_bare_touch_is_no_longer_refused(tmp_path: Path, capsys):
+    """**The one behaviour change M2 makes to a shipped command.**
+
+    `command_resume` gates on `manifest_hash(recorded) != manifest_hash(fresh)`
+    and refuses `E-RESUME-INPUT-MOVED`. Before M2 a bare `touch` of one input
+    file between the crash and the resume was enough to trip that gate — while
+    `verify_manifest`, the detector the run itself uses in phase 8, correctly
+    reported nothing changed. An operator whose backup tool restamped an mtime
+    lost the whole crashed run for a reason no artifact could justify.
+
+    Now it resumes. Asserted with the two halves that make it attributable:
+
+    (a) the mtime really moved and the content really did not, read off the
+        recorded manifest and the file on disk;
+    (b) `E-RESUME-INPUT-MOVED` is absent from what the command printed, and the
+        resume reaches `EXIT_OK` with a `run.yaml` — an exit code alone would
+        pass if the gate had fired and some later phase had returned `0`.
+
+    The refusal itself stays pinned, on the faults it is really about, by
+    `test_h9b_the_input_manifest_gate` (content moved, file added, manifest
+    unreadable) — grepped rather than assumed: `E-RESUME-INPUT-MOVED` appears in
+    this file at six lines, and none of the three arms there turns on an mtime.
+    """
+    from publishable.manifest import verify_manifest
+
+    control = tmp_path / "crash_control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    input_dir = Path(yaml.safe_load(Path(doc["cfg"]).read_text())["data"]["input_dir"]).expanduser()
+
+    recorded = json.loads((crashed / "manifest" / "input.json").read_text())
+    assert recorded["policy"] == "hash_all"
+    roster = input_dir / "index.csv"
+    ns = recorded["files"]["index.csv"]["mtime"] + 86_400_000_000_000
+    os.utime(roster, ns=(ns, ns))
+
+    # (a)
+    assert roster.stat().st_mtime_ns != recorded["files"]["index.csv"]["mtime"]
+    assert verify_manifest(input_dir, recorded) == []
+
+    # (b)
+    capsys.readouterr()
+    code = main(["resume", str(crashed)])
+    printed = capsys.readouterr()
+    assert "E-RESUME-INPUT-MOVED" not in printed.out + printed.err
+    assert code == EXIT_OK, printed.out + printed.err
+    assert (crashed / "run.yaml").is_file()

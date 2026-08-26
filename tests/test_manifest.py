@@ -131,3 +131,109 @@ def test_hash_index_hashes_the_named_files_and_nothing_else(tmp_path: Path):
         files["index.csv"]["sha256"]
         == build_manifest(tmp_path, "hash_all")["files"]["index.csv"]["sha256"]
     )
+
+
+# Whole-project review 2026-08-26, M2: `manifest_hash` digested the whole
+# manifest, `mtime` included, so `touch` alone moved `input_manifest_hash` while
+# `verify_manifest` — the change DETECTOR — correctly reported nothing changed,
+# because it compares `sha256` for a hashed file and falls back to size+mtime
+# only for one the policy left unhashed. The detector was content-addressed
+# where it could be and the hash never was.
+
+
+def test_touch_alone_does_not_move_the_hash_under_hash_all(input_dir: Path):
+    """The defect, stated as the property. Every byte is identical and every
+    mtime differs, so nothing but the mtime can be what a moved digest saw.
+
+    Paired with the detector's own answer in the same test: `verify_manifest`
+    reported nothing changed before this fix too, and asserting the hash alone
+    would not say the two now agree — which is the whole finding.
+    """
+    before = build_manifest(input_dir, "hash_all")
+    digest = manifest_hash(before)
+    for path in (input_dir / "index.csv", input_dir / "sub" / "scan.bin"):
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_mtime_ns + 1_000_000_000, stat.st_mtime_ns + 1_000_000_000))
+    after = build_manifest(input_dir, "hash_all")
+    # The mtimes really moved — without this the test passes on a filesystem
+    # that quietly ignored `os.utime`, which is a test that cannot fail.
+    assert {r: e["mtime"] for r, e in after["files"].items()} != {
+        r: e["mtime"] for r, e in before["files"].items()
+    }
+    assert verify_manifest(input_dir, before) == []
+    assert manifest_hash(after) == digest
+
+
+def test_a_content_edit_still_moves_the_hash_under_hash_all(input_dir: Path):
+    """The control the test above needs: a projection that dropped too much
+    would make the digest insensitive to content as well, and a hash nothing
+    moves is not an identity claim."""
+    before = build_manifest(input_dir, "hash_all")
+    (input_dir / "index.csv").write_text("patient_id\np1\np2\np3\n")
+    assert manifest_hash(build_manifest(input_dir, "hash_all")) != manifest_hash(before)
+
+
+def test_the_manifest_still_records_mtime_for_a_hashed_file(input_dir: Path):
+    """Only the DIGEST drops it. `verify_manifest`'s size+mtime fallback reads
+    the recorded value for an unhashed file, and `manifest/input.json` is
+    byte-identical across this change — so the projection has to live in
+    `manifest_hash` rather than in `build_manifest`."""
+    m = build_manifest(input_dir, "hash_all")
+    for entry in m["files"].values():
+        assert entry["sha256"] is not None
+        assert isinstance(entry["mtime"], int)
+
+
+def test_touch_still_moves_the_hash_under_none(input_dir: Path):
+    """No weaker where content is not available. Under `none` there is no
+    content hash, so size and mtime are the only evidence there is and the
+    digest must keep covering both — the policy's own documented claim is a
+    change *detector*, not a verification."""
+    before = build_manifest(input_dir, "none")
+    path = input_dir / "index.csv"
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_mtime_ns + 1_000_000_000, stat.st_mtime_ns + 1_000_000_000))
+    assert manifest_hash(build_manifest(input_dir, "none")) != manifest_hash(before)
+
+
+def test_under_hash_index_only_the_named_files_mtime_stops_counting(tmp_path: Path):
+    """The discriminating arm: one file the policy hashed and one it did not, in
+    one `input_dir`, touched one at a time. A projection applied to every file
+    alike would pass the first half and fail the second; one applied to none
+    would fail the first. Neither reading survives both assertions."""
+    (tmp_path / "index.csv").write_text("patient_id\np1\n")
+    (tmp_path / "unnamed.txt").write_text("not named by anything\n")
+
+    def touch(name: str) -> None:
+        path = tmp_path / name
+        ns = path.stat().st_mtime_ns + 1_000_000_000
+        os.utime(path, ns=(ns, ns))
+
+    before = build_manifest(tmp_path, "hash_index", {"index.csv"})
+    assert before["files"]["index.csv"]["sha256"] is not None
+    assert before["files"]["unnamed.txt"]["sha256"] is None
+
+    touch("index.csv")
+    assert manifest_hash(build_manifest(tmp_path, "hash_index", {"index.csv"})) == manifest_hash(
+        before
+    )
+
+    middle = build_manifest(tmp_path, "hash_index", {"index.csv"})
+    touch("unnamed.txt")
+    assert manifest_hash(build_manifest(tmp_path, "hash_index", {"index.csv"})) != manifest_hash(
+        middle
+    )
+
+
+def test_the_policy_stays_in_the_payload_so_two_claims_cannot_collide(tmp_path: Path):
+    """Under an `input_dir` whose every file is an index file, `hash_index` and
+    `hash_all` produce identical per-file projections. They are two different
+    claims about the same bytes — "the units were identical and nothing else
+    moved size or timestamp" against "the data was identical" — so they must
+    not share one digest. Dropping `policy` from the payload makes them equal.
+    """
+    (tmp_path / "index.csv").write_text("patient_id\np1\n")
+    all_ = build_manifest(tmp_path, "hash_all")
+    index = build_manifest(tmp_path, "hash_index", {"index.csv"})
+    assert all_["files"] == index["files"]
+    assert manifest_hash(all_) != manifest_hash(index)
