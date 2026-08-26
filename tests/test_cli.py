@@ -27836,3 +27836,153 @@ def test_h3c3_a_real_resume_honours_the_RECORDED_holdout_rather_than_redrawing(t
         assert in_unit in split["test"]
         assert out_unit in split["train"]
         assert set(split["test"]) | set(split["train"]) == control_arm
+
+
+# ---------------------------------------------------------------------------
+# Whole-project review 2026-08-26, M6: `io.record`'s scalar contract had two
+# structurally identical enforcement sites — the plain branch and the
+# `measurement=` branch — and deleting the coercion from either cost 2 failures
+# out of 3417, both hand-constructing a `StepIO` and asserting on `io.rows()`.
+# Every end-to-end run test passed with a `list` accepted into a recorded
+# column. The pin below runs a REAL project through `main(["run", ...])` and
+# asserts on the ARTIFACT rather than on the accessor.
+#
+# **What this pin can and cannot see, measured rather than assumed.** A
+# `numpy.float64` reaching `units.parquet` uncoerced is NOT observable at the
+# artifact: `_encode_parquet` calls `_coerced_rows(rows, keep_structural=True)`
+# on its way out, which unwraps a NumPy scalar independently of `io.record`, and
+# `pq.read_table(...).to_pylist()` yields Python scalars either way. So the
+# discriminating value is a STRUCTURAL one — `.parquet` keeps a structural cell
+# byte-faithfully by its own documented capability, so with the coercion gone a
+# `list` reaches `units.parquet` and comes back as a `list`. The NumPy half is
+# still recorded here, in the good step, as the positive control that the
+# artifact carries real exact-typed cells rather than being vacuously empty.
+_M6_GOOD_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        import numpy as np
+
+        for i, unit in enumerate(io.units):
+            io.record(
+                unit.key,
+                {{
+                    "score": np.float64(i) / 2,
+                    "count": np.int64(i),
+                    "valid": np.bool_(i % 2 == 0),
+                    "label": np.str_("m" + str(i)),
+                }},
+            )
+        return {{}}
+"""
+
+_M6_BAD_STEP = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            io.record(unit.key, {{"trace": [1, 2]}}MEASUREMENT)
+        return {{}}
+"""
+
+_M6_SCALARS = (bool, int, float, str, type(None))
+
+
+@pytest.mark.parametrize(
+    ("arm", "measurement", "units_overrides"),
+    [
+        ("plain", "", None),
+        (
+            "measured",
+            ", measurement='r1'",
+            {"measurements": {"by": "read_id", "collapse": "first"}},
+        ),
+    ],
+)
+def test_io_record_refuses_a_structural_value_end_to_end_at_both_branches(
+    tmp_path: Path, arm: str, measurement: str, units_overrides: dict[str, Any] | None
+):
+    """A real `run` whose second step records a `list`; parametrized over both
+    `io.record` enforcement sites so neither can be narrowed alone.
+
+    Three properties, and each is non-vacuous on the side it pins:
+
+    (a) **the execution fails with `E-STEP-RETURN-TYPE`, and the run still
+        writes its record.** Delete the coercion at this arm's site and the
+        execution *completes* — this assertion is what catches it, and it is
+        the half that cannot pass by absence.
+
+    (b) **every cell of every `units.parquet`/`measurements.parquet` under the
+        run directory is an exact Python scalar type.** With the coercion in
+        place the bad step raises before `io.finalize()` — `runner.execute_plan`
+        calls `finalize` INSIDE the `try`, after the step returns — so it writes
+        no table at all and this sweep sees only the good step's. With the
+        coercion gone the bad step completes and its `list` lands in the
+        artifact, which is what this assertion reads back. Asserted on
+        `_decode_parquet` of the file's own bytes, never on `io.rows()`.
+
+        **(b) is proven able to fail, and it is NOT the assertion that catches
+        the mutation.** Under either deletion, `run_a_project`'s own
+        `expect_exit` assertion fires first (the run exits `0` rather than
+        `EXIT_PARTIAL`), and then (a). To reach (b) at all the mutation probe
+        had to neuter both: with the plain branch's `coerce_scalars` deleted,
+        `expect_exit=EXIT_OK` and (a) commented out, (b) failed naming
+        `seed40/step02_trace/units.parquet`, column `trace`, `<class 'list'>`,
+        `[1, 2]`. So (a) is the catching assertion and (b) is the one that says
+        what shipped — recorded this way round rather than the reverse, because
+        an assertion whose failure is unreachable behind an earlier one is a
+        claim about the artifact that no mutation has yet exercised.
+
+    (c) **the good step's table is non-empty and carries all four exact types**,
+        so (b) is a sweep over something rather than a control asserting only
+        absences.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        _starter_step=_M6_GOOD_STEP,
+        extra_steps=["trace"],
+        extra_step_source=_M6_BAD_STEP.replace("MEASUREMENT", measurement),
+        units_overrides=units_overrides,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run_dir = doc["run_dir"]
+    assert (run_dir / "run.yaml").is_file()
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert run["status"] == "partial"
+
+    ledger = [json.loads(line) for line in (run_dir / "executions.jsonl").read_text().splitlines()]
+    bad = [e for e in ledger if e["step"] == "step02_trace"]
+    good = [e for e in ledger if e["step"] == "step01_summarize_units"]
+    assert bad and good, [e["step"] for e in ledger]
+    # (a) — the half that cannot pass by absence.
+    assert {e["status"] for e in bad} == {"failed"}
+    assert {e["status"] for e in good} == {"completed"}
+    for entry in bad:
+        assert "E-STEP-RETURN-TYPE" in (entry["error"] or ""), entry["error"]
+        assert "'trace'" in (entry["error"] or ""), entry["error"]
+
+    # (b) — the artifact, not the accessor.
+    tables = sorted(run_dir.rglob("units.parquet")) + sorted(run_dir.rglob("measurements.parquet"))
+    seen_types: set[type] = set()
+    for table in tables:
+        assert "step02_trace" not in table.parts, f"the refused step wrote {table}"
+        for row in _decode_parquet(table.read_bytes()):
+            for column, value in row.items():
+                assert type(value) in _M6_SCALARS, (table, column, type(value), value)
+                seen_types.add(type(value))
+
+    # (c) — the sweep in (b) ran over real cells of every type the good step wrote.
+    assert {bool, int, float, str}.issubset(seen_types), seen_types
