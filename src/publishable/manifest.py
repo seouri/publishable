@@ -40,8 +40,46 @@ def build_manifest(
     return {"policy": policy, "files": files}
 
 
+def _hash_payload(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The manifest with each HASHED file's `mtime` dropped.
+
+    `input_manifest_hash` answers *was the data identical?*, and an `mtime` is
+    not data. Digesting the manifest whole made `touch` alone move the published
+    hash while `verify_manifest` — the change *detector* — correctly reported
+    nothing changed, because it compares `sha256` for a file the policy hashed
+    and falls back to size and mtime only for one it did not. The detector was
+    content-addressed where it could be and the hash never was.
+
+    The projection is exactly that asymmetry and no wider:
+
+    - a file the policy hashed contributes its `size` and its `sha256`, and not
+      its `mtime` — content decides, and `size` is redundant beside a content
+      hash rather than wrong, so it is left in place rather than removed for
+      tidiness;
+    - a file the policy did **not** hash contributes all three, unchanged. Size
+      and mtime are the only evidence there is, and dropping the mtime would make
+      the hash *weaker* than the detector rather than as strong.
+
+    `policy` stays in the payload. Under an `input_dir` whose every file is an
+    index file, `hash_index` and `hash_all` produce identical per-file
+    projections, and two different claims about the same bytes must not collide
+    on one digest.
+
+    The MANIFEST itself is unchanged — `verify_manifest`'s fallback needs the
+    mtime, and `manifest/input.json` is byte-identical across this change. Only
+    the digest taken over it moves.
+    """
+    files = {}
+    for rel, entry in manifest["files"].items():
+        if entry.get("sha256") is None:
+            files[rel] = entry
+            continue
+        files[rel] = {k: v for k, v in entry.items() if k != "mtime"}
+    return {**manifest, "files": files}
+
+
 def manifest_hash(manifest: dict[str, Any]) -> str:
-    payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    payload = json.dumps(_hash_payload(manifest), sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 

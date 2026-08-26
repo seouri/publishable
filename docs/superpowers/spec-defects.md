@@ -10813,3 +10813,69 @@ document states, which is why the docstring records rather than fixes.
 **Severity:** Minor-to-Major depending on the design — an empty fold is a paid execution over no
 units, disclosed by `n.resolved: 0` rather than hidden, but nothing refuses it. Reachable only under a
 declared `fold.stratify_by`, which no config in `docs/feasibility-llm-growth-studies.md` declares.
+
+## OPEN — `input_manifest_hash`'s definition changed and only `uv.lock` carries why, so `diff` prints `input_manifest DIFFERS` for identical data — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the record's schema as its surface)**
+
+**Filed 2026-08-26 by the whole-project review's M2 fix.** `manifest_hash` was narrowed to the content
+it can address — a hashed file's `mtime` no longer reaches the digest — so
+`provenance.input_manifest_hash` moves for every past run whose policy hashed at least one file.
+Nothing in a record says which definition produced its figure, and
+[`diff`](../reference.md#operation-commands) accordingly prints `input_manifest DIFFERS` for two runs
+over byte-identical data taken on either side of the change.
+
+**This is the same shape H6a shipped for `code_hash` and it is the same refusal, taken for the same
+reason rather than by analogy.** A `provenance.hash_definition` key, a fourth hash, or a
+`schema_version` bump were each considered and refused there: a bump makes
+`lineage.read_record_file` reject **every record already on disk**, which is strictly worse than an
+unmarked value change. The carrier is `provenance.environment.uv_lock_hash` — core's own version is
+pinned in that lockfile — and the honest statement of the cost is the one H5b wrote for its own
+value change: **being *able* to derive a definition change from a lockfile digest is not being
+told.**
+
+**What is measured and what is not.** Measured: the value moves under `hash_all` and under
+`hash_index` whenever it named at least one file, and does **not** move under `none` (no file is
+hashed, so the digest's input is byte-identical); `manifest/input.json` is byte-identical across the
+change and its per-file `sha256`s are unmoved; nothing derived from `code_hash` moves, and
+`provenance.upstream[]` copies `code_hash`/`parameters_hash` and never a manifest hash, so no record
+can carry two manifest-hash definitions the way one can carry two `code_hash` definitions. Not
+measured, and the reason this is filed rather than closed: **how many records already on disk this
+affects is unknowable from here**, which is exactly what a marker would have answered.
+
+**The check its closer must make** is not "add a marker" — that is refused above. It is whether
+`diff` should grow a line distinguishing *a definition boundary* from *a data change* for **both**
+hashes at once, which needs something in the record to read and therefore reopens the refusal on
+different grounds than either slice argued it on: H6a refused a marker for one hash, and two
+unmarked definition changes in one record's history is a different question from one.
+
+**Severity:** Minor. No number a run publishes is wrong, and no run is refused — a reader comparing
+two runs across the boundary is told the data differs when it does not, and the remedy in hand is to
+compare the per-file `sha256`s in the two `manifest/input.json` copies, which are unmoved.
+
+## OPEN — § `manifest/input.json`'s fenced example is a different shape from what `build_manifest` writes — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has the artifact examples as its surface)**
+
+**Filed 2026-08-26 by the whole-project review's M2 fix, which did not cause it and links to the
+section.** The example shows `"files"` as a **list of objects each carrying a `"path"` key**, with
+`"mtime": "2026-08-01T09:12:44Z"` — an ISO-8601 string. `manifest.build_manifest` returns
+`{"policy": …, "files": {<relative path>: {"size": …, "mtime": <st_mtime_ns>, "sha256": …}}}`: a
+**mapping keyed by relative path**, with `mtime` an integer at nanosecond scale, pinned by
+`tests/test_manifest.py::test_stored_mtime_is_an_int_at_nanosecond_scale`.
+
+**Both halves reproduced rather than recalled:** `sed -n '/### `manifest\/input.json`/,+15p'
+docs/reference.md` for the example; `manifest.py`'s `files[rel] = {...}` and
+`return {"policy": policy, "files": files}` for the shape; and the test above for the int.
+
+**Why it is not closed here.** These four fixes changed the digest taken over the manifest and not
+the manifest, and the example is a *normative* artifact example — rewriting it is a decision about
+what the document promises, with `verify_manifest`'s own prose and the three
+`input_manifest_policy` rows reading against it, rather than a typo to correct in passing. The M2
+disclosure links to this section for the `mtime` fact, which the example does state correctly in
+substance (the manifest records one per file) and in the wrong type.
+
+**The check its closer must make:** whether the example becomes the dict-keyed, ns-int shape the code
+writes, or whether the code's shape is the one that should change — the list form carries `path`
+explicitly and is the friendlier thing to read, and nothing outside `manifest.py` and its own tests
+consumes the structure by key today (`verify_manifest` and `cli.py`'s two call sites are the whole
+reader set, grepped).
+
+**Severity:** Minor. A reader hand-writing a checker against the example gets the wrong parser; no
+published number is affected.
