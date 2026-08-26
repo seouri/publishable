@@ -59,6 +59,25 @@ class Node:
             )
         return _wrap(value, full)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise ContractError(
+            f"the config is immutable: cannot set {name!r}. A node is rebuilt on every "
+            "access, so the write would land on a throwaway object — a step that held "
+            f"one and read {name!r} back would see its own value while every fresh "
+            "`cfg` access still returned what the config declares. The config is the "
+            "record of what ran; change it in the file",
+            code="E-CONFIG-IMMUTABLE",
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise ContractError(
+            f"the config is immutable: cannot delete {name!r}. A node is rebuilt on "
+            "every access, so the deletion would land on a throwaway object and every "
+            "fresh `cfg` access would still resolve the path. The config is the record "
+            "of what ran; change it in the file",
+            code="E-CONFIG-IMMUTABLE",
+        )
+
 
 class Config(Node):
     def __init__(self, data: dict[str, Any]) -> None:
