@@ -2389,3 +2389,25 @@ code is **minted** (`W-DATA-CELL-THIN`) and its gate excludes all nine. No exit 
 none moves. The only behaviour change reachable from a config without a group axis is the one that
 is not a change at all: `units.partition_within_cells` reduces to the byte-identical whole-roster
 `partition_units` call it made before, which is what guard-pin arms A, B, D and E exist to hold.
+
+#### Correction appended 2026-08-25 — one grep in the entry above is falsified by its own sentence
+
+**This is a correction to the H3c-3 entry's row 1, not a new entry**, and it mints **no fifth
+number**: the four-row table is untouched and still the thing to quote.
+
+That row writes *"`grep -n "kind: fold"` returns **nothing** — no config here declares a `fold` level
+at all."* Run against this file it returns a line, and that line is the sentence making the claim —
+the self-matching-sweep shape `CLAUDE.md` § Mechanical traps names, met here by a sweep written
+inside the file it sweeps. **The unscoped count is not a figure worth quoting at all**, since this
+correction itself moves it: naming the searched string is enough to change the answer, which is why
+the rule is to filter the file list rather than the output.
+
+**The substance is unchanged and now stated reproducibly.** Scoped to what the claim is about — the
+fenced blocks, which is where every config in this analysis lives — the string appears **zero**
+times inside a fence; every hit is prose. So no config here declares a `fold` level, both retired
+codes stay unreachable for want of a cell structure, and row 1 stands at **8 of 8** exactly as
+derived.
+
+The two greps beside it were already scoped and are unaffected: *"two hits in config blocks, both
+`groups: []`"* and *"two config hits, both `allocation: within`"* each count config blocks rather
+than lines, so neither is falsified by its own sentence.

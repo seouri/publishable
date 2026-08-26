@@ -10624,6 +10624,30 @@ one commit earlier.
 - **It is a fact, not a deferral.** Nothing about these entries is scheduled, waiting, or blocked on
   an input. A reader who wants one closed is the owner, and this file is the brief.
 
+**SCOPE WIDENED 2026-08-25 by H3c-3's whole-branch fix round — from *the thirty-eight* to EVERY
+unclosed entry in this file.** The thirty-eight above are the entries that *justify* `unassigned` by
+naming a slice, and the sentences above are addressed to them; but they are not every open entry, and
+the ones they leave out are the ones that most need the sentence. Re-measured by the same walk at the
+fix round's commit — sections split on `^## `, each body whitespace-collapsed first:
+
+| Measured | Count |
+|---|---|
+| `## OPEN` headings | 59 |
+| …the union this entry governed (`H3c-3` or *whichever slice*) | 41 |
+| …outside that union | 18 |
+| …of those, already carrying a *no remaining slice* sentence of their own | 3 |
+| **…outside the union AND carrying no such sentence — newly covered here** | **15** |
+
+Those fifteen say `Owner: unassigned` (one says `Owner: none; accepted`) and stop there, and
+`unassigned` alone reads as *awaiting an owner* — which is the reading this file's own
+`RE-OWNED 2026-08-19` entry rejects. **They are not awaiting anything. No slice follows this one, so
+every one of them ships open and unowned, and the same three bullets above — the verdict does not
+move, it is a fact rather than a deferral, a reader who wants one closed is the owner — apply to
+them verbatim.** No body is edited, so nothing is retro-edited and the fifteen keep their own dates.
+(The whole-branch review counted **14** here; the walk above finds 15, the extra being the `run`
+execution-banner entry. The figure to reproduce is 15, and the same control as above holds — `H99z-4`
+returns **0** over the 59.)
+
 **And the hygiene check the `RE-OWNED 2026-08-22` entry asked for is still missing, permanently.**
 It wanted a test that parses every unclosed `## ` heading's `Owner:` line **and** any *"no remaining
 slice (…)"* enumeration and fails on either naming a merged slice. It would live in `tests/`, and
@@ -10688,6 +10712,38 @@ than one that misses a design whose thinnest arm does not.
 rather than inferred from silence: the slice threads `cells` into `_check_holdout` and into the fold
 basis and into nothing else, and `_check_resample`'s call is unchanged, still `fold_basis(roster,
 cluster_by)` over the roster or over the holdout's realized test side.
+
+**CORRECTED 2026-08-25 by H3c-3's whole-branch fix round — the paragraph immediately above is false in
+its first two clauses, and this paragraph replaces them.** *"Into nothing else"* and *"did not move
+it"* are both wrong. `_check_units`' `cells` local has **four** consumers, not two, and they are the
+whole list: the fold basis (`units.thinnest_cell`), `_check_cell_size`, `_check_holdout`, and — the
+one the paragraph above misses — **`_holdout_test_roster`, whose return value *is* `_check_resample`'s
+`holdout_test`.** (`cli._resolved_holdout` is the same threading on the run side.) So the decomposition reaches this denominator by one hop, and *"the holdout's
+realized test side"* names a **different set of units** after this slice than before it. **This is
+therefore a disclosure of something the slice did move, not a filing of something left alone.**
+
+**Measured rather than argued**, on one config run through `validate_config` under both trees: 24
+units in two arms of 12, six clusters nested inside each arm, `cluster_by: cl`, a `by_attribute`
+`arm` axis, `holdout: {method: random, frac: 0.2, seed: 1}`, `resample: {method: bootstrap, n: 2000}`.
+
+| `limits.min_clusters` | At `main` `dfc6b7d` | At this branch |
+|---|---|---|
+| 3 | no `W-STATS-RESAMPLE-CLUSTERS` (flat test side: 6 units, **3** clusters) | warns (per-cell test side: 4 units, **2** clusters) |
+| 5 | warns, naming **3** clusters | warns, naming **2** clusters |
+
+So the figure moves in **both** directions — a warning that did not fire now does, and one that fired
+now names a different count. (At `main` that config also earned `E-DATA-HOLDOUT-CELLS`, retired by
+this slice's task 16; `validate` collects rather than aborting, so the warning was computed beside the
+refusal and the comparison is between two answers to the same question, not between an answer and
+silence.)
+
+**What survives of the paragraph above:** `_check_resample`'s own call really is byte-identical, and
+the open gap this entry is *about* is untouched — the count is still roster-wide rather than per-arm
+under `allocation: between`, still wrong in the direction of not firing, and Ruling LL still stands.
+The forward is now pinned by
+`tests/test_validate.py::test_the_resample_cluster_count_is_over_the_PER_CELL_holdout_draw`, which
+asserts the per-cell count by message equality at `min_clusters: 5` and its presence at 3; before that
+test, wiring the forward to the constant `None` left the whole suite green.
 
 **Severity:** Minor. Both the roster figure and the per-arm figure are true; the warning states the
 one that fires less often.
