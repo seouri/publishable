@@ -338,3 +338,110 @@ with no last-cell row (`E-IO-FAILED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`,
 
 **No finding.**
 
+## Check 8 — the filings
+
+### The struck entry really is closed by code
+
+*"an evaluation split cannot be drawn within a cell"* turned on the sentence
+**"No build draws one."** `units.partition_within_cells` and
+`units.holdout_within_cells` exist, are the single producers `validate` and
+`run` both call, and Check 5 above shows a real run drawing four units per arm
+per fold end to end. Both registry rows are gone (Check 3, Check 7). Closed.
+
+### The `RE-OWNED 2026-08-25` entry's own counts, re-derived by me
+
+Sections split on `^## `, each body whitespace-collapsed before matching (the
+file is hard-wrapped and `H3c-3's remaining 14` wraps mid-phrase):
+
+```
+## OPEN headings: 59      naming H3c-3: 37
+naming "whichever slice": 10      union: 41
+control: "Owner:" -> 58 sections, "H99z-4" -> 0
+```
+
+The entry predicts in writing *"re-running this sweep at this commit returns
+**59 and 41**, not 56 and 38"*. **Both figures reproduce exactly.** The sweep
+was proved able to fail by the entry's own control and by mine.
+
+### The three new filings, each reproduced
+
+- **A cluster may span two cells.** Reproduced by building C1's own measured
+  roster (15 units, `S1`×7 / `S2`×3 / `S3`×3 / `S4` / `S5`, `control` = 0–7),
+  drawing the axis through the real `assignment_for(method: by_attribute)` and
+  intersecting through `cells_of`: cluster **`S2` lands in both**
+  `(('arm','control'),)` and `(('arm','treatment'),)`. And
+  `stratum_varies_within_cluster(roster, "cl", "arm")` returns
+  `('S2', ['control', 'treatment'])` — so the helper the filing names as *the
+  check that would close it* really does report the pair today. Filing accurate.
+- **The per-stratum fold bound.** Reproduced exactly as filed:
+  `partition_units(6 units, k=6, strata=3+3)` returns
+  `[['v1','v3'], ['v0','v5'], ['v2','v4'], [], [], []]` — **three empty
+  folds**, nothing refused. Filing accurate.
+- **`limits.min_clusters` under cells.** The call really is unchanged:
+  `groups = fold_basis(holdout_test if holdout_test is not None else roster, cluster_by)`
+  is byte-identical at `main:6149` and `HEAD:6399`, and `_check_resample(doc,
+  roster, c, holdout_test=holdout_test)` is byte-identical too. **But see the
+  finding below** — one clause of this filing is false.
+
+### Finding — MAJOR: the `min_clusters` filing's *"and into nothing else"* is false, and its *"did not move it"* is false with it
+
+The filing says:
+
+> **H3c-3 did not move it and did not make it worse** … the slice threads
+> `cells` into `_check_holdout` and into the fold basis and **into nothing
+> else**, and `_check_resample`'s call is unchanged, still
+> `fold_basis(roster, cluster_by)` over the roster or over the holdout's
+> realized test side.
+
+The AST signature diff (Check 2) shows `cells` was threaded into **four**
+functions, not two: `_check_holdout`, the fold basis (`thinnest_cell` at
+`:718`), `cli._resolved_holdout` — and **`validate._holdout_test_roster`**,
+whose return value *is* `_check_resample`'s `holdout_test`. So `cells` reaches
+that denominator by one hop, and *"the holdout's realized test side"* is a
+**different set of units** after this slice than before it.
+
+And the denominator genuinely moves. Searching over rosters drawn through the
+real `assignment_for(by_attribute)` and `cells_of`: 24 units, two arms of 12,
+6 clusters nested inside the arms, `frac: 0.25`, holdout seed `67096` (a legal
+pinned `data.units.holdout.seed`) — the **per-cell** test side spans **4**
+clusters, the flat one spans **3**. At `limits.min_clusters: 4` that is one
+`W-STATS-RESAMPLE-CLUSTERS` present before this slice and absent after it, on
+an unchanged config.
+
+The filing's *substance* survives — the warning is still roster-wide rather
+than per-arm, still wrong in the not-firing direction, and Ruling LL still
+stands. What is false is the two sentences saying this slice touched nothing
+here, and they are exactly the sentences the entry says exist *"so that is on
+the record rather than inferred from silence."*
+
+**Route: no slice follows. Correct it in this slice's fix round** by appending
+to that entry (never by rewriting the body): `cells` reaches the denominator
+through `_holdout_test_roster`, the test side is now a per-cell draw, and the
+figure can move in either direction. It is the same site as the Check 2 Major,
+so one fix round can close both.
+
+### Finding — MINOR: 14 OPEN entries are outside the governing entry's stated scope and say only `Owner: unassigned`
+
+The `RE-OWNED 2026-08-25` entry scopes itself explicitly — *"the union, which
+is what this entry governs: **38**"* and *"Read every one of those
+thirty-eight reasons this way"*. Of the 59 OPEN entries, **18 name neither
+`H3c-3` nor *whichever slice***, and of those **14 never say that no slice
+follows** anywhere in their bodies: `required_env`'s two unbuilt readers,
+`BaseTemplate.field_convention`, `main`'s un-redacted last-resort handler, the
+unloaded installed template class, the plugin-side collision, the escaping
+`glob`, the derived-metric clustered null, the contrast-side `null_draws`, the
+two `check_facts` credential entries, the four fact-contract refusals,
+`resolves_inside_repo`, `nondeterministic`, and the `basis: "repeats"` entry.
+Each says `Owner: unassigned` (one says `Owner: none; accepted`) and stops
+there.
+
+`unassigned` and *no slice follows* are different claims: the first reads as
+*awaiting an owner*, which is what this file's own `RE-OWNED 2026-08-19` entry
+rejects. Four of the 18 already carry *"no remaining slice owns X"*, which is
+the shape the other 14 lack.
+
+**Route: no slice follows.** Cheapest correct fix, one sentence in the fix
+round: widen the governing entry's scope sentence from *the 38* to *every
+unclosed entry in this file*, adding the count of the ones it newly covers.
+No body is edited, so nothing is retro-edited.
+
