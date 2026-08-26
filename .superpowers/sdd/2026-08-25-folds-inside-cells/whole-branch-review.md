@@ -609,3 +609,199 @@ filing. Findings 3, 4 and 5 are one sentence each. **No later slice exists to
 route any of them to** — H3c-3 is the last slice in the project, so what is not
 closed in this slice's fix round ships as it stands.
 
+
+---
+
+## Fix round — 2026-08-25
+
+Four of the five findings are **closed**; the fifth is **open with its reason
+stated**. Commits `1f9149e` (Major 1) and `f260183` (Major 2, Minors 3 and 4);
+this section is committed separately.
+
+### Finding 1 — MAJOR, `_holdout_test_roster`'s `cells` pinned by nothing: **CLOSED**
+
+`tests/test_validate.py::test_the_resample_cluster_count_is_over_the_PER_CELL_holdout_draw`.
+
+**The fixture discriminates the two readings.** 24 units in two arms of 12,
+six clusters nested inside each arm (so no cluster spans a cell), a
+`by_attribute` `arm` axis, `holdout: {method: random, frac: 0.2, seed: 1}` —
+the seed **pinned**, so the partition is a fixture value rather than a
+digest-dependent one. On that roster the per-cell test side is **4 units in 2
+clusters**; the flat whole-roster one is **6 units in 3**. The test asserts:
+
+- at `limits.min_clusters: 5`, the whole `W-STATS-RESAMPLE-CLUSTERS` message
+  **by equality** — the count is the discriminator, `2` shipped versus `3`
+  mutant;
+- at `limits.min_clusters: 3`, the warning's **presence** — the per-cell
+  reading warns (2 < 3), the flat one is silent (3 < 3 is false).
+
+Both arms assert something present under the shipped code, so neither passes on
+"nothing ran", and neither is a count assertion a forced dimension could satisfy.
+
+**Proved, and proved to fail alone.** With `validate.py`'s forward wired to the
+constant `None` — the review's own mutation, applied at the same site — a
+**full unfiltered** run gives `1 failed, 3416 passed, 1 skipped, 2 xfailed`:
+the one failure is this test, and the 3416 is character-for-character the
+review's own baseline, so nothing else moved in either direction. The mutation
+was reverted **by editing back** and the file `diff`-ed byte-identical against a
+copy taken before it.
+
+**And the collection check a `-k` run cannot make.** The mutated full run
+collected 3417 where the baseline collected 3416 + 1 skipped + 2 xfailed = 3419
+→ 3420 at HEAD: collection rose by exactly one, so the module-scope names this
+test adds (`_NESTED_CLUSTER_ROSTER`, `_cells_holdout_resample`) shadow nothing
+in a 787-test module.
+
+One thing the review's own suggestion would have got wrong and this fixture
+does not: at `min_clusters: 4` (the gate's measured discriminator) the shipped
+code is **silent** and the mutant warns, so the only available assertion is an
+absence. Both floors here were chosen so the shipped code is the loud one.
+
+### Finding 2 — MAJOR, the `min_clusters` filing's false claims: **CLOSED**
+
+Corrected by **appending** to the entry (`CORRECTED 2026-08-25`), never by
+rewriting its body, and the correction names the two clauses it replaces.
+
+What is now on the record: `_check_units`' `cells` local has **four**
+consumers, and they are the whole list — the fold basis (`units.thinnest_cell`),
+`_check_cell_size`, `_check_holdout`, and `_holdout_test_roster`, whose return
+value *is* `_check_resample`'s `holdout_test`. `cli._resolved_holdout` is the
+same threading on the run side. So the denominator's **unit set** is a per-cell
+draw after this slice, and the entry is a **disclosure of something the slice
+moved**, not a filing of something left alone.
+
+**Measured under both trees rather than argued.** A `dfc6b7d` worktree was
+created outside the repo and the identical config run through `validate_config`
+under each:
+
+| `limits.min_clusters` | `main` `dfc6b7d` | this branch |
+|---|---|---|
+| 3 | no warning (flat test side: 6 units, 3 clusters) | warns (per-cell: 4 units, 2 clusters) |
+| 5 | warns, naming **3** | warns, naming **2** |
+
+Both `main` figures — the count *and* the size — were read off `main`'s own
+`_holdout_test_roster`, not derived from HEAD's no-cell reduction. The figure
+therefore moves in **both** directions. The correction also records that at
+`main` the same config earned `E-DATA-HOLDOUT-CELLS` beside the warning —
+`validate` collects rather than aborting — so the comparison is between two
+answers to one question, not between an answer and silence.
+
+What survives of the paragraph above it is stated too: `_check_resample`'s own
+call is byte-identical (`groups = fold_basis(holdout_test if holdout_test is
+not None else roster, cluster_by)`, compared across the two blobs), the count is
+still roster-wide rather than per-arm, still wrong in the not-firing direction,
+and Ruling LL stands.
+
+### Finding 3 — MINOR, 14 OPEN entries outside the governing entry's scope: **CLOSED**
+
+The `RE-OWNED 2026-08-25` entry gains a `SCOPE WIDENED 2026-08-25` paragraph
+extending it from *the thirty-eight* to **every unclosed entry in this file**.
+**No body is edited**, so nothing is retro-edited and the fifteen keep their own
+dates.
+
+Re-measured by the same walk (sections split on `^## `, each body
+whitespace-collapsed first) at the fix-round commit: **59** `## OPEN` headings,
+**41** in the union the entry governed, **18** outside it, **3** of those already
+carrying a *no remaining slice* sentence, **15** newly covered. The counts
+before and after the edit are identical, checked by re-running the walk.
+
+**The review's figure was 14; the walk finds 15.** The extra is the `run`
+execution-banner entry, absent from the review's enumeration. The appended
+paragraph states 15, names the discrepancy and its cause, and keeps the control
+(`H99z-4` over the 59 → **0**).
+
+### Finding 4 — MINOR, the self-matching grep in § Executability: **CLOSED**
+
+Corrected by **appending** a dated `#### Correction appended 2026-08-25` note to
+§ Executability. It **mints no fifth number** — the four-row table is untouched
+and is still what to quote — and it corrects a build claim rather than the
+entry's substance.
+
+The note deliberately does **not** state a count for the unscoped grep, because
+naming the searched string moves it — the correction itself would have
+falsified "returns one line" the moment it landed, which is the same trap one
+step further on. It states the **stable** claim instead: scoped to the fenced
+blocks, where every config in this analysis lives, the string appears **zero**
+times; every hit is prose. Verified by a fence-aware walk. The two greps beside
+it are unaffected: both already count *config blocks* rather than lines.
+
+### Finding 5 — MINOR, no `progress.md`: **OPEN, deliberately**
+
+**Not closed, and not by oversight.** The fix-round brief forbids writing one
+and assigns the ledger to the controller, who owns it and will write it. This
+section is the disclosure the review asked for as its second option: H3c-3's
+rulings live in the tracked design (Decisions numbered there) and the tracked
+plan, and the five batch reports carry what each task found. The pointer in
+`CLAUDE.md` § The development record resolves to those.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `uv run pytest` | **3417 passed, 1 skipped, 2 xfailed** in 384s |
+| `uv run ruff check .` | All checks passed |
+| `uv run ruff format --check .` | 101 files already formatted |
+| `uv run mypy` | Success: no issues found in 56 source files |
+
+Foreground, whole suite, after clearing `pytest-of-joon` and every
+`__pycache__`. **The +1 over the review's 3416 is exactly the new test** and
+nothing else; no test was removed, renamed or skipped.
+
+**Nothing regressed.** No `src/` file changed in this round at all
+(`git diff --stat` over the two commits touches `tests/test_validate.py`,
+`docs/superpowers/spec-defects.md` and `docs/feasibility-llm-growth-studies.md`
+only), so the bit-stability oracle, the closed cross-arm leak,
+`W-DATA-CELL-THIN`'s gate and both retired refusals are untouched by
+construction rather than by re-measurement. No guard-pin arm was opened.
+
+### The mechanical pass, on the two edited documents
+
+Both edited `*.md` files were swept: **0** trailing-whitespace, tab or invisible-
+unicode hits; **0** table rows mismatching their header's column count (pipes
+inside inline code and escaped pipes discounted); **0** duplicate heading anchors
+in the feasibility analysis, including the new `####`; no ASCII `x` for
+multiplication; no new links or anchors were introduced. Fenced blocks skipped
+throughout.
+
+### Claims grepped, every hit attributed
+
+Not a count of zero disagreements — what was searched, and what each hit was:
+
+- `grep -n "_holdout_test_roster" src/publishable/validate.py` → **6** hits:
+  the call site, the definition, and **four** prose mentions
+  (`:3230` `_check_holdout`'s docstring, `:5924` and `:5941` `_resolved_cells`'
+  docstring citing it as precedent, and its own docstring). No second call site,
+  which is what makes one pin sufficient.
+- `awk` over `_check_units`' body for `cells` → **8** hits: the assignment, two
+  comment lines, the `is not None` gate, and the **four** consumer calls above.
+  This is the enumeration the corrected filing states, and it is exhaustive by
+  construction rather than by grep-for-a-spelling.
+- `grep -rn "^\s*cells: " src/publishable/*.py` → **12** hits, each read:
+  5 are the parameters named above (`cli:539`, `validate:3195`, `:6033`,
+  `:6119`, `units:2789`), 4 are the other producers' own parameters
+  (`units:1839` `holdout_within_cells`, `:3115`, `:3141`, `:2693` a default),
+  1 is `cli:2170`, a dataclass field, and 2 (`sweep:403`, `:852`) are unrelated
+  locals of a different type (`list[dict]`).
+- `git show dfc6b7d:src/publishable/validate.py | grep -n "groups = fold_basis(holdout_test"`
+  → **1** hit at `:6149`, against **1** at `HEAD:6399`, identical text. The
+  filing's surviving claim.
+- `grep -rn "feasibility-llm-growth-studies\|spec-defects" tests/` → **10+**
+  hits, all prose inside docstrings citing a filing; **no test parses either
+  file's structure**, which is why appending to both is safe.
+- A fence-aware walk for `kind: fold` over the feasibility analysis → **0**
+  inside a fence, all hits prose (the original sentence plus the correction's
+  own mention).
+- `cat .superpowers/sdd/.gitignore` → intact, not clobbered to a bare `*`.
+
+### Concerns carried forward, unclosed
+
+- **The three checks the review did not reach** — § Executability row 1 re-run
+  through `validate` on all eight configs, the five batch reports' claims item
+  by item, and the `statistics` interaction surface `task-b4` enumerates
+  (`runner._units_failed_anywhere`, `runner.attrition`, `cli._cond_roster`) —
+  were **not** taken up in this round either. They ship as the review left them.
+- **The one thing this round newly proves about that surface** is narrow: the
+  new fixture is the first test in the suite to run a
+  `groups` × `holdout` × `cluster_by` config end to end through
+  `validate_config`, and it validates with no error. That is one config, not the
+  pair space `task-b4` names.
