@@ -3,7 +3,7 @@
 Branch `h3c3-folds-inside-cells` at `ff53cf4`, against `main` at `dfc6b7d`.
 Written incrementally; each section is appended as its check completes.
 
-**VERDICT: IN PROGRESS** (see the end of this file for the final line).
+**VERDICT: HOLD** — four findings, two Major and three Minor; see § VERDICT at the end. Every finding is one site or one sentence, and no later slice exists to route any of them to.
 
 ---
 
