@@ -357,6 +357,7 @@ The reference LLM plugin is [`publishable-llm`](https://github.com/someuser/publ
 - **[Reference](https://github.com/seouri/publishable/blob/main/docs/reference.md)** — config schema, CLI, `io` API, templates, sweeps, artifact layout
 - **[Design principles](https://github.com/seouri/publishable/blob/main/docs/design-principles.md)** — why the rules are what they are; read before proposing a change
 - **[Plugin guide](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives)** — building and sharing templates
+- **[The development record](https://github.com/seouri/publishable/blob/main/docs/superpowers/README.md)** — non-normative: how each slice was designed, measured and reviewed, kept because a tool arguing the record should be publishable owes its own
 
 ## Contributing
 

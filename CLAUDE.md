@@ -908,6 +908,7 @@ The four documents say what `publishable` **is**. These say how it got there, an
 
 | Where | What it is | Read it when |
 |---|---|---|
+| `docs/superpowers/README.md` | What the record is, what governs it, and why it is tracked | Before reading anything else in it, or before adding to it |
 | `docs/superpowers/specs/<date>-<slice>-design.md` | A slice's design: its decisions, each with grounds, and what it refuses | Before planning or changing that slice |
 | `docs/superpowers/plans/<date>-<slice>.md` | The same slice as numbered tasks, with code and per-task mutations | While executing it |
 | `docs/superpowers/*-SCOPING.md` | What was **measured against the code**, dated and pinned to a commit | Before trusting any charter |
