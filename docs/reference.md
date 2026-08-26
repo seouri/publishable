@@ -4031,7 +4031,7 @@ It lives in `src/**` rather than in a plugin because it is one experiment's pres
 
 ### The starter step runs
 
-`generate experiment` writes a first step that works rather than one that raises `NotImplementedError`. It counts the units it was given, writes them out, and returns that count as a metric:
+`generate experiment` writes a first step that works rather than one that raises `NotImplementedError`. It records a placeholder number for every unit it was given — which is what earns a [metric block](#the-unit-table-is-the-inference-base): a value, a `ci95`, the four-way `n`, a `method` and a `repeat_spread` — and returns the unit count beside it as a [`basis: repeats`](#the-unit-table-is-the-inference-base) scalar:
 
 ```python
 # src/cohort_pilot/steps/step01_summarize_units.py — generated, and runnable as-is
@@ -4043,11 +4043,17 @@ class Step(BaseStep):
     def run(self, cfg, io):
         units = list(io.units)
         for unit in units:
-            io.record(unit.key, {"present": True})
-        return {"n_units": len(units)}          # TODO: replace with your analysis
+            # TODO: replace this placeholder draw with your own measurement of
+            # `unit`, and rename the column. It must be a NUMBER: a numeric
+            # column is what earns a metric block -- value, ci95, the four-way
+            # n, method and repeat_spread. A bool or a string column reaches
+            # the template's `aggregate` and earns no interval, so a step that
+            # records only those publishes nothing.
+            io.record(unit.key, {"placeholder_score": self.rng.random()})
+        return {"n_units": len(units)}
 ```
 
-Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready: the `TODO` marks the only line that *must* change, and a real pipeline usually renames the file and picks its own [scope](#step-scope) besides — the worked example's first step is `step01_load_cohort` at `scope = "run"`, which is what loading a cohort once should be.
+Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, a real set of provenance hashes, and a real interval over your own units — before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready: the `TODO` marks the only line that *must* change, and a real pipeline usually renames the file and picks its own [scope](#step-scope) besides — the worked example's first step is `step01_load_cohort` at `scope = "run"`, which is what loading a cohort once should be.
 
 **What "immediately" presumes is the `data.units` block `init` wrote** — a table at `input_dir/index.csv` whose key column is the one the config names — since [`io.units` raises when no units are declared](#steps-and-artifacts) and `validate` fails when they don't resolve. Input shaped some other way means editing that one declaration first, which is [one line and one `validate` away](#where-units-come-from); a pipeline with no unit table at all edits the step too, which is the `TODO` it already carries.
 

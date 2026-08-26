@@ -130,6 +130,44 @@ def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
     assert doc["layout"] == {"conditions": False, "repeats": True}
 
 
+def test_the_starter_step_publishes_a_real_metric(tmp_path: Path):
+    """Whole-project review C1. The scaffold exists to demonstrate the loop, and
+    the loop's product is an interval — so what it publishes is asserted key by
+    key, not counted. The pre-fix step recorded `{"present": True}`, a bool
+    column, which by H5b's rule earns no metric block: `aggregated` for this
+    step was `{}` at exit 0 with no diagnostic anywhere.
+    """
+    _, cfg, results = build(tmp_path)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    doc = yaml.safe_load((next(results.glob("run_*")) / "run.yaml").read_text())
+    step = doc["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    entry = step["placeholder_score"]
+    assert entry["basis"] == "units"
+    assert entry["method"] == "t_over_units"
+    assert entry["n"] == {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+    low, high = entry["ci95"]
+    assert low < entry["value"] < high
+    # A draw per repeat, so the five seed repeats disagree: `repeat_spread` is
+    # the half of the block a bool column could never have produced either.
+    assert entry["repeat_spread"]["kind"] == "seed"
+    assert entry["repeat_spread"]["n"] == 5
+    assert entry["repeat_spread"]["std"] > 0.0
+
+
+def test_the_starter_steps_todo_sits_on_the_line_that_decides_the_metric(tmp_path: Path):
+    """C1's third cause: the one `TODO` sat on the `return`, while the reason a
+    first run published nothing was the `io.record` line above it.
+    """
+    root, _, _ = build(tmp_path)
+    lines = (root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py").read_text()
+    lines = lines.splitlines()
+    todo = next(i for i, line in enumerate(lines) if "TODO" in line)
+    record = next(i for i, line in enumerate(lines) if "io.record(" in line)
+    returned = next(i for i, line in enumerate(lines) if line.strip().startswith("return "))
+    assert todo < record < returned
+    assert "TODO" not in lines[returned]
+
+
 def test_run_refuses_a_dirty_code_tree(tmp_path: Path, capsys):
     root, cfg, _ = build(tmp_path)
     # Appended, not overwritten: the edit must dirty `src/**` while leaving the
