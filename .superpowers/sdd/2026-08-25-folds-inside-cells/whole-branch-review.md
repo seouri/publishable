@@ -445,3 +445,104 @@ round: widen the governing entry's scope sentence from *the 38* to *every
 unclosed entry in this file*, adding the count of the ones it newly covers.
 No body is edited, so nothing is retro-edited.
 
+## Check 9 — § Executability, both consistency passes, and the development record
+
+### § Executability, re-derived by me
+
+**The four-row table is byte-identical.** A programmatic walk finds **13**
+`| Figure | Count | Visible to` headers in the analysis; blocks 1 through 12
+are **equal to the last, line for line**, six lines each, by both the
+walk-forward method and a fixed six-line slice. Only block **0** differs, and
+it is the pre-H8a table in an older dated entry — correct, since H8a is the
+entry that changed it. **Four rows, no fifth number**, and the new entry quotes
+no single figure for executability.
+
+**The pinned commit is still accurate.** The entry says *"Measured on
+2026-08-25 against commit `7ef6846`"*; `git diff --stat 7ef6846..HEAD -- src/`
+is **empty**, so no code moved under the claim after it was measured.
+
+**The row-1 greps, re-run by me:** `groups:` → two config hits, both
+`groups: []`; `allocation:` → two config hits, both `within`; `holdout:` → one
+real block plus one `null`, beside that same `within`/`[]`;
+`min_units_per_cell: 20` at lines 216, 339, 629 — **three config blocks**, as
+claimed; `cluster_by:` → two hits, both `null`. So no config here resolves a
+cell structure, both retirements are unreachable, and `W-DATA-CELL-THIN`'s gate
+excludes all of them. Row 1 stands.
+
+#### Finding — MINOR: one grep in § Executability is falsified by its own sentence
+
+The entry writes *"`grep -n "kind: fold"` returns **nothing** — no config here
+declares a `fold` level at all."* Run today it returns **one** line: line 2343,
+the sentence itself. The substance is right — no config block declares a fold —
+but the claim as written is a build claim a reader cannot reproduce, and it is
+the self-matching-sweep shape `CLAUDE.md` § Mechanical traps names.
+
+**Route: no slice follows.** One-word fix in this slice's fix round: say the
+grep returns one hit and that it is this sentence, or scope the grep to the
+config blocks.
+
+### Mechanical pass — clean
+
+Over `README.md`, `docs/design-principles.md`, `docs/experimental-designs.md`,
+`docs/reference.md` (and, separately, the feasibility analysis and `CLAUDE.md`
+for the whitespace half):
+
+- every relative link and `#anchor` resolves — **0 broken**, fenced blocks
+  skipped, GitHub's slugger reproduced (punctuation stripped, each space → one
+  hyphen, so `Secrets & credentials` → `secrets--credentials`);
+- **no duplicate heading anchors** in any of the four;
+- every table's rows match its header's column count, pipes inside inline code
+  and escaped pipes discounted — **0 mismatches, 0 empty rows**;
+- **no trailing whitespace, no tab, no invisible unicode** (the class was
+  corrected mid-check and then controlled: it rejects U+0020 and accepts
+  U+00A0);
+- no ASCII `x` used for multiplication.
+
+### Cross-document pass — the worked example did not move
+
+Every `cohort-pilot` figure was counted across the four documents at `main` and
+at `HEAD` and compared: `0.581 / 0.488 / 0.661`, `0.607 / 0.517 / 0.683`,
+`0.412 / 0.347 / 0.477`, `0.026 / −0.007 / 0.059`, `−0.169 / −0.213 / −0.125`,
+`0.014`, `240`, `228`, and the hash prefixes `8e21 / 1a2b / 3d8a / 6b1f /
+2f5c8d0`. **Not one count changed.** The scan was proved able to fail:
+`E-REPL-FOLD-CELLS` reads `main=4 head=0` through the identical loop. **The
+intervals are not narrowed back.**
+
+The two document edits are both behaviour-tracking, not example-touching:
+`experimental-designs.md` loses one false sentence (*"a fold or a holdout drawn
+within each cell is not built"*), and `reference.md`'s § A fixed holdout split,
+§ Clustered units, § Validation, § Errors, § Warnings and `sweep.yaml` sections
+follow the code.
+
+### The development record was not retro-edited
+
+`git diff --numstat` over `docs/superpowers/` and `.superpowers/`: the plan
+(+43/−0), the design (+56/−0) and all five batch reports (+0 deletions) are
+**append-only**. The only file with deletions is `docs/superpowers/spec-defects.md`
+— **3 lines**, the sole permitted exception — and all three are the strike
+(`## OPEN — an evaluation split…` → the struck heading) plus one
+`prints` → `printed` tense change that preserves the original 195 and appends
+the re-measurement beside it.
+
+`.superpowers/sdd/.gitignore` is intact (not clobbered to a bare `*`).
+
+#### Finding — MINOR: this slice has no `progress.md`, alone among 33
+
+Every other slice directory under `.superpowers/sdd/` carries a `progress.md`;
+`2026-08-25-folds-inside-cells` does not, and none was ever committed
+(`git log --all -- …/progress.md` is empty; the path is not gitignored).
+`CLAUDE.md` § The development record names that file as *"The ledger: every
+ruling, its reason, and what it costs if wrong"* and tells a reader to read it
+before re-deriving anything.
+
+**Mitigated but not closed:** Rulings HH, II, JJ, KK and LL are each defined in
+the tracked design (numbered Decisions 2, 5, …) and the tracked plan, and no
+report on this branch claims a ledger entry that does not exist — so no
+*content* is lost, and the pointer in `CLAUDE.md` still resolves to something.
+What is lost is the one place the table promises it.
+
+**Route: no slice follows.** Either write the ledger from the design's
+decisions and the five batch reports in this slice's fix round, or record in
+this review that the last slice deliberately kept its rulings in the design
+instead — the second costs one sentence and is honest.
+
