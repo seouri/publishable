@@ -546,3 +546,66 @@ decisions and the five batch reports in this slice's fix round, or record in
 this review that the last slice deliberately kept its rulings in the design
 instead — the second costs one sentence and is honest.
 
+## Final state — all mutations reverted, everything re-run
+
+Every mutation in this review was reverted **by editing back** (never
+`git checkout --`), each revert confirmed by `git diff --quiet`, and the tree
+was then re-verified end to end on the clean branch:
+
+```
+$ git status --short                     (empty)
+$ uv run pytest -q                       3416 passed, 1 skipped, 2 xfailed in 382.08s
+$ uv run ruff check .                    All checks passed!
+$ uv run ruff format --check .           101 files already formatted
+$ uv run mypy                            Success: no issues found in 56 source files
+$ <the 336-case oracle, re-run>          ORACLE STILL BIT-IDENTICAL
+```
+
+## Checks I did not reach
+
+- **Row 1 of § Executability re-run through `validate`.** I verified the greps
+  the entry derives it from and that neither retirement is reachable, but I did
+  not transplant all eight configs and run `validate_config` on them. The entry
+  claims that row *unchanged* rather than newly derived, and nothing this slice
+  built can reach a config with no group axis — so the risk is low, but the
+  number is the entry's, not mine.
+- **The five batch reports' own claims, item by item.** I checked the claims
+  the priority list routed me to (Rulings II, JJ, KK, LL; guard-pin arm
+  authorizations; the retirements; the filings) and the three report claims
+  `3e69757` says it corrected, but I did not audit every assertion in
+  `task-b1`–`task-b5` against the code.
+- **The `statistics` interaction surface** enumerated at the end of `task-b4`
+  (`runner._units_failed_anywhere`, `runner.attrition`, `cli._cond_roster` and
+  its four downstream readers) — the newly reachable
+  `holdout × arm_members` pairs. The report calls them *believed correct,
+  untested for this pair*, and I did not build fixtures for them. **No slice
+  follows, so anything wrong there ships.**
+- **`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`'s reworded message** and the other
+  docstring/message rewrites in `units.py` — read, not mutation-tested.
+
+## VERDICT: **HOLD** — for a fix round, not for a redesign
+
+The slice is sound where it matters most: **the bit-stability oracle holds by
+my own measurement across 336 cases against a real `main` worktree**, the
+retirements leave no live claim anywhere, the guard pin is intact and every arm
+can fail, Ruling KK's replacement is derived and survives a real
+crash-and-resume with a group axis, `W-DATA-CELL-THIN` does not fire on a
+generated project, § Errors carries one row per code covering every emit site,
+the worked example did not move, and the development record is append-only.
+
+Four findings, none of which requires a design change:
+
+| # | Sev | Finding |
+|---|---|---|
+| 1 | **Major** | `validate._holdout_test_roster`'s `cells` argument is pinned by nothing — the whole suite is green with it wired to `None`, while a real config discriminates (4 clusters vs 3 in the holdout test side) |
+| 2 | **Major** | The `min_clusters` filing's *"threads `cells` … into nothing else"* and *"did not move it"* are false: `cells` reaches that denominator through `_holdout_test_roster` |
+| 3 | **Minor** | 14 OPEN `spec-defects.md` entries sit outside the `RE-OWNED 2026-08-25` entry's own stated scope and say only `Owner: unassigned` |
+| 4 | **Minor** | § Executability's *"`grep -n "kind: fold"` returns **nothing**"* is falsified by its own sentence |
+| 5 | **Minor** | This slice has no `progress.md`, alone among 33 slice directories |
+
+Findings 1 and 2 are **one site** and close together: one test pinning the
+`cells` forward at `_holdout_test_roster`, and one appended paragraph on the
+filing. Findings 3, 4 and 5 are one sentence each. **No later slice exists to
+route any of them to** — H3c-3 is the last slice in the project, so what is not
+closed in this slice's fix round ships as it stands.
+
