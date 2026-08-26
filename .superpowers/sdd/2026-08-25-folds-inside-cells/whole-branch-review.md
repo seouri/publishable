@@ -109,3 +109,66 @@ specs, plans, scopings, `.superpowers/sdd/`), which is not to be retro-edited.
 
 **No finding.**
 
+## Check 2 — the accepted-and-never-forwarded class, swept
+
+The sweep is mechanical rather than by eye. `ast.parse` over both `main:` and
+`HEAD:` blobs of the seven changed modules, comparing each function's
+`posonlyargs + args + kwonlyargs`. **Seven existing functions gained a
+parameter; nine functions are new.** The gainers, exhaustively:
+
+| Function | Gained | Forwarded from | Constant? |
+|---|---|---|---|
+| `cli._resolved_holdout` | `cells` | `cli.py:2982`, the `cells` local of `cli.py:2844` (`cells_of(group_axes) if group_axes else None`) | no |
+| `validate._check_holdout` | `cells` | `validate.py:757`, the `cells` local of `:691` | no |
+| `validate._check_replication` | `fold_cell` | `validate.py:763` as `fold_cell=basis_cell`, from `thinnest_cell` at `:718` | no |
+| `validate._holdout_test_roster` | `cells` | `validate.py:748`, same local | no |
+| `replication._fold_k` | `cell` | `replication.py:284`, `resolve_repeats`' own `fold_cell` | no |
+| `replication.resolve_repeats` | `fold_cell` | `validate.py:3869` and `cli.py:2877`, both computed | no |
+| `sweep.sweep_document` | `partitions_within` | `cli.py:3345`, from `populated_cells(cells or {})` at `:3334` | no |
+
+A second AST pass confirms each new parameter is **read in the body**
+(docstring excluded): 1, 1, 1, 1, 3, 1 and 2 `Name` loads respectively. So
+task 13's exact shape — added, documented, wired to a constant — **does not
+recur on this branch.**
+
+The two remaining constant-looking arguments are conditionals, not constants:
+`partition_within_cells(…, cells_of(axes) if axes else {}, …)` at `cli.py:2561`
+and `partition_within_cells(…, cells or {}, …)` at `cli.py:2967`.
+
+### Finding — MAJOR: `_holdout_test_roster`'s `cells` is forwarded and pinned by nothing
+
+Mutating the forward at `validate.py:748` to the constant `None` —
+
+```
+_holdout_test_roster(doc, units_decl, roster, usable_cluster, cells)
+  → _holdout_test_roster(doc, units_decl, roster, usable_cluster, None)
+```
+
+— leaves the **whole suite green**: `3416 passed, 1 skipped, 2 xfailed`,
+identical to the unmutated run. (The same mutation applied to the *other* two
+forwards on the same three lines is caught: `_check_holdout`'s constant fails
+`test_the_empty_test_partition_is_bounded_by_the_thinnest_cell_not_the_roster`
+and `test_an_empty_cell_beside_a_holdout_is_bounded_by_the_populated_cells`;
+`fold_cell=None` fails three tests including
+`test_a_k_past_the_thinnest_POPULATED_cell_is_refused_naming_that_cell`. So the
+mutation apparatus is not the thing that is blind.)
+
+**And the seam is real, not vacuous.** `holdout_test` reaches
+`_check_resample`, where `groups = fold_basis(holdout_test …, cluster_by)`
+decides `W-STATS-RESAMPLE-CLUSTERS`. A search over random rosters (clusters
+nested inside arms, the legal shape) finds discriminating inputs immediately:
+12 units, two arms, 4 clusters, `frac: 0.4`, holdout seed 6851 — the per-cell
+draw's test side spans **4** clusters and the flat draw's spans **3**. With
+`limits.min_clusters: 4` that is one warning present under the shipped code and
+absent under the mutant. This is exactly the "seam named in the brief and
+instantiated by no fixture" shape `CLAUDE.md` records, in the one place where
+the docstring's own argument — *"a call that passed the decomposition here and
+not there … would bound `limits.min_clusters` against a test partition no run
+produces"* — is the claim going untested.
+
+**Route: there is no later slice. H3c-3 is the last slice in the project, so
+this ships unpinned unless it is closed in this slice's fix round.** The fix is
+one test: the config above (or any `groups × holdout × cluster_by` config with
+`limits.min_clusters` set at the discriminating value) asserting
+`W-STATS-RESAMPLE-CLUSTERS`'s presence/absence and its cluster count.
+
