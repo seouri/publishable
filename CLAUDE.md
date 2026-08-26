@@ -763,9 +763,16 @@ or by absolute path, and every read is accumulated into `provenance.upstream`. `
 `run.yaml` reader **nothing in `src/` had**, eleven `E-UPSTREAM-*` refusals, and a containment rule now
 enforced on **three** readers — `reuse_from`, `read_upstream` and `read_condition`, the last two having
 enforced **no name rule at all**. **It moves exactly one row of the feasibility analysis' table, 6 → 0**,
-and mints no new number; the `report_by`-under-`resample` gap still meets **seven** configs and is **unassigned** — it was H4's,
-and the 2026-08-19 re-owning after H4d merged moved it, along with four others, to *unassigned with a
-reason*: no remaining slice has the `statistics` block as its surface.
+and mints no new number; the `report_by`-under-`resample` **limitation** still meets **seven** configs. It
+was H4's, and the 2026-08-19 re-owning after H4d merged moved it, along with four others, to *unassigned
+with a reason*: no remaining slice has the `statistics` block as its surface. **RECONCILED 2026-08-26:
+this is a documented limitation, not pending work**, and `reference.md` § Statistical reporting says so in
+those words. The two grounds it rests on both measure true — a level's block carries **no
+`resample_draws` key at all** when `resample_columns` is false (`stats.py` calls the absence deliberate,
+because *"a `null` there would claim otherwise"*), so a reader can see which construction produced which
+number; and **a level joins no correction family**, which is a § Invariants rule, so the asymmetry cannot
+reach an interval a verdict rests on. **The count stays** — seven configs really do meet it, and that is a
+useful figure — but the word *gap* was doing work the facts do not support.
 **H8 was scoped at 30 tasks against a one-row charter**, split 10/8/12 — H8b is `diff`/`freeze`, H8c is
 `report`/`study`, and **`BaseReport` is H8c's** (§ Package layout makes `report.py` *be* `BaseReport`).
 

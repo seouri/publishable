@@ -2411,3 +2411,36 @@ derived.
 The two greps beside it were already scoped and are unaffected: *"two hits in config blocks, both
 `groups: []`"* and *"two config hits, both `allocation: within`"* each count config blocks rather
 than lines, so neither is falsified by its own sentence.
+
+### Correction, appended 2026-08-26 against commit `541f24c` — row 3 names a documented limitation, not a gap
+
+**Row 3 of the four-row table is correct as a count and was described with the wrong word throughout this
+section.** Every entry that repeats the table calls it *"the `report_by`-under-`resample` **gap**"*, and
+twenty-eight sentences here carry that phrasing. **The count stays** — seven of the nine configs (E1, E2,
+E4, E6, C1, C2, C3) declare both a non-empty `report_by` and a non-null `resample`, and that is a true and
+useful figure. **What changes is its character**, and the change is not this analysis' to make: it is
+`reference.md`'s, which already made it.
+
+**§ Statistical reporting addresses it in those words**: *"A `statistics.report_by` level's recorded-column
+interval is a `t_over_units` one even under a declared `resample`, and that is a documented limitation
+rather than a gap awaiting a slice."* Measured against the code on 2026-08-26, **both grounds that
+paragraph rests on hold**:
+
+- **It is self-disclosing.** A level's column block carries **no `resample_draws` key at all** when
+  `resample_columns` is false, and `stats.py` states the absence is deliberate — *"a `null` there would
+  claim otherwise"*. So a record declaring both constructions **shows which one produced which number**
+  rather than presenting them as one design.
+- **It cannot reach a verdict.** A `report_by` level **joins no correction family**, which is a `CLAUDE.md`
+  § Invariants rule. A level is a *description*; the comparison is a contrast. So the asymmetry never
+  touches an interval a hypothesis rests on.
+
+**Why this matters for a reader of this analysis specifically.** The dated entries above are correct that
+seven configs meet it and correct that core chooses the construction inside `summarize_step`. But a reader
+arriving at *"gap"* concludes the tool has a defect these experiments would hit, and **the honest statement
+is narrower**: a run declaring both gets a stratified percentile interval for the condition and an
+unstratified *t* interval for each of its levels, **in one record, distinguishable, and outside every
+correction family**. That is a stated limit of the design, not a wrong number.
+
+**Nothing above is retro-edited**, on this section's own convention — the entries are dated measurements and
+say what was measured when. **The four-row table is untouched and no fifth number is minted.** This
+correction changes one word's worth of meaning and leaves every figure where it was.

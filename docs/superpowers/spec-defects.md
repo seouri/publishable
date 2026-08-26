@@ -6391,7 +6391,7 @@ but `resample_columns and seed is not None` — are pinned by this test and by
 `test_the_undeclared_resample_shape_is_pinned_absent_key` respectively; both were run and confirmed
 to fail before being reverted.
 
-## `percentile_of_derived` reported a zero-width interval for a near-unique stratum — CLOSED; and a report_by asymmetry deferred beside it
+## `percentile_of_derived` reported a zero-width interval for a near-unique stratum — CLOSED; and a report_by asymmetry that is a DOCUMENTED LIMITATION, not deferred work
 
 Found during task 15's review (2026-08-15, H4a). Two related findings, recorded together because
 the fix for the first is what makes the second visible rather than merely theoretical.
@@ -6557,6 +6557,27 @@ as "H4 owns closing this" is false for the reason H4d's own task 24 gives — H4
 closed it in the only way its own ruling allowed, by converting it rather than fixing the code.
 **This entry needs no further owner of either kind.**
 
+
+**RECONCILED 2026-08-26 by the whole-project review — the `report_by` half is not deferred work and this
+entry's heading said it was.** `reference.md` § Statistical reporting addresses it directly: *"A
+`statistics.report_by` level's recorded-column interval is a `t_over_units` one even under a declared
+`resample`, and that is a documented limitation rather than a gap awaiting a slice."* **Both grounds that
+paragraph rests on were measured and hold:**
+
+- **It is self-disclosing.** A level's column block carries **no `resample_draws` key at all** when
+  `resample_columns` is false — `stats.py` states the absence is deliberate, because *"a `null` there
+  would claim otherwise"* — so a record shows which construction produced which number rather than
+  presenting two designs as one.
+- **It cannot reach a verdict.** A `report_by` level **joins no correction family**, which is a
+  `CLAUDE.md` § Invariants rule and not merely a comment, so the asymmetry never touches an interval a
+  hypothesis rests on. A level is a description; a contrast is the comparison.
+
+**So the technical description above stays accurate and its character changes**: this is a bounded, marked
+limitation of a shipped design, not a defect awaiting an owner. **Closing it would change published
+`ci95` values and `method` strings on a shipped surface** and would flow into `corrected_from_pool` —
+H5b's exact class of change, which needed a scoping, a nine-arm guard pin and a disclosure. **Two slices
+that had the context (H4c, H5b) declined it in writing rather than fold it in**, and this reconciliation
+agrees with them rather than reversing them.
 ## ~~The contrast path discloses nothing about its resample~~, ~~and `paired_percentile_of_derived` never got the zero-width sweep~~ (CLOSED — the first half by H4d task 22, the second by H4b-2 task 9)
 
 Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
