@@ -147,8 +147,8 @@ def test_base_report_section_constructs_one():
 
 
 def test_base_report_sections_is_a_generator_yielding_all_four_standard_sections():
-    """Task 6 completes the base: all four standard sections, in Decision
-    5's order, over an empty `run`. Conditions, Deltas and Hypothesis
+    """Task 6 completes the base: all five standard sections, in order,
+    over an empty `run`. Conditions, Deltas and Hypothesis
     verdicts each have nothing to say about an empty record and yield an
     empty `rows` list; Attrition still reports the (missing) top-level
     `status` — it is not refused for lack of content either, it just has
@@ -159,6 +159,7 @@ def test_base_report_sections_is_a_generator_yielding_all_four_standard_sections
     assert inspect.isgenerator(result)
     sections = list(result)
     assert [s.title for s in sections] == [
+        "Run",
         "Conditions",
         "Deltas",
         "Hypothesis verdicts",
@@ -185,7 +186,13 @@ def test_an_override_composes_with_yield_from_super():
             yield self.section("Second", body="b")
 
     titles = [s.title for s in Report().sections(run={}, io=object())]
+    # "Run" leads the standard block since the whole-project review's M7:
+    # a rendered report must name the run it came from. The property this
+    # test exists for is unchanged -- an override's own sections follow
+    # `yield from super()`'s, in order -- so the list grew by one at the
+    # front rather than the assertion being loosened.
     assert titles == [
+        "Run",
         "Conditions",
         "Deltas",
         "Hypothesis verdicts",
@@ -3029,3 +3036,57 @@ def test_fixture_j_report_renders_the_carried_and_the_dropped_columns_correctly(
     names = _table_metric_names(out, "## Conditions")
     assert {"n_rows", "n_valid", "mean_score", "score"} <= names
     assert "valid" not in names
+
+
+def test_a_rendered_report_names_the_run_it_came_from():
+    """**The whole-project review's M7, narrowed to the half that survived
+    reading the specification.** § A report override renders one
+    experiment's own figures rules that `report` produces four standard
+    blocks and NOT a paper-ready page — "the figure your paper actually
+    needs" is the override's job — so "this is a melt, not a report" is a
+    documented division of labour rather than a defect. What did not
+    survive that reading is identity: a rendered report carried no
+    `run_id`, no hash and no commit anywhere in its output, for a tool
+    whose pitch is *hand a collaborator one file*.
+
+    **Asserted on the rendered TEXT, not on the section list**, because
+    the section list is what `test_base_report_sections_…` already pins
+    and a reader's complaint is about what reaches the page. Every value
+    is asserted by its own literal, so a section that rendered the right
+    labels against the wrong record would fail.
+
+    The bundle path is deliberately not re-asserted here — it had this
+    already, through `_bundle_header_section`, which is why the fix is
+    that function's single-run sibling rather than a new idea.
+    """
+    run = {
+        "run_id": "run_2026-08-26T18-57-27Z_ddcb010",
+        "status": "completed",
+        "code_hash": "sha256:ddcb010",
+        "parameters_hash": "sha256:8ef1cae",
+        "provenance": {
+            "input_manifest_hash": "sha256:1848ea4",
+            "git": {"commit": "86f5c9f43beb"},
+        },
+    }
+    page = render_markdown(BaseReport().sections(run, io=object()))
+
+    assert "## Run" in page
+    assert "run_id: run_2026-08-26T18-57-27Z_ddcb010" in page
+    assert "status: completed" in page
+    assert "code_hash: sha256:ddcb010" in page
+    assert "parameters_hash: sha256:8ef1cae" in page
+    assert "input_manifest_hash: sha256:1848ea4" in page
+    assert "commit: 86f5c9f43beb" in page
+    # A non-draft run must not carry the draft warning the bundle path uses.
+    assert "**draft**" not in page
+
+
+def test_a_draft_run_says_so_in_its_own_identity_block():
+    """The `draft` line exists for the same reason `_bundle_header_section`
+    carries one: a draft's code state is not reachable from any commit, and
+    a reader must not have to infer that from an absent hash. Paired with
+    the assertion above so neither is an absence-only control."""
+    page = render_markdown(BaseReport().sections({"run_id": "r", "draft": True}, io=object()))
+    assert "run_id: r" in page
+    assert "**draft**" in page

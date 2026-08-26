@@ -199,8 +199,54 @@ class Section:
     body: "str | Mapping[str, Any]"
 
 
+def identity_section(run: Mapping[str, Any]) -> Section:
+    """§ The five standard sections #0: which run this is.
+
+    A rendered report that cannot say which run produced it is the one thing
+    in this renderer that contradicts the project's own pitch — *hand a
+    collaborator one file* — and a whole-project review found it carrying no
+    `run_id`, no hash and no status anywhere in its output. **The bundle path
+    already had this**: `_bundle_header_section` gives every member a
+    `run_id`/`status` line, so the gap was the single-run path alone, and this
+    is that section's sibling rather than a new idea.
+
+    **It renders identity and nothing derived.** Every value is copied out of
+    the record as written — no rounding, no recomputation, no lookup against
+    the filesystem — because § A report override renders one experiment's own
+    figures rules that a renderer "adds and reorders sections; it cannot
+    change a number", and a section that recomputed a hash to display it would
+    be doing exactly that. A missing key renders as `null` rather than being
+    dropped: a reader comparing two reports needs the row to exist in both.
+
+    The `draft` line follows `_bundle_header_section`'s wording deliberately,
+    for the same reason it exists there — a draft's code state is not
+    reachable from any commit, and a reader must not have to infer that from
+    an absent hash.
+    """
+    provenance = run.get("provenance")
+    if not isinstance(provenance, Mapping):
+        provenance = {}
+    git = provenance.get("git")
+    if not isinstance(git, Mapping):
+        git = {}
+    lines = [
+        f"run_id: {run.get('run_id')}",
+        f"status: {run.get('status')}",
+        f"code_hash: {run.get('code_hash')}",
+        f"parameters_hash: {run.get('parameters_hash')}",
+        f"input_manifest_hash: {provenance.get('input_manifest_hash')}",
+        f"commit: {git.get('commit')}",
+    ]
+    if run.get("draft") is True:
+        lines.append(
+            "**draft** — this run's code state is not reachable from any "
+            "commit; it is not a citable result on its own"
+        )
+    return Section(title="Run", body="\n".join(lines))
+
+
 def conditions_section(run: Mapping[str, Any]) -> Section:
-    """§ The four standard sections #1: `results.conditions[]` — identity,
+    """§ The five standard sections #1: `results.conditions[]` — identity,
     then every metric `aggregated[step]` carries, then its `by` strata when
     declared. A pure function of `run.yaml` alone — no standard section ever
     opens a file under the run directory (Decision 5)."""
@@ -303,7 +349,7 @@ def _declared_contrast_rows(contrast: Mapping[str, Any]) -> list[dict[str, Any]]
 
 
 def deltas_section(run: Mapping[str, Any]) -> Section:
-    """§ The four standard sections #2: every condition's `vs_baseline` AS
+    """§ The five standard sections #2: every condition's `vs_baseline` AS
     WELL AS top-level `results.contrasts` (Decision 5's own correction to
     § The two files' `run.yaml` example, which shows only `vs_baseline` and
     is the reading that produces the bug of silently omitting every
@@ -346,7 +392,7 @@ _HYPOTHESIS_OPTIONAL_FIELDS = ("family_size", "family")
 
 
 def hypotheses_section(run: Mapping[str, Any]) -> Section:
-    """§ The four standard sections #3: `results.hypotheses[]`."""
+    """§ The five standard sections #3: `results.hypotheses[]`."""
     rows: list[dict[str, Any]] = []
     for verdict in (run.get("results") or {}).get("hypotheses") or []:
         if not isinstance(verdict, Mapping):
@@ -450,7 +496,7 @@ def _execution_rows(run: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def attrition_section(run: Mapping[str, Any]) -> Section:
-    """§ The four standard sections #4: `provenance.units.n`; each metric's
+    """§ The five standard sections #4: `provenance.units.n`; each metric's
     own `n`; every execution's `status` across `shared`, `conditions[]`
     (with its repeat nesting) and `summary`; the top-level `status`; and
     `provenance.input_manifest_changed` — measured to be a LIST, so this
@@ -516,8 +562,8 @@ class BaseReport:
         construction when an earlier one refuses; it buys no streaming
         of output.
 
-        Yields all four standard sections, in Decision 5's order:
-        Conditions, Deltas, Hypothesis verdicts, Attrition. Every one is a
+        Yields all five standard sections, in order: Run, Conditions,
+        Deltas, Hypothesis verdicts, Attrition. Every one is a
         pure function of `run` alone: `io` is accepted (an override's own
         `sections` passes it straight through to `yield from
         super().sections(run, io)`) but no standard section reads it,
@@ -525,6 +571,7 @@ class BaseReport:
         under the run directory — that is `ReportIO.read_condition`'s
         surface, for an override.
         """
+        yield identity_section(run)
         yield conditions_section(run)
         yield deltas_section(run)
         yield hypotheses_section(run)
@@ -571,7 +618,7 @@ def _table_columns(rows: "list[Mapping[str, Any]]") -> list[str]:
 
 
 def _as_rows(body: "str | Mapping[str, Any]") -> "list[Mapping[str, Any]] | None":
-    """`body["rows"]` when `body` is one of the four standard sections'
+    """`body["rows"]` when `body` is one of the five standard sections'
     own shape; a one-row `{key, value}` table over an arbitrary mapping an
     override handed `self.section(..., body=...)`, so a renderer never has
     to special-case a shape this module did not itself construct; `None`
@@ -672,7 +719,7 @@ def render_report(report_cls: "type[BaseReport] | None", run: Mapping[str, Any],
     `report_cls is None` is the ordinary case (`generate report` is
     opt-in) and is not the class-declares-nothing refusal: there is no
     class here for "declared" and "omitted" to disagree about, so core
-    renders its own four standard sections as markdown, unconditionally.
+    renders its own five standard sections as markdown, unconditionally.
     A REAL class — the override subclass `render_with_override` resolved —
     that nonetheless declares no `format` (or a value other than
     `"markdown"`/`"html"`) is refused, because a class that exists and
@@ -1164,7 +1211,7 @@ def _bundle_header_section(name: str, record: Mapping[str, Any]) -> Section:
     bundle is a set, and refusing the whole render because one of five runs
     was a draft would throw away four legitimate renders." The flag lives
     here, in prose text a reader cannot miss, rather than as a fifth column
-    threaded through every one of the four standard sections' tables.
+    threaded through every one of the five standard sections' tables.
     """
     lines = [f"run_id: {record.get('run_id')}", f"status: {record.get('status')}"]
     if record.get("draft") is True:
@@ -1206,7 +1253,7 @@ def render_bundle(bundle_dir: Path, members: list[tuple[str, dict[str, Any]]]) -
     HTML being self-contained and offline is a run-form override's own
     property, never a bundle's.
 
-    Each member's four standard sections come from `BaseReport().sections`
+    Each member's five standard sections come from `BaseReport().sections`
     directly — **never** `render_with_override`, which is the run form's
     own discovery entry point and is not called anywhere in this function
     or by anything it calls. `ReportIO` is still constructed (§ Corrections,
@@ -1239,10 +1286,22 @@ def render_bundle(bundle_dir: Path, members: list[tuple[str, dict[str, Any]]]) -
                 f"missing or malformed at {exc!r} — `report` needs "
                 "`execution`, `results.conditions` and "
                 "`config.data.input_dir` to build the read-only artifact "
-                "accessor the four standard sections read",
+                "accessor the five standard sections read",
                 code="E-REPORT-RECORD-INCOMPLETE",
             ) from exc
-        sections.extend(BaseReport().sections(record, io))
+        # A bundle member already has its identity line, from
+        # `_bundle_header_section` a few lines above — `run_id`, `status`
+        # and the draft flag. So the single-run `Run` section is DROPPED
+        # here rather than rendered twice: a member would otherwise carry
+        # two identity blocks, and the second would print `None` for a
+        # hash the bundle deliberately EXCLUDES when the member lacks it
+        # (`test_bundle_missing_code_hash_excluded_not_printed_as_none`).
+        # Dropped by title rather than by position, because position is a
+        # proxy: a later section added to the base would silently take the
+        # slot an index names.
+        sections.extend(
+            section for section in BaseReport().sections(record, io) if section.title != "Run"
+        )
     sections.append(Section(title="Hypotheses", body={"rows": _bundle_hypotheses_rows(members)}))
     return render_markdown(iter(sections))
 
@@ -1280,7 +1339,7 @@ def command_report(path: Path) -> int:
     called — this function itself never returns `2`.
 
     **`report <study.yaml>` renders the real bundle (task 10).** Every
-    member's four standard sections, in `study.yaml`'s own declared order,
+    member's five standard sections, in `study.yaml`'s own declared order,
     plus one combined Hypotheses table, and Decision 8's two cross-checks
     printed as notices before the render — never `cli._report_not_built`'s
     "command is not built" diagnostic at exit `2`, which would be a false

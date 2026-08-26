@@ -886,7 +886,7 @@ def test_generate_report_writes_a_class_discovery_resolves_and_renders_all_four_
     same four sections, so a test that only inspected rendered text could
     not distinguish "the generated override ran" from "no override exists
     at all"; second, that calling `.sections(record, io)` on that resolved
-    class yields all four standard titles, in Decision 5's order, because
+    class yields all five standard titles, in order, because
     the generated body is nothing but `yield from super().sections(run, io)`
     and a `TODO` comment.
     """
@@ -908,7 +908,11 @@ def test_generate_report_writes_a_class_discovery_resolves_and_renders_all_four_
         return [section.title for section in cls().sections(record, object())]
 
     titles = render_with_override(built["run_dir"], record, render=render)
-    assert titles == ["Conditions", "Deltas", "Hypothesis verdicts", "Attrition"]
+    # "Run" leads since the whole-project review's M7 -- a rendered report
+    # must name the run it came from. What this test pins is that a
+    # DISCOVERED override yields the standard titles in order, and that is
+    # unchanged: the list grew by one at the front.
+    assert titles == ["Run", "Conditions", "Deltas", "Hypothesis verdicts", "Attrition"]
 
 
 def test_generate_report_seeds_format_from_the_flag_and_markdown_when_omitted(
