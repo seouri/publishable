@@ -3917,6 +3917,8 @@ my-study/
 
 There's no `data/` or `results/` directory; input and output live outside the repo. Because the layout is fixed, core doesn't need `--repo` or `--templates-dir` flags.
 
+It prints the project path it wrote and one `next:` line — the [`generate experiment`](#generators) invocation, with the three values only you can supply left as placeholders.
+
 ### The generated README
 
 The scaffold writes a real README, not a placeholder. This one matters more than most, because **the repo is the reproducibility artifact** — it's what a reviewer clones. It arrives already correct for this project and stays correct as experiments are added:
@@ -3989,6 +3991,8 @@ The `<!-- publishable:begin ... -->` regions are **managed**: a generator that p
 | `step` | built | `publishable g step cohort-pilot analyze` | Next-numbered `src/cohort_pilot/steps/step03_analyze.py` with a `BaseStep` stub, registered in order |
 | `template` | built | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Refuses if that file already exists, and takes a name `templates/<name>.py` can be imported under and not one prefixed with `__`, which [discovery skips](#templates-where-parameters-are-defined). Writes its parameter table into the README's managed `templates` region, and says so when the README declares none |
 | `report` | built | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment, with `format` seeded from `--format` (default `markdown` when omitted); see below. Refuses if that file already exists (`E-REPORT-EXISTS`) |
+
+**`experiment` says what it wrote and what to run next**, on stdout: a `<what> → <path>` line per file — printed only for a path it actually wrote — then one `next:` line, the [`validate`](#validation) invocation for the config it just wrote, which is also what reports the two `metadata` fields a generated config deliberately leaves empty. [`publishable new`](#scaffolding-publishable-new) does the same for the project it scaffolds. A creation command that prints nothing is indistinguishable from one that did nothing, and the next command is otherwise the one thing a reader has to look up; the other three generators here say nothing today.
 
 ```python
 # src/cohort_pilot/experiment.py — order, nothing else

@@ -41,7 +41,7 @@ from publishable.diagnostics import (
 )
 from publishable.errors import ContractError, PublishableError
 from publishable.estimate import Estimate
-from publishable.generators.experiment import generate_experiment
+from publishable.generators.experiment import generate_experiment, package_name
 from publishable.generators.report import generate_report
 from publishable.generators.step import generate_step
 from publishable.generators.template import generate_template, is_usable_name
@@ -5006,12 +5006,18 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     #
     # A plain line on stderr, not a `Collector` finding. It is a summary of
     # what the record already says rather than a new fault, so it mints no
-    # code and owes no § Errors row — and stderr is where `_execute_prepared`
-    # already sends a stop diagnostic and `draft` its relaxation notice, while
-    # `run`'s stdout for a SUCCESSFUL run is pinned as the warning block plus
-    # one `run.yaml → <path>` line (`reference.md` § What `demo` walks you
-    # through, whose row 5 this change narrows to a completing run, and
-    # `test_demo.py::test_run_itself_prints_no_table_banner_or_progress_bar`).
+    # code and owes no § Errors row.
+    #
+    # Stderr on two grounds, and NOT on a third that does not hold. It holds
+    # that stdout is reserved for what a command produces (`generators/
+    # experiment.py` says exactly that of its own README notices), and that
+    # this function already sends `stop_c` there while `draft` sends its
+    # relaxation notice there — a message about why a run went sideways is
+    # that class. It does NOT hold that stdout would have broken a pin: both
+    # the byte-exact stdout arm and `test_demo.py`'s
+    # `test_run_itself_prints_no_table_banner_or_progress_bar` cover a
+    # COMPLETING run only, and this line never fires for one.
+    #
     # Redacted with the same credential set every diagnostic on this path uses.
     if status != "completed":
         errored = [r for r in results if r.error]
@@ -5950,7 +5956,17 @@ def _dispatch(command: str, rest: list[str]) -> int:
     if command == "new":
         if len(rest) != 1:
             return EXIT_INVOCATION
-        scaffold_project(Path(rest[0]))
+        root = scaffold_project(Path(rest[0]))
+        # Whole-project review, Minor: `new` printed zero bytes at exit 0 — no
+        # created path, no next step. Both lines are read off what
+        # `scaffold_project` returned rather than composed from the argument,
+        # and the second names the command `reference.md` § Scaffolding puts
+        # next; nothing here claims a path this function did not write.
+        print(f"project → {root}")
+        print(
+            f"next: cd {root} && uv run publishable generate experiment <name> "
+            "--template generic --input-dir <dir> --output-dir <dir>"
+        )
         return EXIT_OK
     if command in ("generate", "g", "init"):
         return _dispatch_generate(command, rest)
@@ -6145,7 +6161,7 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
                 file=sys.stderr,
             )
             return EXIT_INVOCATION
-        generate_experiment(
+        config_path = generate_experiment(
             repo_root=repo_root,
             name=name,
             template_name=opts["template"],
@@ -6153,6 +6169,16 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
             output_dir=opts["output-dir"],
             plugin=opts.get("plugin"),
         )
+        # Whole-project review, Minor: this printed zero bytes at exit 0 too.
+        # `config_path` is what `generate_experiment` returned, and the step is
+        # named from `config_path`'s own sibling tree rather than recomposed —
+        # `is_file()` before printing, because a path a command claims to have
+        # written is worth one stat.
+        print(f"config → {config_path}")
+        step = repo_root / "src" / package_name(name) / "steps" / "step01_summarize_units.py"
+        if step.is_file():
+            print(f"step   → {step}")
+        print(f"next: uv run publishable validate {config_path}")
         return EXIT_OK
     if kind == "step":
         if len(positional) != 2:
