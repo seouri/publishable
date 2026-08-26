@@ -172,3 +172,39 @@ one test: the config above (or any `groups × holdout × cluster_by` config with
 `limits.min_clusters` set at the discriminating value) asserting
 `W-STATS-RESAMPLE-CLUSTERS`'s presence/absence and its cluster count.
 
+## Check 4 — `W-DATA-CELL-THIN` on a generated project: **does not fire**
+
+Run **outside the repo**, at
+`…/scratchpad/wbr_h3c3/proj/cell-probe`, through the real console script
+(`uv run --project /Users/joon/src/tries/publishable publishable …`):
+
+1. `publishable new cell-probe`
+2. `publishable generate experiment pilot --template generic --input-dir …/in --output-dir …/out`
+3. the only edits are the three a scaffold demands anyway —
+   `metadata.description`, `metadata.authors`, and `data.units.key` to match
+   the 12-row `index.csv`.
+
+The generated `configs/pilot/config.yaml` carries **`min_units_per_cell: 20`**
+(grepped) over a **12-unit** roster — the exact under-floor shape an ungated
+check would fire on.
+
+```
+$ publishable validate configs/pilot/config.yaml
+  ✓ config valid · configs/pilot/config.yaml
+```
+
+Zero warnings. The gate holds: `sweep: {}` and `allocation: within` resolve no
+cell structure, `_resolved_cells` returns `None`, and `_check_cell_size`
+returns before the floor is read.
+
+**Positive control, so this is not a silent check.** Editing the same config to
+`attributes: [arm]`, `allocation: between`, `sweep: {groups: [{by: arm, levels: [a, b]}]}`
+— arms of 9 and 3 — produces:
+
+```
+warning W-DATA-CELL-THIN     limits.min_units_per_cell
+        is 20, and the design's thinnest cell (`arm=b`) holds 3 of 12 resolved units. …
+```
+
+**No finding.**
+
