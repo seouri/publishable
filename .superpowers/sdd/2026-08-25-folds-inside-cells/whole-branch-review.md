@@ -263,3 +263,39 @@ something H3c-3 introduces.
 
 **No finding.**
 
+## Check 6 — the guard-pin arms: green, able to fail, moved only where authorized
+
+**Moved only where authorized.** The five arm bodies were extracted from
+`bf68454` (task 1) and from `HEAD` by AST-free slicing and compared: arms
+**A, B, C, D and E are all byte-identical**. (The two apparent diffs — a
+trailing comment banner after arm A and the `_H3C3_ARM_ROSTER` literal after
+arm E — are sibling content appended *after* the function, not edits inside
+it.) Arm C, the only arm with an authorized editor (task 17), was **not**
+edited, which is the post-edit state task 1 specified in advance.
+
+**Able to fail — a mutation per arm, each reverted by editing back and
+re-verified:**
+
+| Arm | Mutation | Result |
+|---|---|---|
+| A | `units._seed_from`: `\|folds` → `\|foldz` | `test_h3c3_pin_arm_a_…` **FAILED** (1 failed, 271 deselected) |
+| B | `sweep.sweep_document`: `if partitions_within:` → unconditional write | `test_h3c3_pin_arm_b_…` **FAILED** |
+| C | `cli._resumed_allocation`: `tuple(keys)` → `tuple(sorted(keys, reverse=True))` | `test_h3c3_pin_arm_c_…` **FAILED** |
+| D | `units.partition_within_cells` reduction: bare `digest` → `digest + "\|cell"` | **FAILED**; and a second, calling the producer twice, **FAILED** too |
+| E | `validate._check_cell_size`: cell-structure gate removed, `cells=None` → one cell over the roster (MU-11) | `test_h3c3_pin_arm_e_…` **FAILED** |
+
+One mutation was **not** discriminating and is recorded because it is the
+"mutation whose two branches cannot differ" shape: setting `partitions_within`
+to `[]` instead of `None` at `cli.py:3346` left arm B green, because
+`sweep_document`'s `if partitions_within:` is falsy for both. The real MU-14
+has to be applied in `sweep.py`, where the key is written.
+
+**H9d guard-pin arm C, the half the controller kept.** Appending one newline to
+`docs/design-principles.md` fails
+`test_h9d_arm_c_…[docs/design-principles.md]`; reverting by editing back and
+re-running passes. So the surviving parametrization is a live pin, not a
+retired one, and the `docs/experimental-designs.md` parametrization is gone
+from the collected set (Check 10a).
+
+**No finding.**
+
