@@ -38,3 +38,16 @@ reduction mutated to `digest + "x"` and `holdout_within_cells`' reduction to
 produced **13021 differing lines**. Both mutations were reverted by editing
 back and the comparison re-run: byte-identical again.
 
+## Check 10 — gates
+
+| Gate | Result |
+|---|---|
+| `uv run pytest` | **3416 passed, 1 skipped, 2 xfailed** in 383s |
+| `uv run ruff check .` | All checks passed |
+| `uv run ruff format --check .` | 101 files already formatted |
+| `uv run mypy` | Success: no issues found in 56 source files |
+
+Run in the foreground, whole suite, after clearing `pytest-of-joon` and every
+`__pycache__`. `main`'s 3338 → **+78** collected-and-passing, 1 skipped and
+2 xfailed unchanged. Delta accounted for below (Check 10a).
+
