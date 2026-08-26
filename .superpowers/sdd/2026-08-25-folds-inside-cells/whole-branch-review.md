@@ -299,3 +299,42 @@ from the collected set (Check 10a).
 
 **No finding.**
 
+## Check 7 — § Errors / § Warnings: one row per code, covering every emit site
+
+**Row-count delta, derived mechanically** (last-cell code extraction over every
+table row of `main:docs/reference.md` and `HEAD:docs/reference.md`):
+
+```
+E-DATA-HOLDOUT-CELLS:  1 → 0      E-REPL-FOLD-CELLS:  2 → 0
+W-DATA-CELL-THIN:      0 → 3      E-DATA-ASSIGN-LEVELS: 2 → 3
+```
+
+Nothing else moved. `W-DATA-CELL-THIN`'s three are **one** registry row in
+§ Warnings core reports (counted directly: `rows in Warnings core reports: 1`)
+plus the two § Validation rows *Cells are populated* and *Allocation is
+coherent* that name it; `E-DATA-ASSIGN-LEVELS`' third is the cross-reference
+inside *Cells are populated* (*"an arm no unit resolves to is refused as
+`E-DATA-ASSIGN-LEVELS` rather than reported as a thin cell"*), not a second
+registry row.
+
+**Emit sites enumerated by grepping the quoted code string in `src/`, then
+checked against each row's own claim:**
+
+| Code | Sites | Row's claim | Verdict |
+|---|---|---|---|
+| `W-DATA-CELL-THIN` | 1 (`validate.py:6105`) | thinnest **populated** cell; gated on a cell structure resolving; silent when the draw faults; reported once | Each clause verified in `_check_cell_size` (`if roster is None or cells is None: return`, `min(populated, key=len)`, single `c.warn`) and in `_resolved_cells` (every fault → `None`) |
+| `E-DATA-HOLDOUT-EMPTY` | 2 (`validate.py:3560`, `units.py:1821`) | validate row: denominator is the thinnest populated cell **when the cells resolve**, test side only; core-raises row: the re-raise names the cell | `_check_holdout` computes `bound_n` from `populated_cells(cells or {})` and falls back to `len(roster)`; `holdout_within_cells` re-raises under the same code with `cell_label`. Both rows are in the right table for their site |
+| `E-REPL-FOLD-K-TOO-LARGE` | 3 (`replication.py:172`, `:178`, reported at `validate.py`'s `resolve_repeats` `except`) | *"One row, three emit sites … `validate` reports it as a finding, and `replication._fold_k` raises it twice — once counting units and once counting clusters"* | Exactly right, and **both** raises carry the `in_cell` / `because` clauses, so the widening reaches all three rather than the one a message is asserted at |
+| `E-RUN-FOLD-UNRESOLVED` | 5 (was 3; `units.py:3215` and `:3225` are new) | the § Errors core raises row gained *"a cell decomposition that does not partition the roster the folds are drawn inside"* | One clause covers both new raises (a unit in two cells, a unit in none) — which is the *one row per code* rule, not an undercount |
+
+`validate.py:3713` is a **membership set** (`REPL_DECLARATION_CODES`), not an
+emit site, and is excluded from the count above — which is what makes the row's
+"three" right rather than four.
+
+I also swept all 293 `E-`/`W-` literals in `src/` against the tables. The six
+with no last-cell row (`E-IO-FAILED`, `E-PROJECT-EXISTS`, `E-EXPERIMENT-EXISTS`,
+`E-STEP-EXISTS`, `E-TEMPLATE-EXISTS`, `E-INPUT-CHANGED`) are **identical on
+`main`** — pre-existing, and outside this slice.
+
+**No finding.**
+
