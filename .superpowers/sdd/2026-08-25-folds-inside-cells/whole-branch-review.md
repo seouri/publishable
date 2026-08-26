@@ -77,3 +77,35 @@ The 9 removals are each accounted for and none is a lost guarantee:
 
 The 87 additions land in 8 files; no test file lost a test other than the 9.
 
+## Check 3 — the two retired codes: **no live claim survives**
+
+A newline-insensitive sweep over **every tracked file** (`git ls-files`),
+matching each code against the file's text with all whitespace, backticks and
+asterisks stripped, so a code broken across a line or wrapped in emphasis
+still matches. Proven able to fail two ways: `E-REPL-FOLD-K-TOO-LARGE` and
+`E-DATA-HOLDOUT-EMPTY` hit 29 and 28 files, and the collapsed matcher finds
+`E-REPL-\nFOLD-CELLS` in a synthetic string.
+
+**Neither code appears anywhere in the four documents** — `README.md`,
+`docs/design-principles.md`, `docs/experimental-designs.md`,
+`docs/reference.md` are all absent from the hit list, so § Errors carries no
+row for either.
+
+Survivors outside the development record, each read in place:
+
+| File | Verdict |
+|---|---|
+| `src/publishable/units.py` (1×) | Historical: *"That combination was refused outright (`E-DATA-HOLDOUT-CELLS`, retired by H3c-3 task 16) until this function existed"* |
+| `src/publishable/runner.py` (2×) | Historical: *"WAS refused"*, *"the leak … stood in for until this commit"* |
+| `src/publishable/artifacts.py` (1×) | Historical: *"the imbalance `E-DATA-HOLDOUT-CELLS` was minted against does not exist"* |
+| `tests/test_validate.py` (5+2) | Two are `assert "E-…-CELLS" not in found` — the retirement's own pins; the rest are past tense |
+| `tests/test_cli.py`, `tests/test_runner.py` | Past tense, each dating the retirement to its task |
+| `CLAUDE.md` (2+2) | Both sites amended in place with **"both retired by H3c-3 on 2026-08-25"** / **"Discharged: H3c-3 merged…"** — the pre-existing sentences are left standing and corrected beside, which is this repo's own correction convention |
+| `docs/feasibility-llm-growth-studies.md` (2+2) | In the dated § Executability entry, describing the retirement |
+| `docs/superpowers/spec-defects.md` (2+2) | Inside the **STRUCK 2026-08-25** entry |
+
+The remaining ~50 hits are all in the development record (`docs/superpowers/`
+specs, plans, scopings, `.superpowers/sdd/`), which is not to be retro-edited.
+
+**No finding.**
+
