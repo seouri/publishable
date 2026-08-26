@@ -208,3 +208,58 @@ warning W-DATA-CELL-THIN     limits.min_units_per_cell
 
 **No finding.**
 
+## Check 5 — Ruling KK: derived, not patched, and a real crash-and-resume
+
+**The replacement is derived.** `_resumed_allocation` does not compute fold
+membership itself; it calls **`units.partition_within_cells`** — the same
+single producer `_prepare_run` calls — on the **overridden** axes
+(`cells_of(axes)` built from the recorded plans), and `fold_members` follows
+through `replication.fold_members_for`, exactly as in `_prepare_run`. The gate
+is `prepared.partitions is not None` (*a fold level exists*), not *an axis
+exists*, so the no-axis arm takes the producer's own byte-identical reduction
+rather than a branch. `partition_units` is not called from that function.
+
+**A real crash-and-resume with a group axis, run outside the repo through the
+real console script.** `…/scratchpad/wbr_h3c3/proj2/resume-probe`: 24 units,
+`allocation: between`, `sweep.groups: [{by: arm, levels: [a, b]}]`,
+`assign.arm: {method: by_attribute, from: arm}`, `replication.repeats:
+[{kind: fold, k: 3}]`. The step `os._exit(9)`s from its third execution
+onward, keyed off a sentinel file **outside** `input_dir` and outside `src/`
+so neither `input_manifest_hash` nor `code_hash` moves between the two
+commands.
+
+1. `publishable run configs/pilot/config.yaml` → process dies, run directory
+   left with `allocation.json`, `sweep.yaml`, `identity.json` and **no
+   `run.yaml`**.
+2. sentinel removed; `publishable resume <run_dir>` → **exit 0**, `run.yaml`
+   written.
+
+Per-fold membership, read out of the `units.parquet` artifacts:
+
+```
+00_arm=a fold01 ['u04','u05','u06','u10']   01_arm=b fold01 ['u16','u17','u18','u22']
+00_arm=a fold02 ['u02','u03','u08','u11']   01_arm=b fold02 ['u14','u15','u20','u23']
+00_arm=a fold03 ['u00','u01','u07','u09']   01_arm=b fold03 ['u12','u13','u19','u21']
+```
+
+**Every arm holds four units in every fold** — the property the whole slice
+exists for, observed end to end on a resumed run rather than by direct call.
+
+**The lever, run for real.** Repeating the crash and then editing the recorded
+`allocation.json` to swap `u11` (arm `a`) and `u12` (arm `b`) — the record
+being what `_resumed_allocation` overrides with — the resumed arm-`b` fold03
+comes out `['u11','u13','u19','u21']`. `u11` for `u12`, and nothing else
+moved. The folds follow the **recorded** decomposition, not the tree's fresh
+one: the exact claim Ruling KK's replacement makes, and the exact claim the
+retired *"pure function of the roster and the design digest"* argument would
+have got wrong.
+
+**Observation, not a finding.** In that second run the pre-crash arm-`a`
+artifacts still show `u11`, so across the crash boundary one unit appears in
+two arms. That is the consequence of hand-editing `allocation.json`, which
+`resume` treats as authoritative and which no hash on the resume path covers —
+a property of H9's `resume`, recorded in this slice's own task-23 report, not
+something H3c-3 introduces.
+
+**No finding.**
+
