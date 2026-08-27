@@ -1,5 +1,6 @@
 """An experiment type's parameters. See docs/reference.md § Templates."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from publishable.param import Param
@@ -23,8 +24,19 @@ class BaseTemplate:
     # core can check.
     version: str | None = None
 
-    def validate(self, config: Any) -> list[str]:
-        """Cross-field rules. Receives the WHOLE config; [] when OK."""
+    def validate(self, config: Mapping[str, Any]) -> list[str]:
+        """Cross-field rules. Receives the WHOLE config; [] when OK.
+
+        **A mapping — the parsed document — and deliberately not the dot-access
+        node `aggregate`'s `cfg` is.** This method reads *declarations*, where an
+        absent optional block is the answer; `aggregate` reads a condition's
+        *resolved* values, where a path that misses is a typo and a node refusing
+        it is right. Five of the paths a cross-block rule asks about
+        (`statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, a
+        `sweep` mode) are absent from what `init` writes, so a reader that raised
+        on an absence could not answer the question this method exists for —
+        `reference.md` § Templates has the idiom and the worked rule.
+        """
         return []
 
     def aggregate(self, units: "UnitTable", cfg: Any) -> dict[str, Any]:

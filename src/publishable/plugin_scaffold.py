@@ -75,6 +75,11 @@ class {cls}(BaseTemplate):
     default_repeats = 1
 
     def validate(self, config) -> list[str]:
+        """Cross-field rules over the whole config; `[]` when there is nothing to
+        say. `config` is the parsed document, a plain mapping — not the
+        dot-access `cfg` a step gets — so read an optional block as
+        `(config.get("data") or {{}}).get("units") or {{}}`, which cannot raise
+        on an absence."""
         return []
 
     def aggregate(self, units, cfg) -> dict:

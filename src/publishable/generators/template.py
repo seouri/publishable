@@ -51,7 +51,12 @@ class {cls}(BaseTemplate):
     def validate(self, config) -> list[str]:
         """Cross-field rules over the WHOLE config; `[]` when there is nothing
         to say. This is where a rule core cannot know goes — a pipeline that
-        fits a model rejecting a config with no `holdout` and no `fold`, say."""
+        fits a model rejecting a config with no `holdout` and no `fold`, say.
+
+        `config` is the parsed document, a plain mapping — not the dot-access
+        `cfg` a step gets — because an optional block this rule asks about is
+        usually absent, and `(config.get("data") or {{}}).get("units") or {{}}`
+        is how you read one without raising."""
         return []
 
     def aggregate(self, units, cfg) -> dict:

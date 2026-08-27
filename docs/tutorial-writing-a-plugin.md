@@ -276,19 +276,22 @@ from a legitimate one; the template can.
         return []
 ```
 
-**Note the `.get` calls.** [§ The importable surface](reference.md#the-importable-surface) says this
-method receives the dot-access config node; at `e61dcb4` it receives a **plain `dict`**, so the
-documented idiom `config.data.units.holdout` fails:
+**Note the `.get` calls — that is the documented idiom, not a workaround.** `validate` receives the
+parsed document, a plain mapping, and deliberately not the dot-access `cfg` a step gets. The reason is
+what this method is *for*: a cross-block rule asks whether an optional block is **declared**, and five of
+the paths such a rule asks about — `statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, and a
+`sweep` mode — are absent from what `init` writes. A reader that refused an absent path could not answer
+the question. Reaching for dot-access here is reported rather than crashed, which makes it cheap to get
+wrong and easy to miss:
 
 ```
   error   E-TEMPLATE-RULE      parameters
           raised while validating: AttributeError: 'dict' object has no attribute 'data'
 ```
 
-Write plain mapping access until that is closed, and expect to revisit it —
-filed: [`template.validate` receives a dict](#templatevalidate-receives-a-plain-dict-not-the-dot-access-config-node).
-The refusal is contained rather than a traceback, which is why the mistake is cheap to make and easy to
-miss: it costs one error line at `validate`, not a crash.
+`or {}` at each step rather than a `{}` default, because a block declared with nothing under it parses as
+`None` as readily as an absent one. [§ Templates](reference.md#templates-where-parameters-are-defined)
+carries the worked rule this idiom was promised for.
 
 A declared value is refused with the template's own message:
 
@@ -809,22 +812,18 @@ Five, all measured on 2026-08-27 against `937591f` and filed in
 here so a reader of this tutorial knows which of its instructions exist to route around a defect rather
 than to teach a rule.
 
-**Three are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
+**Four are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
 fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
 package = false`, and `plugin_scaffold.TEST_PY` was replaced by the entry-point pair in
 [§ Testing a plugin](#testing-a-plugin). *A plugin's writer never dispatches unless something imports its
 module* was closed next, by the slice [`W1-SCOPING.md`](superpowers/W1-SCOPING.md) chartered — the suffix
 is now resolved over installed claims as well as registrations, which is what
-[§ 7](#7-a-writer-and-its-reader-resolved-from-the-claim) describes. All three are struck in
-`spec-defects.md`, and this section lists the two that remain. They are named rather than dropped because
-a reader who heard there were five should be able to see which three went and how.
-
-### `template.validate` receives a plain dict, not the dot-access config node
-
-[§ The importable surface](reference.md#the-importable-surface) states that a template's
-`validate(self, config)` receives the same node core's own config access uses, "which is how a cross-block
-rule reads `data.units.holdout` without core handing it a second shape". It receives
-`yaml.safe_load`'s dict, so that exact idiom raises `AttributeError` and lands as `E-TEMPLATE-RULE`.
+[§ 7](#7-a-writer-and-its-reader-resolved-from-the-claim) describes. And *`template.validate` receives a
+plain dict* was closed by [`W2-SCOPING.md`](superpowers/W2-SCOPING.md)'s — **by deleting the sentence that
+promised otherwise**, because the promised reader raises on exactly the absences a cross-block rule asks
+about. All four are struck in `spec-defects.md`, and this section lists the one that remains. They are
+named rather than dropped because a reader who heard there were five should be able to see which four
+went and how.
 
 ### The plugin scaffold writes neither `uv.lock`, an example config, nor a `docs` region
 

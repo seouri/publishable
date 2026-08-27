@@ -15432,3 +15432,159 @@ def test_an_empty_cell_with_no_evaluation_split_is_not_an_error_at_all(write_con
     validate_config(write_config(_h3c3_empty_cell_config(limits={"min_units_per_cell": 20})), c)
     assert [f.code for f in c.findings] == ["W-DATA-CELL-THIN"]
     assert "(`sex=m, arm=control`) holds 3 of 10 resolved units" in c.findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# W2 — what a template's `validate` receives. `docs/superpowers/W2-SCOPING.md`.
+# The shape is the parsed document, a plain mapping, and the reason is that a
+# cross-block rule asks whether an optional block is DECLARED — a question a
+# node that raises on an absent path cannot answer.
+# ---------------------------------------------------------------------------
+
+_W2_ABSENT_FROM_A_MATERIALIZED_CONFIG = (
+    ("statistics", "contrasts"),
+    ("statistics", "report_by"),
+    ("statistics", "resample"),
+    ("statistics", "null_test"),
+    ("sweep", "grid"),
+)
+
+
+def _w2_template(rule):
+    """A template whose `validate` is `rule`, swapped in for the resolved merge.
+
+    `generic` has no cross-field rule of its own, which is why
+    `test_a_template_cross_field_rule_is_reported` above stubs one too — same
+    mechanism, and this returns the class rather than monkeypatching so each arm
+    below states its own rule.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    class Ruled(GenericTemplate):
+        def validate(self, config):
+            return rule(config)
+
+    return Ruled
+
+
+def _w2_install(monkeypatch, cls):
+    import publishable.validate as validate_mod
+    from publishable.templates.registry import Claim
+
+    monkeypatch.setattr(
+        validate_mod,
+        "_claims",
+        lambda repo_root=None: {"generic": Claim(provenance="core", provider="stub", cls=cls)},
+    )
+
+
+def test_w2_a_rule_reading_an_absent_optional_block_reports_nothing(write_config, monkeypatch):
+    """The documented idiom over a block `init` does not write.
+
+    `statistics.contrasts` is absent from a materialized config, so this rule
+    finds nothing and says nothing. Wrapping the argument in `Config` — the
+    closure W2-SCOPING § 2 rejects — makes `.get` raise, which the guard around
+    the call turns into `E-TEMPLATE-RULE` and fails this test.
+
+    Paired with the arm below, which must REPORT: an assertion that nothing was
+    reported passes identically if `validate` was never called at all.
+    """
+
+    def rule(config):
+        contrasts = (config.get("statistics") or {}).get("contrasts") or []
+        return [f"{len(contrasts)} contrasts declared"] if contrasts else []
+
+    _w2_install(monkeypatch, _w2_template(rule))
+    assert "E-TEMPLATE-RULE" not in codes(write_config())
+
+
+def test_w2_a_rule_that_fires_is_reported_through_the_same_shape(write_config, monkeypatch):
+    """The control for the arm above, and the mapping read that matters: the rule
+    reaches `data.units.key`, which every config declares, and its message
+    carries the value it read — so this cannot pass on a rule that fired blind."""
+
+    def rule(config):
+        data = config.get("data") or {}
+        units = data.get("units") or {}
+        # Two reads, one present and one absent, in the message so neither can
+        # be satisfied by the other: this fixture's `base_config` declares
+        # `input_manifest_policy` and no `data.units` at all.
+        return [f"policy {data.get('input_manifest_policy')}, key {units.get('key')}"]
+
+    _w2_install(monkeypatch, _w2_template(rule))
+    path = write_config()
+    assert messages_by_code(path)["E-TEMPLATE-RULE"] == "policy hash_all, key None"
+
+
+@pytest.mark.parametrize(("block", "key"), _W2_ABSENT_FROM_A_MATERIALIZED_CONFIG)
+def test_w2_the_paths_a_cross_block_rule_asks_about_are_absent_from_what_init_writes(
+    block, key, tmp_path
+):
+    """W2-SCOPING § 0.1, pinned as the *reason* rather than as prose.
+
+    Measured against what `init` actually materializes rather than against a test
+    fixture's hand-built document, because the claim is about core's own output:
+    each of these five is absent there, and a node reader raises
+    `E-STEP-PARAM-UNKNOWN` on every one of them — which is why the document's
+    promised shape was deleted instead of built. A later slice that makes that
+    sentence true by wrapping the argument has to fail this arm first.
+
+    Both halves are asserted: the sub-key reads as absent through the mapping
+    idiom, **and** the same read through `Config` raises. A test of the first
+    alone would pass against the wrapper too, since it never performs the read
+    the wrapper would refuse.
+    """
+    from publishable.config import Config
+    from publishable.errors import ContractError
+    from publishable.materialize import materialize_config
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    doc = yaml.safe_load(
+        materialize_config(
+            template=GenericTemplate(),
+            template_name="generic",
+            name="cohort-pilot",
+            input_dir=str(tmp_path / "input"),
+            output_dir=str(tmp_path / "results"),
+            entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+        )
+    )
+
+    assert (doc.get(block) or {}).get(key) is None
+    with pytest.raises(ContractError) as excinfo:
+        getattr(getattr(Config(doc), block), key)
+    assert excinfo.value.code == "E-STEP-PARAM-UNKNOWN"
+
+
+def test_w2_the_documented_idiom_is_the_one_that_is_tested():
+    """The fenced example in `reference.md` § Templates, executed.
+
+    Extracted rather than copied, so the published example cannot drift into
+    something that raises while a paraphrase of it stays green here. The
+    extraction is proven able to fail: it asserts it found a block, and that the
+    block defines the method it claims to.
+    """
+    from pathlib import Path
+
+    text = Path(__file__).resolve().parents[1].joinpath("docs/reference.md").read_text()
+    marker = "**What it receives is the parsed document"
+    assert marker in text, "the § Templates paragraph this example belongs to moved"
+    fence = text.index("```python", text.index(marker))
+    body = text[text.index("\n", fence) + 1 : text.index("```", fence + 3)]
+    assert "def validate(self, config)" in body, "the fenced block is not the example"
+
+    namespace: dict = {}
+    exec("class Published:\n" + "\n".join(f"    {line}" for line in body.split("\n")), namespace)
+    published = namespace["Published"]()
+
+    # Absent, declared-empty and declared-None all read without raising, and the
+    # rule fires on each because none of them supplies a partition.
+    for document in ({}, {"data": {}, "replication": {}}, {"data": None, "replication": None}):
+        assert len(published.validate(document)) == 1
+
+    assert (
+        published.validate({"data": {"units": {"holdout": {"method": "random", "frac": 0.2}}}})
+        == []
+    )
+    assert published.validate({"replication": {"repeats": [{"kind": "fold", "k": 5}]}}) == []
+    assert published.validate({"replication": {"repeats": [{"kind": "seed", "n": 5}]}}) != []

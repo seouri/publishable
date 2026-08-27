@@ -10974,7 +10974,7 @@ one of the four. The nine files that remain in the map are files that should not
 **is** the direct question. Measured: with the declaration deleted, arm D passes and the new test fails,
 which is the division of labour the narrowing intends.
 
-## OPEN — `template.validate` receives a plain dict, while § The importable surface says it receives the dot-access config node — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `validate.py`'s template hook or `config.py` as its surface)**
+## ~~OPEN — `template.validate` receives a plain dict, while § The importable surface says it receives the dot-access config node~~ — **CLOSED, struck 2026-08-27 by W2**
 
 **Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
 
@@ -11032,6 +11032,32 @@ documented accessor inside a documentation-correction slice.
 either direction, and the deciding facts are that the promised reader cannot answer the question and that
 `aggregate` keeping the node is not an inconsistency — *resolved* values, where a miss is a typo, against
 *declarations*, where an absence is the answer.
+
+**CLOSED 2026-08-27 by W2, and the closure is a deletion.** § The importable surface's *"receives this
+same object"* clause is gone; the sentence now says the method receives the parsed document, a plain
+mapping, and gives the reason in the same breath — a cross-block rule asks whether an optional block is
+declared, and five of the paths such a rule asks about are absent from what `init` writes. § Templates
+gains the shape and **the worked rule as code rather than prose**, since a promise whose whole value is
+that an author can copy it should be copyable; `BaseTemplate.validate` is annotated `Mapping[str, Any]`
+with the *declared-not-resolved* distinction in its docstring; and both generated templates name the shape
+where their author reads first.
+
+**Four pins, and two of them exist because a type assertion would not have discriminated.** A rule reading
+an absent optional block reports nothing, and a rule that fires reports its message with two reads in it
+— one present, one absent — so neither can be satisfied by the other; wrapping the argument in `Config`
+fails both, with `ContractError: get is not a path this config holds`, which is the rejected closure caught
+by its own diagnostic. A parametrized arm over the five paths asserts each is absent from
+`materialize_config`'s **actual output** and that the same read through `Config` raises
+`E-STEP-PARAM-UNKNOWN` — measured against core's output rather than a fixture's hand-built document,
+because the claim is about what `init` writes. And the published example is **extracted from
+`reference.md` and executed**, so it cannot drift into something that raises while a paraphrase stays
+green here: breaking its `or {}` guards fails that test with a `KeyError`.
+
+**The sweep found five files and only one needed the shape edit** — `reference.md`; the other four carry
+the *true* half (*"receives the whole config, not only `parameters`"*), which reads almost identically and
+stays as written. `CLAUDE.md`'s invariant was the fifth home and carried the **false caller claim** about
+`raw` rather than the shape, found by re-sweeping newline-insensitively after the shape edits landed, with
+the sweep proven able to fail against a string known present.
 
 ## OPEN — the plugin scaffold writes neither `uv.lock`, an example config, nor a README region, all three of which § Creating a plugin shows — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugin_scaffold.py` as its surface)**
 
@@ -11244,3 +11270,35 @@ and `::test_the_shipped_pyproject_can_run_the_shipped_test`; restoring the old l
 dev group fails both. `reference.md` § Creating a plugin's tree annotation moved with it — `# asserts the
 template materializes and validates` described a test needing `materialize_config`, which the import root
 does not export, so it now reads `# asserts the entry point resolves and the spec is well-formed`.
+
+---
+
+## OPEN — `Config.raw` has no reader in core's own source — **Owner: unassigned, with the reason (the charter is complete, and removing a documented accessor is a shipped-surface change no slice holds)**
+
+**Found 2026-08-27 by [`W2-SCOPING.md`](W2-SCOPING.md) § 0.3, measured against `92634af`.**
+
+`grep -rn "\.raw\b" src/` returns **nothing** but the accessor's own `def`. Its ten readers are all in
+`tests/test_runner.py`, of the form `cfg.raw["parameters"][...]` and `parameters_hash(cfg.raw)`.
+
+Until W2, § The importable surface justified the accessor by naming two callers: *"`validate` and a
+template's `validate(config)` both need the underlying mapping."* Both are false — core's `validate` works
+on `dict`s throughout and the template receives one — so W2 replaced that justification with the class
+that measures true: anything holding a node **whole** may need a plain mapping, which is a step's `cfg` or
+the `cfg` a template's `aggregate` receives.
+
+**Why it is not closed.** The replacement reason is honest but has no reader either: no shipped step,
+template or test-of-a-step reads `cfg.raw` in `src/`. The two candidate closures are opposite and neither
+belongs to a documentation slice. **Removing it** deletes a member of § The importable surface's
+enumerated list, which is a behaviour change to a shipped surface — a template or step in someone's repo
+may read it, and nothing in this repository would notice. **Keeping it** leaves a public accessor whose
+only demonstrated use is a test convenience, which is the *declarable field with no reader* shape this
+project keeps producing.
+
+**The check its closer must make:** whether a step genuinely needs it. `cfg` is dot-access with no
+methods, so a step wanting to hand its parameters to a library — `pandas.DataFrame([...])`, a
+`json.dumps`, a `**kwargs` splat — has no other route, and that is an argument from a plausible need
+rather than from a measured one. Measure it: grep the feasibility analysis's step code and the generated
+step for a use, and decide from what is there.
+
+**Severity:** Minor. Nothing is wrong at runtime; the defect is that a public surface's justification
+survived only because nobody checked who called it.
