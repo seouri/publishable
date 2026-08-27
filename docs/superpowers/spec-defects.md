@@ -9239,6 +9239,13 @@ writers take *any nesting* rather than a flat row set:
   or `str` subclass on sight — which is why only two of the four coerced types are visibly excluded
   here rather than all four.
 
+**A fourth instance, measured 2026-08-27 by [`W4-SCOPING.md`](W4-SCOPING.md) § 2 at `50d1a8a`:**
+`io.write("x.json", cfg.parameters)` — a config **node** where a mapping was meant, which is the mistake
+a reader of § The importable surface makes before learning about `raw` — raises the same bare
+`TypeError: Object of type Node is not JSON serializable`. It widens the class rather than adding a
+case: the fault is *any object `json` cannot encode*, not the NumPy types alone, and a closer sizing the
+refusal should state it that way.
+
 This is the exact traceback-instead-of-diagnostic class `coercion.py` says it exists to prevent, now
 **visibly excluded** rather than merely unaddressed — H5a's own coercion work (tasks 6, 9, 10) widened
 `coerce_scalars`'s callers but did not touch `.yaml`/`.json`/`.jsonl`'s own encoders, which take a
@@ -11351,3 +11358,20 @@ step for a use, and decide from what is there.
 
 **Severity:** Minor. Nothing is wrong at runtime; the defect is that a public surface's justification
 survived only because nobody checked who called it.
+
+**SCOPED 2026-08-27** against `50d1a8a` in [`W4-SCOPING.md`](W4-SCOPING.md) — **4 tasks, the accessor
+stays, and this entry measured the wrong thing.** *No reader in `src/`* is the right test for a
+**declaration core is supposed to read** — `required_env`, `apparatus_probe`, `field_convention`, every
+example that row has carried. `raw` runs the other way: it is an accessor **user code** calls, and core
+neither needs nor should have a call to it, exactly as it has none to `Unit`, `Estimate` or `BaseStep`
+except to construct them. The real gap is next door: **`raw` appears in no example in any document**, so
+the fix is the worked use it never had.
+
+**Its use is measured, not argued from the API's shape** — which is what this entry's *"a plausible need
+rather than a measured one"* asked for. A nested node carries no `raw`
+(`cfg.parameters.raw` → `E-STEP-PARAM-UNKNOWN`) and a node is not JSON-serializable
+(`TypeError: Object of type Node is not JSON serializable`, probed through the real `StepIO`), so
+`cfg.raw["parameters"]` is the **only** way a step can write what it ran under to an artifact. A fourth
+ground against removal appeared too, which this entry could not have known when it declined on
+scope alone: `publishable` 0.1.2 is published, so removing a documented public accessor is a breaking
+change for users this repository cannot enumerate.
