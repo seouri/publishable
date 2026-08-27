@@ -11101,6 +11101,13 @@ closure, and it changes when a plugin's top level runs for every command — a b
 commands, which is the class this project has repeatedly declined to make inside a slice that did not
 charter it.
 
+**SCOPED 2026-08-27** against `00ad727` in [`W1-SCOPING.md`](W1-SCOPING.md) — **9 tasks**, and the
+scoping rejects this entry's own proposed closure: eager loading at `command_run`'s start contradicts
+`load_entry_point`'s stated contract, so the shape is lazy suffix resolution mirroring
+`units._resolver_for`. Three things this entry did not know, all measured there: `io.read_input` is in
+scope (three of `_read`'s seven call sites), `_read`'s shipped ruling rests on a premise the fix
+falsifies, and two § Errors rows enumerate emit surfaces that would become narrower than their code.
+
 **The check its closer must make:** whether registration-time collision refusal still holds if the group
 is loaded lazily — `register_writer` raises `E-PLUGIN-COLLISION` for a core suffix at decoration, so the
 raise would move inside whatever `try` the loader sits in, and § Errors' row for that code says a
