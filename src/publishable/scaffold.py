@@ -37,6 +37,26 @@ dependencies = ["publishable"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+package = false
+"""
+"""What `publishable new` writes, and the last two lines are load-bearing.
+
+Without `package = false`, `uv` tries to BUILD the project it is asked to run
+in, hatchling looks for a package matching the distribution name, and there is
+none: `src/` holds a `.gitkeep`, and `generate experiment <name>` writes
+`src/<experiment>/` rather than `src/<project>/` — so no experiment ever
+supplies one either. Every `uv run publishable ...` in a scaffolded project
+failed on a hatchling traceback, including the `next:` line `new` itself
+prints.
+
+`package = false` rather than a `[tool.hatch.build.targets.wheel]` entry
+because the declaration is true rather than a workaround: an experiment
+repository is code under a commit, not a distribution anybody installs — which
+is exactly why `code_hash` covers `src/**` and `templates/**` and `uv.lock`
+pins everything else. A plugin package needs none of this; `publishable-my-assay`
+builds, its `src/publishable_my_assay/` matching its own name.
 """
 
 

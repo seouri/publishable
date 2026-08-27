@@ -25,6 +25,9 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = ["publishable"]
 
+[dependency-groups]
+dev = ["pytest"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -120,11 +123,69 @@ def read(payload: bytes):
     return payload.decode()
 '''
 
-TEST_PY = """\
-def test_the_template_materializes_and_validates():
-    from publishable.templates.registry import get_template
+TEST_PY = '''\
+from importlib.metadata import entry_points
 
-    assert get_template("{stem}") is not None or True  # installed-name check once loaded
+from publishable import Param
+
+GROUP = "publishable.templates"
+NAME = "{stem}"
+
+
+def _registered():
+    """The template this distribution registers, loaded through its own entry point.
+
+    Asked through `importlib.metadata` rather than through core, and the reason
+    is core's own rule: core resolves an installed name from package metadata
+    WITHOUT importing the package, so there is no accessor on the `publishable`
+    import root to ask — and reaching into a submodule for one would leave the
+    single import root that document enumerates.
+
+    It is also the question worth asking. A mistyped module path or class name in
+    `pyproject.toml` breaks nothing until a config names this template, and then
+    reads like a config typo rather than a packaging one.
+    """
+    found = [entry for entry in entry_points(group=GROUP) if entry.name == NAME]
+    assert found, (
+        f"no installed distribution registers `{{NAME}}` in `{{GROUP}}` — run these "
+        "tests through `uv run pytest`, which installs this package first"
+    )
+    assert len(found) == 1, f"`{{NAME}}` is registered {{len(found)}} times: {{found}}"
+    return found[0].load()
+
+
+def test_the_entry_point_resolves_to_the_registered_template():
+    assert _registered().__name__ == "{cls}"
+
+
+def test_the_spec_declares_parameters_and_every_value_is_a_param():
+    spec = _registered().parameter_spec
+    assert spec, "a `parameter_spec` that is empty declares no parameters at all"
+    assert all(isinstance(param, Param) for param in spec.values())
+'''
+"""The test `plugin new` ships, and it is written to survive being edited.
+
+It asserts nothing about which parameters the spec declares, because the spec it
+ships with is a placeholder whose own help text says to replace it — a test
+enumerating those keys would go red on the first real edit, and a test that
+fails on arrival gets deleted rather than fixed. What it asserts instead
+survives every domain edit and still fails when the package is genuinely
+broken: mistype the entry point's class name and both tests fail; delete
+`parameter_spec` and the second fails alone.
+
+What it replaces was `assert get_template(...) is not None or True`, which
+**cannot fail** — and which reached `publishable.templates.registry` for a
+`get_template` the import root does not export. The registry question it was
+reaching for (does core resolve this name?) is `E-TEMPLATE-INSTALLED-UNSUPPORTED`
+today; when loading an installed template lands, this file gains a case rather
+than being replaced.
+
+**What it does not cover, measured rather than assumed:** removing
+`@register_template` entirely leaves both tests green, because loading an entry
+point yields the class whether or not the decorator ran. That agreement is
+`check_registration`'s (`E-PLUGIN-DECORATOR`), which runs wherever core loads the
+object behind a key — for a resolver or a probe that is `validate` and `run`, and
+for an installed template it is nowhere yet, which is the same refusal again.
 """
 
 # One target module per group, keyed by the group core reads it under. The
@@ -203,7 +264,7 @@ def scaffold_plugin(root: Path, license_name: str = "MIT") -> Path:
     )
     (root / ".gitignore").write_text(read_scaffold("gitignore.tmpl"))
     (root / "tests").mkdir(exist_ok=True)
-    (root / "tests" / f"test_{stem}.py").write_text(TEST_PY.format(stem=stem))
+    (root / "tests" / f"test_{stem}.py").write_text(TEST_PY.format(stem=stem, cls=cls))
     (root / "examples" / stem).mkdir(parents=True, exist_ok=True)
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)

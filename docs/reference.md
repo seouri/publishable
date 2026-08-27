@@ -4112,7 +4112,7 @@ publishable-my-assay/
 ├── README.md                 # generated, with a parameter table derived from the spec
 ├── LICENSE
 ├── CITATION.cff
-├── pyproject.toml            # declares the publishable.templates entry point
+├── pyproject.toml            # declares the publishable.templates entry point, and pytest as a dev group
 ├── uv.lock
 ├── .git/
 ├── src/publishable_my_assay/
@@ -4122,7 +4122,7 @@ publishable-my-assay/
 │   ├── writers/                  # optional artifact writers, @register_writer applied
 │   └── steps/                    # optional reusable BaseStep subclasses
 ├── tests/
-│   └── test_my_assay.py          # asserts the template materializes and validates
+│   └── test_my_assay.py          # asserts the entry point resolves and the spec is well-formed
 └── examples/
     └── my_assay/config.yaml      # a filled-in config, generated from the spec
 ```

@@ -10902,3 +10902,280 @@ reader set, grepped).
 
 **Severity:** Minor. A reader hand-writing a checker against the example gets the wrong parser; no
 published number is affected.
+
+---
+
+## ~~OPEN — a scaffolded project cannot be built by `uv`, so `uv run publishable …` fails in it~~ — **CLOSED, struck 2026-08-27**
+
+**Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
+
+`scaffold_project` writes a `pyproject.toml` declaring `build-backend = "hatchling.build"` and no
+package for hatchling to find: `src/` holds only `.gitkeep`, and `generate experiment <name>` creates
+`src/<experiment>/`, never `src/<project>/`. So `uv` cannot build the project it is asked to install,
+and **every `uv run publishable …` inside a freshly scaffolded project fails** — including the line
+`new` itself prints:
+
+```
+next: cd my-study && uv run publishable generate experiment <name> --template generic --input-dir <dir> --output-dir <dir>
+```
+
+**Reproduced rather than recalled**, with `uv 0.12.6`:
+
+```
+$ publishable new fresh && cd fresh && uv run publishable
+   Building fresh @ file:///…/fresh
+  × Failed to build `fresh @ file:///…/fresh`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `hatchling.build.build_editable` failed (exit status: 1)
+```
+
+It still fails after `generate experiment my-pilot` lands `src/my_pilot/`, because the project is named
+`fresh`. `printf '\n[tool.uv]\npackage = false\n' >> pyproject.toml` clears it, and an experiment
+repository genuinely is not a distributable package — the same is true of `[tool.hatch.build.targets.wheel]
+packages = ["src"]`, which keeps it one.
+
+**Three consequences beyond the printed next step.** `reference.md` writes `uv run publishable <cmd>` for
+every command run inside a project (CLAUDE.md [§ Documentation conventions](../../CLAUDE.md#documentation-conventions) records that
+spelling as deliberate), so the whole reference CLI surface is unreachable as written until a user edits the file.
+The documented `--plugin owner/repo` flow runs `uv_add` **inside** that project
+(`generators/experiment.py`), so it fails for the same reason before it resolves a template. And
+`demo` is unaffected, which is why nothing caught this: `demo.py` runs the other commands through
+`main` in-process rather than through `uv run`.
+
+**The check its closer must make:** whether the scaffolded `pyproject.toml` gains `[tool.uv] package =
+false` (an experiment repo is not distributed — but it is a `uv`-specific key in a file core otherwise
+keeps backend-neutral) or a hatch `packages` entry (backend-specific instead, and it must name a
+directory that exists at scaffold time, which `src/` does). Either way the **plugin** scaffold needs no
+change: `publishable-my-assay` builds, because `src/publishable_my_assay/` matches its own name.
+
+**Severity:** Major. No published number is affected and no run is wrong — but a new user's first
+command after `new` fails, and the failure is a hatchling traceback naming neither `publishable` nor a
+remedy.
+
+**CLOSED 2026-08-27, the same day it was filed.** `scaffold.PYPROJECT` now ends with `[tool.uv]` /
+`package = false`, and the module docstring beneath it states why in the terms above. The first branch was
+taken — `package = false` rather than a hatch `packages` entry — because the declaration is **true**
+rather than a workaround: an experiment repository is code under a commit, not a distribution. Verified
+through the real console script from a fresh scaffold with **no hand edit**: `publishable new lab-study`,
+then the `next:` line it prints, then `generate experiment`, then `validate` — which reports the two
+`metadata` fields and the roster's key column, i.e. `validate` doing its job rather than a build failing.
+
+**Two pins, and the second is the one worth reading.** The direct question is
+`tests/test_scaffold.py::test_the_scaffolded_pyproject_declares_the_project_unbuildable`, which parses the
+file and asserts the resolved value is `False` — not the presence of a `[tool.uv]` key, since
+`package = true` would satisfy that while restoring the failure exactly. Deleting the two lines from
+`PYPROJECT` fails it. And **H9d guard-pin arm D fired**, as it had to: it hashes every scaffolded file but
+`README.md`, `pyproject.toml` included. The hash was **not** refreshed. `pyproject.toml` was narrowed out
+of that map with the reason recorded in the arm's own docstring — a digest over a file whose content is a
+behaviour slices change is a proxy that fires whenever the scaffold legitimately moves, which is H9d arm
+C's lesson one file over, and arm D's actual job (proving task 3's move of four scaffolds into
+`readme_templates/` changed no byte) is discharged and cannot recur, `pyproject.toml` never having been
+one of the four. The nine files that remain in the map are files that should not move, for which a digest
+**is** the direct question. Measured: with the declaration deleted, arm D passes and the new test fails,
+which is the division of labour the narrowing intends.
+
+## OPEN — `template.validate` receives a plain dict, while § The importable surface says it receives the dot-access config node — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `validate.py`'s template hook or `config.py` as its surface)**
+
+**Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
+
+`reference.md` § The importable surface, in the paragraph on dot-access nodes: *"A template's
+`validate(self, config)` receives this same object, which is how a cross-block rule reads
+`data.units.holdout` without core handing it a second shape."* Measured, it receives `load_document`'s
+return, which is `yaml.safe_load`'s **`dict`** — `validate.py`'s call is `template.validate(doc)`, and
+`doc` is typed `dict[str, Any]` at every helper around it.
+
+So the documented idiom is unwritable, and fails as a *reported* error rather than a crash, which is what
+makes it easy to ship:
+
+```
+  error   E-TEMPLATE-RULE      parameters
+          raised while validating: AttributeError: 'dict' object has no attribute 'data'
+```
+
+**Both halves reproduced:** a probe template printing `type(config)` at `validate` printed
+`<class 'dict'>` with keys `['schema_version', 'experiment_type', 'plugin', 'metadata']`; the
+`config.data.units.holdout` form produced the error above.
+
+**Why it is not closed here.** Two defensible closures point opposite ways. Wrapping `doc` in `Config`
+at the call site makes the document true and is one line — but `Config` raises `ContractError` on a
+path the config does not hold, so a template probing an optional block with `config.sweep` would newly
+raise where a `.get` returns `None` today, and every template written against the shipped `dict`
+behaviour breaks at once. Narrowing the sentence keeps the code and costs the cross-block idiom the
+sentence exists to enable. The scaffolded and generated templates both take `(self, config)` and touch
+nothing, so neither shape is pinned by them.
+
+**Nothing in the suite pins it either, grepped rather than assumed:** `grep -rn "def validate(self,
+config" tests/` returns exactly one hit, `test_validate.py:5062`'s `RuleBreaker`, whose body is
+`return ["a cross-field rule was broken"]` and never reads `config`. So the argument's shape may be
+changed in either direction without a test failing, which is its own finding.
+
+**The check its closer must make:** whether any shipped test asserts the argument's type (grepped at
+`937591f`: `tests/` mentions `template.validate` only through configs that reach it, none asserting the
+shape), and whether `E-TEMPLATE-RULE`'s § Errors row needs a clause for a raise, which it already has.
+
+**Severity:** Major. It is the one documented idiom a plugin author is most likely to write first, and
+the failure names `dict` rather than the document that promised otherwise.
+
+## OPEN — the plugin scaffold writes neither `uv.lock`, an example config, nor a README region, all three of which § Creating a plugin shows — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugin_scaffold.py` as its surface)**
+
+**Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
+
+§ Creating a plugin's fenced tree shows `uv.lock` and `examples/my_assay/config.yaml  # a filled-in
+config, generated from the spec`, and its README block shows a
+`<!-- publishable:begin templates -->` region holding *"a parameter table generated from
+`parameter_spec` itself"*, closing with: *"Add a parameter and run `publishable docs` — the table, the
+example config, and newly-initialized configs all update together."*
+
+`scaffold_plugin` writes none of the three. Measured on a real `publishable plugin new
+publishable-plate-assay`: no `uv.lock`; `examples/plate_assay/` created and **empty**
+(`(root / "examples" / stem).mkdir(parents=True, exist_ok=True)` and nothing after it); and a README
+from the module-level `README` literal, whose "What it registers" table is static and carries no region
+markers. So the payoff sentence is false for a plugin, and `docs` refuses there:
+
+```
+  error   E-DOCS-NO-REGIONS    /…/publishable-plate-assay/README.md
+          this README declares none of the managed regions (overview, credentials, experiments, templates), so there is nothing `docs` may rewrite …
+```
+
+exit `1`. That refusal is H9d's and is correct — *a command that silently rewrites nothing looks
+identical to one that worked* — which is why the gap surfaces as a refusal rather than a silence.
+
+**AMENDED 2026-08-27, same day: the tree disagrees with the output in five places, not three.** Two more,
+found by diffing the fenced tree against a real scaffold rather than by reading it: **`steps/` is shown
+and is not written** (`_MODULES` names `templates`, `resolvers`, `probes` and `writers`, and nothing
+creates a `steps/` directory — so the *"optional reusable `BaseStep` subclasses"* the section promises have
+no home the scaffold makes), and **`.gitignore` is written and is not shown**. Neither is a defect of the
+same class as the three above — one is a promise with nothing behind it, the other an omission from a
+document — but a closer narrowing the tree must move five lines rather than three. The `pyproject.toml`
+line moved on 2026-08-27 for a different reason and is now correct: the scaffold declares a `pytest` dev
+group, and the annotation says so.
+
+**Why it is not closed here.** The three are not one fix. A `uv.lock` needs a `uv lock` subprocess in a
+directory whose only dependency is `publishable` itself — resolvable now that 0.1.2 is published, which
+retires [*a scaffolded project cannot resolve a lockfile until `publishable` is published*](#a-scaffolded-project-cannot-resolve-a-lockfile-until-publishable-is-published)
+as that entry's own closing sentence anticipates, so a `uv lock` here would now succeed and the only
+question left is whether the scaffold should spend the subprocess. An `examples/<stem>/config.yaml` generated *from the spec* means running
+`materialize_config` against a template the scaffold has only just written and cannot import without
+executing it. The README region is the cheap one, and it is the one whose absence a reader meets — but a
+region in a plugin README also means `docs` must resolve an **installed** template's spec to fill it,
+which is exactly what `E-TEMPLATE-INSTALLED-UNSUPPORTED` refuses today.
+
+**The check its closer must make:** whether the three are closed together or the tree is narrowed to what
+the scaffold writes. Narrowing is a normative edit to a fenced example, and the `docs` sentence must
+change with it or it keeps promising a table nothing generates.
+
+**Severity:** Minor for the lockfile and the example, Major for the README region — it is the section's
+own headline claim (*documentation that can't drift*) failing on the artifact the section is about.
+
+## OPEN — a plugin's writer or reader never dispatches unless user code imports its module — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugins.py`'s writer registry as its surface)**
+
+**Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
+
+`plugins.register_writer` records the writer by **mutating `artifacts.WRITERS` when the decorator runs**,
+and nothing in `src/` ever loads a `publishable.writers` entry point. Templates, resolvers and probes each
+resolve a *name* lazily through `scan_group`/`load_entry_point`; a writer is keyed by a suffix and
+`io.write`'s `_suffix_for` iterates the live `WRITERS` table, so a plugin's suffix is absent from it until
+something has imported the module for its side effect.
+
+**Reproduced end to end.** A plugin registering `.plate_assay` in both `publishable.writers` and
+`publishable.readers`, installed and resolvable (its *resolver* in the same distribution dispatched in
+the same run), with a step calling `io.write("readings.plate_assay", {"n": 6})`:
+
+```
+run failed: 10 of 10 executions failed; first error at step01_summarize_units · condition 0 · seed96: E-ARTIFACT-UNWRITABLE ArtifactError: readings.plate_assay has no registered writer, so the object must be bytes or str, not dict
+```
+
+exit `4`, `run.yaml` written. Adding `import publishable_plate_assay.writers.artifact` to the step makes
+the same run write `readings.plate_assay` beside `units.parquet` in all ten step directories.
+
+**What the documents say.** § Creating a plugin describes the writers group as one of *"five registries,
+one mechanism"* and states the asymmetry it does refuse — a suffix `WRITERS` holds and `READERS` does not,
+caught at the read as `E-ARTIFACT-UNREADABLE`. It does not say a registered writer is inert until
+imported, and the sentence *"`io.write` dispatches on the writer table alone"* reads as if the table were
+populated from metadata the way the other three groups are resolved from it.
+
+**Why it is not closed here.** Eager import of the group at `io.write` time would import plugin code
+inside an execution, and *loading a plugin runs its top level* is the reason `validate` resolves names
+from metadata in the first place. Loading the group once at `command_run`'s start is the plausible
+closure, and it changes when a plugin's top level runs for every command — a behaviour change to shipped
+commands, which is the class this project has repeatedly declined to make inside a slice that did not
+charter it.
+
+**The check its closer must make:** whether registration-time collision refusal still holds if the group
+is loaded lazily — `register_writer` raises `E-PLUGIN-COLLISION` for a core suffix at decoration, so the
+raise would move inside whatever `try` the loader sits in, and § Errors' row for that code says a
+decoration-time raise is contained by `E-PLUGIN-LOAD`.
+
+**Severity:** Major. The failure costs a whole run's executions, and the remedy is an import that appears
+in no document.
+
+## ~~OPEN — the test `plugin new` scaffolds cannot fail, and reaches past the public import root~~ — **CLOSED, struck 2026-08-27**
+
+**Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
+
+`plugin_scaffold.TEST_PY`, verbatim:
+
+```python
+def test_the_template_materializes_and_validates():
+    from publishable.templates.registry import get_template
+
+    assert get_template("{stem}") is not None or True  # installed-name check once loaded
+```
+
+Two faults, and the first is this repository's single most-documented anti-pattern — a check that cannot
+fail. `X or True` is true under every mutation, so the assertion measures nothing, while the test's
+**name** claims the template materializes and validates. CLAUDE.md's own row is *"a test whose name claims
+the guarantee"*, and *"a reader greps for exactly that name and stops looking"*.
+
+The second is an invariant breach rather than a weak test: `publishable.templates.registry` is
+implementation detail, and § The importable surface makes `publishable` itself the one import root
+everything a user writes against comes from. The scaffold ships a plugin whose only test violates the rule
+the plugin's own artifacts are checked against — and `get_template` is not exported from `publishable`,
+so there is no compliant spelling of that import.
+
+**Why it is not closed here.** The honest replacement asserts against the scaffolded template class
+directly — `set(Cls.parameter_spec) == {…}`, and `Cls().validate({}) == []` — which needs no registry
+lookup and no installed-template loading, so it passes today and keeps passing when loading lands. That is
+a rewrite of the shipped literal plus a decision about whether the scaffold should also `uv add --dev
+pytest`, which it does not today: the generated `pyproject.toml` declares no test runner, so the shipped
+test cannot be run without an edit either.
+
+**The check its closer must make:** that the replacement **fails** when the template it tests is broken —
+demonstrated, not asserted. The three-test set in
+[`docs/tutorial-writing-a-plugin.md` § Testing a plugin](../tutorial-writing-a-plugin.md#testing-a-plugin)
+was run against a deliberately gutted `validate` (`1 failed, 2 passed`) and restored (`3 passed`), which
+is the evidence this entry's closer owes too.
+
+**Severity:** Minor as shipped code, Major as an example. Every plugin author starts from this file.
+
+**CLOSED 2026-08-27, the same day it was filed — and NOT by the replacement this entry proposed.** Two
+tests over the distribution's **own entry point**, through `importlib.metadata` and `publishable`'s
+exported `Param`: the group is scanned for this template's name, an empty result asserts with the reason
+(*run these tests through `uv run pytest`, which installs this package first*), a second registration
+asserts with the count, and the loaded class is then checked against the name the scaffold wrote, with
+`parameter_spec` non-empty and every value a `Param`.
+
+**The proposal in this entry was rejected on measurement.** Enumerating
+`set(parameter_spec) == {"<stem>.threshold"}` would go red on the author's **first real edit**, the shipped
+spec being a placeholder whose own help text says to replace it — a scaffold shipping a test that fails on
+arrival, which gets deleted rather than fixed. And its second assertion, `validate({}) == []`, **cannot
+fail**: deleting the method inherits `BaseTemplate.validate`, which also returns `[]` — this entry's own
+defect reproduced in its own remedy. What replaced it asserts nothing a domain edit touches, and asks the
+question that actually breaks in practice: a mistyped module path or class name in `pyproject.toml`, silent
+until a config names the template and then reading like a config typo.
+
+**Three mutations, run against a real scaffolded plugin installed with `uv add --editable`:** typo the
+entry point's class name → **2 failed**; delete `parameter_spec` → **1 failed, 1 passed** (which is what
+proves the two tests are not one test); remove `@register_template` entirely → **2 passed**, uncovered
+here and stated as such in `TEST_PY`'s own docstring, because that agreement is `check_registration`'s
+(`E-PLUGIN-DECORATOR`) wherever core loads the object behind a key — for a resolver or probe that is
+`validate` and `run`, and for an installed template it is nowhere yet.
+
+**The second half of this entry's question is closed too**: the scaffolded `pyproject.toml` now declares
+`[dependency-groups]` with `dev = ["pytest"]`, so `uv run pytest` inside a fresh plugin collects and runs
+the test it just wrote — **2 passed**, measured. Pinned by
+`tests/test_plugin_scaffold.py::test_the_shipped_test_asks_the_entry_point_rather_than_asserting_a_tautology`
+and `::test_the_shipped_pyproject_can_run_the_shipped_test`; restoring the old literal and dropping the
+dev group fails both. `reference.md` § Creating a plugin's tree annotation moved with it — `# asserts the
+template materializes and validates` described a test needing `materialize_config`, which the import root
+does not export, so it now reads `# asserts the entry point resolves and the spec is well-formed`.

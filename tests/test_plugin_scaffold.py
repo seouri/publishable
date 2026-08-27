@@ -1,4 +1,5 @@
 # tests/test_plugin_scaffold.py
+import re
 import tomllib
 from pathlib import Path
 
@@ -77,3 +78,46 @@ def test_a_non_empty_directory_is_refused(tmp_path: Path):
         scaffold_plugin(root)
     assert excinfo.value.code == "E-PROJECT-EXISTS"
     assert (root / "keepme.txt").read_text() == "mine\n"  # nothing was overwritten
+
+
+def test_the_shipped_test_asks_the_entry_point_rather_than_asserting_a_tautology(tmp_path: Path):
+    """What `plugin new` writes into `tests/` is the first test every plugin
+    author reads, and what it shipped could not fail: `assert get_template(...)
+    is not None or True`, importing `publishable.templates.registry` for a name
+    the import root does not export.
+
+    Both halves are asserted on the generated source, because that source is the
+    artifact — the file is not imported here (its entry point resolves only once
+    the generated package is installed, which is `uv run pytest` inside it, not
+    this suite).
+    """
+    root = scaffold_plugin(tmp_path / "publishable-my-assay")
+    source = (root / "tests" / "test_my_assay.py").read_text()
+
+    # A tautological assertion is the defect this replaced, so it is named
+    # rather than described: `or True` and `or 1` both disarm an assert.
+    assert " or True" not in source
+    assert not re.search(r"assert\b.*\bor\s+(True|1)\b", source)
+    # The import root is `publishable` itself; a submodule import here would ship
+    # core's own invariant broken in the example every plugin author copies.
+    assert re.search(r"^from publishable import ", source, re.M)
+    assert not re.search(r"from publishable\.\w", source)
+    # And it asks the question a scaffolded test can actually answer today: the
+    # entry point resolves to the class the scaffold wrote.
+    assert "entry_points(group=" in source
+    assert '"publishable.templates"' in source
+    assert 'MyAssayTemplate"' in source
+
+
+def test_the_shipped_pyproject_can_run_the_shipped_test(tmp_path: Path):
+    """A test nothing can run is a test nobody runs. The scaffold declared no
+    runner, so `uv run pytest` inside a fresh plugin needed a hand edit before it
+    did anything at all — filed alongside the tautology, and closed with it.
+    """
+    root = scaffold_plugin(tmp_path / "publishable-my-assay")
+    declared = tomllib.loads((root / "pyproject.toml").read_text())
+    assert "pytest" in declared.get("dependency-groups", {}).get("dev", []), (
+        "the scaffold declares no test runner, so `uv run pytest` in a fresh "
+        "plugin installs nothing that can collect the test it just wrote"
+    )
+    assert (root / "tests" / "test_my_assay.py").is_file()

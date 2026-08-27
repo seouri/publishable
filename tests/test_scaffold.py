@@ -1,6 +1,7 @@
 import hashlib
 import itertools
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -205,7 +206,6 @@ _H9D_ARM_D_SCAFFOLD_DIGESTS = {
     "LICENSE": "2b548550d33cea762ba2c229c394d8512be0f86fa3ab5f65372f4b6c48fd2552",
     "configs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "docs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "pyproject.toml": "51ee00b516a6a5d71bdd7cfa0015e13699e0f61d127b5d8000edbc9a0906f08b",
     "src/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "templates/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "tests/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -230,6 +230,21 @@ def test_h9d_arm_d_every_scaffolded_file_except_the_readme(tmp_path: Path):
     and object bytes that are not reproducible between two runs; the map was
     captured twice in one session and compared before the literal was written.
 
+    **NARROWED 2026-08-27, and the narrowing is the arm working rather than the
+    arm failing.** `pyproject.toml` left this map when `scaffold.PYPROJECT`
+    gained `[tool.uv] package = false` — the fix for *a scaffolded project
+    cannot be built by `uv`*, without which every `uv run publishable ...` in a
+    fresh project failed. The hash was NOT refreshed, because a digest over a
+    file whose content is a **behaviour** slices change is a proxy that fires
+    whenever the scaffold legitimately moves, which is H9d arm C's own lesson
+    one file over; and this arm's job — proving task 3's move of four scaffolds
+    into `readme_templates/` changed no byte — is discharged and cannot recur,
+    `pyproject.toml` never having been one of the four. The nine entries that
+    remain are files that should not move, for which a digest IS the direct
+    question. What replaced it is the direct question for this file too:
+    `test_the_scaffolded_pyproject_declares_the_project_unbuildable` below,
+    which reads the declaration rather than the bytes around it.
+
     The project name is fixed at `my-study` — the name `reference.md`
     § The generated README uses — because `CITATION.cff` and `pyproject.toml`
     both interpolate it.
@@ -239,10 +254,33 @@ def test_h9d_arm_d_every_scaffolded_file_except_the_readme(tmp_path: Path):
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*"))
         if path.is_file()
-        and path.relative_to(root).as_posix() != "README.md"
+        and path.relative_to(root).as_posix() not in ("README.md", "pyproject.toml")
         and path.relative_to(root).parts[0] != ".git"
     }
     assert seen == _H9D_ARM_D_SCAFFOLD_DIGESTS
+
+
+def test_the_scaffolded_pyproject_declares_the_project_unbuildable(tmp_path: Path):
+    """`[tool.uv] package = false`, without which `uv` tries to build the project
+    it is asked to run in and hatchling finds no package matching the
+    distribution name — `src/` holds a `.gitkeep` and `generate experiment`
+    writes `src/<experiment>/`, never `src/<project>/`.
+
+    Parsed rather than grepped, so a line inside a string or a comment cannot
+    satisfy it, and asserted as the resolved value rather than as the presence of
+    a key: `package = true` would pass a `"[tool.uv]" in text` check while
+    restoring the failure exactly.
+    """
+    root = scaffold_project(tmp_path / "my-study")
+    declared = tomllib.loads((root / "pyproject.toml").read_text())
+    assert declared.get("tool", {}).get("uv", {}).get("package") is False, (
+        "`[tool.uv] package = false` is absent, so `uv` will try to build this "
+        "project and hatchling will find no package matching its name"
+    )
+    # The other half, and the reason this key is needed at all: nothing in the
+    # scaffold gives hatchling a package to find, and no generator adds one.
+    assert not (root / "src" / "my_study").exists()
+    assert [p.name for p in (root / "src").iterdir()] == [".gitkeep"]
 
 
 # ---------------------------------------------------------------------------
