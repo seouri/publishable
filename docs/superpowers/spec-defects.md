@@ -11433,3 +11433,56 @@ looks safe on today's callers and the risk is entirely the pin above.
 **Severity:** Minor. No shipped code takes this route, and a step that did would be corrupting its own
 run deliberately; the defect is that a documented guarantee has an undocumented way around it, now
 disclosed rather than closed.
+
+---
+
+## OPEN — § Templates promises a `# REQUIRED` marker `init` does not write, and draws a consequence the code contradicts — **Owner: unassigned, and either closure is a change to what every generated config looks like or to what `validate` accepts**
+
+**Found 2026-08-27 by the end-to-end review of [`tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `ca37a27`.**
+
+§ Templates states it three ways. The three-states table's third row: `Param(str)` — no `default` —
+*"`init` writes"* `""  # REQUIRED`. The paragraph beneath: *"Required parameters get the same treatment
+`metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file
+`init` produced is complete and fails validation until you fill it in."* And its consequence: *"**The
+marker is what fails**: `validate` rejects a required parameter still holding its type's empty value …
+an empty string can never be a legal value for a required `str`, because there is no way to distinguish
+the value you meant from the placeholder you didn't fill in."*
+
+**Measured, on a template declaring one required `Param` of each type**, through `materialize_config`:
+
+```
+    req_str: 
+    req_int: 
+    req_list:                       # list of string
+    req_float: 
+    req_bool: 
+```
+
+A key with **no value and no marker** — and, incidentally, a trailing space on four of the five lines, in
+generated YAML that lands in a user's repository. `grep -n REQUIRED src/publishable/materialize.py`
+returns exactly two hits, both the hard-coded `metadata.description` and `metadata.authors` lines, so the
+*"same treatment `metadata.description` does"* is the one thing the code does not do.
+
+**What `validate` does instead, and why the consequence is backwards.** The materialized key parses as
+YAML `null`, so the refusal is `E-PARAM-VALUE parameters.instrument.model is null, but the parameter is
+not nullable` — a different code and a different mechanism from *"still holding its type's empty value"*.
+And the documented consequence inverts: **`model: ""` validates clean** (`✓ config valid`, measured), so
+an empty string **is** a legal value for a required `str` on this build. A template author who designed
+around the documented rule — adding a sentinel because empty was said to be impossible — designed around
+a fact that is not there.
+
+**Nothing is broken at runtime**: a fresh config still fails `validate` until the key is filled, which is
+the property the passage exists to promise. What is wrong is every detail of *how*, and one consequence
+that points the opposite way.
+
+**The check its closer must make.** The two closures are opposite and both are real changes. **Making the
+code true** means `init` emits `""  # REQUIRED` (or `0`, `[]`, `false` per type) and `validate` rejects a
+required parameter holding its type's empty value — which changes what every generated config looks like,
+moves `parameters_hash` for anyone regenerating, and **newly refuses `model: ""`**, a value that validates
+today. **Making the document true** costs the design: a bare key tells a reader nothing about what to
+fill in, which is exactly why `metadata` has the marker. Whichever is chosen, the trailing space is a
+separate one-line fix worth taking either way.
+
+**Severity:** Major as documentation — three claims and a consequence, in the section a template author
+reads first, and the consequence is the kind you build around. Minor as behaviour: the refusal fires,
+just not for the stated reason.

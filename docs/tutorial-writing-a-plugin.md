@@ -14,30 +14,35 @@ them is [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 
 ---
 
-## Measured on 2026-08-27 against commit `7672e2f`
+## Measured on 2026-08-27 against commit `ca37a27`
 
-Every command below was run, and every transcript is copied from what it printed. Build facts expire —
-a claim about what the tool does *today* is perishable in a way a specification claim is not — so they
-are confined to this notice and to the tables that carry an error code.
+Every command below was run against that commit, and every transcript is what it printed — abridged where
+this file says so and nowhere else. Build facts expire — a claim about what the tool does *today* is
+perishable in a way a specification claim is not — so they are confined to this notice and to the tables
+that carry an error code.
 
-**Three behaviours were re-measured**, because writing this tutorial found them and the commits up to
-`7672e2f` — the one this heading names — closed them: `scaffold_project` now writes `[tool.uv] package =
-false`, `plugin new` ships a test that can fail plus a `pytest` dev group, and a plugin's writer now
-dispatches from its claim with nothing importing the module, and `plugin new` writes a `steps/` directory
-and a `.gitkeep` under `examples/`. Two further defects were closed by **deleting promises rather than
-building them** — what `validate` receives is documented as the mapping it always was, so § 4's `.get`
-idiom is the rule now instead of a workaround, and `uv.lock` and the plugin README's parameter table left
-the documented trees rather than being generated. Everything else was captured at `937591f` and still
-holds here: `hashes.HASHED_TREES` is `("src", "templates")`,
-so the edited `pyproject.toml` is outside [`code_hash`](reference.md#three-hashes), and every hash and
-`run_id` quoted below is the one `937591f` produced. The one output any of them could have moved was
-re-run at `e61dcb4` — `dry-run`'s fixed-file list, which names `environment/pyproject.toml` — and it
-prints the same nine files in the same order. W1 moves no number at all: it decides which writer encodes
-an artifact, and touches no hash, no statistic and no count.
+**Five defects were found while writing this file and all five are closed; reviewing it end to end at
+`ca37a27` found a sixth, which is open.** Four of the five moved a behaviour:
+`scaffold_project` writes `[tool.uv] package = false`; `plugin new` ships a test that can fail plus a
+`pytest` dev group; a plugin's writer dispatches from its claim with nothing importing the module; and
+`plugin new` writes a `steps/` directory and a `.gitkeep` under `examples/`. Two were closed by
+**deleting a promise rather than building it**: what a template's `validate` receives is now documented as
+the mapping it always was, and `uv.lock` plus the plugin README's parameter table left the documented
+trees instead of being generated — one filing accounting for both kinds.
+[The gaps this tutorial found](#the-gaps-this-tutorial-found) names each one, where it went, and the
+sixth that has not.
+
+**The whole arc was re-run at `ca37a27` for this file's own review**, not only at the commits that closed
+those defects — `new`, `generate template`, `list-templates`, `generate experiment`, `validate`,
+`dry-run`, `run`, `docs`, `plugin new`, and the installed-template and collision refusals. Two numbers
+worth knowing are stable rather than incidental: `dry-run` still prints the same nine fixed files in the
+same order, and the statistics quoted below reproduce **exactly** — the seeds come from the design digest
+rather than from [`code_hash`](reference.md#three-hashes), so a different `code_hash` gives the same
+`reading` and the same `hit_rate`.
 
 What that measurement established, before any prose:
 
-| Route | State at `7672e2f` |
+| Route | State at `ca37a27` |
 |---|---|
 | A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
@@ -142,7 +147,7 @@ template depended on it would be reproducible everywhere except where it mattere
 
 ## Route A: a project-local template, end to end
 
-This route runs to completion at `7672e2f`. Every block is real output.
+This route runs to completion at `ca37a27`. Every block is real output.
 
 ### 1. Scaffold the project
 
@@ -198,9 +203,13 @@ class MyAssayTemplate(BaseTemplate):
 
 Three things about that spec, each a rule rather than a style:
 
-- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as
-  `""  # REQUIRED` and `validate` rejects the file until it is filled in. `default=None` is a different
-  claim — it needs `nullable=True` and means *`null` is a legal value*.
+- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as a
+  key with no value, so the file it wrote fails `validate` until you fill it in —
+  `E-PARAM-VALUE … is null, but the parameter is not nullable`. `default=None` is a different claim: it
+  needs `nullable=True` and means *`null` is a legal value*. (`reference.md` § Templates describes this
+  as `""  # REQUIRED`, an empty value plus a marker, and draws a consequence from it — *"an empty string
+  can never be a legal value for a required `str`"* — which is false of this build: `model: ""` validates
+  clean. Measured, and [filed](superpowers/spec-defects.md).)
 - **The constraint vocabulary is closed** — `choices`, `ge`/`gt`/`le`/`lt`, `pattern`, `item_type`,
   `min_items`/`max_items`, `nullable`, `help`. There is no `validator=` hook, because a rule that needs
   code is a cross-field rule and belongs in `validate`.
@@ -243,7 +252,7 @@ declarations:
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
   instrument:
-    model: ""                       # REQUIRED — Instrument model identifier
+    model:                          # Instrument model identifier
     gain: 1.0                       # float > 0
   analysis:
     threshold: 0.5                  # float in (0, 1)
@@ -261,6 +270,10 @@ create. What tells you exactly what to change is `validate`:
   warning W-PARAM-UNSET        parameters
           holds paths that carry a default and are left unset here; a step reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: instrument.gain, analysis.threshold
 ```
+
+Those three are what a config materialized from the **old** spec reports. Fresh from `init` against the
+new one, the required key is the only thing wrong with it: `E-PARAM-VALUE parameters.instrument.model is
+null, but the parameter is not nullable`, beside whatever `metadata` and `data.units` still need.
 
 ### 4. Add the cross-block rule only a template can know
 
@@ -359,9 +372,11 @@ and earns no interval, so a step recording only those publishes nothing.
 Commit before running: `code_hash` covers `src/**` and `templates/**`, and `run` refuses a dirty tree
 (`E-CODE-DIRTY`) because a hash claiming to cover your code must actually cover what ran.
 
-`dry-run` is what to read before spending anything:
+`dry-run` is what to read before spending anything — its first lines resolve the sweep, the repeats and
+the seeds, and this picks up from the step list:
 
 ```
+…
 steps: step01_summarize_units (repeat)
 statistics: basis units (n=6 resolved); correction holm; derived metric names come from the template's aggregate() and are not knowable before the run
 scale:  60 unit-executions (10 executions × 6 units handed to each)
@@ -389,12 +404,16 @@ Then `run`:
 ```
   warning W-STATS-COLUMN-THIN  limits.min_reported_n
           condition 0, step 'step01_summarize_units': recorded column 'reading' carries a number for 6 unit(s), below limits.min_reported_n (10)
+  warning W-STATS-COLUMN-THIN  limits.min_reported_n
+          condition 1, step 'step01_summarize_units': recorded column 'reading' carries a number for 6 unit(s), below limits.min_reported_n (10)
 2 problems (0 errors, 2 warnings)
 run.yaml → /…/results/run_2026-08-27T13-57-45Z_c075829/run.yaml
 ```
 
 And the template's derived metric is in the record with an interval of its own, beside the recorded
-column's:
+column's — **abridged and re-wrapped** for reading, `n` and `ci95` inlined and each metric's
+`correction: null` and `reading`'s `repeat_spread` dropped; every value is the one a real run wrote, and
+re-running the arc at `ca37a27` reproduced all four digits-for-digits:
 
 ```yaml
     aggregated:
@@ -466,8 +485,11 @@ publishable-plate-assay/
 That is the tree [§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) shows, and
 the two now agree **by test rather than by review**: a fixture parses that document's fenced tree and
 compares it to what `plugin new` commits, in both directions — every path the document names must be in
-the commit, and every path the commit holds must be named. Until 2026-08-27 they disagreed six ways, five
-of them the document over-promising and one the scaffold writing something unannounced.
+the commit, and every path the commit holds must be named. Before that test existed the two disagreed
+about `uv.lock`, an example `config.yaml`, `steps/`, a README parameter table and `.gitignore`, and the
+`examples/` directory was created empty and therefore in no clone — five the document over-promised, one
+the scaffold wrote unannounced, and one only a check that reads the **commit** rather than the disk can
+see.
 
 `uv.lock` is in neither: `uv` writes it on your first `uv run` inside the package.
 `examples/plate_assay/` carries a `.gitkeep` and nothing else — the example config is yours to write, and
@@ -524,7 +546,11 @@ publishable generate experiment my-pilot \
 ```
 
 `--plugin <user>/<repo>` expands to `uv add git+https://github.com/<user>/<repo>`, so publishing is
-"push to GitHub" and pinning is whatever `uv` supports (`…@v1.2.0`). While developing locally there is no
+"push to GitHub" and pinning is whatever `uv` supports (`…@v1.2.0`). **That invocation installs the
+plugin and then refuses**, because the template it names is an installed one — see
+[§ 4](#4-the-template-half-does-not-load-at-this-build). The install is real and the machinery it carries
+works; the `--template` half is what waits. Point `--template` at a core or project-local name, or drop
+the flag and install separately. While developing locally there is no
 remote yet, so add it by path instead — this is a local stand-in for the flag, not a second supported
 form:
 
@@ -570,12 +596,12 @@ without core loading it at all, which is what [Testing a plugin](#testing-a-plug
 Installing a plugin beside a local template of the same name is refused, with both providers named:
 
 ```
-E-TEMPLATE-COLLISION: the template name `my_assay` is claimed more than once:
-/…/lab-study/templates/my_assay.py::MyAssayTemplate and publishable-my-assay 0.1.0 — a template that
-could redefine another's name could change what a config means without changing the config, which is
-what `parameters_hash` exists to make impossible. Install order and import order are the only
-tie-breaks available, and both are properties of a machine rather than of a design. Rename yours.
+  error   E-TEMPLATE-COLLISION experiment_type
+          the template name `plate_assay` is claimed more than once: /…/lab-study/templates/plate_assay.py::PlateAssayTemplate and publishable-plate-assay 0.1.0 — a template that could redefine another's name could change what a config means without changing the config, which is what `parameters_hash` exists to make impossible. Install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design. Rename yours.
 ```
+
+`generate template` reports the same collision as a `note:` on the line it could not update, so you may
+meet it there first.
 
 ### 5. A resolver — the reason most plugins exist
 
@@ -681,8 +707,11 @@ resolver and its probe do, without a step importing anything for a side effect.
 Three rules to know, each of which the dispatch enforces rather than documents:
 
 - **A claim wins only by being strictly longer than what is registered.** `.fastq.gz` beats `.gz`; a
-  claim on `.csv` never takes `.csv` from core. That is what keeps core's five unshadowable, and
-  `E-PLUGIN-COLLISION` is what refuses such a claim outright at decoration.
+  claim on `.csv` never takes `.csv` from core. That is what keeps core's five unshadowable.
+  `E-PLUGIN-COLLISION` refuses such a claim when the module is imported — and a claim that never wins is
+  never imported for that, so a plugin claiming `.csv` and nothing else is **inert** rather than refused
+  at the write. Deliberate: refusing there would make one plugin's bad claim break every core `.csv`
+  write in the process.
 - **Each writer takes exactly what its reader gives back.** A pair is registered through two entry-point
   groups, and dispatch is decided from the writer side alone — so a reader for a suffix no writer answers
   for is never consulted, and the file reads back as bytes.
@@ -707,7 +736,8 @@ unnecessary and harmless.
 ## Testing a plugin
 
 The scaffolded `tests/test_<stem>.py` asks one question, and which question it asks is the interesting
-part:
+part (`_registered`'s own docstring elided here — the file carries the argument for asking through
+metadata rather than through core):
 
 ```python
 from importlib.metadata import entry_points
@@ -802,7 +832,7 @@ no setup — it installs the package first, which is what makes the entry point 
 
 ## What this build refuses, by code
 
-Measured on 2026-08-27 at `7672e2f`. Every code below was produced by running the thing that produces it.
+Measured on 2026-08-27 at `ca37a27`. Every code below was produced by running the thing that produces it.
 
 | Code | When | What to do |
 |---|---|---|
@@ -820,10 +850,10 @@ Measured on 2026-08-27 at `7672e2f`. Every code below was produced by running th
 
 ## The gaps this tutorial found
 
-Five, all measured on 2026-08-27 against `937591f` and filed in
-[`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their severity. **None is open**,
-which is why this section reads as history: nothing above it is a workaround, and a reader who arrived
-here through one of the filings can see where it went.
+Six, all filed in [`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their
+severity. Five were found while writing this file, measured against `937591f`, and **all five are
+closed** — so nothing above them is a workaround. The sixth was found by reviewing this file end to end
+against `ca37a27`, and it is **open**.
 
 **All five are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
 fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
@@ -835,5 +865,16 @@ is now resolved over installed claims as well as registrations, which is what
 plain dict* was closed by [`W2-SCOPING.md`](superpowers/W2-SCOPING.md)'s — **by deleting the sentence that
 promised otherwise**, because the promised reader raises on exactly the absences a cross-block rule asks
 about. And *the plugin scaffold's tree and its output disagree* was closed by [`W3-SCOPING.md`](superpowers/W3-SCOPING.md)'s — two lines built, three narrowed, and the disagreement itself replaced by a test that parses the document and observes the scaffold, so a seventh cannot appear quietly. All five are struck in `spec-defects.md`, and **this section is now a record rather than a list**: every gap this tutorial found is closed. They are
-named rather than dropped because a reader who heard there were five should be able to see which four
-went and how.
+named rather than dropped because a reader who arrived through one of the filings should be able to see
+which one it was and where it went.
+
+### § Templates promises a `# REQUIRED` marker `init` does not write — **open**
+
+The one this file's own review turned up, and it is worth knowing before you declare a required
+parameter. § Templates says `init` materializes one as `""  # REQUIRED`, an empty value plus a marker,
+and concludes that *"an empty string can never be a legal value for a required `str`."* Measured at
+`ca37a27`: `init` writes a bare key with no value and no marker, `validate` refuses it as
+`E-PARAM-VALUE … is null, but the parameter is not nullable`, and **`model: ""` validates clean** — so
+the consequence points the opposite way from the code. A fresh config still fails until you fill the key
+in, which is the property that matters; every detail of how is different, and one of them is a rule a
+template author might design around.
