@@ -11110,6 +11110,32 @@ change with it or it keeps promising a table nothing generates.
 **Severity:** Minor for the lockfile and the example, Major for the README region — it is the section's
 own headline claim (*documentation that can't drift*) failing on the artifact the section is about.
 
+**SCOPED 2026-08-27** against `9d3fadf` in [`W3-SCOPING.md`](W3-SCOPING.md) — **7 tasks, and the
+deliverable is one test.** Two things this entry and its amendment both got wrong. There is a **sixth**
+discrepancy: `examples/<stem>/` is created empty and git tracks no empty directory, so it is absent from
+the scaffold's own commit and `git status --porcelain --ignored` reports nothing either — the author sees
+the folder and a clone does not. And the `uv.lock` half is **not plugin-specific**: § Scaffolding's
+project tree carries the same line and `scaffold_project` does not write it either, measured, where it is
+the only one of that tree's thirteen lines missing.
+
+**The scoping's shape is the point.** All six were possible because the layout is written twice — the
+fenced tree and `plugin_scaffold.py` — with nothing comparing them, so the fix is the pair § CLI reference
+has had for commands since H9: parse the document, observe the code, keep no third copy. Both directions
+are asserted, and the second is the one nobody was checking — every path the commit tracks must be named
+by the tree, which is what `.gitignore` fails today.
+
+**Three of the five are narrowed rather than built, each with grounds.** The README's parameter table:
+`docs` cannot fill it while `E-TEMPLATE-INSTALLED-UNSUPPORTED` stands, **and** a table generated at
+`plugin new` time documents the placeholder spec and goes stale on the author's first edit — W1's
+`TEST_PY` argument exactly. What the scaffold ships instead is a table of registered names derived from
+the same stem the entry points come from, which **cannot drift**, so *documentation that can't drift* is
+satisfied by the registry table and not by a parameter table nobody can regenerate. `uv.lock`: `uv run`
+writes it on first use (measured), and a creation command that needs a network is worse than a lockfile
+that appears a moment later. The example config: generating it needs the class the scaffold has just
+written and would render the placeholder. **Two are built**: `steps/` with an `__init__.py` beside its
+four siblings, and `examples/<stem>/.gitkeep`, which is `scaffold_project`'s own answer for its five
+directories.
+
 ## ~~OPEN — a plugin's writer or reader never dispatches unless user code imports its module~~ — **CLOSED, struck 2026-08-27 by W1**
 
 **Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
