@@ -455,27 +455,36 @@ publishable-plate-assay/
 │   ├── templates/plate_assay.py
 │   ├── resolvers/units.py
 │   ├── probes/instrument.py
-│   └── writers/artifact.py
+│   ├── writers/artifact.py
+│   └── steps/
 ├── tests/test_plate_assay.py
 └── examples/plate_assay/
 ```
 
-Five differences from the tree in
-[§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new): there is no `uv.lock`;
-`examples/plate_assay/` is created **empty** rather than holding a generated `config.yaml`; the README
-carries a static table rather than one derived from the spec; `steps/` is shown there and is not written;
-and `.gitignore` is written and is not shown. The README one has a visible consequence —
-`publishable docs` inside a plugin refuses:
+That is the tree [§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) shows, and
+the two now agree **by test rather than by review**: a fixture parses that document's fenced tree and
+compares it to what `plugin new` commits, in both directions — every path the document names must be in
+the commit, and every path the commit holds must be named. Until 2026-08-27 they disagreed six ways, five
+of them the document over-promising and one the scaffold writing something unannounced.
+
+`uv.lock` is in neither: `uv` writes it on your first `uv run` inside the package.
+`examples/plate_assay/` carries a `.gitkeep` and nothing else — the example config is yours to write, and
+the `.gitkeep` is what puts the directory in a clone, since git tracks no empty one. `steps/` is a
+directory with no module, because a reusable `BaseStep` is registered nowhere: the consuming project
+imports it.
+
+The README carries an install line and the names it registers, all four derived from the distribution's
+own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe
+`plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable,
+and why that table cannot drift. It carries **no parameter table and no managed regions**, deliberately:
+at scaffold time the spec is a placeholder, and filling such a table afterwards would mean reading an
+installed template's spec, which this build refuses. So `publishable docs` inside a plugin refuses too,
+rather than rewriting nothing:
 
 ```
   error   E-DOCS-NO-REGIONS    /…/publishable-plate-assay/README.md
           this README declares none of the managed regions (overview, credentials, experiments, templates), so there is nothing `docs` may rewrite — a README is not regenerated from a template, because everything outside a region is hand-written
 ```
-
-Filed: [the plugin scaffold's tree and its output disagree five ways](#the-plugin-scaffold-writes-neither-uvlock-an-example-config-nor-a-docs-region).
-The names are derived from the distribution's own stem, which is why nothing needs editing to be
-resolvable: `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe
-`plate_assay_instrument`, suffix `.plate_assay`.
 
 ### 2. The entry points are the registration
 
@@ -810,11 +819,11 @@ Measured on 2026-08-27 at `f6e1ff5`. Every code below was produced by running th
 ## The gaps this tutorial found
 
 Five, all measured on 2026-08-27 against `937591f` and filed in
-[`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their severity. They are listed
-here so a reader of this tutorial knows which of its instructions exist to route around a defect rather
-than to teach a rule.
+[`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their severity. **None is open**,
+which is why this section reads as history: nothing above it is a workaround, and a reader who arrived
+here through one of the filings can see where it went.
 
-**Four are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
+**All five are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
 fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
 package = false`, and `plugin_scaffold.TEST_PY` was replaced by the entry-point pair in
 [§ Testing a plugin](#testing-a-plugin). *A plugin's writer never dispatches unless something imports its
@@ -823,14 +832,6 @@ is now resolved over installed claims as well as registrations, which is what
 [§ 7](#7-a-writer-and-its-reader-resolved-from-the-claim) describes. And *`template.validate` receives a
 plain dict* was closed by [`W2-SCOPING.md`](superpowers/W2-SCOPING.md)'s — **by deleting the sentence that
 promised otherwise**, because the promised reader raises on exactly the absences a cross-block rule asks
-about. All four are struck in `spec-defects.md`, and this section lists the one that remains. They are
+about. And *the plugin scaffold's tree and its output disagree* was closed by [`W3-SCOPING.md`](superpowers/W3-SCOPING.md)'s — two lines built, three narrowed, and the disagreement itself replaced by a test that parses the document and observes the scaffold, so a seventh cannot appear quietly. All five are struck in `spec-defects.md`, and **this section is now a record rather than a list**: every gap this tutorial found is closed. They are
 named rather than dropped because a reader who heard there were five should be able to see which four
 went and how.
-
-### The plugin scaffold writes neither `uv.lock`, an example config, nor a `docs` region
-
-[§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) shows a tree containing
-`uv.lock` and `examples/<stem>/config.yaml`, and a README with "a parameter table generated from
-`parameter_spec` itself" whose payoff sentence is "Add a parameter and run `publishable docs`". The
-scaffold writes no lockfile, creates `examples/<stem>/` empty, and writes a README with no managed
-regions — so `docs` refuses there with `E-DOCS-NO-REGIONS` at exit `1`.

@@ -1,5 +1,6 @@
 import hashlib
 import itertools
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -13,6 +14,7 @@ from publishable.generators.step import generate_step
 from publishable.scaffold import scaffold_project
 
 _REPO_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+_REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
 
 
 def test_new_creates_the_fixed_layout_and_a_first_commit(tmp_path: Path):
@@ -520,3 +522,167 @@ def test_generate_experiment_prints_its_paths_and_a_next_command_that_works(
     capsys.readouterr()
     assert main(argv) == 0
     assert "✓ config valid" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# W3 — the documented layouts versus what the scaffolds write.
+# `docs/superpowers/W3-SCOPING.md`.
+#
+# The layout lives in `reference.md`'s two fenced trees and in `scaffold.py` /
+# `plugin_scaffold.py`, and nothing compared them — which is how six lines came
+# to disagree. This is the pair § CLI reference has had for commands since H9
+# (`tests/test_cli.py`, "the list of commands lives in the document and in
+# `cli.NOT_BUILT_COMMANDS`, nowhere else"): parse the document, observe the code,
+# keep no third copy.
+# ---------------------------------------------------------------------------
+
+_TREE_ENTRY = re.compile(r"^(?P<indent>(?:[│ ]   )*)(?:├──|└──) (?P<name>[^#]+?)\s*(?:#.*)?$")
+
+
+def documented_tree(section: str) -> set[str]:
+    """The set of paths the fenced tree under `section` names, root stripped.
+
+    Paths only — never the trailing annotation, which the document must stay free
+    to reword without failing a test. A trailing `/` is kept, because it is what
+    marks a directory and the reverse direction below needs to know.
+
+    Located by its heading rather than by position: *"the fenced block after the
+    third paragraph"* is the row-position trap in another currency.
+    """
+    text = _REFERENCE_MD.read_text()
+    start = text.index(section)
+    while True:
+        fence = text.index("```", start)
+        body = text[text.index("\n", fence) + 1 : text.index("```", fence + 3)]
+        if "├──" in body:
+            break
+        start = text.index("```", fence + 3) + 3
+    parents: dict[int, str] = {}
+    named: set[str] = set()
+    for line in body.split("\n"):
+        match = _TREE_ENTRY.match(line)
+        if match is None:
+            continue
+        depth = len(match.group("indent")) // 4
+        name = match.group("name").strip()
+        parents[depth] = name
+        prefix = "".join(parents[d] for d in range(depth))
+        named.add(prefix + name)
+    return named
+
+
+def _tracked(root: Path) -> set[str]:
+    """What the scaffold's own first commit holds, which is what a CLONE sees.
+
+    `git ls-files` rather than a filesystem walk, deliberately: W3-SCOPING § 0's
+    whole finding is that the two differ — an empty directory exists on the
+    author's disk, is invisible to git in both directions, and is absent from
+    every clone.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    )
+    return {line for line in listed.stdout.split("\n") if line}
+
+
+def _visible_in(entry: str, tracked: set[str]) -> bool:
+    """Whether a clone of the scaffold's own commit would hold `entry`.
+
+    Checked against `git ls-files` rather than the filesystem, and that is the
+    whole point of this helper: an existence check on disk **cannot see** the
+    fault W3-SCOPING § 0 found. `examples/<stem>/` was created and left empty, git
+    tracks no empty directory, so it existed on the author's disk and in no clone
+    — and deleting the `.gitkeep` that fixes it left an `exists()`-based agreement
+    test entirely green, measured, which is why this reads the commit instead.
+
+    A directory counts as present when something tracked sits under it; a file
+    counts when it is tracked itself. `.git/` is the one entry its caller exempts:
+    a repository's own directory is not content, and the tree names it to say that
+    `git init` ran.
+    """
+    if entry.endswith("/"):
+        return any(path.startswith(entry) for path in tracked)
+    return entry in tracked
+
+
+def _assert_agreement(root: Path, named: set[str]) -> None:
+    """Both directions, and the second is the one nobody was checking.
+
+    Collected into one assertion rather than two, so a failure reports **every**
+    disagreement at once: two `assert`s stop at the first, and a reader who cannot
+    count what is broken reviews these lines one at a time — which is how five of
+    them survived.
+    """
+    directories = tuple(entry for entry in named if entry.endswith("/"))
+    tracked = _tracked(root)
+    problems = [
+        f"named by the document and absent from what the scaffold commits: {entry}"
+        for entry in sorted(named)
+        if entry != ".git/" and not _visible_in(entry, tracked)
+    ] + [
+        f"tracked by the scaffold and named nowhere in the tree: {path}"
+        for path in sorted(_tracked(root))
+        if path not in named and not path.startswith(directories)
+    ]
+    assert not problems, "\n".join(problems)
+
+
+def test_w3_the_documented_project_tree_is_what_new_writes(tmp_path: Path):
+    """§ Scaffolding's tree against `publishable new`."""
+    named = documented_tree("## Scaffolding: `publishable new`")
+    _assert_agreement(scaffold_project(tmp_path / "my-study"), named)
+
+
+def test_w3_the_documented_plugin_tree_is_what_plugin_new_writes(tmp_path: Path):
+    """§ Creating a plugin's tree against `publishable plugin new`."""
+    from publishable.plugin_scaffold import scaffold_plugin
+
+    named = documented_tree("### Creating a plugin: `publishable plugin new`")
+    _assert_agreement(scaffold_plugin(tmp_path / "publishable-my-assay"), named)
+
+
+def test_w3_the_tree_parser_can_fail():
+    """A parser whose zeros nobody has seen fail is a parser that reports zero.
+
+    Three claims: it finds the counts the two trees actually carry, it resolves a
+    nested entry to its parent rather than to a bare name, and a path the tree
+    does not carry is absent from what it returns.
+    """
+    project = documented_tree("## Scaffolding: `publishable new`")
+    plugin = documented_tree("### Creating a plugin: `publishable plugin new`")
+
+    assert len(project) == 12, sorted(project)
+    assert "pyproject.toml" in project and "src/" in project
+    # The trees name what the scaffolds write and nothing else, which is what lets
+    # the agreement above need no exception list and no reading of the annotation
+    # column: `uv.lock` is written by `uv` on first run and is named in prose
+    # beside both trees instead.
+    assert "uv.lock" not in project
+
+    assert "src/publishable_my_assay/templates/my_assay.py" in plugin
+    assert "templates/my_assay.py" not in plugin  # the nesting is resolved, not flattened
+    assert "tests/test_my_assay.py" in plugin
+    assert "publishable-my-assay/" not in plugin  # the root is stripped
+    assert "not-in-any-tree.txt" not in plugin
+
+
+def test_w3_the_documented_plugin_readme_is_the_one_the_scaffold_writes(tmp_path: Path):
+    """§ Creating a plugin shows the generated README in full, so it is a second
+    copy of a generated artifact — the same defect class as the tree, in prose.
+
+    Compared byte for byte, which is safe *because* the README is derived: every
+    name in it comes from the distribution's stem, so there is no worked value for
+    a document to elide and no reason for the two to differ. The block is located
+    by the sentence that introduces it rather than by position, and the extraction
+    asserts it found the block before comparing.
+    """
+    from publishable.plugin_scaffold import scaffold_plugin
+
+    text = _REFERENCE_MD.read_text()
+    intro = text.index("an install line and **the names it registers**")
+    fence = text.index("````markdown", intro)
+    documented = text[text.index("\n", fence) + 1 : text.index("````", fence + 4)]
+    assert documented.startswith("# publishable-my-assay"), "the fenced block is not the README"
+
+    root = scaffold_plugin(tmp_path / "publishable-my-assay")
+    assert documented == (root / "README.md").read_text()

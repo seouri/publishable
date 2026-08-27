@@ -11059,7 +11059,7 @@ stays as written. `CLAUDE.md`'s invariant was the fifth home and carried the **f
 `raw` rather than the shape, found by re-sweeping newline-insensitively after the shape edits landed, with
 the sweep proven able to fail against a string known present.
 
-## OPEN — the plugin scaffold writes neither `uv.lock`, an example config, nor a README region, all three of which § Creating a plugin shows — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugin_scaffold.py` as its surface)**
+## ~~OPEN — the plugin scaffold writes neither `uv.lock`, an example config, nor a README region, all three of which § Creating a plugin shows~~ — **CLOSED, struck 2026-08-27 by W3**
 
 **Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
 
@@ -11092,6 +11092,29 @@ same class as the three above — one is a promise with nothing behind it, the o
 document — but a closer narrowing the tree must move five lines rather than three. The `pyproject.toml`
 line moved on 2026-08-27 for a different reason and is now correct: the scaffold declares a `pytest` dev
 group, and the annotation says so.
+
+**CLOSED 2026-08-27 by W3, and the closure is a test rather than the five edits.** Both trees are now
+compared to their scaffold's own **commit** by
+`tests/test_scaffold.py::test_w3_the_documented_project_tree_is_what_new_writes` and
+`::test_w3_the_documented_plugin_tree_is_what_plugin_new_writes`, in both directions — every path the
+document names must be in the commit, and every path the commit holds must be named by the tree or sit
+under a directory it names. A third pins the fenced README block byte for byte against what the scaffold
+writes, safe **because** that README is derived. The red state before the edits was five reported
+disagreements across the two tests, and the parser has its own arm proving it can fail.
+
+**`git ls-files` rather than the filesystem, and that choice is the finding.** An `exists()`-based
+version of the same test was written first and **passed with the `examples/` `.gitkeep` deleted** —
+measured — because the directory still exists on disk while being absent from every clone. The forward
+direction now reads the commit, which caught it, and bought a pin on the project scaffold's five
+`.gitkeep` files for free.
+
+**Two built, three narrowed.** `steps/` is written with an `__init__.py` beside its four siblings, and
+`examples/<stem>/.gitkeep` puts that directory in a clone. `uv.lock` left **both** trees — a tree names
+what its scaffold writes, so a file `uv` creates on first run belongs in prose beside it, which is also
+what lets the agreement test need no exception list and no reading of the annotation column. The README's
+parameter table is replaced by what the scaffold actually generates, a registry-name table that cannot
+drift, with the two grounds stated where a plugin author reads them; and the `docs` payoff sentence is
+scoped to a project, where its readers are and where both template homes are readable.
 
 **Why it is not closed here.** The three are not one fix. A `uv.lock` needs a `uv lock` subprocess in a
 directory whose only dependency is `publishable` itself — resolvable now that 0.1.2 is published, which

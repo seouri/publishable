@@ -270,7 +270,20 @@ def scaffold_plugin(root: Path, license_name: str = "MIT") -> Path:
     (root / ".gitignore").write_text(read_scaffold("gitignore.tmpl"))
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / f"test_{stem}.py").write_text(TEST_PY.format(stem=stem, cls=cls))
+    # `steps/` has no entry-point group — a reusable `BaseStep` is imported by the
+    # consuming project's own code and registered nowhere — so there is nothing to
+    # generate into it and the directory is the whole of what § Creating a plugin
+    # names. Written beside its four siblings, with their `__init__.py`, because a
+    # reader of any plugin relies on that layout being there.
+    (package / "steps").mkdir(exist_ok=True)
+    (package / "steps" / "__init__.py").write_text("")
+    # A `.gitkeep`, because git tracks no empty directory: without it this folder
+    # exists on the author's disk, is absent from the scaffold's own commit and
+    # from every clone, and `git status` reports nothing in either direction.
+    # `scaffold_project` writes one into each of its five directories for exactly
+    # this reason.
     (root / "examples" / stem).mkdir(parents=True, exist_ok=True)
+    (root / "examples" / stem / ".gitkeep").touch()
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(["git", "add", "."], cwd=root, check=True)

@@ -3942,8 +3942,7 @@ my-study/
 ├── README.md                # generated, ready to ship — see below
 ├── CITATION.cff             # generated; how to cite this work
 ├── LICENSE                  # MIT by default; --license to change
-├── pyproject.toml           # uv project, publishable pinned, src layout
-├── uv.lock
+├── pyproject.toml           # uv project, publishable pinned, src layout, not itself a package
 ├── .git/                    # git init + first commit
 ├── .env.example             # credential variable NAMES only
 ├── .gitignore               # .env, __pycache__ — nothing data-related
@@ -3954,7 +3953,7 @@ my-study/
 └── docs/
 ```
 
-There's no `data/` or `results/` directory; input and output live outside the repo. Because the layout is fixed, core doesn't need `--repo` or `--templates-dir` flags.
+There's no `data/` or `results/` directory; input and output live outside the repo. Because the layout is fixed, core doesn't need `--repo` or `--templates-dir` flags. There's no `uv.lock` either, for the reason [§ Creating a plugin](#creating-a-plugin-publishable-plugin-new) gives for a plugin's: `uv` writes one on the first `uv run`, and a creation command that needed a resolver and a network to succeed would be a worse trade than a lockfile arriving a moment later. Every directory named above carries a `.gitkeep`, so the layout a clone sees is the layout this tree shows — git tracks no empty directory, and one it did not track would exist on your disk and nowhere else.
 
 It prints the project path it wrote and one `next:` line — the [`generate experiment`](#generators) invocation, with the three values only you can supply left as placeholders.
 
@@ -4127,11 +4126,11 @@ This scaffolds a standalone installable package rather than an experiment repo, 
 
 ```
 publishable-my-assay/
-├── README.md                 # generated, with a parameter table derived from the spec
+├── README.md                 # generated: install line, and the names it registers
 ├── LICENSE
 ├── CITATION.cff
 ├── pyproject.toml            # declares the publishable.templates entry point, and pytest as a dev group
-├── uv.lock
+├── .gitignore                # __pycache__, .env — the same set a project gets
 ├── .git/
 ├── src/publishable_my_assay/
 │   ├── templates/my_assay.py     # BaseTemplate + parameter_spec, @register_template applied
@@ -4142,8 +4141,10 @@ publishable-my-assay/
 ├── tests/
 │   └── test_my_assay.py          # asserts the entry point resolves and the spec is well-formed
 └── examples/
-    └── my_assay/config.yaml      # a filled-in config, generated from the spec
+    └── my_assay/                 # a config to ship as an example — yours to write
 ```
+
+**`uv.lock` is not in that tree, and neither scaffold writes one.** `uv` writes it on the first `uv run` inside the package, so it arrives a moment later without a creation command needing a resolver and a network to succeed — `plugin new` runs `git init` and nothing else. What pins a plugin for a *consuming* project is that project's own lockfile, which is [what `--plugin` puts the dependency into](#plugins-where-domain-knowledge-lives) and what `reproduce` reads.
 
 ```toml
 [project.entry-points."publishable.templates"]
@@ -4174,45 +4175,36 @@ That authority costs the guarantee two paragraphs up: an entry-point name is res
 
 **Every non-dunder-stemmed file under `templates/` is a template, and one that fails to load is a fault rather than a silence.** Discovery imports every such file to find its registration, so a file that raises while importing, imports cleanly but never calls `@register_template`, or registers something that is not a `BaseTemplate` subclass leaves `validate` with nothing it can resolve a name against — reported as [`E-TEMPLATE-LOAD`](#errors-validate-reports), naming the file, ahead of a collision for the same partial-information reason a collision is checked ahead of an unresolved `experiment_type`. A helper a template means to import as a sibling, rather than have discovered as a template in its own right, is exempt the same way `__init__.py` already is: name it with the same `__`-prefix.
 
-The generated README documents the plugin the way a user needs it — install line, template list, and **a parameter table generated from `parameter_spec` itself**:
+The generated README documents the plugin the way a user needs it — an install line and **the names it registers**, every one derived from the distribution's own stem:
 
 ````markdown
 # publishable-my-assay
 
-A [`publishable`](https://github.com/your-org/publishable) plugin providing
-the `my_assay` experiment template.
+A [`publishable`](https://github.com/your-org/publishable) plugin.
 
 ## Install
 
 ```bash
-uv run publishable generate experiment my-pilot \
-  --plugin someuser/publishable-my-assay \
-  --template my_assay \
-  --input-dir /path/to/data --output-dir /path/to/results
+uv add git+https://github.com/<you>/publishable-my-assay
 ```
 
-<!-- publishable:begin templates -->
-## Templates
+## What it registers
 
-### `my_assay`
-
-Convention class `wet_lab` · default repeats 3 · naming `kebab-case`
-
-| Parameter | Type | Default | Constraints | Description |
-|---|---|---|---|---|
-| `instrument.model` | str | — | required | Instrument model identifier |
-| `instrument.gain` | float | 1.0 | > 0 | Detector gain multiplier |
-| `instrument.vendor` | str | `vendor_a` | choices: vendor_a \| vendor_b | Which vendor's API the readings come through |
-
-**Required credentials:** `INSTRUMENT_API_TOKEN`; `VENDOR_B_TOKEN` when `instrument.vendor: vendor_b`
-
-**Apparatus probe:** `assay_instrument` — records `model`, `firmware`, `calibration_id`, `reagent_lot`
-<!-- publishable:end templates -->
+| Registry | Name |
+|---|---|
+| template | `my_assay` |
+| resolver | `my_assay_units` |
+| probe | `my_assay_instrument` |
+| writer / reader | `.my_assay` |
 ````
 
-Note what is *not* in that parameter table: the **calibration run this assay is traceable to.** It's a fact about the instrument at the moment of the run, so it's [apparatus provenance](#the-apparatus-core-can-only-observe) rather than a parameter — read from the instrument instead of typed into a config, and outside `parameters_hash`, so recalibrating doesn't read as redesigning the experiment. The rule for the boundary is short: if you decide it, it's a `Param`; if you can only observe it, it's an apparatus fact.
+**That table cannot drift, which is why it is the one generated here.** Every name in it comes from the same substitution the [entry points](#creating-a-plugin-publishable-plugin-new) come from, so renaming the distribution moves both sides at once — there is no state for the README to be wrong about.
 
-This is the same principle as `init` materializing a config: `parameter_spec` is the single source of truth, so the documentation is *derived* from it rather than maintained alongside it. Add a parameter and run `publishable docs` — the table, the example config, and newly-initialized configs all update together. Documentation that can't drift is the only kind worth generating.
+**A parameter table is not generated here, and the reason is worth stating rather than leaving as an absence.** At `plugin new` time the `parameter_spec` is a placeholder — one `threshold` whose help text says to replace it — so a table rendered from it would document a TODO and go stale on the first thing you do. And core could not regenerate it afterwards: filling such a table means reading an **installed** template's spec, which is [what this build refuses](#errors-validate-reports) under `E-TEMPLATE-INSTALLED-UNSUPPORTED`. A hand-maintained parameter table in a plugin's README is exactly the drift `parameter_spec` exists to prevent, so this README carries none, declares no [managed regions](#the-generated-readme), and `publishable docs` inside a plugin says so rather than rewriting nothing: `E-DOCS-NO-REGIONS`, exit `1`.
+
+**Where `docs` does derive a parameter table is a project**, whose README declares all four managed regions and whose templates are core's or [its own `templates/`](#templates-where-parameters-are-defined) — both readable. Add a parameter there, run `publishable docs`, and the table, the example config and newly-initialized configs update together. Documentation that can't drift is the only kind worth generating; a table nobody can regenerate is the other kind.
+
+**One thing that belongs in neither table: the calibration run this assay is traceable to.** It's a fact about the instrument at the moment of the run, so it's [apparatus provenance](#the-apparatus-core-can-only-observe) rather than a parameter — read from the instrument instead of typed into a config, and outside `parameters_hash`, so recalibrating doesn't read as redesigning the experiment. The rule for the boundary is short: if you decide it, it's a `Param`; if you can only observe it, it's an apparatus fact.
 
 Publishing is "push to GitHub" — that's all `--plugin owner/repo` expects.
 
