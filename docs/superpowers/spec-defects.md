@@ -11016,6 +11016,23 @@ shape), and whether `E-TEMPLATE-RULE`'s § Errors row needs a clause for a raise
 **Severity:** Major. It is the one documented idiom a plugin author is most likely to write first, and
 the failure names `dict` rather than the document that promised otherwise.
 
+**SCOPED 2026-08-27** against `92634af` in [`W2-SCOPING.md`](W2-SCOPING.md) — **7 tasks, and the fix is a
+deletion.** Three measurements decide it. Wrapping an `init`-materialized config in `Config` and walking
+the seven paths a cross-block rule actually asks about, **five raise**
+(`statistics.contrasts`/`report_by`/`resample`/`null_test`, `sweep.grid`) — the two that pass do so only
+because `init` writes `holdout: null` and `hypotheses: []` — so the wrapper's one advantage is
+unavailable in exactly the case the method exists for. **The document contradicts itself**: `raw`'s own
+paragraph says *"`validate` and a template's `validate(config)` both need the underlying mapping"*, which
+is what the code hands them, so the only fiction is the wrap-then-unwrap in between. And **`raw` has no
+reader in `src/` at all** — its stated justification names two calls that do not happen, which the
+scoping recommends closing by deleting the caller list and filing the gap rather than removing a
+documented accessor inside a documentation-correction slice.
+
+**This entry's own framing was too narrow**: it treated the disagreement as one sentence to settle in
+either direction, and the deciding facts are that the promised reader cannot answer the question and that
+`aggregate` keeping the node is not an inconsistency — *resolved* values, where a miss is a typo, against
+*declarations*, where an absence is the answer.
+
 ## OPEN — the plugin scaffold writes neither `uv.lock`, an example config, nor a README region, all three of which § Creating a plugin shows — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugin_scaffold.py` as its surface)**
 
 **Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
