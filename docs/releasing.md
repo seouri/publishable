@@ -25,7 +25,7 @@ The sequence matters, and each step's output is the next step's input.
 |---|---|---|
 | 1 | Land every change on `main` and push | The published metadata's URLs point at `main`; they should resolve to a tree that contains what they describe |
 | 2 | Build and verify the artifacts | Everything after this consumes the exact bytes verified here |
-| 3 | TestPyPI, and install from it | The only rehearsal available — a PyPI version number can be yanked but never re-uploaded |
+| 3 | TestPyPI, and install from it — **optional**, see below | A real upload against a real index. `verify` covers the rest, so this earns its place only for a new name, a metadata change, or a README change |
 | 4 | Tag and cut the GitHub release | Tag the tree that gets uploaded, before uploading it |
 | 5 | Publishing the release triggers `release.yml`, which verifies and uploads to PyPI | The workflow is the uploader; there is no token |
 | 6 | Point the Homebrew formula at the published sdist, verify, push the tap | The formula's `url` cannot exist until step 5 |
@@ -105,8 +105,27 @@ so it prints `unknown command`.
 
 ## 3. TestPyPI
 
-TestPyPI is a separate site with a separate account and separate tokens; pypi.org
-credentials do not work there.
+**Optional since 0.1.2, and worth knowing when it stops being optional.** The
+rehearsal this step exists for is now done by `release.yml`'s `verify` job on every
+release — the same build, the same `twine check`, the same installed-console-script
+arc, on Linux. What TestPyPI adds beyond that is a real *upload* against a real index,
+which matters in exactly three cases:
+
+- **A first upload of a new project name.** There is no trusted publisher yet and no
+  project to scope a token to; rehearsing the upload is the only way to find a
+  metadata rejection before it costs the real name's first version.
+- **A change to packaging metadata** — `pyproject.toml`'s `[project]` table, a new
+  `classifier`, a `license` spelling. `twine check` validates locally, but PyPI's own
+  validator is stricter and is what actually rejects.
+- **A change to how the README renders**, since the project page is built from the
+  long description and cannot be re-uploaded for a version.
+
+For an ordinary release that changes only code, skip it: `verify` covers the same
+ground and a failed upload no longer costs anything, because nothing uploads until
+`verify` is green.
+
+When you do run it, TestPyPI is a separate site with a separate account and separate
+tokens; pypi.org credentials do not work there.
 
 ```bash
 UV_PUBLISH_TOKEN=<test-token> uv publish --publish-url https://test.pypi.org/legacy/ \
@@ -295,7 +314,7 @@ patch version.
 - [ ] `CITATION.cff` `date-released` is the actual release date
 - [ ] `uv build`; `twine check`; both archive listings read
 - [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet`
-- [ ] TestPyPI upload, install from it, same arc
+- [ ] TestPyPI upload and install — only for a new project name, a packaging-metadata change, or a README change; `verify` covers an ordinary release
 - [ ] `main` pushed; tag pushed; GitHub release created, no install block yet
 - [ ] `release.yml` green through `verify` and `publish`; uploaded sha256 equals the local one
 - [ ] Formula repointed in **both** copies; style, audit, untap/tap, install, test
