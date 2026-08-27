@@ -14,26 +14,28 @@ them is [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 
 ---
 
-## Measured on 2026-08-27 against commit `e61dcb4`
+## Measured on 2026-08-27 against commit `f6e1ff5`
 
 Every command below was run, and every transcript is copied from what it printed. Build facts expire —
 a claim about what the tool does *today* is perishable in a way a specification claim is not — so they
 are confined to this notice and to the tables that carry an error code.
 
 **Three behaviours were re-measured**, because writing this tutorial found them and the commits up to
-`e61dcb4` — the one this heading names — closed them: `scaffold_project` now writes `[tool.uv] package =
+`f6e1ff5` — the one this heading names — closed them: `scaffold_project` now writes `[tool.uv] package =
 false`, `plugin new` ships a test that can fail plus a `pytest` dev group, and a plugin's writer now
-dispatches from its claim with nothing importing the module. Everything else was captured at `937591f`
-and still holds here: `hashes.HASHED_TREES` is `("src", "templates")`,
+dispatches from its claim with nothing importing the module. A fourth defect was closed there by
+**deleting a promise rather than building it** — what `validate` receives is documented as the mapping it
+always was, so § 4's `.get` idiom is the rule now instead of a workaround, and no behaviour moved with it.
+Everything else was captured at `937591f` and still holds here: `hashes.HASHED_TREES` is `("src", "templates")`,
 so the edited `pyproject.toml` is outside [`code_hash`](reference.md#three-hashes), and every hash and
-`run_id` quoted below is the one `937591f` produced. The one output any of the three could have moved
-was re-run at `e61dcb4` — `dry-run`'s fixed-file list, which names `environment/pyproject.toml` — and it
+`run_id` quoted below is the one `937591f` produced. The one output any of them could have moved was
+re-run at `e61dcb4` — `dry-run`'s fixed-file list, which names `environment/pyproject.toml` — and it
 prints the same nine files in the same order. W1 moves no number at all: it decides which writer encodes
 an artifact, and touches no hash, no statistic and no count.
 
 What that measurement established, before any prose:
 
-| Route | State at `e61dcb4` |
+| Route | State at `f6e1ff5` |
 |---|---|
 | A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
@@ -138,7 +140,7 @@ template depended on it would be reproducible everywhere except where it mattere
 
 ## Route A: a project-local template, end to end
 
-This route runs to completion at `e61dcb4`. Every block is real output.
+This route runs to completion at `f6e1ff5`. Every block is real output.
 
 ### 1. Scaffold the project
 
@@ -789,7 +791,7 @@ no setup — it installs the package first, which is what makes the entry point 
 
 ## What this build refuses, by code
 
-Measured on 2026-08-27 at `e61dcb4`. Every code below was produced by running the thing that produces it.
+Measured on 2026-08-27 at `f6e1ff5`. Every code below was produced by running the thing that produces it.
 
 | Code | When | What to do |
 |---|---|---|
