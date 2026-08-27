@@ -218,10 +218,13 @@ curl -s https://pypi.org/pypi/publishable/<v>/json | python3 -c \
   "import json,sys; print([u['digests']['sha256'] for u in json.load(sys.stdin)['urls']])"
 ```
 
-They should be equal. **The build is bit-reproducible from the tag** — measured for
-0.1.0 on 2026-08-26, where a rebuild in a detached worktree at `v0.1.0` reproduced both
-published digests exactly — so anyone can perform this check against the tag, and it is
-what makes the artifacts attached at step 4 the same bytes the workflow publishes.
+They should be equal. **The build is bit-reproducible from the tag, across platforms**,
+and both halves of that were measured. On 2026-08-26 a rebuild in a detached worktree
+at `v0.1.0` reproduced both published digests on the same machine. On 2026-08-27 the
+stronger form held: 0.1.2 was built by `verify` on `ubuntu-latest` and published from
+there, and both digests match a local macOS `uv build` of the same tag exactly. That is
+what makes the artifacts attached at step 4 the same bytes the workflow publishes, and
+it means anyone can check a published artifact against the tag on any machine.
 
 ## 6. Homebrew
 
