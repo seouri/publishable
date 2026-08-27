@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from publishable import ContractError
@@ -92,3 +95,61 @@ def test_the_root_config_refuses_a_write_too_and_raw_stays_read_only():
             setattr(c, name, object())
         assert e.value.code == "E-CONFIG-IMMUTABLE"
     assert c.raw["parameters"]["analysis"]["method"] == "pearson"
+
+
+# ---------------------------------------------------------------------------
+# W4 — `Config.raw` is the only route from a config to a mapping.
+# `docs/superpowers/W4-SCOPING.md`.
+# ---------------------------------------------------------------------------
+
+
+def test_w4_raw_is_what_a_step_writes_its_parameters_through(tmp_path: Path):
+    """§ The importable surface's worked use, run rather than described.
+
+    Both halves, because the second is what makes the first necessary: the node
+    route **must** fail, or `raw` is redundant and this test would pass against an
+    accessor nobody needs. A round trip rather than a type assertion — the point
+    is that what comes back through `io.read_upstream`'s own reader is the mapping
+    the config declared, nested values and all.
+    """
+    from publishable.artifacts import StepIO
+
+    cfg = Config({"parameters": {"analysis": {"method": "pearson", "min_samples": 30}}})
+    step_dir = tmp_path / "step"
+    for directory in (step_dir, tmp_path / "in", tmp_path / "run"):
+        directory.mkdir()
+    io = StepIO(step_dir=step_dir, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+
+    io.write("params.json", cfg.raw["parameters"])
+    assert json.loads((step_dir / "params.json").read_text()) == {
+        "analysis": {"method": "pearson", "min_samples": 30}
+    }
+
+    # The control, and the whole reason the accessor exists: a node is not
+    # encodable, and a nested node carries no `raw` to reach around it with.
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        io.write("node.json", cfg.parameters)
+    with pytest.raises(ContractError) as excinfo:
+        getattr(cfg.parameters, "raw")  # noqa: B009 — the read IS the assertion
+    assert excinfo.value.code == "E-STEP-PARAM-UNKNOWN"
+
+
+def test_w4_raw_is_a_shallow_copy_which_the_document_calls_read_only():
+    """The disclosure § The importable surface now carries, pinned as behaviour.
+
+    Rebinding a top-level key is contained; writing **inside** one is not, and it
+    reaches the document underneath. Filed rather than fixed — the obvious deep
+    copy defuses `test_runner.py::test_per_condition_cfgs_are_not_the_same_object`,
+    which observes the resolver's own deep copy through this accessor — so what is
+    pinned here is the behaviour the document discloses, and a closer who changes
+    it will fail this test and read the filing.
+    """
+    document = {"parameters": {"analysis": {"method": "pearson"}}}
+    cfg = Config(document)
+
+    cfg.raw["parameters"] = {"hijacked": True}
+    assert cfg.parameters.analysis.method == "pearson"  # the rebind is contained
+
+    cfg.raw["parameters"]["analysis"]["method"] = "kendall"
+    assert cfg.parameters.analysis.method == "kendall"  # the nested write is not
+    assert document["parameters"]["analysis"]["method"] == "kendall"

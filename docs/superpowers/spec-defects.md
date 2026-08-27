@@ -11329,7 +11329,7 @@ does not export, so it now reads `# asserts the entry point resolves and the spe
 
 ---
 
-## OPEN — `Config.raw` has no reader in core's own source — **Owner: unassigned, with the reason (the charter is complete, and removing a documented accessor is a shipped-surface change no slice holds)**
+## ~~OPEN — `Config.raw` has no reader in core's own source~~ — **CLOSED, struck 2026-08-27 by W4: the wrong thing was measured**
 
 **Found 2026-08-27 by [`W2-SCOPING.md`](W2-SCOPING.md) § 0.3, measured against `92634af`.**
 
@@ -11375,3 +11375,61 @@ rather than a measured one"* asked for. A nested node carries no `raw`
 ground against removal appeared too, which this entry could not have known when it declined on
 scope alone: `publishable` 0.1.2 is published, so removing a documented public accessor is a breaking
 change for users this repository cannot enumerate.
+
+**CLOSED 2026-08-27 by W4.** § The importable surface's `raw` paragraph now carries the worked use it
+never had — `io.write("params.json", cfg.raw["parameters"])` and a `**` splat — with the two facts that
+make it the only route, and § Using them in step code points a step author at it from where they are
+reading. The false clause about the accessor having no reader in core's source is **deleted rather than
+rewritten**: it described the wrong test. Pinned by
+`tests/test_config.py::test_w4_raw_is_what_a_step_writes_its_parameters_through`, which round-trips the
+mapping **and** asserts the node route fails — the control being what makes the accessor necessary, since
+without it the test would pass against an accessor nobody needs.
+
+**What did not change, and the measurement that says why.** `raw` is still a shallow copy. Making it a
+deep copy was run as a mutation: `tests/test_config.py` goes red, as it should — and
+`test_runner.py::test_per_condition_cfgs_are_not_the_same_object` stays **green**, which is the whole
+warning, since that test observes *the resolver's* deep copy through this accessor and its docstring says
+that aliasing is how an earlier defect first showed itself. 109 passed, 1 failed, and the 1 was the new
+pin rather than the old one. Filed below with what its closer owes.
+
+---
+
+## OPEN — `Config.raw` is a shallow copy, so writing inside one of its values is a route around the immutability a node refuses — **Owner: unassigned, and its closer owes a re-expression of another test's claim first**
+
+**Found 2026-08-27 by [`W4-SCOPING.md`](W4-SCOPING.md) § 2, measured against `50d1a8a`.**
+
+`Config.raw` returns `dict(object.__getattribute__(self, "_data"))` — one level. Measured:
+
+```
+cfg.raw["parameters"] = {"hijacked": True}                 → cfg.parameters.analysis.method unchanged
+cfg.raw["parameters"]["analysis"]["method"] = "kendall"     → cfg.parameters.analysis.method == "kendall"
+                                                              and the document underneath changed too
+```
+
+Rebinding a top-level key is contained. Writing **inside** one is not, and it sticks: `Node.__setattr__`
+refuses a write under `E-CONFIG-IMMUTABLE` with the reason *"The config is the record of what ran; change
+it in the file"*, while this route changes what every later [scope](../reference.md) reads after
+`parameters_hash` was computed from the file. § The importable surface now discloses it — *"treat it as
+read-only"*, with the consequence spelled out — and
+`tests/test_config.py::test_w4_raw_is_a_shallow_copy_which_the_document_calls_read_only` pins the
+behaviour so a change fails a test rather than a reading.
+
+**Why W4 did not close it, and this is the part to read.** The obvious fix is `copy.deepcopy` in `raw`.
+Run as a mutation, it makes the new pin fail — correctly — and leaves
+`test_runner.py::test_per_condition_cfgs_are_not_the_same_object` **green**, measured (109 passed, 1
+failed, the failure being the new pin). That test asserts
+`cfg0.raw["parameters"]["analysis"] is not cfg1.raw["parameters"]["analysis"]` in order to prove **the
+resolver** deep-copies per condition, and its own docstring says *"that aliasing is exactly how an earlier
+defect in this project first showed itself."* If `raw` copies, that assertion is true whatever the
+resolver does. **Closing this defect by deep-copying would weaken that pin silently** — the shape this
+repository names *a pin weakened quietly* — so the closure owes, first, a re-expression of the resolver's
+claim that does not observe it through `raw`.
+
+**The check its closer must make:** whether any shipped step, template or fixture depends on `raw`
+handing back the document's own nested objects rather than copies. Grepped at `50d1a8a`: the readers are
+ten assertions in `tests/test_runner.py` and the two new ones above, and none mutates — so the change
+looks safe on today's callers and the risk is entirely the pin above.
+
+**Severity:** Minor. No shipped code takes this route, and a step that did would be corrupting its own
+run deliberately; the defect is that a documented guarantee has an undocumented way around it, now
+disclosed rather than closed.

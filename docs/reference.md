@@ -1146,11 +1146,24 @@ designed to.
 is a real exception to "no methods at all" and it costs one name: a top-level key named `raw` is
 unreachable through dot-access. It is at the root only, because the root is the one node
 anything holds whole: a step's `cfg`, and the `cfg` a template's [`aggregate`](#templates-where-parameters-are-defined)
-receives. Either may need the mapping — to hand a library, or to hash — and a nested node
-has no such holder. Core itself needs it nowhere: `validate` reads the parsed document
-and so does a template's `validate(config)`, neither of them through a node, which is
-why this accessor has no reader in core's own source. A parameter named `raw` inside a block
-is reachable exactly as any other is.
+receives. Either may need the mapping, and a nested node has no such holder. A parameter named `raw`
+inside a block is reachable exactly as any other is.
+
+**What it is for, since it is the only route there:** a node cannot be encoded — `json.dumps(cfg.parameters)`
+and `io.write("params.json", cfg.parameters)` both raise `Object of type Node is not JSON serializable` —
+and a nested node carries no `raw` of its own. So recording what a step ran under goes through the root:
+
+```python
+io.write("params.json", cfg.raw["parameters"])     # a plain mapping, nested dicts and all
+analyze(cohort, **cfg.raw["parameters"]["analysis"])
+```
+
+What comes back is the document's own mapping rather than a rebuilt one, so **treat it as read-only**:
+`cfg.raw` is a shallow copy, and writing *inside* one of its values changes what every later
+[scope](#step-scope) reads while [`parameters_hash`](#three-hashes) has already been computed from the
+file. The [immutability a node enforces](#the-importable-surface) is not enforced here. Core itself needs
+none of this: `validate` reads the parsed document and so does a template's
+[`validate(config)`](#templates-where-parameters-are-defined), neither of them through a node.
 
 ### What you define, and what is core's
 
@@ -2484,6 +2497,8 @@ class Step(BaseStep):
 ```
 
 A step written for a single-condition experiment works unchanged when someone later adds a sweep — sweeping is a config concern, not a code concern.
+
+`cfg` is [dot-access with no methods](#the-importable-surface), which is what keeps a parameter named `items` or `values` readable — so when a step needs its parameters as a **mapping**, to record them or to splat them into a call, the root node's one accessor is the route: `cfg.raw["parameters"]`, read-only for the reason given there.
 
 When a step genuinely needs its context — seeding a library, labeling a plot — it's available on the instance, since core constructs a fresh step per execution:
 
