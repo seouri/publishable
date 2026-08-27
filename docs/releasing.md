@@ -26,13 +26,14 @@ Step 7 is last on purpose. A documented route with nothing behind it is this rep
 
 ## Version sites
 
-Five files carry `publishable`'s own version, and `CLAUDE.md` § Versions is the rule. They move together:
+Six files carry `publishable`'s own version, and `CLAUDE.md` § Versions is the rule. They move together:
 
 - `pyproject.toml`
 - `CITATION.cff` — its `date-released` moves too, and went three weeks stale before 0.1.0
 - `src/publishable/__init__.py`
 - `docs/reference.md`'s worked `publishable_version` value
 - README's `v0.x` notice, when the major or the phase changes
+- `uv.lock` — the one nobody edits: the project is an editable member of its own lock, so the first `uv run` or `uv build` after the bump rewrites that entry by itself. It was omitted from this list until 0.1.3, where it surfaced as an unexplained sixth modified file at commit time. Let `uv` write it and commit it with the rest, rather than hand-editing it or leaving it to appear in the next unrelated commit
 
 **Three sites carry `0.1.0` and must NOT move**: `scaffold.py` and `plugin_scaffold.py` write the *scaffolded project's* version, and `tests/test_cli.py`'s fixtures do the same. Two real pins assert `provenance.publishable_version`, and they move only when the package version does. Enumerate these; never `sed` the version across the tree.
 
