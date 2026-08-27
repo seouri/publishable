@@ -6,6 +6,12 @@
 # docs/releasing.md's order: the release is cut, then PyPI. The `pypi`
 # environment is the human gate, and can require an approving reviewer.
 #
+# There is no job that uploads artifacts to the release: releases on this
+# repository are IMMUTABLE, and `gh release upload` against one returns
+# `HTTP 422: Cannot upload assets to an immutable release` — measured, after a
+# job that tried it shipped. The release is created WITH its artifacts instead,
+# which is also why `docs/releasing.md` step 4 says to attach them there.
+#
 # `verify` is not ceremony. This project's tests set `pythonpath = ["."]` and so
 # import from `src/`; a wheel that dropped `readme_templates/*.tmpl` would pass
 # every one of them and fail on the first `publishable new` a stranger ran. So
@@ -122,20 +128,3 @@ jobs:
           name: dist
           path: dist/
       - run: uv publish
-
-  attach:
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # replaces the release's assets with the bytes that were published
-    steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
-        with:
-          name: dist
-          path: dist/
-      # The build is bit-reproducible from the tag, so these are the same bytes
-      # a maintainer's local `uv build` produces — measured for 0.1.0. Uploading
-      # them here means the release assets and the PyPI files cannot diverge.
-      - run: gh release upload "${GITHUB_REF_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
-        env:
-          GH_TOKEN: ${{ github.token }}

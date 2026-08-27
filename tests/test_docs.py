@@ -733,8 +733,20 @@ def test_both_region_bodies_are_in_name_order_whatever_the_filesystem_answers(
     _generate(root, tmp_path, "exp-one", "alpha_assay")
     _generate(root, tmp_path, "exp-two", "beta_assay")
 
+    # Reversed by NAME, not by whatever the filesystem returned. Until
+    # 2026-08-27 this was `list(reversed(real(r)))` and the assertion below
+    # expected `["exp-two", "exp-one"]` — which holds only where the raw
+    # directory order already happens to be `exp-one, exp-two`. On a Linux
+    # runner it is not, and this test failed: its own precondition depended on
+    # the filesystem the test exists to defeat. Sorting descending by name
+    # hands `experiments()` the reversed arrangement on every filesystem,
+    # which is what the docstring above claims.
     real = docs_module.config_paths
-    monkeypatch.setattr(docs_module, "config_paths", lambda r: list(reversed(real(r))))
+    monkeypatch.setattr(
+        docs_module,
+        "config_paths",
+        lambda r: sorted(real(r), key=lambda path: path.parent.name, reverse=True),
+    )
     assert [path.parent.name for path in docs_module.config_paths(root)] == [
         "exp-two",
         "exp-one",

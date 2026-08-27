@@ -138,7 +138,7 @@ gh release create v<v> --title "publishable <v>" --notes-file <notes> \
   dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-**Publishing the release is what triggers the upload** — see step 5. Attach both artifacts (the `attach` job replaces them with the bytes it published), and write the notes **without install instructions** — they
+**Publishing the release is what triggers the upload** — see step 5. Attach both artifacts here — releases on this repository are immutable, so nothing can add them afterwards — and write the notes **without install instructions** — they
 are not true yet. The install block goes in at step 7 with `gh release edit`, which
 keeps the URL.
 
@@ -154,13 +154,19 @@ triggers `.github/workflows/release.yml`, which authenticates to PyPI over
 token minted by that specific workflow file, so nothing long-lived exists to leak or
 rotate. Step 4's `gh release create` is what starts it.
 
-The workflow has three jobs, in order:
+The workflow has two jobs, in order:
 
 | Job | What it does | Why it is separate |
 |---|---|---|
 | `verify` | ruff, mypy, the full suite, `uv build`, `twine check`, the tag-matches-version check, then the installed console script driven through `new` → `generate experiment` → `validate` → `run` → `report` outside the repository | Nothing is uploaded until this passes. It is the only place the *artifact* is exercised |
 | `publish` | `uv publish` with `id-token: write`, in the `pypi` environment | The environment is the human gate — add a required reviewer there to hold every upload for approval |
-| `attach` | Uploads the same artifacts to the release with `--clobber` | The build is bit-reproducible from the tag, so the release assets and the PyPI files cannot diverge |
+
+**There is no job that attaches artifacts to the release, and the reason is a
+measurement.** Releases on this repository are immutable: `gh release upload` against
+one returns `HTTP 422: Cannot upload assets to an immutable release`. A job that tried
+it shipped and could never have succeeded. Create the release **with** its artifacts —
+step 4 — and the bit-reproducible build is what makes them the same bytes the workflow
+publishes.
 
 **The workflow filename is part of PyPI's authorization.** Renaming
 `release.yml` breaks publishing until the publisher is updated at
@@ -196,8 +202,8 @@ curl -s https://pypi.org/pypi/publishable/<v>/json | python3 -c \
 
 They should be equal. **The build is bit-reproducible from the tag** — measured for
 0.1.0 on 2026-08-26, where a rebuild in a detached worktree at `v0.1.0` reproduced both
-published digests exactly — so anyone can perform this check against the tag, and the
-`attach` job above relies on it.
+published digests exactly — so anyone can perform this check against the tag, and it is
+what makes the artifacts attached at step 4 the same bytes the workflow publishes.
 
 ## 6. Homebrew
 
@@ -270,7 +276,7 @@ patch version.
 - [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet`
 - [ ] TestPyPI upload, install from it, same arc
 - [ ] `main` pushed; tag pushed; GitHub release created, no install block yet
-- [ ] `release.yml` green through `verify`, `publish` and `attach`; uploaded sha256 equals the local one
+- [ ] `release.yml` green through `verify` and `publish`; uploaded sha256 equals the local one
 - [ ] Formula repointed in **both** copies; style, audit, untap/tap, install, test
 - [ ] Tap pushed; `formula-still-builds.yml` green
 - [ ] README install block and release notes updated last

@@ -20158,6 +20158,34 @@ _H9A_NORMALIZED_LEAF_KEYS = {
     # hash of the roster — so it is a hardcoded literal below, not in this
     # set.
     "commit",
+    # ADDED 2026-08-27, and the reason is a measurement rather than a
+    # preference: `release.yml`'s first run put this suite on Linux for the
+    # first time and the two arms below failed on four leaves, every one of
+    # them a fact about the HOST rather than about behaviour — `cpu_count`
+    # 8 vs 4, `os` Darwin vs Linux, `python_version` 3.13.7 vs 3.12.3,
+    # `branch` main vs master. `python_version` alone pins these arms to one
+    # interpreter, so a macOS runner would have failed too.
+    #
+    # H6b added `os`/`hostname`/`hardware` as deliberate MEASUREMENTS of the
+    # machine; `hostname` was recognised as such above and the other three
+    # were not. Their content is pinned elsewhere, by arms that use installed
+    # sentinels rather than whatever this machine answers: `os` at
+    # `test_h6b_..._os_is_three_components` (`Fixtureos-9.9.9-fixarch`),
+    # `cpu_count` at the two `test_h6b_arm_c_hardware_carries_cpu_count` arms
+    # (`77`, and `None` written through), `python_version` by the
+    # `environment` shape assertion further down this file.
+    "os",
+    "python_version",
+    "cpu_count",
+    # `branch` is here for a DIFFERENT reason, and it is not a trade. Pinning
+    # it as the literal `"main"` caught nothing: replacing
+    # `branch=_git(repo, "rev-parse", "--abbrev-ref", "HEAD")` with
+    # `branch="main"` left BOTH arms below green — the golden's expected value
+    # is exactly what the plausible bug produces, which is `CLAUDE.md`
+    # § Writing checks that can fail, row 1. What replaces it is
+    # `test_branch_is_recorded_from_the_repo_not_assumed`, which fails that
+    # mutation.
+    "branch",
 }
 
 
@@ -20317,14 +20345,14 @@ def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
         ("provenance.allocation", None),
         ("provenance.allocation_hash", None),
         ("provenance.apparatus", None),
-        ("provenance.environment.hardware.cpu_count", 8),
+        ("provenance.environment.hardware.cpu_count", "<normalized>"),
         ("provenance.environment.hostname", "<normalized>"),
         ("provenance.environment.manager", "uv"),
-        ("provenance.environment.os", "Darwin-25.5.0-arm64"),
-        ("provenance.environment.python_version", "3.13.7"),
+        ("provenance.environment.os", "<normalized>"),
+        ("provenance.environment.python_version", "<normalized>"),
         ("provenance.environment.uv_lock", None),
         ("provenance.environment.uv_lock_hash", None),
-        ("provenance.git.branch", "main"),
+        ("provenance.git.branch", "<normalized>"),
         ("provenance.git.code_dirty", False),
         ("provenance.git.commit", "<normalized>"),
         ("provenance.git.config_committed", True),
@@ -20489,6 +20517,42 @@ def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
         ("schema_version", "1.0"),
         ("status", "completed"),
     ]
+
+
+def test_branch_is_recorded_from_the_repo_not_assumed(tmp_path: Path, monkeypatch):
+    """`provenance.git.branch` is read off the repository, not assumed.
+
+    This replaces the `("provenance.git.branch", "main")` literal the two
+    whole-`run.yaml` arms carried until 2026-08-27. That literal caught
+    nothing: replacing `branch=_git(repo, "rev-parse", "--abbrev-ref",
+    "HEAD")` in `provenance.py` with `branch="main"` left BOTH arms green,
+    because their expected value is exactly what the plausible bug produces
+    (`CLAUDE.md` § Writing checks that can fail, row 1 — a fixture whose
+    numbers agree with the bug). It also pinned this machine's
+    `init.defaultBranch`, which is why those arms failed on a Linux runner
+    whose git defaults to `master`.
+
+    So the branch here is a SENTINEL, the way H6b pins `os` with
+    `Fixtureos-9.9.9-fixarch` rather than with `platform.system()`: a name no
+    default produces, which a hardcoded `"main"` cannot satisfy. Verified by
+    running that mutation — this fails, and the two arms do not.
+
+    Only `init.defaultBranch` is set, deliberately NOT the wholesale
+    `GIT_CONFIG_GLOBAL=/dev/null` neutralization CONTROLLER RULING M replaced
+    with two targeted `-c` overrides: discarding a machine's whole git config
+    changes far more than the branch name.
+    """
+    config = tmp_path / "gitconfig"
+    config.write_text("[init]\n\tdefaultBranch = pin-sentinel-branch\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+
+    doc = run_a_project(
+        tmp_path / "proj-root",
+        replication={"repeats": [{"kind": "seed", "n": 1}]},
+        units=4,
+    )
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_doc["provenance"]["git"]["branch"] == "pin-sentinel-branch"
 
 
 def test_h9a_arm_b_runs_full_stdout_line_by_line(tmp_path: Path, capsys):
@@ -22867,14 +22931,14 @@ _H9B_ARM_A_GOLDEN = [
     ("provenance.allocation", None),
     ("provenance.allocation_hash", None),
     ("provenance.apparatus", None),
-    ("provenance.environment.hardware.cpu_count", 8),
+    ("provenance.environment.hardware.cpu_count", "<normalized>"),
     ("provenance.environment.hostname", "<normalized>"),
     ("provenance.environment.manager", "uv"),
-    ("provenance.environment.os", "Darwin-25.5.0-arm64"),
-    ("provenance.environment.python_version", "3.13.7"),
+    ("provenance.environment.os", "<normalized>"),
+    ("provenance.environment.python_version", "<normalized>"),
     ("provenance.environment.uv_lock", None),
     ("provenance.environment.uv_lock_hash", None),
-    ("provenance.git.branch", "main"),
+    ("provenance.git.branch", "<normalized>"),
     ("provenance.git.code_dirty", False),
     ("provenance.git.commit", "<normalized>"),
     ("provenance.git.config_committed", True),
