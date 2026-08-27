@@ -14,8 +14,8 @@ class Publishable < Formula
 
   desc "Run experiments so the record is publishable by default"
   homepage "https://github.com/seouri/publishable"
-  url "https://files.pythonhosted.org/packages/ab/c4/38cf1153faa6b8e1e07bc8f7d882f3195c22e0fd897be1bd56ae723a306c/publishable-0.1.2.tar.gz"
-  sha256 "667207afed0fdaba22671211454b134b6eaa70e52a86940abfdcd23b79bf7207"
+  url "https://files.pythonhosted.org/packages/b8/a9/c231b05a38cf7e7d8e3d590ad8a6c21d3d37e587c0c3de6415be7bfd9edb/publishable-0.1.3.tar.gz"
+  sha256 "122470461bcce5d13afa650fcb81b570b7eaabb911ebd3967fe84c219cb61d6a"
   license "MIT"
 
   # `numpy` and `scipy` are Homebrew formulae and bottled, so they are
