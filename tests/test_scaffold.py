@@ -15,6 +15,7 @@ from publishable.scaffold import scaffold_project
 
 _REPO_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 _REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+_TUTORIAL_MD = Path(__file__).resolve().parents[1] / "docs" / "tutorial-writing-a-plugin.md"
 
 
 def test_new_creates_the_fixed_layout_and_a_first_commit(tmp_path: Path):
@@ -539,7 +540,7 @@ def test_generate_experiment_prints_its_paths_and_a_next_command_that_works(
 _TREE_ENTRY = re.compile(r"^(?P<indent>(?:[│ ]   )*)(?:├──|└──) (?P<name>[^#]+?)\s*(?:#.*)?$")
 
 
-def documented_tree(section: str) -> set[str]:
+def documented_tree(section: str, document: Path = _REFERENCE_MD) -> set[str]:
     """The set of paths the fenced tree under `section` names, root stripped.
 
     Paths only — never the trailing annotation, which the document must stay free
@@ -549,7 +550,7 @@ def documented_tree(section: str) -> set[str]:
     Located by its heading rather than by position: *"the fenced block after the
     third paragraph"* is the row-position trap in another currency.
     """
-    text = _REFERENCE_MD.read_text()
+    text = document.read_text()
     start = text.index(section)
     while True:
         fence = text.index("```", start)
@@ -585,6 +586,44 @@ def _tracked(root: Path) -> set[str]:
     return {line for line in listed.stdout.split("\n") if line}
 
 
+def _unenumerated(named: set[str], tracked: set[str]) -> list[str]:
+    """Directories a tree half-enumerates.
+
+    The two directions below are each necessary and neither catches a **deleted**
+    line: dropping `src/<pkg>/steps/` removes a claim, so the forward direction has
+    nothing to check, and the reverse direction finds every file under it announced
+    by the parent that is still named. Measured — the arm that should have caught it
+    stayed green.
+
+    So: **a tree that enumerates a level enumerates it completely.** Where the tree
+    names any child of a directory, every subdirectory of that directory holding a
+    tracked file must be named too. Files need no such rule — no tree lists every
+    `__init__.py`, and none pretends to.
+    """
+    # A directory the tree names, or names something inside: naming
+    # `<pkg>/templates/my_assay.py` announces `<pkg>/templates/` as surely as
+    # naming the directory would.
+    announced = set()
+    for entry in named:
+        if entry.endswith("/"):
+            announced.add(entry)
+        head = entry.rsplit("/", 1)[0] + "/" if "/" in entry else ""
+        if head:
+            announced.add(head)
+    enumerated = {d for d in announced if any(a != d and a.startswith(d) for a in announced)}
+    problems = []
+    for path in sorted(tracked):
+        if "/" not in path:
+            continue
+        directory = path.rsplit("/", 1)[0] + "/"
+        parent = directory[:-1].rsplit("/", 1)[0] + "/" if directory[:-1].count("/") else ""
+        if parent in enumerated and directory not in announced:
+            problems.append(
+                f"the tree enumerates {parent} and does not name {directory}, which holds {path}"
+            )
+    return sorted(set(problems))
+
+
 def _visible_in(entry: str, tracked: set[str]) -> bool:
     """Whether a clone of the scaffold's own commit would hold `entry`.
 
@@ -615,15 +654,19 @@ def _assert_agreement(root: Path, named: set[str]) -> None:
     """
     directories = tuple(entry for entry in named if entry.endswith("/"))
     tracked = _tracked(root)
-    problems = [
-        f"named by the document and absent from what the scaffold commits: {entry}"
-        for entry in sorted(named)
-        if entry != ".git/" and not _visible_in(entry, tracked)
-    ] + [
-        f"tracked by the scaffold and named nowhere in the tree: {path}"
-        for path in sorted(_tracked(root))
-        if path not in named and not path.startswith(directories)
-    ]
+    problems = (
+        _unenumerated(named, tracked)
+        + [
+            f"named by the document and absent from what the scaffold commits: {entry}"
+            for entry in sorted(named)
+            if entry != ".git/" and not _visible_in(entry, tracked)
+        ]
+        + [
+            f"tracked by the scaffold and named nowhere in the tree: {path}"
+            for path in sorted(_tracked(root))
+            if path not in named and not path.startswith(directories)
+        ]
+    )
     assert not problems, "\n".join(problems)
 
 
@@ -686,3 +729,79 @@ def test_w3_the_documented_plugin_readme_is_the_one_the_scaffold_writes(tmp_path
 
     root = scaffold_plugin(tmp_path / "publishable-my-assay")
     assert documented == (root / "README.md").read_text()
+
+
+# ---------------------------------------------------------------------------
+# The tutorial reproduces three generated artifacts — the plugin layout, its
+# entry-point table and its shipped test. Each is compared to what the scaffold
+# writes, for `reference.md` § CLI reference's reason: a document that copies a
+# generated artifact is a second copy, and a second copy drifts. The tutorial
+# carries no dated build claim, so these are what keep its present tense true.
+# ---------------------------------------------------------------------------
+
+
+def _tutorial_fence(after: str, kind: str = "") -> str:
+    """The first ```<kind> block following `after` in the tutorial.
+
+    Located by a sentence rather than by position, and it asserts it found the
+    marker: a parse that silently matches nothing reports agreement.
+    """
+    text = _TUTORIAL_MD.read_text()
+    assert after in text, f"the sentence introducing this block moved: {after!r}"
+    fence = text.index(f"```{kind}\n", text.index(after))
+    return text[text.index("\n", fence) + 1 : text.index("```", fence + 3)]
+
+
+def test_the_tutorials_plugin_tree_is_what_plugin_new_writes(tmp_path: Path):
+    """Route B step 1's tree, both directions, against a real scaffold."""
+    from publishable.plugin_scaffold import scaffold_plugin
+
+    named = documented_tree("### 1. Scaffold", _TUTORIAL_MD)
+    _assert_agreement(scaffold_plugin(tmp_path / "publishable-plate-assay"), named)
+
+
+def test_the_tutorials_entry_point_table_is_what_plugin_new_declares(tmp_path: Path):
+    """Route B step 2 quotes the generated `pyproject.toml`'s entry-point tables.
+
+    Compared as parsed TOML rather than as text, because the tutorial shows those
+    tables alone while the file also carries `[project]` and the build backend —
+    a text comparison would fail on what the tutorial correctly omits.
+    """
+    from publishable.plugin_scaffold import scaffold_plugin
+
+    documented = tomllib.loads(_tutorial_fence("The entry points are the registration", "toml"))
+    root = scaffold_plugin(tmp_path / "publishable-plate-assay")
+    written = tomllib.loads((root / "pyproject.toml").read_text())
+    assert documented["project"]["entry-points"] == written["project"]["entry-points"]
+
+
+def test_the_tutorials_quote_of_the_shipped_test_omits_only_its_docstring(tmp_path: Path):
+    """§ Testing a plugin quotes `tests/test_<stem>.py` and says it elides one
+    docstring. Every other line must be there, in order.
+
+    Asserted as a line-by-line subsequence rather than by equality, because the
+    elision is exactly what the tutorial declares — and asserted as ordered
+    rather than as a set, so a quote that shuffled the file would still fail.
+    """
+    from publishable.plugin_scaffold import scaffold_plugin
+
+    quoted = _tutorial_fence("asks one question", "python").split("\n")
+    root = scaffold_plugin(tmp_path / "publishable-plate-assay")
+    written = (root / "tests" / "test_plate_assay.py").read_text().split("\n")
+
+    remaining = list(quoted)
+    inside_docstring = False
+    missing = []
+    for line in written:
+        if line.strip().startswith('"""'):
+            inside_docstring = not inside_docstring or line.strip() != '"""'
+            if line.count('"""') == 2:
+                inside_docstring = False
+            continue
+        if inside_docstring:
+            continue
+        if line in remaining:
+            remaining = remaining[remaining.index(line) + 1 :]
+        else:
+            missing.append(line)
+    assert not missing, f"in the scaffold's test and not in the tutorial: {missing}"

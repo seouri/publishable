@@ -4,37 +4,35 @@
 
 It answers three questions in order: **why** plugins exist, **when** you actually need one, and **how** to build one. The second answer surprises most readers, so it is here rather than buried: most projects need a **project-local template**, not a plugin. [Do you need a plugin at all?](#do-you-need-a-plugin-at-all) is the section that decides.
 
-**Before you start** you need `uv`, `git`, and `publishable` on your path (`uv tool install publishable`). Everything below was run end to end; the commands are meant to be typed.
+**Before you start** you need `uv`, `git`, and `publishable` on your path (`uv tool install publishable`). The commands below are meant to be typed, in order.
 
 ---
 
 ## Contents
 
-- [What this build supports](#what-this-build-supports)
+- [What a plugin can do](#what-a-plugin-can-do)
 - [Why plugins exist](#why-plugins-exist)
 - [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 - [The five registries](#the-five-registries)
 - [Route A: a project-local template, end to end](#route-a-a-project-local-template-end-to-end)
 - [Route B: packaging the machinery as a plugin](#route-b-packaging-the-machinery-as-a-plugin)
 - [Testing a plugin](#testing-a-plugin)
-- [What this build refuses, by code](#what-this-build-refuses-by-code)
+- [What core refuses, by code](#what-core-refuses-by-code)
 - [Where to go next](#where-to-go-next)
 
 ---
 
-## What this build supports
+## What a plugin can do
 
-Measured on 2026-08-27 against commit `cfd4a83`, by running every command below. Build facts expire in a way specification claims do not, so they are confined to this table and to the ones that carry an error code.
-
-| | State |
+| | |
 |---|---|
 | A project-local `templates/*.py` template | Works end to end: `init`, `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
 | A plugin's **apparatus probe** | Dispatches, and its facts land in `provenance.apparatus` |
 | A plugin's **writer / reader** | Dispatches: the suffix resolves from the claim, and only the winning distribution is loaded |
-| A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and does not load what it points at |
+| A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and does not load the class behind it |
 
-So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end) builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery around it.
+That last row shapes the rest of this tutorial. A plugin is worth building for its **machinery** — resolvers, probes, writers — while the template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end) builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery around it.
 
 ---
 
@@ -91,7 +89,7 @@ A name is claimed **once**: two installed plugins claiming one name, a plugin sh
 
 ## Route A: a project-local template, end to end
 
-Every block below is real output.
+Every unlabelled block below is what the command prints.
 
 ### 1. Scaffold the project
 
@@ -372,7 +370,7 @@ publishable-plate-assay/
 
 `uv` writes `uv.lock` on your first `uv run` inside the package. `examples/plate_assay/` carries a `.gitkeep` and nothing else — the example config is yours to write, and the `.gitkeep` is what puts the directory in a clone, since git tracks no empty one. `steps/` is a directory with no module, because a reusable `BaseStep` is registered nowhere: the consuming project imports it.
 
-The README carries an install line and the names it registers, all four derived from the distribution's own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe `plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable, and why that table cannot drift. It carries no parameter table and no [managed regions](reference.md#the-generated-readme), deliberately: at scaffold time the spec is a placeholder, and filling such a table afterwards would mean reading an installed template's spec, which this build refuses. So `publishable docs` inside a plugin refuses too, rather than rewriting nothing:
+The README carries an install line and the names it registers, all four derived from the distribution's own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe `plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable, and why that table cannot drift. It carries no parameter table and no [managed regions](reference.md#the-generated-readme), deliberately: at scaffold time the spec is a placeholder, and filling such a table afterwards would mean reading an installed template's spec, which core does not do. So `publishable docs` inside a plugin refuses too, rather than rewriting nothing:
 
 ```
   error   E-DOCS-NO-REGIONS    /…/publishable-plate-assay/README.md
@@ -411,7 +409,7 @@ publishable generate experiment my-pilot \
   --input-dir /…/data --output-dir /…/results
 ```
 
-`--template` there points at a core or project-local name, because an installed template is [not loadable in this build](#4-a-plugins-template-does-not-load-in-this-build). While developing locally there is no remote yet, so add the plugin by path instead:
+`--template` there points at a core or project-local name, because [an installed template is refused](#4-a-plugins-template-is-refused). While developing locally there is no remote yet, so add the plugin by path instead:
 
 ```bash
 uv add --editable ../publishable-plate-assay
@@ -427,9 +425,9 @@ $ ./.venv/bin/publishable validate configs/my-pilot/config.yaml
 
 The same config through `uv run publishable validate` prints `Installed 1 package` and then `✓ config valid`. Stay inside `uv run` while developing a plugin, or `uv sync` after every entry-point change.
 
-### 4. A plugin's template does not load in this build
+### 4. A plugin's template is refused
 
-Naming one in a config is refused, at `init` and at `validate`:
+Core resolves an installed template's name from package metadata and does not load the class behind it, so naming one in a config is refused — at `init` and at `validate`:
 
 ```
   error   E-TEMPLATE-INSTALLED-UNSUPPORTED names `plate_assay`, which publishable-plate-assay 0.1.0 registers as a `publishable.templates` entry point — but core resolves an installed template's name without importing its package, and loading one is not implemented in this build; installed templates will be honored in a later slice. Use a project-local `templates/` file or a core template for now
@@ -445,7 +443,7 @@ build** (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed temp
 metadata without importing the package, so there is no class here to read a `parameter_spec` off.
 ```
 
-So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway — it is the artifact that becomes usable the day loading lands, and it is testable today without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does.
+So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway: it is testable without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does, and it is the artifact that becomes usable if that refusal is ever lifted.
 
 **A name is claimed once**, so promoting a local template to a plugin means deleting the local file. A local template beside an installed one of the same name is refused, with both providers named:
 
@@ -637,7 +635,7 @@ Restored, `3 passed`. The third test is what makes the second one mean something
 
 ---
 
-## What this build refuses, by code
+## What core refuses, by code
 
 | Code | When | What to do |
 |---|---|---|
