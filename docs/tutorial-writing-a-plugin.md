@@ -1,17 +1,10 @@
 # Tutorial: writing a plugin
 
-**Non-normative.** The four documents — [`README.md`](../README.md),
-[`design-principles.md`](design-principles.md), [`experimental-designs.md`](experimental-designs.md),
-[`reference.md`](reference.md) — are the specification. This file teaches a path through them and is
-authoritative over nothing; where the two disagree, `reference.md` wins.
+**Non-normative.** The four documents — [`README.md`](../README.md), [`design-principles.md`](design-principles.md), [`experimental-designs.md`](experimental-designs.md), [`reference.md`](reference.md) — are the specification. This file teaches a path through them and is authoritative over nothing; where the two disagree, `reference.md` wins.
 
-It answers three questions in order: **why** plugins exist, **when** you actually need one, and **how**
-to build one. The second answer surprises most readers, so it is here rather than buried: most projects
-need a **project-local template**, not a plugin. [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
-is the section that decides.
+It answers three questions in order: **why** plugins exist, **when** you actually need one, and **how** to build one. The second answer surprises most readers, so it is here rather than buried: most projects need a **project-local template**, not a plugin. [Do you need a plugin at all?](#do-you-need-a-plugin-at-all) is the section that decides.
 
-**Before you start** you need `uv`, `git`, and `publishable` on your path (`uv tool install publishable`).
-Everything below was run end to end; the commands are meant to be typed.
+**Before you start** you need `uv`, `git`, and `publishable` on your path (`uv tool install publishable`). Everything below was run end to end; the commands are meant to be typed.
 
 ---
 
@@ -31,9 +24,7 @@ Everything below was run end to end; the commands are meant to be typed.
 
 ## What this build supports
 
-Measured on 2026-08-27 against commit `cfd4a83`, by running every command below. Build facts expire in a
-way specification claims do not, so they are confined to this table and to the ones that carry an error
-code.
+Measured on 2026-08-27 against commit `cfd4a83`, by running every command below. Build facts expire in a way specification claims do not, so they are confined to this table and to the ones that carry an error code.
 
 | | State |
 |---|---|
@@ -43,26 +34,17 @@ code.
 | A plugin's **writer / reader** | Dispatches: the suffix resolves from the claim, and only the winning distribution is loaded |
 | A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and does not load what it points at |
 
-So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the
-template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end)
-builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery
-around it.
+So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end) builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery around it.
 
 ---
 
 ## Why plugins exist
 
-Core knows nothing about assays, cohorts, instruments, solvers, or models. It owns the config envelope,
-the three hashes, sweep expansion, unit resolution, the statistics over the unit table, and the whole
-command lifecycle. Everything domain-shaped is a plugin, and the test is one sentence from
-[`design-principles.md` § Core vs. plugin](design-principles.md#core-vs-plugin):
+Core knows nothing about assays, cohorts, instruments, solvers, or models. It owns the config envelope, the three hashes, sweep expansion, unit resolution, the statistics over the unit table, and the whole command lifecycle. Everything domain-shaped is a plugin, and the test is one sentence from [`design-principles.md` § Core vs. plugin](design-principles.md#core-vs-plugin):
 
 > would it be identical for a wet-lab assay, a simulation sweep, and an LLM benchmark?
 
-If yes, it is core's and you should not be writing it. If no, it is yours. The split is not a courtesy to
-extension authors — it is what keeps `parameters_hash` meaningful. Core materializes and enforces
-`parameters` from a **spec** it did not write, so *what* a parameter is stays under your control while
-*whether a config honours it* stays under core's.
+If yes, it is core's and you should not be writing it. If no, it is yours. The split is not a courtesy to extension authors — it is what keeps `parameters_hash` meaningful. Core materializes and enforces `parameters` from a **spec** it did not write, so *what* a parameter is stays under your control while *whether a config honours it* stays under core's.
 
 Two boundaries inside "yours" decide the shape of what you write:
 
@@ -71,17 +53,13 @@ Two boundaries inside "yours" decide the shape of what you write:
 | Something you **decide** | a `Param` in `parameter_spec` | it is part of the design, so it belongs inside `parameters_hash` |
 | Something you can only **observe** | an [apparatus fact](reference.md#the-apparatus-core-can-only-observe) | recalibrating an instrument is not redesigning an experiment, so it must stay outside that hash |
 
-An instrument's gain is the first. Its firmware revision and calibration ID are the second. Getting this
-wrong in either direction is the mistake plugin authors make most: a probed fact declared as a parameter
-makes every recalibration read as a new design, and a decided value read off the apparatus makes two
-different designs share one identity.
+An instrument's gain is the first. Its firmware revision and calibration ID are the second. Getting this wrong in either direction is the mistake plugin authors make most: a probed fact declared as a parameter makes every recalibration read as a new design, and a decided value read off the apparatus makes two different designs share one identity.
 
 ---
 
 ## Do you need a plugin at all?
 
-A template can live in three places, and [where it lives decides how it is
-pinned](reference.md#templates-where-parameters-are-defined):
+A template can live in three places, and [where it lives decides how it is pinned](reference.md#templates-where-parameters-are-defined):
 
 | Where | Registered by | Pinned by | Use it when |
 |---|---|---|---|
@@ -89,25 +67,15 @@ pinned](reference.md#templates-where-parameters-are-defined):
 | Your repo's `templates/*.py` | its `@register_template` argument, discovered by path | [`code_hash`](reference.md#three-hashes), which covers `templates/**` | the experiment type is **this project's** |
 | An installed distribution | a `publishable.templates` entry point | `uv.lock` | two or more projects share the experiment type |
 
-**Start local.** `publishable generate template <name>` writes a file into `templates/`, and it is a real
-template in every way that matters — `init` materializes from it, `validate` enforces it, `aggregate`
-derives from it, `list-templates` prints its spec, `docs` renders its parameter table. Its cost and its
-benefit are the same fact: it is inside `code_hash`, so editing it moves the run identity, exactly as
-editing a step does.
+**Start local.** `publishable generate template <name>` writes a file into `templates/`, and it is a real template in every way that matters — `init` materializes from it, `validate` enforces it, `aggregate` derives from it, `list-templates` prints its spec, `docs` renders its parameter table. Its cost and its benefit are the same fact: it is inside `code_hash`, so editing it moves the run identity, exactly as editing a step does.
 
-**Package it when a second project needs it**, or when the domain work is machinery rather than
-parameters — walking a DICOM archive, probing an instrument, encoding a domain file format. That
-machinery is also the part core genuinely cannot supply: what is required *of* a unit is identical across
-every field, and *how* units are found is not.
+**Package it when a second project needs it**, or when the domain work is machinery rather than parameters — walking a DICOM archive, probing an instrument, encoding a domain file format. That machinery is also the part core genuinely cannot supply: what is required *of* a unit is identical across every field, and *how* units are found is not.
 
 ---
 
 ## The five registries
 
-One mechanism, five groups. Each is an entry-point group in a plugin's `pyproject.toml` and a
-`@register_*` decorator in its source, and [the entry point is the
-registration](reference.md#creating-a-plugin-publishable-plugin-new) while the decorator argument is a
-declaration checked against it.
+One mechanism, five groups. Each is an entry-point group in a plugin's `pyproject.toml` and a `@register_*` decorator in its source, and [the entry point is the registration](reference.md#creating-a-plugin-publishable-plugin-new) while the decorator argument is a declaration checked against it.
 
 | Registry | Provides | A config names it as | Resolved at |
 |---|---|---|---|
@@ -117,10 +85,7 @@ declaration checked against it.
 | `publishable.writers` | bytes for a domain artifact suffix | nothing — `io.write` dispatches on the suffix | the `io.write` call |
 | `publishable.readers` | the inverse of a writer | nothing — the read indexes it | the read |
 
-A name is claimed **once**: two installed plugins claiming one name, a plugin shadowing `generic`, a
-writer claiming a suffix core already writes, or a local file taking an installed name all fail at load
-rather than being resolved by install order. Install order is a property of a machine, and a run whose
-template depended on it would be reproducible everywhere except where it mattered.
+A name is claimed **once**: two installed plugins claiming one name, a plugin shadowing `generic`, a writer claiming a suffix core already writes, or a local file taking an installed name all fail at load rather than being resolved by install order. Install order is a property of a machine, and a run whose template depended on it would be reproducible everywhere except where it mattered.
 
 ---
 
@@ -146,9 +111,7 @@ That next line runs as printed, and one line in the scaffolded `pyproject.toml` 
 package = false
 ```
 
-An experiment repository is code under a commit, not a distribution anybody installs — so `uv` is told
-not to build it. Nothing here supplies a package for a build backend to find: `src/` holds a `.gitkeep`,
-and `generate experiment` writes `src/<experiment>/` rather than `src/<project>/`.
+An experiment repository is code under a commit, not a distribution anybody installs — so `uv` is told not to build it. Nothing here supplies a package for a build backend to find: `src/` holds a `.gitkeep`, and `generate experiment` writes `src/<experiment>/` rather than `src/<project>/`.
 
 ### 2. Write the template
 
@@ -180,17 +143,9 @@ class MyAssayTemplate(BaseTemplate):
 
 Three things about that spec, each a rule rather than a style:
 
-- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as the
-  key, no value, and a `# REQUIRED` marker carrying the parameter's own comment — so the file it wrote
-  fails `validate` until you fill it in: `E-PARAM-VALUE … is null, but the parameter is not nullable`.
-  What fails is the **absent** value rather than an empty one, which is what keeps `0`, `false`, `[]` and
-  `""` legal for a required parameter of the matching type. `default=None` is a different claim: it needs
-  `nullable=True` and means *`null` is a legal value*.
-- **The constraint vocabulary is closed** — `choices`, `ge`/`gt`/`le`/`lt`, `pattern`, `item_type`,
-  `min_items`/`max_items`, `nullable`, `help`. There is no `validator=` hook, because a rule that needs
-  code is a cross-field rule and belongs in `validate`.
-- **The dotted path is the config's nesting.** `instrument.gain` becomes `parameters.instrument.gain`,
-  which is what a step reads as `cfg.parameters.instrument.gain`.
+- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as the key, no value, and a `# REQUIRED` marker carrying the parameter's own comment — so the file it wrote fails `validate` until you fill it in: `E-PARAM-VALUE … is null, but the parameter is not nullable`. What fails is the **absent** value rather than an empty one, which is what keeps `0`, `false`, `[]` and `""` legal for a required parameter of the matching type. `default=None` is a different claim: it needs `nullable=True` and means *`null` is a legal value*.
+- **The constraint vocabulary is closed** — `choices`, `ge`/`gt`/`le`/`lt`, `pattern`, `item_type`, `min_items`/`max_items`, `nullable`, `help`. There is no `validator=` hook, because a rule that needs code is a cross-field rule and belongs in `validate`.
+- **The dotted path is the config's nesting.** `instrument.gain` becomes `parameters.instrument.gain`, which is what a step reads as `cfg.parameters.instrument.gain`.
 
 `list-templates` reads the spec back, with the provenance of every template it can see:
 
@@ -221,8 +176,7 @@ step   → /…/lab-study/src/my_pilot/steps/step01_summarize_units.py
 next: uv run publishable validate /…/lab-study/configs/my-pilot/config.yaml
 ```
 
-The `parameters` block of that config is your spec, materialized with its comments derived from the same
-declarations:
+The `parameters` block of that config is your spec, materialized with its comments derived from the same declarations:
 
 ```yaml
 parameters:
@@ -234,9 +188,7 @@ parameters:
     threshold: 0.5                  # float in (0, 1)
 ```
 
-**Changing `parameter_spec` later does not rewrite a config that already exists.** `init` refuses an
-experiment that exists (`E-EXPERIMENT-EXISTS`), by design — it never modifies a package it did not just
-create. What tells you exactly what to change is `validate`:
+**Changing `parameter_spec` later does not rewrite a config that already exists.** `init` refuses an experiment that exists (`E-EXPERIMENT-EXISTS`), by design — it never modifies a package it did not just create. What tells you exactly what to change is `validate`:
 
 ```
   error   E-PARAM-UNKNOWN      parameters.my_assay.threshold
@@ -249,10 +201,7 @@ create. What tells you exactly what to change is `validate`:
 
 ### 4. Add the cross-block rule only a template can know
 
-`validate` receives the **whole** config, not just `parameters`, because the rules a template most needs
-are cross-block: an experiment type that fits a model can reject a config declaring no `holdout` and no
-`fold`, since otherwise it evaluates on the units it was fitted against. Core cannot tell that config
-from a legitimate one; the template can.
+`validate` receives the **whole** config, not just `parameters`, because the rules a template most needs are cross-block: an experiment type that fits a model can reject a config declaring no `holdout` and no `fold`, since otherwise it evaluates on the units it was fitted against. Core cannot tell that config from a legitimate one; the template can.
 
 ```python
     def validate(self, config) -> list[str]:
@@ -265,14 +214,7 @@ from a legitimate one; the template can.
         return []
 ```
 
-**Note the `.get` calls.** `validate` receives the parsed document — a plain mapping, and deliberately
-not the dot-access `cfg` a step gets. The reason is what this method is *for*: a cross-block rule asks
-whether an optional block is **declared**, and several of the paths such a rule asks about —
-`statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, a `sweep` mode — are absent from what
-`init` writes. A reader that refused an absent path could not answer the question. Use `or {}` at each
-step rather than a `{}` default, because a block declared with nothing under it parses as `None` as
-readily as an absent one. [§ Templates](reference.md#templates-where-parameters-are-defined) carries the
-worked `holdout`-or-`fold` rule as code you can copy.
+**Note the `.get` calls.** `validate` receives the parsed document — a plain mapping, and deliberately not the dot-access `cfg` a step gets. The reason is what this method is *for*: a cross-block rule asks whether an optional block is **declared**, and several of the paths such a rule asks about — `statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, a `sweep` mode — are absent from what `init` writes. A reader that refused an absent path could not answer the question. Use `or {}` at each step rather than a `{}` default, because a block declared with nothing under it parses as `None` as readily as an absent one. [§ Templates](reference.md#templates-where-parameters-are-defined) carries the worked `holdout`-or-`fold` rule as code you can copy.
 
 A declared value is then refused with your own message:
 
@@ -281,14 +223,11 @@ A declared value is then refused with your own message:
           instrument.gain is a calibration, not a variable: sweeping it makes two conditions two instruments
 ```
 
-Reading the envelope is not owning it. Returning an error is the **only** thing a template does with what
-it reads; it cannot add a field to `data` or change what `sweep` means.
+Reading the envelope is not owning it. Returning an error is the **only** thing a template does with what it reads; it cannot add a field to `data` or change what `sweep` means.
 
 ### 5. Derive a metric in `aggregate`
 
-`aggregate` is optional and it is the only way to give a derived statistic a real interval — core can
-call it on a **resampled** table, which is what makes the metric `basis: units` rather than a scalar core
-can only watch vary across seeds.
+`aggregate` is optional and it is the only way to give a derived statistic a real interval — core can call it on a **resampled** table, which is what makes the metric `basis: units` rather than a scalar core can only watch vary across seeds.
 
 ```python
     def aggregate(self, units, cfg) -> dict:
@@ -301,12 +240,7 @@ can only watch vary across seeds.
         return {"hit_rate": sum(1 for r in readings if r > threshold) / len(readings)}
 ```
 
-The table supports exactly four operations — iterate, `units.<column>`, `len`, `units.columns` — and
-nothing else, so filtering is ordinary Python. Returning `{}` for a table this template does not
-recognize is the right answer, not an error: core calls `aggregate` once per **recording step**, and a
-pipeline can have several. Reading `cfg` is what lets one `aggregate` compute a different statistic per
-condition, and core passes the same `cfg` when it recomputes on a resampled table, so a value and its
-interval are always the same statistic.
+The table supports exactly four operations — iterate, `units.<column>`, `len`, `units.columns` — and nothing else, so filtering is ordinary Python. Returning `{}` for a table this template does not recognize is the right answer, not an error: core calls `aggregate` once per **recording step**, and a pipeline can have several. Reading `cfg` is what lets one `aggregate` compute a different statistic per condition, and core passes the same `cfg` when it recomputes on a resampled table, so a value and its interval are always the same statistic.
 
 ### 6. Record a number in the step
 
@@ -324,8 +258,7 @@ class Step(BaseStep):
         return {"n_units": len(units)}
 ```
 
-A **numeric** column is what earns a metric block. A bool or a string column reaches `aggregate`'s table
-and earns no interval, so a step recording only those publishes nothing.
+A **numeric** column is what earns a metric block. A bool or a string column reaches `aggregate`'s table and earns no interval, so a step recording only those publishes nothing.
 
 ### 7. Validate, commit, cost, run
 
@@ -333,11 +266,9 @@ and earns no interval, so a step recording only those publishes nothing.
   ✓ config valid · configs/my-pilot/config.yaml
 ```
 
-Commit before running: `code_hash` covers `src/**` and `templates/**`, and `run` refuses a dirty tree
-(`E-CODE-DIRTY`) because a hash claiming to cover your code must actually cover what ran.
+Commit before running: `code_hash` covers `src/**` and `templates/**`, and `run` refuses a dirty tree (`E-CODE-DIRTY`) because a hash claiming to cover your code must actually cover what ran.
 
-`dry-run` is what to read before spending anything. Its first lines resolve the sweep, the repeats and
-the seeds; this picks up at the step list:
+`dry-run` is what to read before spending anything. Its first lines resolve the sweep, the repeats and the seeds; this picks up at the step list:
 
 ```
 …
@@ -374,9 +305,7 @@ Then `run`:
 run.yaml → /…/results/run_2026-08-27T13-57-45Z_c075829/run.yaml
 ```
 
-And the template's derived metric is in the record with an interval of its own, beside the recorded
-column's — inlined and abridged here for reading, `correction: null` and `reading`'s `repeat_spread`
-dropped:
+And the template's derived metric is in the record with an interval of its own, beside the recorded column's — inlined and abridged here for reading, `correction: null` and `reading`'s `repeat_spread` dropped:
 
 ```yaml
     aggregated:
@@ -397,9 +326,7 @@ dropped:
           resample_draws: 2000
 ```
 
-`reading` is a *t* interval over units; `hit_rate` is a **percentile** interval over 2000 resampled
-tables, because it is derived and core recomputed `aggregate` on each draw. That difference is the whole
-payoff of writing `aggregate` rather than returning a number from a step.
+`reading` is a *t* interval over units; `hit_rate` is a **percentile** interval over 2000 resampled tables, because it is derived and core recomputed `aggregate` on each draw. That difference is the whole payoff of writing `aggregate` rather than returning a number from a step.
 
 ### 8. Let the documentation derive itself
 
@@ -411,9 +338,7 @@ uv run publishable docs
 README.md: rewrote `overview`, `credentials`, `experiments`, `templates`
 ```
 
-The `templates` region now holds the same parameter table `list-templates` printed, generated from
-`parameter_spec`. Add a parameter, run `docs`, and the table and newly-initialized configs move together.
-Documentation that cannot drift is the only kind worth generating.
+The `templates` region now holds the same parameter table `list-templates` printed, generated from `parameter_spec`. Add a parameter, run `docs`, and the table and newly-initialized configs move together. Documentation that cannot drift is the only kind worth generating.
 
 ---
 
@@ -445,18 +370,9 @@ publishable-plate-assay/
 └── examples/plate_assay/
 ```
 
-`uv` writes `uv.lock` on your first `uv run` inside the package. `examples/plate_assay/` carries a
-`.gitkeep` and nothing else — the example config is yours to write, and the `.gitkeep` is what puts the
-directory in a clone, since git tracks no empty one. `steps/` is a directory with no module, because a
-reusable `BaseStep` is registered nowhere: the consuming project imports it.
+`uv` writes `uv.lock` on your first `uv run` inside the package. `examples/plate_assay/` carries a `.gitkeep` and nothing else — the example config is yours to write, and the `.gitkeep` is what puts the directory in a clone, since git tracks no empty one. `steps/` is a directory with no module, because a reusable `BaseStep` is registered nowhere: the consuming project imports it.
 
-The README carries an install line and the names it registers, all four derived from the distribution's
-own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe
-`plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable,
-and why that table cannot drift. It carries no parameter table and no
-[managed regions](reference.md#the-generated-readme), deliberately: at scaffold time the spec is a
-placeholder, and filling such a table afterwards would mean reading an installed template's spec, which
-this build refuses. So `publishable docs` inside a plugin refuses too, rather than rewriting nothing:
+The README carries an install line and the names it registers, all four derived from the distribution's own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe `plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable, and why that table cannot drift. It carries no parameter table and no [managed regions](reference.md#the-generated-readme), deliberately: at scaffold time the spec is a placeholder, and filling such a table afterwards would mean reading an installed template's spec, which this build refuses. So `publishable docs` inside a plugin refuses too, rather than rewriting nothing:
 
 ```
   error   E-DOCS-NO-REGIONS    /…/publishable-plate-assay/README.md
@@ -482,16 +398,11 @@ this build refuses. So `publishable docs` inside a plugin refuses too, rather th
 ".plate_assay" = "publishable_plate_assay.writers.artifact:read"
 ```
 
-The key is what a config writes, and core resolves it **from installed metadata without importing the
-package** — which is how `validate` answers "no installed package registers `plate_wells`" while
-creating nothing and reaching nothing. The `@register_*` argument must agree with the key; when the two
-disagree, loading fails naming both rather than one silently winning.
+The key is what a config writes, and core resolves it **from installed metadata without importing the package** — which is how `validate` answers "no installed package registers `plate_wells`" while creating nothing and reaching nothing. The `@register_*` argument must agree with the key; when the two disagree, loading fails naming both rather than one silently winning.
 
 ### 3. Install it
 
-`--plugin <user>/<repo>` on a creation command expands to `uv add git+https://github.com/<user>/<repo>`
-and nothing more, so publishing is "push to GitHub" and pinning is whatever `uv` supports
-(`…@v1.2.0`):
+`--plugin <user>/<repo>` on a creation command expands to `uv add git+https://github.com/<user>/<repo>` and nothing more, so publishing is "push to GitHub" and pinning is whatever `uv` supports (`…@v1.2.0`):
 
 ```bash
 publishable generate experiment my-pilot \
@@ -500,17 +411,13 @@ publishable generate experiment my-pilot \
   --input-dir /…/data --output-dir /…/results
 ```
 
-`--template` there points at a core or project-local name, because an installed template is
-[not loadable in this build](#4-a-plugins-template-does-not-load-in-this-build). While developing
-locally there is no remote yet, so add the plugin by path instead:
+`--template` there points at a core or project-local name, because an installed template is [not loadable in this build](#4-a-plugins-template-does-not-load-in-this-build). While developing locally there is no remote yet, so add the plugin by path instead:
 
 ```bash
 uv add --editable ../publishable-plate-assay
 ```
 
-`uv run` re-syncs when the plugin's `pyproject.toml` changes, so a **new** entry point is picked up
-without a manual reinstall — it reinstalls the package and resolves the name. Invoking the console script
-directly does not, and the diagnostic enumerates the stale set rather than guessing:
+`uv run` re-syncs when the plugin's `pyproject.toml` changes, so a **new** entry point is picked up without a manual reinstall — it reinstalls the package and resolves the name. Invoking the console script directly does not, and the diagnostic enumerates the stale set rather than guessing:
 
 ```
 $ ./.venv/bin/publishable validate configs/my-pilot/config.yaml
@@ -518,9 +425,7 @@ $ ./.venv/bin/publishable validate configs/my-pilot/config.yaml
           `data.units.from.resolver` names `plate_assay_probe3`, which no installed distribution registers in the `publishable.resolvers` entry-point group (registered: plate_assay_units, plate_assay_wells)
 ```
 
-The same config through `uv run publishable validate` prints `Installed 1 package` and then
-`✓ config valid`. Stay inside `uv run` while developing a plugin, or `uv sync` after every entry-point
-change.
+The same config through `uv run publishable validate` prints `Installed 1 package` and then `✓ config valid`. Stay inside `uv run` while developing a plugin, or `uv sync` after every entry-point change.
 
 ### 4. A plugin's template does not load in this build
 
@@ -540,26 +445,20 @@ build** (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed temp
 metadata without importing the package, so there is no class here to read a `parameter_spec` off.
 ```
 
-So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin
-anyway — it is the artifact that becomes usable the day loading lands, and it is testable today without
-core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does.
+So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway — it is the artifact that becomes usable the day loading lands, and it is testable today without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does.
 
-**A name is claimed once**, so promoting a local template to a plugin means deleting the local file.
-A local template beside an installed one of the same name is refused, with both providers named:
+**A name is claimed once**, so promoting a local template to a plugin means deleting the local file. A local template beside an installed one of the same name is refused, with both providers named:
 
 ```
   error   E-TEMPLATE-COLLISION experiment_type
           the template name `plate_assay` is claimed more than once: /…/lab-study/templates/plate_assay.py::PlateAssayTemplate and publishable-plate-assay 0.1.0 — a template that could redefine another's name could change what a config means without changing the config, which is what `parameters_hash` exists to make impossible. Install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design. Rename yours.
 ```
 
-`generate template` reports the same collision as a `note:` on the line it could not update, so you may
-meet it there first.
+`generate template` reports the same collision as a `note:` on the line it could not update, so you may meet it there first.
 
 ### 5. A resolver — the reason most plugins exist
 
-A CSV index is the same everywhere and core reads it. A DICOM archive whose units are series rather than
-files, a plate layout keyed by barcode and well, a benchmark shipped as sharded JSONL: finding units
-there is domain work, and it is the **only** domain work in `data.units`.
+A CSV index is the same everywhere and core reads it. A DICOM archive whose units are series rather than files, a plate layout keyed by barcode and well, a benchmark shipped as sharded JSONL: finding units there is domain work, and it is the **only** domain work in `data.units`.
 
 ```python
 from publishable import Unit, register_resolver
@@ -571,10 +470,7 @@ def resolve(io, cfg):
         yield Unit(key=row["id"], paths=(), attributes={"site": row["site"]})
 ```
 
-`io` is read-only. `cfg` is what a `scope: "run"` step sees, so a swept parameter is unreadable here by
-construction: the unit table is **one** table for the whole run, and a roster that varied by condition
-would make the conditions incomparable. Yield order is kept, and it is data —
-`assign.method: blocked` balances arms across it and `units_hash` covers the list in it.
+`io` is read-only. `cfg` is what a `scope: "run"` step sees, so a swept parameter is unreadable here by construction: the unit table is **one** table for the whole run, and a roster that varied by condition would make the conditions incomparable. Yield order is kept, and it is data — `assign.method: blocked` balances arms across it and `units_hash` covers the list in it.
 
 ```yaml
     from: {resolver: plate_assay_units}
@@ -584,8 +480,7 @@ would make the conditions incomparable. Yield order is kept, and it is data —
   ✓ config valid · configs/my-pilot/config.yaml
 ```
 
-The run record then carries what produced the roster, which is the concrete payoff of packaging rather
-than pasting:
+The run record then carries what produced the roster, which is the concrete payoff of packaging rather than pasting:
 
 ```yaml
   plugin_versions:
@@ -605,8 +500,7 @@ def probe(cfg):
     return Apparatus(facts={"firmware": "4.2.1", "calibration_id": "cal-2026-08-01"})
 ```
 
-The template declares which probe and which facts it requires — a declared fact the probe does not
-supply is a diagnostic, not a silence:
+The template declares which probe and which facts it requires — a declared fact the probe does not supply is a diagnostic, not a silence:
 
 ```python
     apparatus_probe = "plate_assay_instrument"
@@ -630,10 +524,7 @@ Core calls it at run start and before every execution, and assembles the record 
         total_probes: 12
 ```
 
-Twelve probes for ten executions: `apparatus/probes.jsonl` holds twelve lines, the first two carrying
-`"phase": "run_start"` — one per condition — and one per execution after them. A fact that **moves** from
-its first answered observation fails the run; that gate is the reason a probe is worth declaring, and it
-is why a probe must never return something it computed rather than observed.
+Twelve probes for ten executions: `apparatus/probes.jsonl` holds twelve lines, the first two carrying `"phase": "run_start"` — one per condition — and one per execution after them. A fact that **moves** from its first answered observation fails the run; that gate is the reason a probe is worth declaring, and it is why a probe must never return something it computed rather than observed.
 
 ### 7. A writer and its reader, resolved from the claim
 
@@ -651,34 +542,19 @@ def read(payload: bytes):
     return payload.decode()
 ```
 
-A step calling `io.write("readings.plate_assay", {"n": 6})` with the plugin installed and **nothing
-importing it** writes the artifact beside `units.parquet` in each step directory. `io.write` decides the
-suffix over what a writer has registered *plus every suffix an installed distribution claims* — the claim
-read from package metadata, and only the winning one loaded — so a plugin's pair works the way its
-resolver and its probe do, without a step importing anything for a side effect.
+A step calling `io.write("readings.plate_assay", {"n": 6})` with the plugin installed and **nothing importing it** writes the artifact beside `units.parquet` in each step directory. `io.write` decides the suffix over what a writer has registered *plus every suffix an installed distribution claims* — the claim read from package metadata, and only the winning one loaded — so a plugin's pair works the way its resolver and its probe do, without a step importing anything for a side effect.
 
 Three rules to know, each of which the dispatch enforces rather than documents:
 
-- **A claim wins only by being strictly longer than what is registered.** `.fastq.gz` beats `.gz`; a
-  claim on `.csv` never takes `.csv` from core. That is what keeps core's five unshadowable.
-  `E-PLUGIN-COLLISION` refuses such a claim when the module is imported — and a claim that never wins is
-  never imported for that, so a plugin claiming `.csv` and nothing else is **inert** rather than refused
-  at the write. Deliberate: refusing there would make one plugin's bad claim break every core `.csv`
-  write in the process.
-- **Each writer takes exactly what its reader gives back.** A pair is registered through two entry-point
-  groups, and dispatch is decided from the writer side alone — so a reader for a suffix no writer answers
-  for is never consulted, and the file reads back as bytes.
-- **A plugin's top level runs at the first write of its suffix**, inside a step and therefore inside an
-  execution. A module that raises there is `E-PLUGIN-LOAD` failing that execution, with the run record
-  still written; a `KeyboardInterrupt` still stops the command. A plugin doing slow work at import pays
-  for it inside a measured execution, so do the work in the writer rather than at module scope.
+- **A claim wins only by being strictly longer than what is registered.** `.fastq.gz` beats `.gz`; a claim on `.csv` never takes `.csv` from core. That is what keeps core's five unshadowable. `E-PLUGIN-COLLISION` refuses such a claim when the module is imported — and a claim that never wins is never imported for that, so a plugin claiming `.csv` and nothing else is **inert** rather than refused at the write. Deliberate: refusing there would make one plugin's bad claim break every core `.csv` write in the process.
+- **Each writer takes exactly what its reader gives back.** A pair is registered through two entry-point groups, and dispatch is decided from the writer side alone — so a reader for a suffix no writer answers for is never consulted, and the file reads back as bytes.
+- **A plugin's top level runs at the first write of its suffix**, inside a step and therefore inside an execution. A module that raises there is `E-PLUGIN-LOAD` failing that execution, with the run record still written; a `KeyboardInterrupt` still stops the command. A plugin doing slow work at import pays for it inside a measured execution, so do the work in the writer rather than at module scope.
 
 ---
 
 ## Testing a plugin
 
-The scaffolded `tests/test_<stem>.py` asks one question, and which question it asks is the interesting
-part (`_registered`'s own docstring elided here):
+The scaffolded `tests/test_<stem>.py` asks one question, and which question it asks is the interesting part (`_registered`'s own docstring elided here):
 
 ```python
 from importlib.metadata import entry_points
@@ -709,10 +585,7 @@ def test_the_spec_declares_parameters_and_every_value_is_a_param():
     assert all(isinstance(param, Param) for param in spec.values())
 ```
 
-It asserts nothing about *which* parameters the spec declares, deliberately. The spec it ships with is a
-placeholder whose own help text says to replace it, so a test enumerating those keys would go red on your
-first real edit — and a test that fails on arrival gets deleted rather than fixed. What it asserts instead
-survives every domain edit and still fails when the package is genuinely broken:
+It asserts nothing about *which* parameters the spec declares, deliberately. The spec it ships with is a placeholder whose own help text says to replace it, so a test enumerating those keys would go red on your first real edit — and a test that fails on arrival gets deleted rather than fixed. What it asserts instead survives every domain edit and still fails when the package is genuinely broken:
 
 | Mutation | Result |
 |---|---|
@@ -720,11 +593,9 @@ survives every domain edit and still fails when the package is genuinely broken:
 | Delete `parameter_spec` | `1 failed, 1 passed` |
 | Remove `@register_template` | `2 passed` — **not covered here**; that agreement is `check_registration`'s (`E-PLUGIN-DECORATOR`), which runs wherever core loads the object behind a key |
 
-The second row is what proves the two tests are not measuring one thing. The third is the omission,
-stated rather than left for you to discover.
+The second row is what proves the two tests are not measuring one thing. The third is the omission, stated rather than left for you to discover.
 
-**Your own tests go past that, and they are plain Python** — import the class, call the method, assert the
-claim. No run, no config on disk, no installed-template loading:
+**Your own tests go past that, and they are plain Python** — import the class, call the method, assert the claim. No run, no config on disk, no installed-template loading:
 
 ```python
 from publishable_plate_assay.templates.plate_assay import PlateAssayTemplate
@@ -760,12 +631,9 @@ FAILED tests/test_plate_assay.py::test_a_swept_calibration_is_refused_and_the_me
 1 failed, 2 passed
 ```
 
-Restored, `3 passed`. The third test is what makes the second one mean something: a refusal test alone
-passes just as well against a template that refuses **everything**. Enumerate the spec's keys rather than
-counting them, for the same reason — a count passes against the wrong three parameters.
+Restored, `3 passed`. The third test is what makes the second one mean something: a refusal test alone passes just as well against a template that refuses **everything**. Enumerate the spec's keys rather than counting them, for the same reason — a count passes against the wrong three parameters.
 
-`pytest` is declared as a dev group by the scaffold, so `uv run pytest` inside the plugin works with no
-setup — it installs the package first, which is what makes the entry point resolvable.
+`pytest` is declared as a dev group by the scaffold, so `uv run pytest` inside the plugin works with no setup — it installs the package first, which is what makes the entry point resolvable.
 
 ---
 
@@ -790,14 +658,8 @@ setup — it installs the package first, which is what makes the entry point res
 
 ## Where to go next
 
-- [`reference.md` § Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) — the
-  normative account of the five registries, the collision rules and the generated layout.
-- [`reference.md` § Templates](reference.md#templates-where-parameters-are-defined) — `parameter_spec`'s
-  full constraint vocabulary, `validate`, and `aggregate`'s four-operation table.
-- [`reference.md` § Where units come from](reference.md#where-units-come-from) and
-  [§ The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) — resolvers
-  and probes in full.
-- [`design-principles.md` § Core vs. plugin](design-principles.md#core-vs-plugin) — why the line falls
-  where it does, and what may still be added on core's side of it.
-- [`experimental-designs.md`](experimental-designs.md) — before you design the experiment your template
-  will serve: what core prevents, and what it refuses to do for you.
+- [`reference.md` § Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) — the normative account of the five registries, the collision rules and the generated layout.
+- [`reference.md` § Templates](reference.md#templates-where-parameters-are-defined) — `parameter_spec`'s full constraint vocabulary, `validate`, and `aggregate`'s four-operation table.
+- [`reference.md` § Where units come from](reference.md#where-units-come-from) and [§ The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) — resolvers and probes in full.
+- [`design-principles.md` § Core vs. plugin](design-principles.md#core-vs-plugin) — why the line falls where it does, and what may still be added on core's side of it.
+- [`experimental-designs.md`](experimental-designs.md) — before you design the experiment your template will serve: what core prevents, and what it refuses to do for you.

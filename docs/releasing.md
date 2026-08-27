@@ -1,21 +1,12 @@
 # Releasing
 
-**Non-normative.** This is the maintainer's runbook for putting a version on PyPI and
-in the Homebrew tap. It describes an operation, not the tool — nothing here is
-authoritative over [the four documents](../CLAUDE.md#the-documents).
+**Non-normative.** This is the maintainer's runbook for putting a version on PyPI and in the Homebrew tap. It describes an operation, not the tool — nothing here is authoritative over [the four documents](../CLAUDE.md#the-documents).
 
-Everything below was measured while doing the 0.1.0 release on 2026-08-26, and the
-things that cost a round are written down as the reason rather than the step, because
-a step without its reason is the first thing a later release quietly drops.
+Everything below was measured while doing the 0.1.0 release on 2026-08-26, and the things that cost a round are written down as the reason rather than the step, because a step without its reason is the first thing a later release quietly drops.
 
 ## The one thing to understand first
 
-**A green test suite says nothing about the distribution.** `[tool.pytest.ini_options]`
-sets `pythonpath = ["."]`, so all 3444 tests import from `src/`. A wheel that dropped
-`readme_templates/*.tmpl` would pass every one of them and then fail on the first
-`publishable new` a stranger ran. So the release gate is not `pytest`; it is building
-the artifacts and driving the **installed console script from outside this
-repository**.
+**A green test suite says nothing about the distribution.** `[tool.pytest.ini_options]` sets `pythonpath = ["."]`, so all 3444 tests import from `src/`. A wheel that dropped `readme_templates/*.tmpl` would pass every one of them and then fail on the first `publishable new` a stranger ran. So the release gate is not `pytest`; it is building the artifacts and driving the **installed console script from outside this repository**.
 
 ## Order
 
@@ -31,14 +22,11 @@ The sequence matters, and each step's output is the next step's input.
 | 6 | Point the Homebrew formula at the published sdist, verify, push the tap | The formula's `url` cannot exist until step 5 |
 | 7 | Add the install routes to README and to the release notes | They are false until step 6 |
 
-Step 7 is last on purpose. A documented route with nothing behind it is this
-repository's most-repeated defect, and an install line is the version of it that lands
-on the page a new user reads first.
+Step 7 is last on purpose. A documented route with nothing behind it is this repository's most-repeated defect, and an install line is the version of it that lands on the page a new user reads first.
 
 ## Version sites
 
-Five files carry `publishable`'s own version, and `CLAUDE.md` § Versions is the rule.
-They move together:
+Five files carry `publishable`'s own version, and `CLAUDE.md` § Versions is the rule. They move together:
 
 - `pyproject.toml`
 - `CITATION.cff` — its `date-released` moves too, and went three weeks stale before 0.1.0
@@ -46,10 +34,7 @@ They move together:
 - `docs/reference.md`'s worked `publishable_version` value
 - README's `v0.x` notice, when the major or the phase changes
 
-**Three sites carry `0.1.0` and must NOT move**: `scaffold.py` and `plugin_scaffold.py`
-write the *scaffolded project's* version, and `tests/test_cli.py`'s fixtures do the
-same. Two real pins assert `provenance.publishable_version`, and they move only when
-the package version does. Enumerate these; never `sed` the version across the tree.
+**Three sites carry `0.1.0` and must NOT move**: `scaffold.py` and `plugin_scaffold.py` write the *scaffolded project's* version, and `tests/test_cli.py`'s fixtures do the same. Two real pins assert `provenance.publishable_version`, and they move only when the package version does. Enumerate these; never `sed` the version across the tree.
 
 ## 1. Land and push
 
@@ -69,27 +54,15 @@ tar tzf dist/publishable-<v>.tar.gz | sed 's|^publishable-<v>/||' | sort
 unzip -l dist/publishable-<v>-py3-none-any.whl
 ```
 
-Read both listings rather than trusting `[tool.hatch.build.targets.*]`. Two things the
-config is doing, and why:
+Read both listings rather than trusting `[tool.hatch.build.targets.*]`. Two things the config is doing, and why:
 
-**The wheel's `artifacts` list is not decoration.** `readme_templates/*.tmpl` and
-`py.typed` are declared there because they are read at runtime and are not modules.
-Any new non-`.py` payload under `src/publishable/` has to be added, and the way to find
-out is `find src/publishable -type f ! -name "*.py"`, not memory.
+**The wheel's `artifacts` list is not decoration.** `readme_templates/*.tmpl` and `py.typed` are declared there because they are read at runtime and are not modules. Any new non-`.py` payload under `src/publishable/` has to be added, and the way to find out is `find src/publishable -type f ! -name "*.py"`, not memory.
 
-**The sdist has an explicit `include` because the default swept 1160 files** —
-`.claude/settings.local.json`, the whole `.superpowers/sdd/` ledger, `docs/superpowers/`
-and `standards/`. It is 70 files now.
+**The sdist has an explicit `include` because the default swept 1160 files** — `.claude/settings.local.json`, the whole `.superpowers/sdd/` ledger, `docs/superpowers/` and `standards/`. It is 70 files now.
 
-**`tests/` is deliberately not in the sdist**, and that was measured rather than
-assumed: with the suite included, the tarball unpacked outside any repository and run
-gave **2 failed, 3442 passed**. Both failures are properties of the unpacked tarball —
-one command test reaches `E-GIT-NO-REPO` because an unpacked sdist is not a git
-repository, and one `.parquet` golden digest moves because a fresh resolve is not this
-repo's `uv.lock`. A suite that fails on unpack is worse than no suite.
+**`tests/` is deliberately not in the sdist**, and that was measured rather than assumed: with the suite included, the tarball unpacked outside any repository and run gave **2 failed, 3442 passed**. Both failures are properties of the unpacked tarball — one command test reaches `E-GIT-NO-REPO` because an unpacked sdist is not a git repository, and one `.parquet` golden digest moves because a fresh resolve is not this repo's `uv.lock`. A suite that fails on unpack is worse than no suite.
 
-Then drive it. Install the **wheel** into a throwaway venv outside the repository and
-walk the arc:
+Then drive it. Install the **wheel** into a throwaway venv outside the repository and walk the arc:
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python <path>/dist/publishable-<v>-py3-none-any.whl
@@ -98,42 +71,26 @@ uv venv .venv && uv pip install --python .venv/bin/python <path>/dist/publishabl
 # then: generate experiment -> validate -> run -> report
 ```
 
-`run` reaching `status: completed` and writing a readable `units.parquet` is the check
-that matters, because it is the only one that exercises `pyarrow`. Note that
-`publishable --help` is *not* a smoke test: operation commands take paths and no flags,
-so it prints `unknown command`.
+`run` reaching `status: completed` and writing a readable `units.parquet` is the check that matters, because it is the only one that exercises `pyarrow`. Note that `publishable --help` is *not* a smoke test: operation commands take paths and no flags, so it prints `unknown command`.
 
 ## 3. TestPyPI
 
-**Optional since 0.1.2, and worth knowing when it stops being optional.** The
-rehearsal this step exists for is now done by `release.yml`'s `verify` job on every
-release — the same build, the same `twine check`, the same installed-console-script
-arc, on Linux. What TestPyPI adds beyond that is a real *upload* against a real index,
-which matters in exactly three cases:
+**Optional since 0.1.2, and worth knowing when it stops being optional.** The rehearsal this step exists for is now done by `release.yml`'s `verify` job on every release — the same build, the same `twine check`, the same installed-console-script arc, on Linux. What TestPyPI adds beyond that is a real *upload* against a real index, which matters in exactly three cases:
 
-- **A first upload of a new project name.** There is no trusted publisher yet and no
-  project to scope a token to; rehearsing the upload is the only way to find a
-  metadata rejection before it costs the real name's first version.
-- **A change to packaging metadata** — `pyproject.toml`'s `[project]` table, a new
-  `classifier`, a `license` spelling. `twine check` validates locally, but PyPI's own
-  validator is stricter and is what actually rejects.
-- **A change to how the README renders**, since the project page is built from the
-  long description and cannot be re-uploaded for a version.
+- **A first upload of a new project name.** There is no trusted publisher yet and no project to scope a token to; rehearsing the upload is the only way to find a metadata rejection before it costs the real name's first version.
+- **A change to packaging metadata** — `pyproject.toml`'s `[project]` table, a new `classifier`, a `license` spelling. `twine check` validates locally, but PyPI's own validator is stricter and is what actually rejects.
+- **A change to how the README renders**, since the project page is built from the long description and cannot be re-uploaded for a version.
 
-For an ordinary release that changes only code, skip it: `verify` covers the same
-ground and a failed upload no longer costs anything, because nothing uploads until
-`verify` is green.
+For an ordinary release that changes only code, skip it: `verify` covers the same ground and a failed upload no longer costs anything, because nothing uploads until `verify` is green.
 
-When you do run it, TestPyPI is a separate site with a separate account and separate
-tokens; pypi.org credentials do not work there.
+When you do run it, TestPyPI is a separate site with a separate account and separate tokens; pypi.org credentials do not work there.
 
 ```bash
 UV_PUBLISH_TOKEN=<test-token> uv publish --publish-url https://test.pypi.org/legacy/ \
   dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-Name the two files. `uv publish` defaults to `dist/*`, and `dist/` carries a
-`.gitignore`.
+Name the two files. `uv publish` defaults to `dist/*`, and `dist/` carries a `.gitignore`.
 
 Installing from TestPyPI needs real PyPI for the dependencies, which are not mirrored:
 
@@ -157,39 +114,23 @@ gh release create v<v> --title "publishable <v>" --notes-file <notes> \
   dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-**Publishing the release is what triggers the upload** — see step 5. Attach both artifacts here — releases on this repository are immutable, so nothing can add them afterwards — and write the notes **without install instructions** — they
-are not true yet. The install block goes in at step 7 with `gh release edit`, which
-keeps the URL.
+**Publishing the release is what triggers the upload** — see step 5. Attach both artifacts here — releases on this repository are immutable, so nothing can add them afterwards — and write the notes **without install instructions** — they are not true yet. The install block goes in at step 7 with `gh release edit`, which keeps the URL.
 
-**A version number is single-use, and a failed release costs it.** Releases on this
-repository are immutable, which retires the tag name the moment a release publishes
-against it — *permanently*, and deleting the release does not give it back:
+**A version number is single-use, and a failed release costs it.** Releases on this repository are immutable, which retires the tag name the moment a release publishes against it — *permanently*, and deleting the release does not give it back:
 
 ```
 remote: - Cannot create ref due to creations being restricted.
 ```
 
-Measured on 2026-08-27, when `release.yml`'s first run failed at `verify` and `v0.1.1`
-could not be re-tagged after its release was deleted. **So there is no retry.** If a
-release's pipeline fails, the fix goes on `main` and the next release takes the next
-number.
+Measured on 2026-08-27, when `release.yml`'s first run failed at `verify` and `v0.1.1` could not be re-tagged after its release was deleted. **So there is no retry.** If a release's pipeline fails, the fix goes on `main` and the next release takes the next number.
 
-Which is why a change that could plausibly fail on CI should be proven from a
-throwaway branch first, on a workflow generated **from** `release.yml` rather than
-hand-written to resemble it — same jobs, only the trigger changed. That costs a CI run
-and no version number.
+Which is why a change that could plausibly fail on CI should be proven from a throwaway branch first, on a workflow generated **from** `release.yml` rather than hand-written to resemble it — same jobs, only the trigger changed. That costs a CI run and no version number.
 
-**The tag does not track `main` afterwards.** It marks the tree that was uploaded;
-step 7's commit makes claims that only became true once the upload existed. For 0.1.0
-the tag is at `e39d2dc` while `main` moved on, and that is correct — do not "fix" it.
+**The tag does not track `main` afterwards.** It marks the tree that was uploaded; step 7's commit makes claims that only became true once the upload existed. For 0.1.0 the tag is at `e39d2dc` while `main` moved on, and that is correct — do not "fix" it.
 
 ## 5. PyPI
 
-**Publishing is automated and there is no token.** Publishing a GitHub release
-triggers `.github/workflows/release.yml`, which authenticates to PyPI over
-[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — PyPI trusts an OIDC
-token minted by that specific workflow file, so nothing long-lived exists to leak or
-rotate. Step 4's `gh release create` is what starts it.
+**Publishing is automated and there is no token.** Publishing a GitHub release triggers `.github/workflows/release.yml`, which authenticates to PyPI over [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — PyPI trusts an OIDC token minted by that specific workflow file, so nothing long-lived exists to leak or rotate. Step 4's `gh release create` is what starts it.
 
 The workflow has two jobs, in order:
 
@@ -198,36 +139,21 @@ The workflow has two jobs, in order:
 | `verify` | ruff, mypy, the full suite, `uv build`, `twine check`, the tag-matches-version check, then the installed console script driven through `new` → `generate experiment` → `validate` → `run` → `report` outside the repository | Nothing is uploaded until this passes. It is the only place the *artifact* is exercised |
 | `publish` | `uv publish` with `id-token: write`, in the `pypi` environment | The environment is the human gate — add a required reviewer there to hold every upload for approval |
 
-**There is no job that attaches artifacts to the release, and the reason is a
-measurement.** Releases on this repository are immutable: `gh release upload` against
-one returns `HTTP 422: Cannot upload assets to an immutable release`. A job that tried
-it shipped and could never have succeeded. Create the release **with** its artifacts —
-step 4 — and the bit-reproducible build is what makes them the same bytes the workflow
-publishes.
+**There is no job that attaches artifacts to the release, and the reason is a measurement.** Releases on this repository are immutable: `gh release upload` against one returns `HTTP 422: Cannot upload assets to an immutable release`. A job that tried it shipped and could never have succeeded. Create the release **with** its artifacts — step 4 — and the bit-reproducible build is what makes them the same bytes the workflow publishes.
 
-**The workflow filename is part of PyPI's authorization.** Renaming
-`release.yml` breaks publishing until the publisher is updated at
-pypi.org → Manage → Publishing.
+**The workflow filename is part of PyPI's authorization.** Renaming `release.yml` breaks publishing until the publisher is updated at pypi.org → Manage → Publishing.
 
-**The `verify` job's gate was shown to fail before it was trusted.** A wheel built with
-`readme_templates/*.tmpl` removed — the exact payload the `artifacts` list exists to
-keep — makes it exit 1 at `publishable new` with `E-IO-FAILED`, while the full suite
-stays green on that same wheel.
+**The `verify` job's gate was shown to fail before it was trusted.** A wheel built with `readme_templates/*.tmpl` removed — the exact payload the `artifacts` list exists to keep — makes it exit 1 at `publishable new` with `E-IO-FAILED`, while the full suite stays green on that same wheel.
 
 ### Publishing by hand
 
-Still the route for a first-ever upload of a **new project name**, because a trusted
-publisher has to be attached to something. PyPI supports a *pending* publisher for
-exactly this; a token works too:
+Still the route for a first-ever upload of a **new project name**, because a trusted publisher has to be attached to something. PyPI supports a *pending* publisher for exactly this; a token works too:
 
 ```bash
 UV_PUBLISH_TOKEN=<token> uv publish dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-A brand-new name cannot use a scoped token, because scoping needs a project that
-exists — so the first upload needs an **Entire account** token. Delete it immediately
-afterward. A token that has been pasted into a terminal, a chat, or a shell history is
-spent; rotate it rather than reasoning about who saw it.
+A brand-new name cannot use a scoped token, because scoping needs a project that exists — so the first upload needs an **Entire account** token. Delete it immediately afterward. A token that has been pasted into a terminal, a chat, or a shell history is spent; rotate it rather than reasoning about who saw it.
 
 Then confirm what landed is what was verified:
 
@@ -237,23 +163,13 @@ curl -s https://pypi.org/pypi/publishable/<v>/json | python3 -c \
   "import json,sys; print([u['digests']['sha256'] for u in json.load(sys.stdin)['urls']])"
 ```
 
-They should be equal. **The build is bit-reproducible from the tag, across platforms**,
-and both halves of that were measured. On 2026-08-26 a rebuild in a detached worktree
-at `v0.1.0` reproduced both published digests on the same machine. On 2026-08-27 the
-stronger form held: 0.1.2 was built by `verify` on `ubuntu-latest` and published from
-there, and both digests match a local macOS `uv build` of the same tag exactly. That is
-what makes the artifacts attached at step 4 the same bytes the workflow publishes, and
-it means anyone can check a published artifact against the tag on any machine.
+They should be equal. **The build is bit-reproducible from the tag, across platforms**, and both halves of that were measured. On 2026-08-26 a rebuild in a detached worktree at `v0.1.0` reproduced both published digests on the same machine. On 2026-08-27 the stronger form held: 0.1.2 was built by `verify` on `ubuntu-latest` and published from there, and both digests match a local macOS `uv build` of the same tag exactly. That is what makes the artifacts attached at step 4 the same bytes the workflow publishes, and it means anyone can check a published artifact against the tag on any machine.
 
 ## 6. Homebrew
 
-The tap is [`seouri/homebrew-tap`](https://github.com/seouri/homebrew-tap), and
-`packaging/homebrew/publishable.rb` is a staging copy of the same formula. **Edit both**
-— they are byte-identical below the staging header, and `diff` is how you know.
+The tap is [`seouri/homebrew-tap`](https://github.com/seouri/homebrew-tap), and `packaging/homebrew/publishable.rb` is a staging copy of the same formula. **Edit both** — they are byte-identical below the staging header, and `diff` is how you know.
 
-**The installable name is `seouri/tap/publishable`, not `publishable`.** A bare name
-resolves only in homebrew-core, whose bar is >=75 stars, >=30 forks or >=30 watchers
-plus a public repository with an immutable tagged release.
+**The installable name is `seouri/tap/publishable`, not `publishable`.** A bare name resolves only in homebrew-core, whose bar is >=75 stars, >=30 forks or >=30 watchers plus a public repository with an immutable tagged release.
 
 For a version bump, `url` and `sha256` change and the resources usually do too. Then:
 
@@ -264,10 +180,7 @@ brew uninstall publishable; brew install seouri/tap/publishable
 brew test seouri/tap/publishable
 ```
 
-A formula that audits clean against a `file://` sdist has not been audited against the
-one people download, so re-run all four after the URL is real. And verify along the
-path a user takes — `brew untap seouri/tap && brew tap seouri/tap` — rather than the
-one you already have set up.
+A formula that audits clean against a `file://` sdist has not been audited against the one people download, so re-run all four after the URL is real. And verify along the path a user takes — `brew untap seouri/tap && brew tap seouri/tap` — rather than the one you already have set up.
 
 Five things this formula knows that are easy to lose:
 
@@ -279,33 +192,17 @@ Five things this formula knows that are easy to lose:
 | `uv` is a runtime dependency, git via `uses_from_macos` | `run` pins the environment through `uv.lock` and refuses outside a git repository, so omitting them ships a binary that refuses the first real command |
 | The `test do` block asserts a scaffolded **file** | `readme_templates/*.tmpl` is the one payload a wheel can silently drop, and an exit code would not see it |
 
-**`no_autobump!` is rejected in third-party taps** — measured, not assumed:
-`Error: ... can only be used in official Homebrew taps`. That is why the `brew bump`
-workflow is disabled at the tap level instead: its PR moves `url` and `sha256` and
-never the resources, so for this formula it would be incomplete every time.
+**`no_autobump!` is rejected in third-party taps** — measured, not assumed: `Error: ... can only be used in official Homebrew taps`. That is why the `brew bump` workflow is disabled at the tap level instead: its PR moves `url` and `sha256` and never the resources, so for this formula it would be incomplete every time.
 
-**`tests.yml` does not build the formula except on a pull request.** Its only build
-step, `brew test-bot --only-formulae`, is gated on
-`github.event_name == 'pull_request'`, so a push to `main` runs tap-syntax and compiles
-nothing. `formula-still-builds.yml` is the separate weekly workflow that does build,
-and it exists as a tripwire for the `pyarrow`/`apache-arrow` pin — nothing else in the
-tap fires when homebrew-core bumps Arrow.
+**`tests.yml` does not build the formula except on a pull request.** Its only build step, `brew test-bot --only-formulae`, is gated on `github.event_name == 'pull_request'`, so a push to `main` runs tap-syntax and compiles nothing. `formula-still-builds.yml` is the separate weekly workflow that does build, and it exists as a tripwire for the `pyarrow`/`apache-arrow` pin — nothing else in the tap fires when homebrew-core bumps Arrow.
 
-**`brew untap` and `brew tap` reset the tap's `origin` to HTTPS**, and pushing a
-workflow file over the `gh` OAuth token then fails with *"refusing to allow an OAuth
-App to create or update workflow ... without `workflow` scope"*. Set the remote back to
-SSH.
+**`brew untap` and `brew tap` reset the tap's `origin` to HTTPS**, and pushing a workflow file over the `gh` OAuth token then fails with *"refusing to allow an OAuth App to create or update workflow ... without `workflow` scope"*. Set the remote back to SSH.
 
 ## 7. The install routes
 
-README's install block and the release notes both gain the routes now that they exist.
-`gh release edit v<v> --notes-file <notes>` keeps the release URL.
+README's install block and the release notes both gain the routes now that they exist. `gh release edit v<v> --notes-file <notes>` keeps the release URL.
 
-**Known and accepted drift:** the PyPI project page renders the README as it was when
-the sdist was built, and PyPI will not accept a re-upload of a version. So a README
-edit made after the upload — such as adding the Homebrew line — never reaches the PyPI
-page for that version. It corrects itself on the next release, and it is not worth a
-patch version.
+**Known and accepted drift:** the PyPI project page renders the README as it was when the sdist was built, and PyPI will not accept a re-upload of a version. So a README edit made after the upload — such as adding the Homebrew line — never reaches the PyPI page for that version. It corrects itself on the next release, and it is not worth a patch version.
 
 ## Checklist
 
