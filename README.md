@@ -16,7 +16,7 @@ Nothing about what ran ends up in a shell history, so nothing has to be reconstr
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Nothing else to configure:
 
 ```bash
-uv tool install publishable        # or: pipx install publishable
+uv tool install publishable        # or: pipx install publishable, brew install seouri/tap/publishable
 publishable demo
 ```
 

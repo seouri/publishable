@@ -1,20 +1,18 @@
-# STAGING COPY. The tap repository `seouri/homebrew-tap` is the source of truth
-# once it exists; this file is here so the formula survives a `brew untap`, which
-# deletes the tap tree Homebrew keeps under its own prefix.
+# STAGING COPY. `seouri/homebrew-tap` is the source of truth; this file is here
+# so the formula survives a `brew untap`, which deletes the tap tree Homebrew
+# keeps under its own prefix. Edit both, or the two drift.
 #
-# NOT INSTALLABLE AS WRITTEN. `url` and `sha256` are a local sdist on the machine
-# that built it, and both must be repointed at the PyPI sdist for the release they
-# describe. A bare `brew install publishable` needs homebrew-core, whose notability
-# bar is >=75 stars, >=30 forks or >=30 watchers plus a public repository with an
-# immutable tagged release; until that is met the installable name is
-# `seouri/tap/publishable`.
+# The installable name is `seouri/tap/publishable`. A bare `brew install
+# publishable` resolves only in homebrew-core, whose bar is >=75 stars, >=30
+# forks or >=30 watchers plus a public repository with an immutable tagged
+# release; until that is met, the tap is the route.
 class Publishable < Formula
   include Language::Python::Virtualenv
 
   desc "Run experiments so the record is publishable by default"
   homepage "https://github.com/seouri/publishable"
-  url "file:///Users/joon/src/tries/publishable/dist/publishable-0.1.0.tar.gz"
-  sha256 "65074fdd70c645be5e3851fa72293b6da1966ffd250303c3190ba9f756e5ef88"
+  url "https://files.pythonhosted.org/packages/4e/b4/6f1242324766b1e2dd83b6584faf87b16543d580690cb19c904018825352/publishable-0.1.0.tar.gz"
+  sha256 "428093dffe229699117c6adf41319387db6bcfcdc6c3c9b57db10e71674d4148"
   license "MIT"
 
   # `numpy` and `scipy` are Homebrew formulae and bottled, so they are
