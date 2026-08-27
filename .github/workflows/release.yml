@@ -1,0 +1,141 @@
+# Publishes a release to PyPI over Trusted Publishing — no token exists to leak
+# or rotate. PyPI authorizes this file by name, so renaming it breaks publishing
+# until the publisher is updated at pypi.org.
+#
+# It fires on a published GitHub release rather than on a tag push, matching
+# docs/releasing.md's order: the release is cut, then PyPI. The `pypi`
+# environment is the human gate, and can require an approving reviewer.
+#
+# `verify` is not ceremony. This project's tests set `pythonpath = ["."]` and so
+# import from `src/`; a wheel that dropped `readme_templates/*.tmpl` would pass
+# every one of them and fail on the first `publishable new` a stranger ran. So
+# the job builds the artifacts and drives the INSTALLED console script through a
+# whole run, outside the repository, before anything is uploaded.
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest -q
+
+      - name: Build
+        run: |
+          uv build
+          uvx twine check dist/*
+
+      - name: The version the release tag names is the version built
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          test -f "dist/publishable-${tag}.tar.gz" \
+            || { echo "::error::no sdist for ${tag}; pyproject version and tag disagree"; exit 1; }
+          test -f "dist/publishable-${tag}-py3-none-any.whl" || exit 1
+
+      # The gate. `run` reaching `status: completed` with a readable
+      # units.parquet is the only check here that exercises pyarrow, and `new`
+      # is the only one that proves the scaffold templates survived the wheel.
+      - name: Drive the installed console script outside the repository
+        run: |
+          work="${RUNNER_TEMP}/gate"
+          mkdir -p "$work/data" "$work/results"
+          python3 - "$work/data/index.csv" <<'PY'
+          import csv, random, sys
+          random.seed(3)
+          with open(sys.argv[1], "w", newline="") as f:
+              w = csv.writer(f); w.writerow(["patient_id", "value"])
+              for i in range(24):
+                  w.writerow([f"p{i}", round(random.random(), 4)])
+          PY
+          uv venv "$work/.venv"
+          uv pip install --python "$work/.venv/bin/python" dist/*.whl
+          bin="$work/.venv/bin/publishable"
+
+          "$bin" list-templates | grep -q "publishable.templates.builtin.generic.GenericTemplate"
+          cd "$work"
+          "$bin" new my-study
+          cd my-study
+          "$bin" generate experiment pilot --template generic \
+            --input-dir "$work/data" --output-dir "$work/results"
+          python3 - configs/pilot/config.yaml <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1]); t = p.read_text()
+          t = t.replace('description: ""', 'description: "release gate"')
+          t = re.sub(r'^(\s*)authors: \[\]', r'\1authors: ["gate"]', t, flags=re.M)
+          p.write_text(t)
+          PY
+          "$bin" validate configs/pilot/config.yaml
+          git add -A
+          git -c user.name=gate -c user.email=gate@example.com commit -q -m gate
+          "$bin" run configs/pilot/config.yaml
+          run_yaml="$(find "$work/results" -name run.yaml | head -1)"
+          grep -q '^status: completed' "$run_yaml"
+          "$bin" report "$run_yaml" > /dev/null
+          "$work/.venv/bin/python" - <<'PY'
+          import glob, os, sys
+          import pyarrow.parquet as pq
+          hits = glob.glob(os.environ["RUNNER_TEMP"] + "/gate/results/**/units.parquet", recursive=True)
+          # `results/latest` is a symlink to the run directory, so the glob sees
+          # every file twice. A count reported as evidence has to be the count.
+          paths = sorted({os.path.realpath(p) for p in hits})
+          assert paths, "run wrote no units.parquet"
+          assert len(paths) == 5, f"expected one per seed repeat, got {len(paths)}"
+          for path in paths:
+              t = pq.read_table(path)
+              assert t.num_rows == 24, (path, t.num_rows)
+          print(f"{len(paths)} parquet files, {t.num_rows} rows each, columns {t.column_names}")
+          PY
+
+      - name: Digests
+        run: shasum -a 256 dist/*
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/publishable/
+    permissions:
+      id-token: write # the OIDC token Trusted Publishing exchanges; no secret involved
+    steps:
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: dist
+          path: dist/
+      - run: uv publish
+
+  attach:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # replaces the release's assets with the bytes that were published
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: dist
+          path: dist/
+      # The build is bit-reproducible from the tag, so these are the same bytes
+      # a maintainer's local `uv build` produces — measured for 0.1.0. Uploading
+      # them here means the release assets and the PyPI files cannot diverge.
+      - run: gh release upload "${GITHUB_REF_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+        env:
+          GH_TOKEN: ${{ github.token }}

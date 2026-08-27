@@ -1,0 +1,13 @@
+# The release workflow pins every action by commit SHA, which is what makes the
+# `# v5.0.0` comments beside them non-load-bearing. A pin that never moves goes
+# stale instead; this keeps them current without giving up the SHA.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

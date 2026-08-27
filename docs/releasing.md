@@ -27,7 +27,7 @@ The sequence matters, and each step's output is the next step's input.
 | 2 | Build and verify the artifacts | Everything after this consumes the exact bytes verified here |
 | 3 | TestPyPI, and install from it | The only rehearsal available — a PyPI version number can be yanked but never re-uploaded |
 | 4 | Tag and cut the GitHub release | Tag the tree that gets uploaded, before uploading it |
-| 5 | Upload to PyPI | |
+| 5 | Publishing the release triggers `release.yml`, which verifies and uploads to PyPI | The workflow is the uploader; there is no token |
 | 6 | Point the Homebrew formula at the published sdist, verify, push the tap | The formula's `url` cannot exist until step 5 |
 | 7 | Add the install routes to README and to the release notes | They are false until step 6 |
 
@@ -138,7 +138,7 @@ gh release create v<v> --title "publishable <v>" --notes-file <notes> \
   dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-Attach both artifacts, and write the notes **without install instructions** — they
+**Publishing the release is what triggers the upload** — see step 5. Attach both artifacts (the `attach` job replaces them with the bytes it published), and write the notes **without install instructions** — they
 are not true yet. The install block goes in at step 7 with `gh release edit`, which
 keeps the URL.
 
@@ -148,15 +148,43 @@ the tag is at `e39d2dc` while `main` moved on, and that is correct — do not "f
 
 ## 5. PyPI
 
+**Publishing is automated and there is no token.** Publishing a GitHub release
+triggers `.github/workflows/release.yml`, which authenticates to PyPI over
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — PyPI trusts an OIDC
+token minted by that specific workflow file, so nothing long-lived exists to leak or
+rotate. Step 4's `gh release create` is what starts it.
+
+The workflow has three jobs, in order:
+
+| Job | What it does | Why it is separate |
+|---|---|---|
+| `verify` | ruff, mypy, the full suite, `uv build`, `twine check`, the tag-matches-version check, then the installed console script driven through `new` → `generate experiment` → `validate` → `run` → `report` outside the repository | Nothing is uploaded until this passes. It is the only place the *artifact* is exercised |
+| `publish` | `uv publish` with `id-token: write`, in the `pypi` environment | The environment is the human gate — add a required reviewer there to hold every upload for approval |
+| `attach` | Uploads the same artifacts to the release with `--clobber` | The build is bit-reproducible from the tag, so the release assets and the PyPI files cannot diverge |
+
+**The workflow filename is part of PyPI's authorization.** Renaming
+`release.yml` breaks publishing until the publisher is updated at
+pypi.org → Manage → Publishing.
+
+**The `verify` job's gate was shown to fail before it was trusted.** A wheel built with
+`readme_templates/*.tmpl` removed — the exact payload the `artifacts` list exists to
+keep — makes it exit 1 at `publishable new` with `E-IO-FAILED`, while the full suite
+stays green on that same wheel.
+
+### Publishing by hand
+
+Still the route for a first-ever upload of a **new project name**, because a trusted
+publisher has to be attached to something. PyPI supports a *pending* publisher for
+exactly this; a token works too:
+
 ```bash
 UV_PUBLISH_TOKEN=<token> uv publish dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
 
-**Tokens.** A brand-new project name cannot be scoped, because scoping needs a project
-that exists — so the first upload of a name needs an **Entire account** token. Delete
-it immediately afterward and create one scoped to `publishable`. A token that has been
-pasted into a terminal, a chat, or a shell history is spent; rotate it rather than
-reasoning about who saw it.
+A brand-new name cannot use a scoped token, because scoping needs a project that
+exists — so the first upload needs an **Entire account** token. Delete it immediately
+afterward. A token that has been pasted into a terminal, a chat, or a shell history is
+spent; rotate it rather than reasoning about who saw it.
 
 Then confirm what landed is what was verified:
 
@@ -166,12 +194,10 @@ curl -s https://pypi.org/pypi/publishable/<v>/json | python3 -c \
   "import json,sys; print([u['digests']['sha256'] for u in json.load(sys.stdin)['urls']])"
 ```
 
-They should be equal. That equality is what lets the Homebrew formula claim it builds
-the tree that was checked rather than one that merely shares a version number.
-
-**Trusted Publishing** removes the token entirely — PyPI trusts a named GitHub Actions
-workflow over OIDC. It is the better end state and `uv publish` supports it; it cannot
-do the local TestPyPI rehearsal above, which is why 0.1.0 used tokens.
+They should be equal. **The build is bit-reproducible from the tag** — measured for
+0.1.0 on 2026-08-26, where a rebuild in a detached worktree at `v0.1.0` reproduced both
+published digests exactly — so anyone can perform this check against the tag, and the
+`attach` job above relies on it.
 
 ## 6. Homebrew
 
@@ -243,9 +269,8 @@ patch version.
 - [ ] `uv build`; `twine check`; both archive listings read
 - [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet`
 - [ ] TestPyPI upload, install from it, same arc
-- [ ] `main` pushed; tag pushed; GitHub release created with both artifacts, no install block yet
-- [ ] PyPI upload; uploaded sha256 equals the local one
-- [ ] Account-wide token deleted, project-scoped token created, TestPyPI token rotated
+- [ ] `main` pushed; tag pushed; GitHub release created, no install block yet
+- [ ] `release.yml` green through `verify`, `publish` and `attach`; uploaded sha256 equals the local one
 - [ ] Formula repointed in **both** copies; style, audit, untap/tap, install, test
 - [ ] Tap pushed; `formula-still-builds.yml` green
 - [ ] README install block and release notes updated last
