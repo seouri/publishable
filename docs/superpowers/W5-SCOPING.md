@@ -84,46 +84,83 @@ takes; only a marker in the file can.
 
 ---
 
-## 2. The third way: keep the null, add the marker
+## 2. The third way: keep the null, add the marker — in `Param`, not in `materialize`
+
+**AMENDED before execution.** This section first put the change in
+`materialize._parameters_block`, special-casing `param.default is MISSING` there. That is the wrong
+home, and the code says so twice.
+
+`Param` already answers this question. It has a `required` property — `self.default is MISSING` —
+and its **other** rendering method already leads with it:
 
 ```python
-value = "" if param.default is MISSING else _scalar(param.default)
-comment = param.comment()
-if param.default is MISSING:
-    comment = f"REQUIRED — {comment}" if comment else "REQUIRED"
+def constraints(self) -> list[str]:
+    """...`required` and `nullable` are in the list even though neither is in the
+    closed constraint vocabulary docs/reference.md § Templates tabulates: both
+    constrain what a config may write, they are what a reader of this table needs
+    first..."""
+    parts: list[str] = []
+    if self.required:
+        parts.append("required")
 ```
 
-What `init` then writes, for the tutorial's own spec:
+So `comment()` and `constraints()` are the two renderings of one parameter's vocabulary — the
+config line and the documentation table — and **only one of them reports requiredness**, with the
+one that does carrying the argument for why a reader needs it first. That is an inconsistency
+inside `Param`, not a gap in `materialize`.
 
-```yaml
-  instrument:
-    model:                          # REQUIRED — Instrument model identifier
-    gain: 1.0                       # float > 0
+And `materialize`'s own line reads `value = "" if param.default is MISSING else …` — answering *is
+this required* with the correlate rather than with `Param.required`, the fact the class exposes.
+Putting the marker there would have added a second such reading.
+
+**So the change is in `comment()`**, and `materialize.py` gains nothing but a `param.required` in
+place of its duplicate:
+
+```python
+def comment(self) -> str:
+    body = self._comment_body()          # today's method, renamed: one constraint, else help
+    if self.required:
+        return f"REQUIRED — {body}" if body else "REQUIRED"
+    return body
 ```
 
-Five things fall out of it, and the fifth is the one that makes it the right shape rather than the
-cheap one:
+**Probed against the real materializer** before this section was rewritten:
+
+```
+'    model:                          # REQUIRED — Instrument model identifier'
+'    gain: 1.0                       # float > 0'
+'    req_bounded:                    # REQUIRED — integer >= 2'
+'    req_bare:                       # REQUIRED'
+'    req_nullable:                   # REQUIRED'
+'    req_choices:                    # REQUIRED — choices: x | y'
+'    opt: 7'
+```
+
+Seven things fall out of it, and the last two are why this placement is better than the first:
 
 1. **The document's load-bearing claim becomes true** — a required parameter is materialized with a
    `# REQUIRED` marker, the same treatment `metadata.description` gets, and the file fails
    `validate` until it is filled.
 2. **No new error code and no new rule.** The value stays absent, so the existing
    `E-PARAM-VALUE … is null, but the parameter is not nullable` is still what fails, and
-   [§ Validation](../reference.md#validation)'s row for that code — *"a value … fails its `Param`'s
-   own check"* — already covers it.
+   [§ Validation](../reference.md#validation)'s row for that code already covers it.
 3. **No legal value is forbidden.** `0`, `false`, `[]` and `""` all stay declarable, and the
    consequence about empty strings is **deleted** rather than implemented.
-4. **The trailing space goes with it**, in every case rather than only where a constraint happened
-   to supply a comment — the marker is always a comment.
-5. **The marker is what distinguishes the two null-looking lines.** A nullable parameter defaulted
-   to `null` renders `thing: null`; a required one renders `model:` with the marker. § 1's
-   unfillable-but-clean case becomes visible to a reader in the one place it can be.
+4. **The trailing space goes in every case**, since the marker is always a comment — `req_bare` and
+   `req_nullable` above carried one before and carry none now.
+5. **The marker distinguishes the two null-looking lines.** A nullable parameter defaulted to
+   `null` renders `thing: null`; a required one renders `model:` with the marker — so § 1's
+   unfillable-but-clean case is visible in the one place it can be, without a refusal.
+6. **The fact is read where it lives.** `Param.required` rather than a second spelling of
+   `default is MISSING`, and the two renderings of one vocabulary stop disagreeing about what a
+   reader needs first.
+7. **`materialize.py` does not change at all**, so anything that ever renders a config line gets
+   the marker without being told. The diff is one method in `param.py` and one word in
+   `materialize.py`.
 
 The format follows `metadata`'s exactly — `# REQUIRED — <text>` where there is text, `# REQUIRED`
-alone where there is not — and `comment()` already answers *which single thing claims the line*, so
-the marker prepends rather than competes.
-
----
+alone where there is not — and `comment()`'s docstring becomes *requiredness, then one constraint
+or `help`*, which is `constraints()`' shape one line shorter.
 
 ## 3. What is unpinned, which is why this drifted
 
@@ -150,12 +187,15 @@ than a probe.
 
 ## 4. Decomposition — 5 tasks
 
-1. **`_parameters_block` prepends the marker.** Three lines, and the trailing space goes with it.
-2. **The pin.** One arm over all five types — required with help, required with a constraint,
-   required with neither — asserting the marker, the absent value and **no trailing whitespace**;
-   one arm asserting a fresh config fails `validate` with `E-PARAM-VALUE` on that path; one arm
-   asserting a **defaulted** parameter's line is unchanged, which is the control that stops the
-   marker leaking onto every line.
+1. **`Param.comment()` reports requiredness**, on the ground `constraints()` already states, with
+   today's body extracted to `_comment_body`; `materialize._parameters_block`'s
+   `param.default is MISSING` becomes `param.required`, deleting a second spelling of one fact.
+2. **The pin, in two places because there are two claims.** In `test_param.py`, `comment()` over a
+   required parameter with help, with a constraint, and with neither — the unit that owns the
+   vocabulary. In the materializer's own test, the rendered line for each of the five types
+   asserting the marker, the absent value and **no trailing whitespace**, plus a fresh config
+   failing `validate` with `E-PARAM-VALUE` on that path, plus a **defaulted** parameter's line
+   unchanged — the control that stops the marker leaking onto every line.
 3. **§ Templates: the table cell and the paragraph.** The cell stops promising `""` and says what
    the line is; the paragraph keeps *"the same treatment `metadata.description` does"* and loses
    *"an empty value"*. The *"marker is what fails"* sentence and the empty-string consequence are
