@@ -2,65 +2,22 @@
 
 **Non-normative.** The four documents — [`README.md`](../README.md),
 [`design-principles.md`](design-principles.md), [`experimental-designs.md`](experimental-designs.md),
-[`reference.md`](reference.md) — are the specification. This file teaches the path through them and is
-authoritative over nothing. Where it disagrees with `reference.md`, `reference.md` wins and the
-disagreement is a defect; every one this tutorial found is [filed](#the-gaps-this-tutorial-found), named
-by code, and linked from the step it bites on.
+[`reference.md`](reference.md) — are the specification. This file teaches a path through them and is
+authoritative over nothing; where the two disagree, `reference.md` wins.
 
-It answers three questions in order: **why** a plugin exists, **when** you actually need one, and **how**
-to build one. The short version of the second answer surprises most readers, so it is here rather than
-buried: most projects need a **project-local template**, not a plugin. The section that decides between
-them is [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
+It answers three questions in order: **why** plugins exist, **when** you actually need one, and **how**
+to build one. The second answer surprises most readers, so it is here rather than buried: most projects
+need a **project-local template**, not a plugin. [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
+is the section that decides.
 
----
-
-## Measured on 2026-08-27 against commit `f9be7a6`
-
-Every command below was run against that commit, and every transcript is what it printed — abridged where
-this file says so and nowhere else. Build facts expire — a claim about what the tool does *today* is
-perishable in a way a specification claim is not — so they are confined to this notice and to the tables
-that carry an error code.
-
-**Six defects were found and all six are closed** — five while writing this file, and a sixth by
-reviewing it end to end. Four of the first five moved a behaviour:
-`scaffold_project` writes `[tool.uv] package = false`; `plugin new` ships a test that can fail plus a
-`pytest` dev group; a plugin's writer dispatches from its claim with nothing importing the module; and
-`plugin new` writes a `steps/` directory and a `.gitkeep` under `examples/`. Two were closed by
-**deleting a promise rather than building it**: what a template's `validate` receives is now documented as
-the mapping it always was, and `uv.lock` plus the plugin README's parameter table left the documented
-trees instead of being generated — one filing accounting for both kinds. The sixth is the one this file
-described wrongly itself: a `# REQUIRED` marker the document promised and `init` did not write, closed by
-writing it. [The gaps this tutorial found](#the-gaps-this-tutorial-found) names each one and where it
-went.
-
-**The whole arc was re-run for this file's own review**, not only at the commits that closed
-those defects — `new`, `generate template`, `list-templates`, `generate experiment`, `validate`,
-`dry-run`, `run`, `docs`, `plugin new`, and the installed-template and collision refusals. Two numbers
-worth knowing are stable rather than incidental: `dry-run` still prints the same nine fixed files in the
-same order, and the statistics quoted below reproduce **exactly** — the seeds come from the design digest
-rather than from [`code_hash`](reference.md#three-hashes), so a different `code_hash` gives the same
-`reading` and the same `hit_rate`.
-
-What that measurement established, before any prose:
-
-| Route | State at `f9be7a6` |
-|---|---|
-| A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
-| A plugin's **resolver** | Dispatches at `validate` and at `run` |
-| A plugin's **apparatus probe** | Dispatches, and its facts land in `provenance.apparatus` |
-| A plugin's **writer / reader** | Dispatches: the suffix is resolved from the claim, and the winning distribution is the only one loaded |
-| A plugin's **template** | Refused: `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and this build does not load what it points at |
-
-So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the
-template that names your parameters stays in your own repo. That is not the arrangement
-[§ Plugins](reference.md#plugins-where-domain-knowledge-lives) describes, and the difference is a build
-state rather than a design change: `reference.md` [names the refusal](reference.md#errors-validate-reports)
-in three places.
+**Before you start** you need `uv`, `git`, and `publishable` on your path (`uv tool install publishable`).
+Everything below was run end to end; the commands are meant to be typed.
 
 ---
 
 ## Contents
 
+- [What this build supports](#what-this-build-supports)
 - [Why plugins exist](#why-plugins-exist)
 - [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 - [The five registries](#the-five-registries)
@@ -68,7 +25,28 @@ in three places.
 - [Route B: packaging the machinery as a plugin](#route-b-packaging-the-machinery-as-a-plugin)
 - [Testing a plugin](#testing-a-plugin)
 - [What this build refuses, by code](#what-this-build-refuses-by-code)
-- [The gaps this tutorial found](#the-gaps-this-tutorial-found)
+- [Where to go next](#where-to-go-next)
+
+---
+
+## What this build supports
+
+Measured on 2026-08-27 against commit `cfd4a83`, by running every command below. Build facts expire in a
+way specification claims do not, so they are confined to this table and to the ones that carry an error
+code.
+
+| | State |
+|---|---|
+| A project-local `templates/*.py` template | Works end to end: `init`, `validate`, `dry-run`, `run`, `docs`, `list-templates` |
+| A plugin's **resolver** | Dispatches at `validate` and at `run` |
+| A plugin's **apparatus probe** | Dispatches, and its facts land in `provenance.apparatus` |
+| A plugin's **writer / reader** | Dispatches: the suffix resolves from the claim, and only the winning distribution is loaded |
+| A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and does not load what it points at |
+
+So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the
+template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end)
+builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery
+around it.
 
 ---
 
@@ -119,8 +97,8 @@ editing a step does.
 
 **Package it when a second project needs it**, or when the domain work is machinery rather than
 parameters — walking a DICOM archive, probing an instrument, encoding a domain file format. That
-machinery is what a plugin ships best today, and it is also the part core genuinely cannot supply: what
-is required *of* a unit is identical across every field, and *how* units are found is not.
+machinery is also the part core genuinely cannot supply: what is required *of* a unit is identical across
+every field, and *how* units are found is not.
 
 ---
 
@@ -137,7 +115,7 @@ declaration checked against it.
 | `publishable.resolvers` | how units are found in domain input | `data.units.from: {resolver: <name>}` | `validate` and `run` |
 | `publishable.probes` | what the apparatus reports about itself | a template's `apparatus_probe` | run start, and before every execution |
 | `publishable.writers` | bytes for a domain artifact suffix | nothing — `io.write` dispatches on the suffix | the `io.write` call |
-| `publishable.readers` | the inverse of a writer | nothing — `io.read_upstream` indexes it | the read |
+| `publishable.readers` | the inverse of a writer | nothing — the read indexes it | the read |
 
 A name is claimed **once**: two installed plugins claiming one name, a plugin shadowing `generic`, a
 writer claiming a suffix core already writes, or a local file taking an installed name all fail at load
@@ -148,7 +126,7 @@ template depended on it would be reproducible everywhere except where it mattere
 
 ## Route A: a project-local template, end to end
 
-This route runs to completion at `f9be7a6`. Every block is real output.
+Every block below is real output.
 
 ### 1. Scaffold the project
 
@@ -169,10 +147,8 @@ package = false
 ```
 
 An experiment repository is code under a commit, not a distribution anybody installs — so `uv` is told
-not to build it. Without that declaration hatchling looks for a package matching the project's own name,
-finds none (`src/` holds a `.gitkeep`, and `generate experiment` writes `src/<experiment>/`), and every
-`uv run publishable …` in a fresh project fails on a build traceback. That was true until 2026-08-27;
-if you are reading a project scaffolded before then, add those two lines by hand.
+not to build it. Nothing here supplies a package for a build backend to find: `src/` holds a `.gitkeep`,
+and `generate experiment` writes `src/<experiment>/` rather than `src/<project>/`.
 
 ### 2. Write the template
 
@@ -204,12 +180,12 @@ class MyAssayTemplate(BaseTemplate):
 
 Three things about that spec, each a rule rather than a style:
 
-- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as
-  the key, no value, and a `# REQUIRED` marker carrying the parameter's own comment — so the file it
-  wrote fails `validate` until you fill it in: `E-PARAM-VALUE … is null, but the parameter is not
-  nullable`. What fails is the **absent** value rather than an empty one, which is what keeps `0`,
-  `false`, `[]` and `""` legal for a required parameter of the matching type. `default=None` is a
-  different claim: it needs `nullable=True` and means *`null` is a legal value*.
+- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as the
+  key, no value, and a `# REQUIRED` marker carrying the parameter's own comment — so the file it wrote
+  fails `validate` until you fill it in: `E-PARAM-VALUE … is null, but the parameter is not nullable`.
+  What fails is the **absent** value rather than an empty one, which is what keeps `0`, `false`, `[]` and
+  `""` legal for a required parameter of the matching type. `default=None` is a different claim: it needs
+  `nullable=True` and means *`null` is a legal value*.
 - **The constraint vocabulary is closed** — `choices`, `ge`/`gt`/`le`/`lt`, `pattern`, `item_type`,
   `min_items`/`max_items`, `nullable`, `help`. There is no `validator=` hook, because a rule that needs
   code is a cross-field rule and belongs in `validate`.
@@ -221,7 +197,7 @@ Three things about that spec, each a rule rather than a style:
 ```
 ### `my_assay`
 
-local · provider /…/lab-study/templates/my_assay.py::MyAssayTemplate
+local · provider `/…/lab-study/templates/my_assay.py::MyAssayTemplate`
 
 Convention class `generic` · default repeats 3 · naming `^[a-z0-9]+(-[a-z0-9]+)*$`
 
@@ -271,10 +247,6 @@ create. What tells you exactly what to change is `validate`:
           holds paths that carry a default and are left unset here; a step reading one as cfg.parameters.<path> raises E-STEP-PARAM-UNKNOWN: instrument.gain, analysis.threshold
 ```
 
-Those three are what a config materialized from the **old** spec reports. Fresh from `init` against the
-new one, the required key is the only thing wrong with it: `E-PARAM-VALUE parameters.instrument.model is
-null, but the parameter is not nullable`, beside whatever `metadata` and `data.units` still need.
-
 ### 4. Add the cross-block rule only a template can know
 
 `validate` receives the **whole** config, not just `parameters`, because the rules a template most needs
@@ -293,24 +265,16 @@ from a legitimate one; the template can.
         return []
 ```
 
-**Note the `.get` calls — that is the documented idiom, not a workaround.** `validate` receives the
-parsed document, a plain mapping, and deliberately not the dot-access `cfg` a step gets. The reason is
-what this method is *for*: a cross-block rule asks whether an optional block is **declared**, and five of
-the paths such a rule asks about — `statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, and a
-`sweep` mode — are absent from what `init` writes. A reader that refused an absent path could not answer
-the question. Reaching for dot-access here is reported rather than crashed, which makes it cheap to get
-wrong and easy to miss:
+**Note the `.get` calls.** `validate` receives the parsed document — a plain mapping, and deliberately
+not the dot-access `cfg` a step gets. The reason is what this method is *for*: a cross-block rule asks
+whether an optional block is **declared**, and several of the paths such a rule asks about —
+`statistics.contrasts`, `.report_by`, `.resample`, `.null_test`, a `sweep` mode — are absent from what
+`init` writes. A reader that refused an absent path could not answer the question. Use `or {}` at each
+step rather than a `{}` default, because a block declared with nothing under it parses as `None` as
+readily as an absent one. [§ Templates](reference.md#templates-where-parameters-are-defined) carries the
+worked `holdout`-or-`fold` rule as code you can copy.
 
-```
-  error   E-TEMPLATE-RULE      parameters
-          raised while validating: AttributeError: 'dict' object has no attribute 'data'
-```
-
-`or {}` at each step rather than a `{}` default, because a block declared with nothing under it parses as
-`None` as readily as an absent one. [§ Templates](reference.md#templates-where-parameters-are-defined)
-carries the worked rule this idiom was promised for.
-
-A declared value is refused with the template's own message:
+A declared value is then refused with your own message:
 
 ```
   error   E-TEMPLATE-RULE      parameters
@@ -372,8 +336,8 @@ and earns no interval, so a step recording only those publishes nothing.
 Commit before running: `code_hash` covers `src/**` and `templates/**`, and `run` refuses a dirty tree
 (`E-CODE-DIRTY`) because a hash claiming to cover your code must actually cover what ran.
 
-`dry-run` is what to read before spending anything — its first lines resolve the sweep, the repeats and
-the seeds, and this picks up from the step list:
+`dry-run` is what to read before spending anything. Its first lines resolve the sweep, the repeats and
+the seeds; this picks up at the step list:
 
 ```
 …
@@ -411,9 +375,8 @@ run.yaml → /…/results/run_2026-08-27T13-57-45Z_c075829/run.yaml
 ```
 
 And the template's derived metric is in the record with an interval of its own, beside the recorded
-column's — **abridged and re-wrapped** for reading, `n` and `ci95` inlined and each metric's
-`correction: null` and `reading`'s `repeat_spread` dropped; every value is the one a real run wrote, and
-re-running the arc at `ca37a27` reproduced all four digits-for-digits:
+column's — inlined and abridged here for reading, `correction: null` and `reading`'s `repeat_spread`
+dropped:
 
 ```yaml
     aggregated:
@@ -462,7 +425,7 @@ Documentation that cannot drift is the only kind worth generating.
 publishable plugin new publishable-plate-assay
 ```
 
-**It prints nothing and exits `0`.** What it wrote:
+It prints nothing and exits `0`. What it wrote:
 
 ```
 publishable-plate-assay/
@@ -482,28 +445,18 @@ publishable-plate-assay/
 └── examples/plate_assay/
 ```
 
-That is the tree [§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) shows, and
-the two now agree **by test rather than by review**: a fixture parses that document's fenced tree and
-compares it to what `plugin new` commits, in both directions — every path the document names must be in
-the commit, and every path the commit holds must be named. Before that test existed the two disagreed
-about `uv.lock`, an example `config.yaml`, `steps/`, a README parameter table and `.gitignore`, and the
-`examples/` directory was created empty and therefore in no clone — five the document over-promised, one
-the scaffold wrote unannounced, and one only a check that reads the **commit** rather than the disk can
-see.
-
-`uv.lock` is in neither: `uv` writes it on your first `uv run` inside the package.
-`examples/plate_assay/` carries a `.gitkeep` and nothing else — the example config is yours to write, and
-the `.gitkeep` is what puts the directory in a clone, since git tracks no empty one. `steps/` is a
-directory with no module, because a reusable `BaseStep` is registered nowhere: the consuming project
-imports it.
+`uv` writes `uv.lock` on your first `uv run` inside the package. `examples/plate_assay/` carries a
+`.gitkeep` and nothing else — the example config is yours to write, and the `.gitkeep` is what puts the
+directory in a clone, since git tracks no empty one. `steps/` is a directory with no module, because a
+reusable `BaseStep` is registered nowhere: the consuming project imports it.
 
 The README carries an install line and the names it registers, all four derived from the distribution's
 own stem — `publishable-plate-assay` → template `plate_assay`, resolver `plate_assay_units`, probe
 `plate_assay_instrument`, suffix `.plate_assay` — which is why nothing needs editing to be resolvable,
-and why that table cannot drift. It carries **no parameter table and no managed regions**, deliberately:
-at scaffold time the spec is a placeholder, and filling such a table afterwards would mean reading an
-installed template's spec, which this build refuses. So `publishable docs` inside a plugin refuses too,
-rather than rewriting nothing:
+and why that table cannot drift. It carries no parameter table and no
+[managed regions](reference.md#the-generated-readme), deliberately: at scaffold time the spec is a
+placeholder, and filling such a table afterwards would mean reading an installed template's spec, which
+this build refuses. So `publishable docs` inside a plugin refuses too, rather than rewriting nothing:
 
 ```
   error   E-DOCS-NO-REGIONS    /…/publishable-plate-assay/README.md
@@ -536,23 +489,20 @@ disagree, loading fails naming both rather than one silently winning.
 
 ### 3. Install it
 
-The documented flow is one flag on a creation command, and it is `uv add` and nothing more:
+`--plugin <user>/<repo>` on a creation command expands to `uv add git+https://github.com/<user>/<repo>`
+and nothing more, so publishing is "push to GitHub" and pinning is whatever `uv` supports
+(`…@v1.2.0`):
 
 ```bash
 publishable generate experiment my-pilot \
   --plugin someuser/publishable-plate-assay \
-  --template plate_assay \
+  --template generic \
   --input-dir /…/data --output-dir /…/results
 ```
 
-`--plugin <user>/<repo>` expands to `uv add git+https://github.com/<user>/<repo>`, so publishing is
-"push to GitHub" and pinning is whatever `uv` supports (`…@v1.2.0`). **That invocation installs the
-plugin and then refuses**, because the template it names is an installed one — see
-[§ 4](#4-the-template-half-does-not-load-at-this-build). The install is real and the machinery it carries
-works; the `--template` half is what waits. Point `--template` at a core or project-local name, or drop
-the flag and install separately. While developing locally there is no
-remote yet, so add it by path instead — this is a local stand-in for the flag, not a second supported
-form:
+`--template` there points at a core or project-local name, because an installed template is
+[not loadable in this build](#4-a-plugins-template-does-not-load-in-this-build). While developing
+locally there is no remote yet, so add the plugin by path instead:
 
 ```bash
 uv add --editable ../publishable-plate-assay
@@ -572,7 +522,9 @@ The same config through `uv run publishable validate` prints `Installed 1 packag
 `✓ config valid`. Stay inside `uv run` while developing a plugin, or `uv sync` after every entry-point
 change.
 
-### 4. The template half does not load at this build
+### 4. A plugin's template does not load in this build
+
+Naming one in a config is refused, at `init` and at `validate`:
 
 ```
   error   E-TEMPLATE-INSTALLED-UNSUPPORTED names `plate_assay`, which publishable-plate-assay 0.1.0 registers as a `publishable.templates` entry point — but core resolves an installed template's name without importing its package, and loading one is not implemented in this build; installed templates will be honored in a later slice. Use a project-local `templates/` file or a core template for now
@@ -588,12 +540,12 @@ build** (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed temp
 metadata without importing the package, so there is no class here to read a `parameter_spec` off.
 ```
 
-So keep the template project-local for now and let the plugin carry the machinery. Keep the class in the
-plugin anyway — it is the artifact that becomes usable the day loading lands, and it is testable today
-without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does.
+So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin
+anyway — it is the artifact that becomes usable the day loading lands, and it is testable today without
+core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does.
 
 **A name is claimed once**, so promoting a local template to a plugin means deleting the local file.
-Installing a plugin beside a local template of the same name is refused, with both providers named:
+A local template beside an installed one of the same name is refused, with both providers named:
 
 ```
   error   E-TEMPLATE-COLLISION experiment_type
@@ -678,9 +630,10 @@ Core calls it at run start and before every execution, and assembles the record 
         total_probes: 12
 ```
 
-Twelve probes for ten executions: `apparatus/probes.jsonl` holds twelve lines, the first two carrying `"phase": "run_start"` — one per condition — and one per execution after them. A fact that
-**moves** from its first answered observation fails the run — that gate is the reason a probe is worth
-declaring, and it is why a probe must never return something it computed rather than observed.
+Twelve probes for ten executions: `apparatus/probes.jsonl` holds twelve lines, the first two carrying
+`"phase": "run_start"` — one per condition — and one per execution after them. A fact that **moves** from
+its first answered observation fails the run; that gate is the reason a probe is worth declaring, and it
+is why a probe must never return something it computed rather than observed.
 
 ### 7. A writer and its reader, resolved from the claim
 
@@ -720,24 +673,12 @@ Three rules to know, each of which the dispatch enforces rather than documents:
   still written; a `KeyboardInterrupt` still stops the command. A plugin doing slow work at import pays
   for it inside a measured execution, so do the work in the writer rather than at module scope.
 
-Until 2026-08-27 none of this was true: the suffix was decided over registered writers alone, so a step
-writing a mapping to a plugin's own suffix lost **every** execution —
-
-```
-run failed: 10 of 10 executions failed; first error at step01_summarize_units · condition 0 · seed96: E-ARTIFACT-UNWRITABLE ArtifactError: readings.plate_assay has no registered writer, so the object must be bytes or str, not dict
-```
-
-— and the remedy was an `import publishable_plate_assay.writers.artifact` in step code, which appeared
-in no document. If you are reading a plugin written against an older build, that import is now
-unnecessary and harmless.
-
 ---
 
 ## Testing a plugin
 
 The scaffolded `tests/test_<stem>.py` asks one question, and which question it asks is the interesting
-part (`_registered`'s own docstring elided here — the file carries the argument for asking through
-metadata rather than through core):
+part (`_registered`'s own docstring elided here):
 
 ```python
 from importlib.metadata import entry_points
@@ -771,7 +712,7 @@ def test_the_spec_declares_parameters_and_every_value_is_a_param():
 It asserts nothing about *which* parameters the spec declares, deliberately. The spec it ships with is a
 placeholder whose own help text says to replace it, so a test enumerating those keys would go red on your
 first real edit — and a test that fails on arrival gets deleted rather than fixed. What it asserts instead
-survives every domain edit and still fails when the package is genuinely broken. Measured:
+survives every domain edit and still fails when the package is genuinely broken:
 
 | Mutation | Result |
 |---|---|
@@ -779,8 +720,8 @@ survives every domain edit and still fails when the package is genuinely broken.
 | Delete `parameter_spec` | `1 failed, 1 passed` |
 | Remove `@register_template` | `2 passed` — **not covered here**; that agreement is `check_registration`'s (`E-PLUGIN-DECORATOR`), which runs wherever core loads the object behind a key |
 
-The second row is what proves the two tests are not measuring one thing. The third is the omission, stated
-rather than left for you to discover.
+The second row is what proves the two tests are not measuring one thing. The third is the omission,
+stated rather than left for you to discover.
 
 **Your own tests go past that, and they are plain Python** — import the class, call the method, assert the
 claim. No run, no config on disk, no installed-template loading:
@@ -820,27 +761,26 @@ FAILED tests/test_plate_assay.py::test_a_swept_calibration_is_refused_and_the_me
 ```
 
 Restored, `3 passed`. The third test is what makes the second one mean something: a refusal test alone
-passes just as well against a template that refuses **everything**. Enumerate the spec's keys rather
-than counting them, for the same reason — a count passes against the wrong three parameters. And note
-what these three do *not* need: none of them enumerates the spec of the **shipped** template, which is
-exactly the coupling the scaffolded pair avoids.
+passes just as well against a template that refuses **everything**. Enumerate the spec's keys rather than
+counting them, for the same reason — a count passes against the wrong three parameters.
 
-`pytest` is declared as a dev group by the scaffold, so `uv run pytest` inside the plugin works with
-no setup — it installs the package first, which is what makes the entry point resolvable.
+`pytest` is declared as a dev group by the scaffold, so `uv run pytest` inside the plugin works with no
+setup — it installs the package first, which is what makes the entry point resolvable.
 
 ---
 
 ## What this build refuses, by code
-
-Measured on 2026-08-27 at `f9be7a6`. Every code below was produced by running the thing that produces it.
 
 | Code | When | What to do |
 |---|---|---|
 | `E-TEMPLATE-INSTALLED-UNSUPPORTED` | a config's `experiment_type` names an installed plugin's template | keep the template project-local in `templates/`; ship machinery in the plugin |
 | `E-TEMPLATE-COLLISION` | one template name claimed twice — two installs, or a local file beside an install | rename yours; when promoting a local template, delete the local file |
 | `E-PLUGIN-COLLISION` | two installs claim one resolver/probe/writer/reader name, or a writer claims a core suffix | claim a suffix or a name of your own |
+| `E-PLUGIN-DECORATOR` | a `@register_*` argument disagrees with the entry-point key that named it | make the two agree |
+| `E-PLUGIN-LOAD` | a plugin's module raises, or calls `sys.exit()`, while being imported | fix the top level; do slow work inside the function, not at module scope |
 | `E-TEMPLATE-RULE` | a template's `validate` returned a message, or raised | your message, or your bug — a raise is reported here rather than crashing |
-| `E-PARAM-UNKNOWN` · `E-PARAM-MISSING` · `W-PARAM-UNSET` | a config disagrees with `parameter_spec` | edit the config; `init` will not rewrite one that exists |
+| `E-PARAM-UNKNOWN` · `E-PARAM-MISSING` · `E-PARAM-VALUE` · `W-PARAM-UNSET` | a config disagrees with `parameter_spec` | edit the config; `init` will not rewrite one that exists |
+| `E-RESOLVER-UNKNOWN` | `data.units.from.resolver` names what no installed distribution registers | check the spelling against the set the diagnostic lists, or `uv sync` |
 | `E-ARTIFACT-UNWRITABLE` | `io.write` found no writer and no claim for the suffix, and the object is not `bytes` or `str` | register or claim a writer for it, or hand `io.write` bytes |
 | `E-DOCS-NO-REGIONS` | `publishable docs` in a README with no managed regions | add the regions, or do not run `docs` in a plugin |
 | `E-EXPERIMENT-EXISTS` | `init`/`generate experiment` on an experiment that exists | edit the config by hand; generators never modify what they did not create |
@@ -848,38 +788,16 @@ Measured on 2026-08-27 at `f9be7a6`. Every code below was produced by running th
 
 ---
 
-## The gaps this tutorial found
+## Where to go next
 
-Six, all filed in [`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their
-severity, and **all six are closed** — so nothing above them is a workaround. Five were found while
-writing this file, measured against `937591f`; the sixth was found by reviewing it end to end, and closed the
-same day.
-
-**All five are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
-fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
-package = false`, and `plugin_scaffold.TEST_PY` was replaced by the entry-point pair in
-[§ Testing a plugin](#testing-a-plugin). *A plugin's writer never dispatches unless something imports its
-module* was closed next, by the slice [`W1-SCOPING.md`](superpowers/W1-SCOPING.md) chartered — the suffix
-is now resolved over installed claims as well as registrations, which is what
-[§ 7](#7-a-writer-and-its-reader-resolved-from-the-claim) describes. And *`template.validate` receives a
-plain dict* was closed by [`W2-SCOPING.md`](superpowers/W2-SCOPING.md)'s — **by deleting the sentence that
-promised otherwise**, because the promised reader raises on exactly the absences a cross-block rule asks
-about. And *the plugin scaffold's tree and its output disagree* was closed by [`W3-SCOPING.md`](superpowers/W3-SCOPING.md)'s — two lines built, three narrowed, and the disagreement itself replaced by a test that parses the document and observes the scaffold, so a seventh cannot appear quietly. All five are struck in `spec-defects.md`, and **this section is now a record rather than a list**: every gap this tutorial found is closed. They are
-named rather than dropped because a reader who arrived through one of the filings should be able to see
-which one it was and where it went.
-
-### § Templates promised a `# REQUIRED` marker `init` did not write — **closed**
-
-The one this file's own review turned up. § Templates said `init` materializes a required parameter as
-`""  # REQUIRED`, an empty value plus a marker, and concluded that *"an empty string can never be a legal
-value for a required `str`."* Measured: `init` wrote a bare key with no value and no marker, `validate`
-refused it as `E-PARAM-VALUE … is null`, and `model: ""` validated clean — so the consequence pointed the
-opposite way from the code.
-
-Closed by the slice [`W5-SCOPING.md`](superpowers/W5-SCOPING.md) chartered, and **neither of the two
-closures the filing costed was taken**. Implementing the promised rule would have forbidden `0`, `0.0`,
-`false` and `[]` as values of a required parameter — the consequence the document drew for `str`, applied
-to the four types it never considered. Narrowing the document to a bare key would have lost the only
-signal a reader has. So the value stays absent and the marker arrives: `Param.comment()` now reports
-requiredness, on the ground its sibling `constraints()` already gave for putting `required` first in a
-generated table. § 2's bullet and § 3's transcript above are the result.
+- [`reference.md` § Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) — the
+  normative account of the five registries, the collision rules and the generated layout.
+- [`reference.md` § Templates](reference.md#templates-where-parameters-are-defined) — `parameter_spec`'s
+  full constraint vocabulary, `validate`, and `aggregate`'s four-operation table.
+- [`reference.md` § Where units come from](reference.md#where-units-come-from) and
+  [§ The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) — resolvers
+  and probes in full.
+- [`design-principles.md` § Core vs. plugin](design-principles.md#core-vs-plugin) — why the line falls
+  where it does, and what may still be added on core's side of it.
+- [`experimental-designs.md`](experimental-designs.md) — before you design the experiment your template
+  will serve: what core prevents, and what it refuses to do for you.
