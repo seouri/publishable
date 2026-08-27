@@ -14,7 +14,7 @@ them is [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 
 ---
 
-## Measured on 2026-08-27 against commit `W5SHA`
+## Measured on 2026-08-27 against commit `f9be7a6`
 
 Every command below was run against that commit, and every transcript is what it printed — abridged where
 this file says so and nowhere else. Build facts expire — a claim about what the tool does *today* is
@@ -43,7 +43,7 @@ rather than from [`code_hash`](reference.md#three-hashes), so a different `code_
 
 What that measurement established, before any prose:
 
-| Route | State at `W5SHA` |
+| Route | State at `f9be7a6` |
 |---|---|
 | A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
@@ -148,7 +148,7 @@ template depended on it would be reproducible everywhere except where it mattere
 
 ## Route A: a project-local template, end to end
 
-This route runs to completion at `W5SHA`. Every block is real output.
+This route runs to completion at `f9be7a6`. Every block is real output.
 
 ### 1. Scaffold the project
 
@@ -832,7 +832,7 @@ no setup — it installs the package first, which is what makes the entry point 
 
 ## What this build refuses, by code
 
-Measured on 2026-08-27 at `W5SHA`. Every code below was produced by running the thing that produces it.
+Measured on 2026-08-27 at `f9be7a6`. Every code below was produced by running the thing that produces it.
 
 | Code | When | What to do |
 |---|---|---|
