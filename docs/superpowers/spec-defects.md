@@ -11486,3 +11486,26 @@ separate one-line fix worth taking either way.
 **Severity:** Major as documentation — three claims and a consequence, in the section a template author
 reads first, and the consequence is the kind you build around. Minor as behaviour: the refusal fires,
 just not for the stated reason.
+
+**SCOPED 2026-08-27** against `392452a` in [`W5-SCOPING.md`](W5-SCOPING.md) — **5 tasks, and both
+closures this entry costed are wrong as stated.** Implementing the document's *empty value* rule forbids
+`0`, `0.0`, `false` and `[]` as values of a required parameter: the consequence this entry quotes is drawn
+for `str` and the document never notices it has committed to it for the other four of `Param`'s five
+types, making a required `int` that may legally be zero impossible to declare. Narrowing the document to
+today's bare key loses the marker — and in one **measured** case the marker is the only thing that can
+tell a reader anything: `Param(str, nullable=True)` with no `default` is required *and* accepts null, so
+`init` writes an unfilled key and `validate` **accepts it**, clean.
+
+**The third way is one line of `_parameters_block`:** keep the absent value, prepend the marker, so a
+required parameter renders `model:` + `# REQUIRED — <its comment>`. The document's load-bearing claim
+becomes true (a marker, the same treatment `metadata.description` gets, failing `validate` until
+filled), the existing `E-PARAM-VALUE … is null` stays what fails so no code is minted and no
+§ Validation row moves, no legal value is forbidden, the trailing space disappears in every case rather
+than only where a constraint supplied a comment, and the marker is what distinguishes `model:` from a
+nullable parameter's `thing: null`. The empty-string consequence is **deleted** rather than implemented.
+
+**Why nobody caught it in four slices of review:** `grep -rc "REQUIRED" tests/*.py` returns 22 lines
+across six files and **not one pins `init`'s rendering of a required parameter** — they are six other
+error codes, a fixture name and a different command's marker, each attributed in the scoping. And
+`generic` declares no required parameter, so no shipped example, worked config or `parameters_hash` in
+any document exercises the surface.
