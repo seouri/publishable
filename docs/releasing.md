@@ -142,6 +142,24 @@ gh release create v<v> --title "publishable <v>" --notes-file <notes> \
 are not true yet. The install block goes in at step 7 with `gh release edit`, which
 keeps the URL.
 
+**A version number is single-use, and a failed release costs it.** Releases on this
+repository are immutable, which retires the tag name the moment a release publishes
+against it — *permanently*, and deleting the release does not give it back:
+
+```
+remote: - Cannot create ref due to creations being restricted.
+```
+
+Measured on 2026-08-27, when `release.yml`'s first run failed at `verify` and `v0.1.1`
+could not be re-tagged after its release was deleted. **So there is no retry.** If a
+release's pipeline fails, the fix goes on `main` and the next release takes the next
+number.
+
+Which is why a change that could plausibly fail on CI should be proven from a
+throwaway branch first, on a workflow generated **from** `release.yml` rather than
+hand-written to resemble it — same jobs, only the trigger changed. That costs a CI run
+and no version number.
+
 **The tag does not track `main` afterwards.** It marks the tree that was uploaded;
 step 7's commit makes claims that only became true once the upload existed. For 0.1.0
 the tag is at `e39d2dc` while `main` moved on, and that is correct — do not "fix" it.

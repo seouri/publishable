@@ -14,7 +14,7 @@ authors:
 repository-code: "https://github.com/seouri/publishable"
 url: "https://github.com/seouri/publishable"
 license: MIT
-version: 0.1.1
+version: 0.1.2
 date-released: "2026-08-27"
 keywords:
   - reproducibility
