@@ -1126,6 +1126,18 @@ made by the author of the rule forbidding it, while measuring for it.
   over one that should never move is the direct question. **When an arm fires, ask whether the finding is
   about the code or about the arm** — retiring it with the reason recorded is a legitimate outcome, and
   refreshing the hash is not.
+- **A commit message describing a command can RUN it.** Backticks inside a double-quoted shell
+  string are command substitution, and this repo's prose quotes commands constantly. A probe branch's
+  message read *"drops `uv publish` so nothing is uploaded"* through `git commit -m "..."` — and the
+  shell ran `uv publish` against **real PyPI**, from a directory holding a built release. Nothing was
+  uploaded only because no token was exported and it died on missing credentials; the guard that saved
+  it was not one anybody had put there. **Write any message that quotes a command with a single-quoted
+  heredoc** (`git commit -F - <<'MSG'`), which is inert, and reserve `-m` for messages with no backtick,
+  `$`, or `!` in them. The same reading applies to `--notes`, `--title` and every other flag that takes
+  prose. And the near-miss generalises past quoting: **a step that is destructive when it fires should
+  be proven absent by an assertion, not by having removed it** — the probe's own generated workflow was
+  checked for a `uv publish` step programmatically, which is the check that would have caught this one
+  had it been aimed at the shell too.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
 - **`ruff format` does not touch `*.md`** — it processes `.py`, `.pyi` and `.ipynb`, and this repo adds no
