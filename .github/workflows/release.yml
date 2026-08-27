@@ -25,6 +25,13 @@ on:
 
 permissions: {}
 
+# GitHub's default is `bash -e {0}`, which has neither `pipefail` nor `-u`. The
+# gate below pipes into `grep -q`, so make the shell explicit rather than rely
+# on which failures the default happens to catch.
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
 jobs:
   verify:
     runs-on: ubuntu-latest
