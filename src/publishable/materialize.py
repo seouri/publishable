@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from publishable.param import MISSING, Param
+from publishable.param import Param
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
 
@@ -81,7 +81,11 @@ def _parameters_block(spec: dict[str, Param]) -> list[str]:
     for head, leaves in tree.items():
         lines.append(f"  {_key(head)}:")
         for leaf, param in leaves.items():
-            value = "" if param.default is MISSING else _scalar(param.default)
+            # `param.required` rather than a second spelling of `default is
+            # MISSING`: the class owns that fact, and its `comment()` reads the
+            # same property to prepend the `# REQUIRED` marker this line's pad
+            # then absorbs — which is why a required key never trails a space.
+            value = "" if param.required else _scalar(param.default)
             entry = f"    {_key(leaf)}: {value}"
             comment = param.comment()
             if comment:

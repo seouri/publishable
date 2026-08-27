@@ -199,3 +199,45 @@ def test_a_value_needing_two_variables_names_both_in_its_own_parenthesis():
         requires_env={"a": ["A_ONE", "A_TWO"], "b": []},
     )
     assert p.comment() == "choices: a (needs A_ONE, A_TWO) | b"
+
+
+# ---------------------------------------------------------------------------
+# W5 — `comment()` reports requiredness. `docs/superpowers/W5-SCOPING.md`.
+# ---------------------------------------------------------------------------
+
+
+def test_w5_a_required_parameter_leads_its_comment_with_the_marker():
+    """`constraints()` has always put `required` first, with the argument for why
+    a reader needs it first; `comment()` is the other rendering of the same
+    vocabulary and reported it nowhere — which is how § Templates came to describe
+    a marker `init` did not write.
+
+    Three shapes, because the format has two branches and the second is the one a
+    bare required parameter takes."""
+    assert Param(str, help="Instrument model identifier").comment() == (
+        "REQUIRED — Instrument model identifier"
+    )
+    assert Param(int, ge=2).comment() == "REQUIRED — integer >= 2"
+    assert Param(str).comment() == "REQUIRED"
+
+
+def test_w5_a_defaulted_parameter_gains_nothing():
+    """The control. Without it the arm above passes against a `comment()` that
+    prefixes every parameter, which would put `REQUIRED` on every line of every
+    generated config."""
+    assert Param(str, default="a", choices=["a", "b"]).comment() == "choices: a | b"
+    assert Param(int, default=30, ge=2).comment() == "integer >= 2"
+    assert Param(bool, default=True, help="Drop missing rows").comment() == "Drop missing rows"
+    assert Param(str, default="x").comment() == ""
+
+
+def test_w5_the_two_renderings_of_one_vocabulary_agree_about_requiredness():
+    """The inconsistency this closed, asserted as an agreement rather than
+    described: whatever `constraints()` says about requiredness, `comment()` says
+    too, and neither says it about a parameter that carries a default."""
+    for param in (Param(str), Param(int, ge=2), Param(str, nullable=True)):
+        assert "required" in param.constraints()
+        assert param.comment().startswith("REQUIRED")
+    for param in (Param(str, default="a"), Param(int, default=1, ge=2)):
+        assert "required" not in param.constraints()
+        assert not param.comment().startswith("REQUIRED")

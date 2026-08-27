@@ -137,7 +137,27 @@ class Param:
         return isinstance(value, expected)
 
     def comment(self) -> str:
-        """The inline comment `init` renders. One constraint claims it, else `help`.
+        """The inline comment `init` renders: requiredness, then one constraint or `help`.
+
+        Requiredness leads for the reason `constraints()` gives below — it
+        constrains what a config may write and it is what a reader needs first —
+        and this method is the other rendering of the same vocabulary, the config
+        line rather than the documentation table. It reported requiredness nowhere
+        until 2026-08-27, which is how § Templates came to describe a `# REQUIRED`
+        marker `init` did not write; `docs/superpowers/W5-SCOPING.md` § 2 has the
+        measurement.
+
+        The format is `metadata.description`'s, which is what the document
+        compares it to: `REQUIRED — <text>` where there is text, `REQUIRED` alone
+        where a required parameter carries neither a constraint nor `help`.
+        """
+        body = self._comment_body()
+        if self.required:
+            return f"REQUIRED — {body}" if body else "REQUIRED"
+        return body
+
+    def _comment_body(self) -> str:
+        """One constraint claims the comment, else `help`.
 
         A `choices` comment additionally carries each value's `requires_env`
         variables. Those are not a constraint — see this module's docstring —

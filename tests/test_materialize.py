@@ -452,3 +452,90 @@ def test_the_plugin_field_stays_a_string_even_when_it_looks_like_a_mapping(tmp_p
         plugin="{a: b}",
     )
     assert yaml.safe_load(text)["plugin"] == "{a: b}"
+
+
+# ---------------------------------------------------------------------------
+# W5 — a required parameter's rendered line. `docs/superpowers/W5-SCOPING.md`.
+# ---------------------------------------------------------------------------
+
+
+class _RequiredTemplate(BaseTemplate):
+    """One required `Param` of every type, plus a defaulted one as the control."""
+
+    parameter_spec = {
+        "a.req_str": Param(str, help="Instrument model identifier"),
+        "a.req_int": Param(int, ge=2),
+        "a.req_float": Param(float),
+        "a.req_bool": Param(bool),
+        "a.req_list": Param(list, item_type=str),
+        "a.req_nullable": Param(str, nullable=True),
+        "a.optional": Param(int, default=7),
+    }
+
+
+def _required_lines() -> dict[str, str]:
+    text = materialize_config(
+        template=_RequiredTemplate(),
+        template_name="generic",
+        name="cohort-pilot",
+        input_dir="/secure/data/cohort-2026",
+        output_dir="/secure/results/cohort-pilot",
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    return {
+        line.strip().split(":")[0]: line
+        for line in text.split("\n")
+        if line.startswith("    ") and ("req_" in line or "optional" in line)
+    }
+
+
+def test_w5_every_required_parameter_is_marked_and_carries_no_value():
+    """§ Templates promises the marker `metadata.description` gets. It described one
+    `init` did not write, in a table, a paragraph and a consequence.
+
+    The value stays **absent** rather than becoming its type's empty value: the key
+    then parses as `null`, which is what `validate` refuses, and `0`/`false`/`[]`
+    stay declarable for a required parameter of those types.
+    """
+    lines = _required_lines()
+    # The pad is what `_parameters_block` computes to column 36; asserted as the
+    # whole line rather than as a substring, because the trailing-space arm below
+    # depends on this padding being what absorbs the empty value.
+    assert lines["req_str"] == (
+        "    req_str:" + " " * 24 + "# REQUIRED — Instrument model identifier"
+    )
+    assert lines["req_int"].endswith("# REQUIRED — integer >= 2")
+    assert lines["req_list"].endswith("# REQUIRED — list of string")
+    assert lines["req_float"].endswith("# REQUIRED")
+    assert lines["req_bool"].endswith("# REQUIRED")
+    for name in ("req_str", "req_int", "req_float", "req_bool", "req_list"):
+        assert yaml.safe_load(lines[name].split("#")[0].strip()) == {name: None}
+
+
+def test_w5_a_defaulted_parameter_line_is_unchanged():
+    """The control that stops the marker leaking onto every line — without it the
+    arm above passes against a materializer that prefixes everything."""
+    line = _required_lines()["optional"]
+    assert line.strip() == "optional: 7"
+    assert "REQUIRED" not in line
+
+
+def test_w5_a_required_line_carries_no_trailing_whitespace():
+    """It did, in exactly the case nothing supplied a comment: the empty value left
+    `    req_float: ` with a space, in generated YAML that lands in a user's
+    repository. The marker is always a comment, so the pad absorbs it."""
+    for name, line in _required_lines().items():
+        assert line == line.rstrip(), f"{name}: {line!r}"
+
+
+def test_w5_the_marker_is_the_only_signal_when_null_is_legal(tmp_path: Path, monkeypatch):
+    """`Param(str, nullable=True)` with no default is required **and** accepts null,
+    so the key `init` leaves unfilled validates clean — measured, and no refusal can
+    catch it, because null is a value the parameter legally takes.
+
+    That is why this slice added a marker rather than a rule: for this one
+    declaration the comment is the only thing that can tell a reader anything.
+    """
+    lines = _required_lines()
+    assert lines["req_nullable"].endswith("# REQUIRED")
+    assert Param(str, nullable=True).check(None) is None

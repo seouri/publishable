@@ -11436,7 +11436,7 @@ disclosed rather than closed.
 
 ---
 
-## OPEN — § Templates promises a `# REQUIRED` marker `init` does not write, and draws a consequence the code contradicts — **Owner: unassigned, and either closure is a change to what every generated config looks like or to what `validate` accepts**
+## ~~OPEN — § Templates promises a `# REQUIRED` marker `init` does not write, and draws a consequence the code contradicts~~ — **CLOSED, struck 2026-08-27 by W5, on neither of the two routes this entry costed**
 
 **Found 2026-08-27 by the end-to-end review of [`tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `ca37a27`.**
 
@@ -11509,3 +11509,30 @@ across six files and **not one pins `init`'s rendering of a required parameter**
 error codes, a fixture name and a different command's marker, each attributed in the scoping. And
 `generic` declares no required parameter, so no shipped example, worked config or `parameters_hash` in
 any document exercises the surface.
+
+**CLOSED 2026-08-27 by W5.** `Param.comment()` reports requiredness — `REQUIRED — <its comment>`, or
+`REQUIRED` where a required parameter carries neither a constraint nor `help` — and
+`materialize._parameters_block` is unchanged except that its `param.default is MISSING` became
+`param.required`, which retired a second spelling of a fact the class owns and left `MISSING` unimported
+there. Measured on a real `generate experiment`:
+
+```
+    model:                          # REQUIRED — Instrument model identifier
+    gain: 1.0                       # float > 0
+```
+
+**Neither route this entry costed was taken**, and § Templates says so in its own terms now: the value
+stays **absent** rather than becoming its type's empty one, so `0`, `0.0`, `false`, `[]` and `""` all
+remain legal for a required parameter — the document's *"an empty string can never be a legal value"*
+consequence is **deleted** rather than implemented, and what fails is `E-PARAM-VALUE … is null` with no
+code minted and no § Validation row moved. The nullable-required case gets a paragraph rather than a
+refusal: `Param(str, nullable=True)` with no default validates clean unfilled, core cannot tell a
+filled-in `null` from an untouched key, and the marker in the file is the only signal there is.
+
+**Five pins across two files, because there are two claims.** `test_param.py` covers `comment()`'s three
+shapes, a defaulted parameter gaining nothing, and an agreement arm asserting `comment()` and
+`constraints()` never disagree about requiredness. `test_materialize.py` covers the rendered line for all
+five types, the defaulted line unchanged, **no trailing whitespace** on any required line — it had one
+wherever nothing supplied a comment — and the nullable case. Mutations: dropping the prefix fails five;
+prefixing every parameter fails seven, two of them pre-existing tests; writing `""` instead of no value
+fails one.

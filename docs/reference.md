@@ -1905,11 +1905,15 @@ There is no `validator=` hook: a rule that needs code is a cross-field rule, and
 |---|---|---|
 | `Param(int, default=30)` | Optional, defaulted | `30` |
 | `Param(str, default=None, nullable=True)` | Optional, and `null` is a legal value | `null` |
-| `Param(str)` — no `default` | **Required.** You must supply a value | `""  # REQUIRED` |
+| `Param(str)` — no `default` | **Required.** You must supply a value | the key, no value, and a `# REQUIRED` marker |
 
 Omitting `default` is what makes a parameter required, which is why `default=None` is not the way to spell it — `null` is a legal value for some parameters and the absence of one is a different claim. A `Param` declaring `default=None` without `nullable=True` is rejected when the template loads, rather than at the first config that leaves it alone. Nullability is load-bearing beyond this: [`sweep.ablate.remove`](#expansion-modes) sets a boolean to `false` or a nullable parameter to `null`, and `validate` needs to know which parameters those are.
 
-Required parameters get the same treatment `metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key. **The marker is what fails**: `validate` rejects a required parameter still holding its type's empty value, exactly as it rejects an empty `metadata.description`. The consequence is worth knowing before you declare one — an empty string can never be a legal value for a required `str`, because there is no way to distinguish the value you meant from the placeholder you didn't fill in. If empty is legitimate, the parameter has a default and isn't required.
+Required parameters get the marker `metadata.description` does — `instrument.model:` with nothing after the colon and `# REQUIRED — <the parameter's own comment>` past it — so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key. **What fails is the absent value**, not the marker: the key parses as `null`, and `null` is not a legal value for a parameter that is not `nullable`, so `validate` reports [`E-PARAM-VALUE`](#validation) naming that path. The marker is what tells you *which* keys those are before you run anything, and it comes from [`Param.comment()`](#the-importable-surface) reading the same `required` its `constraints()` puts first in a generated table.
+
+**A required parameter's legal values are not narrowed by any of this.** `0`, `0.0`, `false`, `[]` and `""` are all values a required parameter of the matching type accepts — `init` leaves no value rather than its type's empty one, precisely so that a required `int` may legally be zero and a required `str` may legally be empty. What `init` writes is *nothing*, which is the one thing no type accepts unless it is `nullable`.
+
+**Which leaves one declaration `validate` cannot catch, and the marker is why it is still legible.** `Param(str, nullable=True)` with no `default` is required *and* accepts `null`, so the key `init` leaves unfilled is a value that parameter legally takes: the generated config validates clean while nothing has been supplied. Core cannot tell a filled-in `null` from an untouched key — YAML gives it the same document either way — so the `# REQUIRED` comment in the file is the only signal there is. Declaring one is legal and occasionally meant; know that the check will not save you.
 
 ### A credential can belong to a parameter value
 

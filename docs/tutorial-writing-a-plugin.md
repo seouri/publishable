@@ -14,25 +14,26 @@ them is [Do you need a plugin at all?](#do-you-need-a-plugin-at-all)
 
 ---
 
-## Measured on 2026-08-27 against commit `ca37a27`
+## Measured on 2026-08-27 against commit `W5SHA`
 
 Every command below was run against that commit, and every transcript is what it printed — abridged where
 this file says so and nowhere else. Build facts expire — a claim about what the tool does *today* is
 perishable in a way a specification claim is not — so they are confined to this notice and to the tables
 that carry an error code.
 
-**Five defects were found while writing this file and all five are closed; reviewing it end to end at
-`ca37a27` found a sixth, which is open.** Four of the five moved a behaviour:
+**Six defects were found and all six are closed** — five while writing this file, and a sixth by
+reviewing it end to end. Four of the first five moved a behaviour:
 `scaffold_project` writes `[tool.uv] package = false`; `plugin new` ships a test that can fail plus a
 `pytest` dev group; a plugin's writer dispatches from its claim with nothing importing the module; and
 `plugin new` writes a `steps/` directory and a `.gitkeep` under `examples/`. Two were closed by
 **deleting a promise rather than building it**: what a template's `validate` receives is now documented as
 the mapping it always was, and `uv.lock` plus the plugin README's parameter table left the documented
-trees instead of being generated — one filing accounting for both kinds.
-[The gaps this tutorial found](#the-gaps-this-tutorial-found) names each one, where it went, and the
-sixth that has not.
+trees instead of being generated — one filing accounting for both kinds. The sixth is the one this file
+described wrongly itself: a `# REQUIRED` marker the document promised and `init` did not write, closed by
+writing it. [The gaps this tutorial found](#the-gaps-this-tutorial-found) names each one and where it
+went.
 
-**The whole arc was re-run at `ca37a27` for this file's own review**, not only at the commits that closed
+**The whole arc was re-run for this file's own review**, not only at the commits that closed
 those defects — `new`, `generate template`, `list-templates`, `generate experiment`, `validate`,
 `dry-run`, `run`, `docs`, `plugin new`, and the installed-template and collision refusals. Two numbers
 worth knowing are stable rather than incidental: `dry-run` still prints the same nine fixed files in the
@@ -42,7 +43,7 @@ rather than from [`code_hash`](reference.md#three-hashes), so a different `code_
 
 What that measurement established, before any prose:
 
-| Route | State at `ca37a27` |
+| Route | State at `W5SHA` |
 |---|---|
 | A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
@@ -147,7 +148,7 @@ template depended on it would be reproducible everywhere except where it mattere
 
 ## Route A: a project-local template, end to end
 
-This route runs to completion at `ca37a27`. Every block is real output.
+This route runs to completion at `W5SHA`. Every block is real output.
 
 ### 1. Scaffold the project
 
@@ -203,13 +204,12 @@ class MyAssayTemplate(BaseTemplate):
 
 Three things about that spec, each a rule rather than a style:
 
-- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as a
-  key with no value, so the file it wrote fails `validate` until you fill it in —
-  `E-PARAM-VALUE … is null, but the parameter is not nullable`. `default=None` is a different claim: it
-  needs `nullable=True` and means *`null` is a legal value*. (`reference.md` § Templates describes this
-  as `""  # REQUIRED`, an empty value plus a marker, and draws a consequence from it — *"an empty string
-  can never be a legal value for a required `str`"* — which is false of this build: `model: ""` validates
-  clean. Measured, and [filed](superpowers/spec-defects.md).)
+- **`instrument.model` has no `default`, which is what makes it required.** `init` materializes it as
+  the key, no value, and a `# REQUIRED` marker carrying the parameter's own comment — so the file it
+  wrote fails `validate` until you fill it in: `E-PARAM-VALUE … is null, but the parameter is not
+  nullable`. What fails is the **absent** value rather than an empty one, which is what keeps `0`,
+  `false`, `[]` and `""` legal for a required parameter of the matching type. `default=None` is a
+  different claim: it needs `nullable=True` and means *`null` is a legal value*.
 - **The constraint vocabulary is closed** — `choices`, `ge`/`gt`/`le`/`lt`, `pattern`, `item_type`,
   `min_items`/`max_items`, `nullable`, `help`. There is no `validator=` hook, because a rule that needs
   code is a cross-field rule and belongs in `validate`.
@@ -252,7 +252,7 @@ declarations:
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
   instrument:
-    model:                          # Instrument model identifier
+    model:                          # REQUIRED — Instrument model identifier
     gain: 1.0                       # float > 0
   analysis:
     threshold: 0.5                  # float in (0, 1)
@@ -832,7 +832,7 @@ no setup — it installs the package first, which is what makes the entry point 
 
 ## What this build refuses, by code
 
-Measured on 2026-08-27 at `ca37a27`. Every code below was produced by running the thing that produces it.
+Measured on 2026-08-27 at `W5SHA`. Every code below was produced by running the thing that produces it.
 
 | Code | When | What to do |
 |---|---|---|
@@ -851,9 +851,9 @@ Measured on 2026-08-27 at `ca37a27`. Every code below was produced by running th
 ## The gaps this tutorial found
 
 Six, all filed in [`spec-defects.md`](superpowers/spec-defects.md) with their reasoning and their
-severity. Five were found while writing this file, measured against `937591f`, and **all five are
-closed** — so nothing above them is a workaround. The sixth was found by reviewing this file end to end
-against `ca37a27`, and it is **open**.
+severity, and **all six are closed** — so nothing above them is a workaround. Five were found while
+writing this file, measured against `937591f`; the sixth was found by reviewing it end to end, and closed the
+same day.
 
 **All five are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
 fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
@@ -868,13 +868,18 @@ about. And *the plugin scaffold's tree and its output disagree* was closed by [`
 named rather than dropped because a reader who arrived through one of the filings should be able to see
 which one it was and where it went.
 
-### § Templates promises a `# REQUIRED` marker `init` does not write — **open**
+### § Templates promised a `# REQUIRED` marker `init` did not write — **closed**
 
-The one this file's own review turned up, and it is worth knowing before you declare a required
-parameter. § Templates says `init` materializes one as `""  # REQUIRED`, an empty value plus a marker,
-and concludes that *"an empty string can never be a legal value for a required `str`."* Measured at
-`ca37a27`: `init` writes a bare key with no value and no marker, `validate` refuses it as
-`E-PARAM-VALUE … is null, but the parameter is not nullable`, and **`model: ""` validates clean** — so
-the consequence points the opposite way from the code. A fresh config still fails until you fill the key
-in, which is the property that matters; every detail of how is different, and one of them is a rule a
-template author might design around.
+The one this file's own review turned up. § Templates said `init` materializes a required parameter as
+`""  # REQUIRED`, an empty value plus a marker, and concluded that *"an empty string can never be a legal
+value for a required `str`."* Measured: `init` wrote a bare key with no value and no marker, `validate`
+refused it as `E-PARAM-VALUE … is null`, and `model: ""` validated clean — so the consequence pointed the
+opposite way from the code.
+
+Closed by the slice [`W5-SCOPING.md`](superpowers/W5-SCOPING.md) chartered, and **neither of the two
+closures the filing costed was taken**. Implementing the promised rule would have forbidden `0`, `0.0`,
+`false` and `[]` as values of a required parameter — the consequence the document drew for `str`, applied
+to the four types it never considered. Narrowing the document to a bare key would have lost the only
+signal a reader has. So the value stays absent and the marker arrives: `Param.comment()` now reports
+requiredness, on the ground its sibling `constraints()` already gave for putting `required` first in a
+generated table. § 2's bullet and § 3's transcript above are the result.
