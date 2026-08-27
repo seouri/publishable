@@ -564,3 +564,50 @@ def test_a_plugin_module_that_imports_cleanly_hands_back_its_object(installed):
 
     ep = scan_group("publishable.resolvers")["plate_wells"][0]
     assert load_entry_point(ep)(None, None) == ["a unit"]
+
+
+# ---------------------------------------------------------------------------
+# W1 — the memoized claim scan. `docs/superpowers/W1-SCOPING.md` § 3.
+# ---------------------------------------------------------------------------
+
+
+def test_w1_the_claim_scan_is_memoized_for_the_life_of_the_process(installed, registries):
+    """`artifacts._suffix_for` consults this on every write and every read, so an
+    unmemoized scan walks every `sys.path` entry's metadata once per artifact.
+
+    Asserted by **identity**, which is what makes it a pin rather than a
+    description: two calls returning equal dicts would pass with the memo deleted,
+    and two calls returning the same object cannot.
+    """
+    from publishable.plugins import WRITER_GROUP, claims
+
+    installed("dist-one", "1.0", {"publishable.writers": {".one": "mod_one:write"}})
+    first = claims(WRITER_GROUP)
+    assert claims(WRITER_GROUP) is first
+    assert ".one" in first
+
+
+def test_w1_reset_claims_is_what_lets_a_later_scan_see_a_new_distribution(installed, registries):
+    """The memo's cost, pinned so nobody removes the reset as dead code.
+
+    A distribution installed *after* a scan is invisible until the memo is
+    cleared — which is exactly why `conftest.registries` clears it on both sides
+    of its yield, and why this test states the staleness rather than hiding it.
+    """
+    from publishable.plugins import WRITER_GROUP, claims, reset_claims
+
+    claims(WRITER_GROUP)  # the scan that becomes stale
+    installed("dist-late", "1.0", {"publishable.writers": {".late": "mod_late:write"}})
+    assert ".late" not in claims(WRITER_GROUP)
+    reset_claims()
+    assert ".late" in claims(WRITER_GROUP)
+
+
+def test_w1_load_claimed_suffix_returns_quietly_for_a_suffix_nothing_claims(registries):
+    """The first of `_resolver_for`'s three steps is deliberately absent here: an
+    unclaimed suffix is not this function's fault to report. `_read`'s own
+    `E-ARTIFACT-UNREADABLE` is what answers, and `_suffix_for` never calls it for
+    a suffix it did not read out of `claims` in the first place."""
+    from publishable.plugins import READER_GROUP, load_claimed_suffix
+
+    load_claimed_suffix(READER_GROUP, ".nothing-claims-this")

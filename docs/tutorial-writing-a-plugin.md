@@ -36,7 +36,7 @@ What that measurement established, before any prose:
 | A project-local `templates/*.py` template | Works end to end: `validate`, `dry-run`, `run`, `docs`, `list-templates` |
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
 | A plugin's **apparatus probe** | Dispatches, and its facts land in `provenance.apparatus` |
-| A plugin's **writer / reader** | Registered in metadata, and **not dispatched until something imports the module** — [filed](#a-plugins-writer-never-dispatches-unless-something-imports-its-module) |
+| A plugin's **writer / reader** | Dispatches: the suffix is resolved from the claim, and the winning distribution is the only one loaded |
 | A plugin's **template** | Refused: `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and this build does not load what it points at |
 
 So a plugin is worth building today for its **machinery** — resolvers, probes, writers — while the
@@ -638,7 +638,7 @@ Twelve probes for ten executions: `apparatus/probes.jsonl` holds twelve lines, t
 **moves** from its first answered observation fails the run — that gate is the reason a probe is worth
 declaring, and it is why a probe must never return something it computed rather than observed.
 
-### 7. A writer — registered, and not dispatched until imported
+### 7. A writer and its reader, resolved from the claim
 
 ```python
 from publishable import register_reader, register_writer
@@ -654,30 +654,35 @@ def read(payload: bytes):
     return payload.decode()
 ```
 
-`io.write` dispatches on the longest registered suffix of the name's last component, and each writer
-takes exactly what its reader gives back. A suffix core itself writes is refused at decoration
-(`E-PLUGIN-COLLISION`): a plugin that could redefine `.csv` could change what an artifact means without
-changing the step that wrote it.
+A step calling `io.write("readings.plate_assay", {"n": 6})` with the plugin installed and **nothing
+importing it** writes the artifact beside `units.parquet` in each step directory. `io.write` decides the
+suffix over what a writer has registered *plus every suffix an installed distribution claims* — the claim
+read from package metadata, and only the winning one loaded — so a plugin's pair works the way its
+resolver and its probe do, without a step importing anything for a side effect.
 
-A step calling `io.write("readings.plate_assay", {"n": 6})` with the plugin installed and nothing
-importing it fails:
+Three rules to know, each of which the dispatch enforces rather than documents:
+
+- **A claim wins only by being strictly longer than what is registered.** `.fastq.gz` beats `.gz`; a
+  claim on `.csv` never takes `.csv` from core. That is what keeps core's five unshadowable, and
+  `E-PLUGIN-COLLISION` is what refuses such a claim outright at decoration.
+- **Each writer takes exactly what its reader gives back.** A pair is registered through two entry-point
+  groups, and dispatch is decided from the writer side alone — so a reader for a suffix no writer answers
+  for is never consulted, and the file reads back as bytes.
+- **A plugin's top level runs at the first write of its suffix**, inside a step and therefore inside an
+  execution. A module that raises there is `E-PLUGIN-LOAD` failing that execution, with the run record
+  still written; a `KeyboardInterrupt` still stops the command. A plugin doing slow work at import pays
+  for it inside a measured execution, so do the work in the writer rather than at module scope.
+
+Until 2026-08-27 none of this was true: the suffix was decided over registered writers alone, so a step
+writing a mapping to a plugin's own suffix lost **every** execution —
 
 ```
 run failed: 10 of 10 executions failed; first error at step01_summarize_units · condition 0 · seed96: E-ARTIFACT-UNWRITABLE ArtifactError: readings.plate_assay has no registered writer, so the object must be bytes or str, not dict
 ```
 
-Templates, resolvers and probes each resolve their entry point lazily when a name is needed; writers and
-readers are registered by the **decorator running**, and nothing imports the module that holds it. So
-import it from the code that writes the artifact:
-
-```python
-import publishable_plate_assay.writers.artifact  # noqa: F401 — registers `.plate_assay`
-```
-
-With that line the artifact lands beside `units.parquet` in each step directory. Filed:
-[a plugin's writer never dispatches unless something imports its module](#a-plugins-writer-never-dispatches-unless-something-imports-its-module).
-Exit code `4` and a complete `run.yaml` is the shape of this failure — every execution paid for and the
-error recorded — so it is worth a test rather than a first real run.
+— and the remedy was an `import publishable_plate_assay.writers.artifact` in step code, which appeared
+in no document. If you are reading a plugin written against an older build, that import is now
+unnecessary and harmless.
 
 ---
 
@@ -788,7 +793,7 @@ Measured on 2026-08-27 at `3427713`. Every code below was produced by running th
 | `E-PLUGIN-COLLISION` | two installs claim one resolver/probe/writer/reader name, or a writer claims a core suffix | claim a suffix or a name of your own |
 | `E-TEMPLATE-RULE` | a template's `validate` returned a message, or raised | your message, or your bug — a raise is reported here rather than crashing |
 | `E-PARAM-UNKNOWN` · `E-PARAM-MISSING` · `W-PARAM-UNSET` | a config disagrees with `parameter_spec` | edit the config; `init` will not rewrite one that exists |
-| `E-ARTIFACT-UNWRITABLE` | `io.write` found no writer for the suffix | import the module holding the `@register_writer` |
+| `E-ARTIFACT-UNWRITABLE` | `io.write` found no writer and no claim for the suffix, and the object is not `bytes` or `str` | register or claim a writer for it, or hand `io.write` bytes |
 | `E-DOCS-NO-REGIONS` | `publishable docs` in a README with no managed regions | add the regions, or do not run `docs` in a plugin |
 | `E-EXPERIMENT-EXISTS` | `init`/`generate experiment` on an experiment that exists | edit the config by hand; generators never modify what they did not create |
 | `E-CODE-DIRTY` | `run` with uncommitted changes under `src/**` or `templates/**` | commit first; a local template is inside `code_hash` |
@@ -802,12 +807,15 @@ Five, all measured on 2026-08-27 against `937591f` and filed in
 here so a reader of this tutorial knows which of its instructions exist to route around a defect rather
 than to teach a rule.
 
-**Two are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot fail*
-were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv] package =
-false`, and `plugin_scaffold.TEST_PY` was replaced by the entry-point pair in
-[§ Testing a plugin](#testing-a-plugin) — so their entries in `spec-defects.md` are struck, and this
-section lists the three that remain. They are named rather than dropped because a reader who heard there
-were five should be able to see which two went and how.
+**Three are closed.** *A scaffolded project cannot be built by `uv`* and *the scaffolded test cannot
+fail* were closed in the same change that added this file — `scaffold.PYPROJECT` gained `[tool.uv]
+package = false`, and `plugin_scaffold.TEST_PY` was replaced by the entry-point pair in
+[§ Testing a plugin](#testing-a-plugin). *A plugin's writer never dispatches unless something imports its
+module* was closed next, by the slice [`W1-SCOPING.md`](superpowers/W1-SCOPING.md) chartered — the suffix
+is now resolved over installed claims as well as registrations, which is what
+[§ 7](#7-a-writer-and-its-reader-resolved-from-the-claim) describes. All three are struck in
+`spec-defects.md`, and this section lists the two that remain. They are named rather than dropped because
+a reader who heard there were five should be able to see which three went and how.
 
 ### `template.validate` receives a plain dict, not the dot-access config node
 
@@ -823,10 +831,3 @@ rule reads `data.units.holdout` without core handing it a second shape". It rece
 `parameter_spec` itself" whose payoff sentence is "Add a parameter and run `publishable docs`". The
 scaffold writes no lockfile, creates `examples/<stem>/` empty, and writes a README with no managed
 regions — so `docs` refuses there with `E-DOCS-NO-REGIONS` at exit `1`.
-
-### A plugin's writer never dispatches unless something imports its module
-
-`register_writer` mutates `artifacts.WRITERS` when the decorator runs, and nothing loads the
-`publishable.writers` entry point — unlike templates, resolvers and probes, each of which resolves its
-entry point lazily by name. A step writing the plugin's own suffix fails with `E-ARTIFACT-UNWRITABLE`
-until user code imports the module for its side effect.

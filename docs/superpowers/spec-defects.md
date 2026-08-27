@@ -11067,7 +11067,7 @@ change with it or it keeps promising a table nothing generates.
 **Severity:** Minor for the lockfile and the example, Major for the README region — it is the section's
 own headline claim (*documentation that can't drift*) failing on the artifact the section is about.
 
-## OPEN — a plugin's writer or reader never dispatches unless user code imports its module — **Owner: unassigned, with the reason (the charter is complete and no remaining slice has `plugins.py`'s writer registry as its surface)**
+## ~~OPEN — a plugin's writer or reader never dispatches unless user code imports its module~~ — **CLOSED, struck 2026-08-27 by W1**
 
 **Found 2026-08-27 while writing [`docs/tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md), measured against `937591f`.**
 
@@ -11115,6 +11115,47 @@ decoration-time raise is contained by `E-PLUGIN-LOAD`.
 
 **Severity:** Major. The failure costs a whole run's executions, and the remedy is an import that appears
 in no document.
+
+**CLOSED 2026-08-27 by the slice [`W1-SCOPING.md`](W1-SCOPING.md) chartered, and the closure is the
+scoping's shape rather than this entry's.** `artifacts._suffix_for` now decides over two candidate sets —
+what a decorator has registered, and every suffix an installed distribution **claims** in
+`publishable.writers`, read through the new memoized `plugins.claims` with no import — and loads only the
+winner, through `plugins.load_claimed_suffix`, which is `units._resolver_for`'s last two steps
+(`load_entry_point`, then `check_registration`) on a suffix instead of a name. `StepIO._read` resolves the
+reader half the same way, for that one suffix, before its `E-ARTIFACT-UNREADABLE` refusal.
+
+**Verified end to end, not by fixture alone.** The reproduction in this entry — a plugin claiming
+`.plate_assay`, installed, with nothing importing its writer module — was re-run through the real console
+script with the workaround import **deleted** from the step: exit `0`, and `readings.plate_assay` written
+in every step directory. Before the change the identical project lost 10 of 10 executions.
+
+**Two rulings the closure had to make, both recorded because a reader will meet them.** A claim wins only
+by being **strictly longer** than what is registered, so core's five stay unshadowable — and the cost is a
+silence rather than a refusal: a claim on `.csv` is *inert* at the write rather than refused there, since
+refusing would make one plugin's bad claim break every core `.csv` write in the process at a moment
+unrelated to the plugin. `E-PLUGIN-COLLISION` still refuses it at the decoration, whenever anything
+imports that module. And **`io.read_input` was in scope and this entry did not say so**: three of `_read`'s
+seven call sites are `read_input`, so a claimed extension under `input_dir` now decodes — decided rather
+than inherited, with `ResolverIO` pinned, because the shipped rule is that one dispatch serves a step and
+a resolver alike.
+
+**What the pins cover, and one thing they cannot.** Ten fixtures in `tests/test_artifacts.py` and three in
+`tests/test_plugins.py`, every one installing a **real** distribution through `conftest.installed`, because
+a fixture registering through the decorator cannot see this defect at all — registering is what the defect
+made impossible. Reverting `_suffix_for` to the registered set alone fails seven; letting an equal-length
+claim win fails the core-suffix arm; dropping the memo fails two; dropping `check_registration` fails one.
+**The one property no fixture holds** is which entry-point group the *candidate* scan reads: adding the
+readers group there leaves every test green, because `_suffix_for` re-reads `WRITERS` for its return value.
+Adding the readers group to the *load* does fail. Said in the code and in the test's own docstring rather
+than left for someone to discover with a mutation.
+
+**Also closed with it**: `plugins.GROUPS`'s docstring claimed all five groups were ones core reads while
+two were read by nothing, and `_registry_for`'s writer and reader arms were unreachable — both now true of
+the code. `reference.md`'s four homes for the *registered-only* dispatch claim moved (§ Steps and
+artifacts' longest-suffix rule, § Creating a plugin's asymmetry paragraph, `E-ARTIFACT-UNREADABLE`'s row,
+and the two § Errors rows that enumerate their emit surfaces), plus a fifth in `CLAUDE.md`'s invariant —
+**found by a newline-insensitive sweep after a line-based grep had missed it**, and the sweep was proven
+able to fail against a string known present before its zeros were believed.
 
 ## ~~OPEN — the test `plugin new` scaffolds cannot fail, and reaches past the public import root~~ — **CLOSED, struck 2026-08-27**
 

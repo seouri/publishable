@@ -47,7 +47,14 @@ GROUPS = (
     "publishable.writers",
     "publishable.readers",
 )
-"""Every entry-point group core reads, one per registry § Creating a plugin declares."""
+"""Every entry-point group core reads, one per registry § Creating a plugin declares.
+
+Literally every one, since W1: `publishable.writers` and `publishable.readers` were
+members of this tuple while nothing in core read either — a plugin's writer was
+registered in metadata and inert until user code imported the module. `claims` and
+`load_claimed_suffix` below are what `artifacts._suffix_for` and `artifacts.StepIO._read`
+now read them through.
+"""
 
 
 def provider_of(ep: EntryPoint) -> str:
@@ -81,6 +88,70 @@ def scan_group(group: str) -> dict[str, list[EntryPoint]]:
 def names(group: str) -> list[str]:
     """The keys `group` registers, in name order."""
     return list(scan_group(group))
+
+
+WRITER_GROUP = "publishable.writers"
+READER_GROUP = "publishable.readers"
+
+_CLAIMED: dict[str, dict[str, list[EntryPoint]]] = {}
+
+
+def claims(group: str) -> dict[str, list[EntryPoint]]:
+    """`scan_group`, memoized for the life of the process.
+
+    Every other group is scanned once per command — a resolver name and a probe
+    name are each resolved at one point in a run. A writer suffix is not:
+    `artifacts._suffix_for` decides one on **every** `io.write` and every read, so
+    an unmemoized scan here would walk every `sys.path` entry's metadata once per
+    artifact.
+
+    Held per group rather than as one dict of every group, so a caller cannot get
+    a stale answer for a group nobody asked about, and cleared by
+    `reset_claims` — which `tests/conftest.py`'s `registries` fixture calls,
+    because a memo above `WRITERS` outlives the fixture's restore of `WRITERS`
+    itself and would leak one test's installed suffix into every later test.
+
+    It sits *above* `importlib.metadata`'s own path cache, which is keyed on a
+    directory and its mtime, so neither cache should be assumed to see a
+    distribution installed after the first scan.
+    """
+    if group not in _CLAIMED:
+        _CLAIMED[group] = scan_group(group)
+    return _CLAIMED[group]
+
+
+def reset_claims() -> None:
+    """Forget every memoized scan. For a test that installs a distribution."""
+    _CLAIMED.clear()
+
+
+def load_claimed_suffix(group: str, suffix: str) -> None:
+    """Import the distribution claiming `suffix` in `group`, so its decorator runs.
+
+    `units._resolver_for`'s three steps, minus the first: a suffix that no
+    distribution claims is not a fault here, because `artifacts._suffix_for` only
+    calls this for a suffix it read out of `claims` — and on the reader side a
+    suffix with a writer and no reader is already `E-ARTIFACT-UNREADABLE`
+    (`reference.md` § Errors core raises), raised by `_read` rather than by a
+    second refusal here. So this returns quietly for an unclaimed
+    suffix and the caller's own check decides.
+
+    A collision between two distributions claiming one suffix is **not** decided
+    here, for the reason `_resolver_for` states: `validate._check_plugin_collisions`
+    reports it over the complete claim set in name order, from metadata, and a
+    verdict computed twice is a verdict that can disagree with itself. The first
+    claimant is used.
+
+    What this function is *for* is the gap `W1-SCOPING.md` measured: nothing in
+    core loaded these two groups, so a plugin's writer was registered in metadata
+    and inert until user code imported the module for its side effect.
+    """
+    claimants = claims(group).get(suffix)
+    if not claimants:
+        return
+    ep = claimants[0]
+    fn = load_entry_point(ep)
+    check_registration(ep, declared_names(group, fn))
 
 
 def versions_for(group: str, name: str) -> dict[str, str]:

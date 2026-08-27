@@ -3068,3 +3068,216 @@ def test_h5a_fixture_e_all_none_column_csv_round_trips_as_empty_string_not_none(
     rows = [{"v": None}, {"v": None}]
     path = io_.write("fixture_e_none.csv", rows)
     assert _decode_csv(path.read_bytes()) == [{"v": ""}, {"v": ""}]
+
+
+# ---------------------------------------------------------------------------
+# W1 — a plugin's writer and reader are loaded from metadata at dispatch.
+# `docs/superpowers/W1-SCOPING.md`. Every fixture here installs a REAL
+# distribution (conftest's `installed`) and writes the module beside it, because
+# the defect W1 closes is invisible to any fixture that registers through the
+# decorator: registering is what the defect made impossible.
+# ---------------------------------------------------------------------------
+
+
+def _install_writer(installed, dist, suffix, module, *, body=None, reader=True):
+    """A distribution claiming `suffix`, and the module behind it.
+
+    The module's writer returns bytes naming itself, so an assertion can tell
+    *which* writer ran rather than that a writer ran — a `b"..."` a core format
+    could never produce.
+
+    **Every caller passes a module name no other test uses**, and that is not
+    tidiness: `sys.modules` outlives the `registries` fixture, so a second test
+    importing one name finds the module cached, its decorator does not run again,
+    and the table the fixture restored is empty — which surfaces as
+    `E-PLUGIN-DECORATOR` from a fixture that looks correct. Production never meets
+    it, nothing there clearing a registry a loaded module filled.
+    """
+    groups = {"publishable.writers": {suffix: f"{module}:write"}}
+    if reader:
+        groups["publishable.readers"] = {suffix: f"{module}:read"}
+    site = installed(dist, "1.0", groups)
+    (site / f"{module}.py").write_text(
+        body
+        or (
+            "from publishable import register_reader, register_writer\n"
+            f'@register_writer("{suffix}")\n'
+            f'def write(obj):\n    return b"{module}:" + repr(obj).encode()\n'
+            f'@register_reader("{suffix}")\n'
+            f'def read(payload):\n    return {{"by": "{module}", "raw": payload.decode()}}\n'
+        )
+    )
+    return site
+
+
+def test_w1_a_claimed_writer_dispatches_with_nothing_having_imported_it(
+    io: StepIO, installed, registries
+):
+    """The defect, inverted into a claim. Before W1 this write raised
+    `E-ARTIFACT-UNWRITABLE` — the object is a mapping and `_suffix_for` saw only
+    what a decorator had filled — and a real run lost all ten executions to it.
+
+    The bytes are asserted, not the fact that a file appeared: `b"plate_mod:..."`
+    is something no core writer produces, so this cannot pass on a fallback.
+    """
+    _install_writer(installed, "dist-plate", ".plate", "plate_write_mod")
+    io.write("readings.plate", {"n": 6})
+    assert (io.step_dir / "readings.plate").read_bytes() == b"plate_write_mod:{'n': 6}"
+
+
+def test_w1_a_suffix_nothing_claims_costs_no_import(io: StepIO, installed, registries):
+    """The guarantee § Creating a plugin justifies the whole mechanism by, kept at
+    this new call site: resolving a suffix reads metadata and imports nothing
+    unless the claim wins.
+
+    The control is a module that cannot be imported without raising, claimed for a
+    suffix this write does not use. Eager loading of the group — the closure
+    W1-SCOPING § 0.1 rejects — fails this test.
+    """
+    _install_writer(
+        installed, "dist-boom", ".boom", "boom_writer", body="raise RuntimeError('kaboom')\n"
+    )
+    io.write("fine.json", {"x": 1})
+    assert (io.step_dir / "fine.json").read_text().strip() == '{"x": 1}'
+
+
+def test_w1_a_claim_on_a_core_suffix_never_shadows_it(io: StepIO, installed, registries):
+    """An equal-length claim loses to what is registered, which is what keeps
+    core's own five unshadowable — the property `parameters_hash` and
+    `E-PLUGIN-COLLISION` both rest on.
+
+    The claimed module raises on import, so a claim that *had* won would be
+    visible as `E-PLUGIN-LOAD` rather than as a wrong encoding. What the write
+    produces is core's csv.
+    """
+    _install_writer(
+        installed, "dist-greedy", ".csv", "greedy_csv", body="raise RuntimeError('shadowed')\n"
+    )
+    io.write("d.csv", [{"k": "p1", "v": 1}])
+    assert "k,v" in (io.step_dir / "d.csv").read_text()
+
+
+def test_w1_the_longest_claim_wins_and_a_shorter_one_is_not_imported(
+    io: StepIO, installed, registries
+):
+    """Longest-suffix over claims, with a decoy on each side of the comparison.
+
+    `.fastq.gz` sorts BEFORE `.gz`, so a scan-order bug would be invisible to a
+    single name: both names are written, and each must reach its own module. The
+    two `.gz` writes also prove the shorter claim is live rather than unloadable —
+    a fixture where the loser cannot work at all proves nothing about ordering.
+    """
+    _install_writer(installed, "dist-gz", ".gz", "gz_mod")
+    _install_writer(installed, "dist-fastq", ".fastq.gz", "fastq_mod")
+    io.write("a.fastq.gz", {"n": 1})
+    io.write("b.gz", {"n": 2})
+    assert (io.step_dir / "a.fastq.gz").read_bytes() == b"fastq_mod:{'n': 1}"
+    assert (io.step_dir / "b.gz").read_bytes() == b"gz_mod:{'n': 2}"
+
+
+def test_w1_a_claimed_reader_decodes_what_the_claimed_writer_wrote(
+    io: StepIO, installed, registries
+):
+    """The pair, round-tripped through the two tables W1 wires: `io.write`
+    dispatched on the writer claim, and `_read` resolved the reader claim for that
+    same suffix. The reader names itself for the same reason the writer does."""
+    _install_writer(installed, "dist-plate", ".plate", "plate_pair_mod")
+    target = io.step_dir / "readings.plate"
+    io.write("readings.plate", {"n": 6})
+    assert StepIO._read(target) == {"by": "plate_pair_mod", "raw": "plate_pair_mod:{'n': 6}"}
+
+
+def test_w1_a_reader_claim_alone_is_never_dispatched_to(installed, registries, tmp_path):
+    """The entry-point form of the shipped dict-level pin two screens up, and the
+    constraint that decided W1's design: dispatch scans the WRITERS side only.
+
+    A distribution claiming `.fq2` in `publishable.readers` and nothing in
+    `publishable.writers` must leave `_read` at raw bytes — and its module must
+    never be imported, which the raising body is the control for.
+
+    **What this pins and what it does not, measured rather than claimed.** Adding
+    the readers group to the *candidate* scan leaves every test here green, this
+    one included: `_suffix_for` re-reads `WRITERS` for its return value, so a
+    candidate that loads no writer yields the same answer either way. Adding the
+    readers group to the *load* fails this test (`PartialLoadError` out of the
+    raising module). So the group choice in the candidate scan is belt and the
+    final re-read is braces, and it is the braces this test holds.
+    """
+    site = installed("dist-readonly", "1.0", {"publishable.readers": {".fq2": "ro_mod:read"}})
+    (site / "ro_mod.py").write_text("raise RuntimeError('never imported')\n")
+    target = tmp_path / "a.fq2"
+    target.write_bytes(b"raw")
+    assert StepIO._read(target) == b"raw"
+
+
+def test_w1_a_claimed_writer_whose_module_raises_is_a_coded_refusal(
+    io: StepIO, installed, registries
+):
+    """`E-PLUGIN-LOAD` reaches `io.write` now, which is a new emit surface for a
+    code whose § Errors row enumerates its surfaces — task 7's sweep.
+
+    Inside an execution this is that execution's failure with a `run.yaml`, the
+    same shape `E-ARTIFACT-UNWRITABLE` already had there, rather than a traceback.
+    """
+    _install_writer(
+        installed, "dist-boom", ".boom", "boom_writer", body="raise RuntimeError('kaboom')\n"
+    )
+    with pytest.raises(ContractError) as excinfo:
+        io.write("x.boom", {"n": 1})
+    assert excinfo.value.code == "E-PLUGIN-LOAD"
+    assert "dist-boom 1.0" in str(excinfo.value)
+
+
+def test_w1_a_writer_whose_decorator_names_another_suffix_is_refused(
+    io: StepIO, installed, registries
+):
+    """`E-PLUGIN-DECORATOR`, the third of `_resolver_for`'s three steps, now
+    reached at a write. The entry point claims `.pair`; the module registers
+    `.other`. Two spellings of one claim are refused rather than resolved."""
+    _install_writer(
+        installed,
+        "dist-mismatch",
+        ".pair",
+        "mismatch_mod",
+        body=(
+            "from publishable import register_writer\n"
+            '@register_writer(".other")\n'
+            "def write(obj):\n    return b'x'\n"
+        ),
+    )
+    with pytest.raises(ContractError) as excinfo:
+        io.write("x.pair", {"n": 1})
+    assert excinfo.value.code == "E-PLUGIN-DECORATOR"
+
+
+def test_w1_a_keyboard_interrupt_at_import_still_stops_the_command(
+    io: StepIO, installed, registries
+):
+    """`load_entry_point` contains `Exception` and `SystemExit`. A
+    `KeyboardInterrupt` is neither, and must stay uncontained: Ctrl-C during a
+    plugin's import stops the run rather than becoming one artifact's diagnostic.
+    """
+    _install_writer(
+        installed, "dist-ctrlc", ".ctrlc", "ctrlc_mod", body="raise KeyboardInterrupt\n"
+    )
+    with pytest.raises(KeyboardInterrupt):
+        io.write("x.ctrlc", {"n": 1})
+
+
+def test_w1_a_resolver_io_reads_a_claimed_pair_too(installed, registries, tmp_path):
+    """W1-SCOPING § 0.3, decided rather than inherited: three of `_read`'s seven
+    call sites are `read_input`, so a claimed extension under `input_dir` decodes.
+
+    The shipped decorator-level test one screen up rules that a registered pair
+    serves a resolver too — *one dispatch, not two* — and this says the same of a
+    pair that is only claimed, which is the case a resolver actually meets: its
+    own distribution's reader is not loaded when it starts.
+    """
+    from publishable.artifacts import ResolverIO
+
+    _install_writer(installed, "dist-plate", ".plate", "plate_input_mod")
+    (tmp_path / "layout.plate").write_bytes(b"ACGT")
+    assert ResolverIO(tmp_path).read_input("layout.plate") == {
+        "by": "plate_input_mod",
+        "raw": "ACGT",
+    }

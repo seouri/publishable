@@ -7,7 +7,7 @@ import io as _io
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -232,14 +232,76 @@ plugin's suffix on behalf of another's. What a plugin may not claim is what
 """
 
 
-def _suffix_for(name: str) -> str | None:
-    """The longest registered suffix of the name's last component, lower-cased."""
-    last = name.rsplit("/", 1)[-1].lower()
+def _longest_match(last: str, candidates: Iterable[str]) -> str | None:
+    """The longest member of `candidates` that `last` ends with, or `None`.
+
+    Extracted from `_suffix_for` because that function now compares two candidate
+    sets — what is registered, and what an installed distribution claims — and one
+    comparison written twice is two rules that can disagree.
+    """
     best: str | None = None
-    for suffix in WRITERS:
+    for suffix in candidates:
         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
             best = suffix
     return best
+
+
+def _suffix_for(name: str) -> str | None:
+    """The longest suffix of the name's last component core can write, lower-cased.
+
+    Two candidate sets, one comparison. `WRITERS` is what a decorator has already
+    filled — core's own five, plus anything a loaded plugin registered. The second
+    set is every suffix an installed distribution **claims** in
+    `publishable.writers`, read from package metadata with no import, because a
+    plugin's writer was otherwise registered in metadata and inert until user code
+    imported the module for its side effect: `io.write` reported
+    `E-ARTIFACT-UNWRITABLE` for a suffix the machine plainly had a writer for, and
+    a step writing a mapping lost every execution to it.
+
+    **A claim wins only by being strictly longer.** An equal-length claim loses to
+    what is registered, which is what keeps core's own five unshadowable — a
+    plugin claiming `.csv` cannot take it, and `register_writer` refuses that claim
+    outright the moment the module is imported for any other reason. The
+    consequence, stated because it is silence rather than a refusal: a claim on a
+    core suffix is *inert* here rather than refused here, since refusing it would
+    make one plugin's bad claim break every core `.csv` write in the process, at a
+    moment that has nothing to do with the plugin.
+
+    A claim that does win is loaded, and only that one: `load_claimed_suffix`
+    imports the single distribution behind it and checks its decorator against the
+    key, so `E-PLUGIN-LOAD` and `E-PLUGIN-DECORATOR` are reached here the way they
+    are already reached at a resolver's and a probe's dispatch.
+
+    Only `publishable.writers` is scanned for candidates, which is what keeps a
+    reader-only claim from becoming a dispatch — the rule `_read`'s own docstring
+    states. That choice is **belt rather than braces**, measured: adding the
+    readers group to this scan leaves every W1 fixture green, because the return
+    below re-reads `WRITERS` and a candidate that loaded no writer yields the same
+    answer. Adding the readers group to the *load* is what breaks, and
+    `test_w1_a_reader_claim_alone_is_never_dispatched_to` is the arm that catches
+    it. Both halves are kept: the narrow scan says the rule, the re-read enforces
+    it.
+
+    The import of `plugins` is function-local because `plugins` imports this
+    module for `WRITERS`, `READERS` and `CORE_SUFFIXES` — the same reason
+    `cli.command_freeze` imports its own collaborator inside the function.
+    """
+    from publishable.plugins import WRITER_GROUP, claims, load_claimed_suffix
+
+    last = name.rsplit("/", 1)[-1].lower()
+    registered = _longest_match(last, WRITERS)
+    # Lower-cased for the comparison and kept in its declared spelling for the
+    # load, since the entry-point key is what `claims` is keyed on.
+    claimed_by_lower = {suffix.lower(): suffix for suffix in claims(WRITER_GROUP)}
+    claimed = _longest_match(last, claimed_by_lower)
+    if claimed is not None and (registered is None or len(claimed) > len(registered)):
+        load_claimed_suffix(WRITER_GROUP, claimed_by_lower[claimed])
+        # `check_registration` inside that call refuses a module whose decorator
+        # named something else, so a return from it means `WRITERS` now holds the
+        # key — read back rather than assumed, because a `False` here would be a
+        # `KeyError` in `write` one frame up.
+        return _longest_match(last, WRITERS)
+    return registered
 
 
 def build_allocation_document(
@@ -1243,14 +1305,33 @@ class StepIO:
         back is stated where it can be enforced.
 
         The reverse is not handled, deliberately rather than by omission:
-        `_suffix_for` is the single dispatch and it iterates `WRITERS` alone,
-        so a suffix `READERS` holds and `WRITERS` does not is invisible to
-        it — `suffix` comes back `None`, and this reads the file as raw bytes
-        without ever consulting `READERS`. That suffix registered no writer
-        in this process, so nothing here could have written the file `_read`
-        is now looking at; a reader with no writer is not a broken pair the
-        way the other direction is, so it is left as the ordinary
+        `_suffix_for` is the single dispatch and it decides from the **writer**
+        side alone, so a suffix `READERS` holds and `WRITERS` does not is
+        invisible to it — `suffix` comes back `None`, and this reads the file as
+        raw bytes without ever consulting `READERS`. That suffix registered no
+        writer in this process, so nothing here could have written the file
+        `_read` is now looking at; a reader with no writer is not a broken pair
+        the way the other direction is, so it is left as the ordinary
         no-suffix-known case rather than given its own refusal.
+
+        **CORRECTED (W1): the ruling above stands and its stated premise does
+        not.** *"Nothing here could have written the file"* was never the whole
+        reason and is now plainly false: `read_upstream` and `reuse_from` read a
+        **prior run's** artifact, `read_input` reads a file no run wrote at all,
+        and since W1 a suffix can be claimed by an installed distribution this
+        process has not loaded. The ruling survives on a narrower ground that
+        measures true — the writer table is what decided the **encoding**, so an
+        extension nothing claims a writer for is an unclaimed extension rather
+        than half a pair, and bytes is the same answer it gets when neither table
+        knows it. Appended rather than rewritten, because the conclusion did not
+        move.
+
+        **What W1 did add here** is one lazy lookup, on the reader side only: a
+        suffix that won dispatch and whose reader is not yet registered resolves
+        its `publishable.readers` claim through `load_claimed_suffix` before the
+        refusal below is raised. Writers are scanned for dispatch and readers are
+        not, which is what keeps the paragraph above true of an installed claim as
+        well as of a registered one.
 
         A suffix *neither* table knows is not a fault at all: it is the raw-bytes
         case `write` already accepts.
@@ -1259,6 +1340,15 @@ class StepIO:
         if suffix is None:
             return path.read_bytes()
         reader = READERS.get(suffix)
+        if reader is None:
+            # The reader half of the pair, resolved for this suffix and no other.
+            # Function-local for `_suffix_for`'s reason: `plugins` imports this
+            # module. A suffix nothing claims returns quietly and the refusal
+            # below is what answers.
+            from publishable.plugins import READER_GROUP, load_claimed_suffix
+
+            load_claimed_suffix(READER_GROUP, suffix)
+            reader = READERS.get(suffix)
         if reader is None:
             raise ArtifactError(
                 f"`{path.name}` claims the suffix `{suffix}`, which has a registered "

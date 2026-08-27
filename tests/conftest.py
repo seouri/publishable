@@ -149,7 +149,16 @@ def registries():
         dict(artifacts.WRITERS),
         dict(artifacts.READERS),
     )
+    # W1: `plugins.claims` memoizes an entry-point scan for the life of the
+    # process, because `artifacts._suffix_for` consults it on every write and
+    # every read. That memo sits ABOVE the four mappings restored below, so
+    # restoring them is not enough — a test that installs a distribution would
+    # otherwise leave its suffix a dispatch candidate for every later test, and a
+    # test installing one AFTER a scan has run would be served the pre-install
+    # answer. Cleared on both sides of the yield for the two halves of that.
+    plugins.reset_claims()
     yield
+    plugins.reset_claims()
     for live, was in zip(
         (plugins.RESOLVERS, plugins.PROBES, artifacts.WRITERS, artifacts.READERS),
         saved,
