@@ -6,6 +6,9 @@
 # publishable` resolves only in homebrew-core, whose bar is >=75 stars, >=30
 # forks or >=30 watchers plus a public repository with an immutable tagged
 # release; until that is met, the tap is the route.
+#
+# Bumping this formula, and why each pin is what it is:
+# docs/releasing.md § Homebrew.
 class Publishable < Formula
   include Language::Python::Virtualenv
 
