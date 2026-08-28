@@ -309,3 +309,17 @@ which is also what § Statistical reporting's four-reason list already said and 
 `experimental-designs.md` § Mistakes core prevents says from the other end ("`fdr_bh` adjusts the
 p-value and reports no interval"). Cost if wrong: a reader under BH expects a corrected bound the
 build has never produced for anyone.
+Fix wave: complete (commit 75137ce). All six addressed; suite 3545 passed / 1 skipped / 2 xfailed
+(baseline 3544 + F5's pin), ruff, format and mypy clean.
+Ruling: F1's "prior condition" reading ACCEPTED over my brief's framing. I offered the fixer two
+readings — a third exception, or a prior condition on the whole promise — and asked which was true.
+`_level_for` returning None under BH is not a property of the member, so no member of any kind gets
+a bound: it is a condition on the promise, and `reference.md` now scopes the promise to
+`holm`/`bonferroni` rather than growing its exception list. That is the better repair because an
+exception list grows and a scope does not. Cost if wrong: a reader under BH looks in the wrong place.
+Ruling: F2's third home VINDICATES the sweep instruction. My brief named two homes; the fixer found a
+third in `cli.py`'s condition-member loop comment, missed by the review because the phrase WRAPS.
+This is CLAUDE.md's own rule — sweep for a distinctive short fragment, assume the next home is one
+your last sweep could not have matched — catching a live instance in the slice that quotes it.
+Ruling: F6's stale paragraph DELETED rather than rewritten, its one true half relocated and rescoped.
+Prefer deleting a claim to rewriting it; a rewrite invents, a deletion cannot.
