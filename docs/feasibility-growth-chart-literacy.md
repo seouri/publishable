@@ -2198,6 +2198,43 @@ any of the fifteen validate to — [gap 1](#gaps-this-analysis-found-in-the-spec
 
 ---
 
+### Re-measured on 2026-08-28 against `v0.2.0` (commit `aba9542`) — first measurement with real step bodies
+
+Two things changed since the entry above, and they cut in opposite directions. Core released
+**0.2.0**, adding a fourth diagnostic the `growth-chart-gaps` slice did not:
+`W-STEP-RETURN-DISCARDED`, which fires when a `run`- or `condition`-scoped step returns a non-empty
+mapping core then discards. And the measurement repository stopped being stubs — `serialize.py`,
+`parse.py`, the plugin's request step, three prompt files, and real bodies for `step01`, `step02`
+and `step03` all landed, so for the first time there is step code for a runtime diagnostic to fire
+on.
+
+**All fifteen configs validate exactly as before**: thirteen clean, `e05c-fixed-n` and `e08-ordering`
+carrying one `W-DATA-CLUSTER-UNDECLARED` each, no errors. A config is a declaration and 0.2.0 removed
+nothing, so this is the expected result rather than a reassuring one.
+
+**The new warning fires on this analysis' own proposed pipeline, and that is the finding.** Both wide
+steps returned counts — `step01_summarize_units` at `run` scope returned `n_units`, `n_visits`,
+`n_labelled`; `step02_serialize` at `condition` scope returned `n_prompts`, `n_without_visits` — and
+every one was being dropped, silently at 0.1.3 and audibly at 0.2.0. Both now write their counts to
+an artifact (`join_counts.json`, `serialize_counts.json`) and return `{}`, which is the route the
+warning's own message names. **The numbers were real and worth keeping**: how many visits joined and
+how many units carry a label are the first questions asked of a run reporting a surprising `n`, and
+before this they existed only in a mapping core threw away.
+
+That is worth more than a housekeeping note, because it is this document's own argument turned back
+on itself. [§ Where every statistical procedure lands](#where-every-statistical-procedure-lands)
+routes a wide step's product to `io.write`; the pipeline this analysis proposed then returned five
+counts from two wide steps anyway. The rule was written down here and not followed here — which is
+what a diagnostic is for, and the reason `W-STEP-RETURN-DISCARDED` was worth building rather than
+documenting harder.
+
+**What is still not measured**, unchanged from every entry above: nothing here has executed a step
+against a deployment. `run`, `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain
+unexercised by this analysis, the four `summary`-step `Estimate`s are unwritten, and `step02_score`
+is still a stub. The release moves none of that.
+
+---
+
 ## Cost and execution summary
 
 | Run | Units | Conditions | Repeats | Executions | Metered requests |
