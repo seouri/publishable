@@ -36,7 +36,7 @@ The per-slice history that used to live here is in the [development record](#the
 | `docs/design-principles.md` | **Normative.** Why each rule is what it is |
 | `docs/experimental-designs.md` | How each experimental design is expressed; what core prevents and refuses |
 | `docs/reference.md` | Config schema, CLI, `io` API, templates, sweeps, artifact layout |
-| `docs/feasibility-*.md` — currently [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
+| `docs/feasibility-*.md` — [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md), [`growth-chart-literacy`](docs/feasibility-growth-chart-literacy.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
 | [`docs/releasing.md`](docs/releasing.md) | **Non-normative.** The maintainer's runbook for a PyPI and Homebrew release, with each step's reason attached |
 | [`docs/tutorial-writing-a-plugin.md`](docs/tutorial-writing-a-plugin.md) | **Non-normative.** The plugin tutorial — why/when a plugin, and how to build one, measured end to end and pinned to a commit. It reuses `reference.md` § Creating a plugin's own `my_assay` for the project-local template and a second stem for the installed plugin, because one name claimed twice is refused and the tutorial shows that refusal; every build claim in it is dated |
 
@@ -177,7 +177,7 @@ Editing one document is almost never a one-file change. Both passes below run be
 
 **Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep the four documents, this file, and any feasibility analysis for what should no longer exist.
 
-**Both passes govern those files only — never the [development record](#the-development-record).** A spec records what was decided when it was written and a scoping what was measured on its date; retro-editing either destroys the evidence they exist to hold. Correct one the way this repo corrects a published claim: append the correction and say what it replaces. The one exception is `spec-defects.md`, a live list, where a closed gap is struck rather than left to mislead.
+**Both passes govern those files only — never the [development record](#the-development-record).** A spec records what was decided when it was written and a scoping what was measured on its date; retro-editing either destroys the evidence they exist to hold. Correct one the way this repo corrects a published claim: append the correction and say what it replaces. The one exception is `spec-defects.md`, a live list, where a closed gap is **removed** rather than left to mislead — struck until 2026-08-28, when the accumulated closures were deleted outright and the file's own preamble took over recording what the rule is and what went.
 
 **Cross-document.** These are the classes that actually drift, and none of them is visible to a mechanical check:
 
