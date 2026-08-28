@@ -16,8 +16,8 @@ of this file's job now, and it changes how three things read:
 - **A closed entry is no longer kept here.** On 2026-08-28 every entry whose own text recorded a closing
   disposition was **removed** rather than left struck — **115 sections of the 267 this file held**, leaving
   152 of which 62 are `OPEN`, and cutting its length by more than half. **Recounted 2026-08-28, later the
-  same day, after Task 11 of the `growth-chart-gaps` slice removed two more entries closed by code:
-  151 of which 61 are `OPEN`.** What went is exactly what said so:
+  same day: Task 11 of the `growth-chart-gaps` slice removed two more entries closed by code and a
+  later filing added one, which nets to the same 152.** What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
   full closure marker. **A partial closure, a multi-item review record, and every entry with no disposition
@@ -6525,3 +6525,61 @@ under a declared correction method, a `compare: {to: constant}` hypothesis's bou
 answerable and comes back `supported: null`; only `evaluate_on: observed` is usable there. Under
 `correction: none` the bound test works fine on the raw interval, exactly as it does for every other
 form.
+
+## OPEN — a `run`- or `condition`-scoped step's returned metric is discarded in silence, at exit `0` — **Owner: unassigned, and no slice follows**
+
+**Found by:** writing the growth-chart pipeline's real steps, 2026-08-28, where `step02_serialize`
+is `condition`-scoped and its return had to be reduced to counts by hand. **Measured against commit
+`247b8f6`** by running a real pipeline end to end through the console script, not read off the code.
+
+A `condition`-scoped step returning `{"accuracy": 0.97, "n_units": 2}` produces:
+
+```
+run.yaml → …/run_2026-08-28T11-50-01Z_1b97f85/run.yaml
+```
+
+exit `0`, no warning, and in the record `per_repeat: {}`, `aggregated: {}`, `summary: {}`. The
+`0.97` appears nowhere. Grepping the run directory for it returns nothing.
+
+**The behaviour is specified and correct; the silence is the defect.** § Step scope states it
+outright — *"A `run`- or `condition`-scoped step's return value is not recorded. Core still requires
+it to be a flat mapping of scalars … but there is nowhere for the values to land"* — and gives the
+reason, which is sound: a metric is keyed by unit or reported per repeat, and a wide scope has
+neither. Nothing about that should change.
+
+What is missing is that core **knows** at the moment of discard. It has the returned mapping, it has
+the scope, and it has already type-checked the values as scalars — every ingredient for a warning,
+and it emits none.
+
+**Why this is worth a code, on this project's own reasoning.** The § Step scope paragraph closes
+with *"A number with no denominator in the record is the mistake this refusal exists to prevent, and
+it is the same one [a usage report makes](#the-unit-table-is-the-inference-base)"* — so the refusal
+is a **statistical** guard, not a bookkeeping convenience. A guard that fires silently teaches
+nothing: the author who wrote `return {"accuracy": 0.97}` at condition scope believes it was
+recorded, and the record they get back is indistinguishable from one where the step returned `{}`.
+That is the shape of `W-DATA-CLUSTER-UNDECLARED` and `W-DATA-WEIGHT-UNDECLARED` exactly — core
+noticing a declaration whose consequence the author probably did not intend — and both of those
+carry a warning rather than a silence.
+
+**The counter-argument, and why it does not hold.** A wide step legitimately returns a value it does
+not want recorded: it satisfies the flat-mapping contract and moves on, and a warning on `{}`-worthy
+returns would be noise. But the distinction is available without asking the author anything — an
+**empty** mapping is the honest "nothing to report" and draws nothing, while a **non-empty** one at
+`run` or `condition` scope is a value the author computed and core threw away. Warning only on the
+second costs a step that means it one edit — `return {}` — and tells every step that did not.
+
+**Proposed resolution.** `W-STEP-RETURN-DISCARDED`, emitted once per execution that returns a
+non-empty mapping at `run` or `condition` scope, naming the step, the scope, and the keys dropped,
+with the route § Step scope already gives: `io.write` for what a wide step produces, and a narrower
+step to record what it measures. No behaviour change — the value is still discarded, and the
+contract check is unmoved.
+
+**What was ALSO measured and is NOT a defect**, recorded so a later reader does not re-file it: a
+recorded column that is constant across every unit (`io.record(key, {"tokens": 0})`) publishes
+`value: 0.0` with `ci95: [0.0, 0.0]` and `repeat_spread: {std: 0.0}`. That interval is arithmetically
+correct — a column with no variance has no width — and inventing one would be worse. The
+growth-chart pipeline's stub recorded exactly this shape, which is what prompted the check.
+
+**Why open.** The charter is complete and no slice follows, so this is what the project ships with:
+a statistical guard whose whole purpose is preventing a number with no denominator fires without
+telling anyone it fired.
