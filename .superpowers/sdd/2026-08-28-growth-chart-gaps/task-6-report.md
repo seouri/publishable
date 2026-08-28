@@ -30,3 +30,33 @@ shape Decision 3 discusses explicitly; the group-axis exclusion (task 8's own
 requirement) was derived from `E-SWEEP-LEVEL-DUPLICATE`'s giant comment about
 assignment-method-dependent unit collision, not stated directly in Decision 3 — worth
 a second look by task 8's author.
+
+## Fix round 1
+
+Finding 1 (critical, over-broad exclusion): fixed. Verified `cli._resolved_group_axes`
+calls `units.assignment_for` exactly once per declared axis over its whole `levels`
+list, so every condition naming a given level reads the same `ArmPlan.members[level]`
+— identical `values` means identical units unconditionally, including across a group
+axis; my "no group axis at all" guard and its assignment-method-uncertainty rationale
+were both wrong, in both the `validate.py` docstring and the `reference.md` row.
+Replaced with `_group_axes_already_erred`, which excludes a pair only when every group
+axis it shares is exactly `E-SWEEP-LEVEL-DUPLICATE`'s trigger (the axis's own repeated
+level string) or `E-SWEEP-BASELINE-GROUP`'s (an axis `sweep.baseline` fixes) — read
+from the raw `sweep` declaration, not re-derived from `expand`'s output. Both
+reviewer-measured false negatives now fire: `groups(control,treatment) x
+grid(pearson,pearson)` and `baseline(analysis.method) + groups + grid(pearson,pearson)`.
+
+Finding 2 (test docstrings claiming false guarantees): fixed. Rewrote both docstrings
+to state the measured fact (the pair DOES resolve to the same `values`, and `validate`
+DOES reach this check for it) and the real reason for silence (already `E-SWEEP-LEVEL-
+DUPLICATE`'s/`E-SWEEP-BASELINE-GROUP`'s own trigger, not unreachability).
+
+Finding 3 (mutation set didn't cover the guard's breadth): added
+`test_a_group_axis_duplicate_that_is_not_the_sharp_codes_own_shape_still_warns` and
+`test_a_baseline_and_group_axis_together_still_report_the_unrelated_grid_duplicate`.
+Mutation: widened the exclusion back to "any shared group axis at all" (the exact bug)
+— both new tests failed red; reverted from a pre-mutation backup, confirmed
+byte-identical, both green.
+
+`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all pass;
+`tests/test_validate.py` (802 tests) passes.

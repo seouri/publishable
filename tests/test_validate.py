@@ -7328,25 +7328,33 @@ def test_a_repeated_grid_value_is_the_soft_case_this_warning_reaches(write_confi
 
 
 def test_a_group_axis_duplicate_level_is_not_this_warning(write_config):
-    """Same units is part of the predicate, not an assumption: a `groups` axis's
-    two arms hold DISJOINT units by construction, so a level rendered twice by
-    `levels: [c, t, c]` is `E-SWEEP-LEVEL-DUPLICATE`'s own shape, not this
-    warning's — the two conditions never resolve to the same `values` because
-    the axis that names the arm differs (or, here, matches only because the
-    label collides, which is exactly what the other code is for). This must
-    stay untouched by the new check."""
+    """`levels: [c, t, c]` DOES resolve two conditions to the same `values` —
+    `arm=c` at index 0 and index 2 — because a group axis is realized ONCE per
+    run (`cli._resolved_group_axes` calls `assignment_for` once over the whole
+    declared `levels` list, and both conditions look up the same
+    `ArmPlan.members['c']`), so "same values" already means "same units" here
+    too, same as everywhere else. The reason this warning stays silent is
+    narrower than that: this exact (axis, level) pair is `E-SWEEP-LEVEL-
+    DUPLICATE`'s own trigger — `'c'` is the string that axis's own `levels`
+    list repeats — so it already has a sharper, dedicated finding, and this
+    check does not report it a second time. `validate` collects rather than
+    aborting, so `E-SWEEP-LEVEL-DUPLICATE` firing does not make this check
+    unreachable; the exclusion has to be earned pair by pair rather than
+    assumed from the refusal."""
     found = codes(write_config({"sweep": {"groups": [{"by": "arm", "levels": ["c", "t", "c"]}]}}))
     assert "E-SWEEP-LEVEL-DUPLICATE" in found
     assert "W-SWEEP-CONDITION-DUPLICATE" not in found
 
 
 def test_a_baseline_fixing_a_group_level_is_not_this_warning_either(write_config):
-    """The sibling group-axis code, `E-SWEEP-BASELINE-GROUP`: a baseline
-    designating a group level duplicates that level's own product row too, but
-    it is refused outright by its own check before this one would ever see it,
-    and — independent of ordering — the two conditions still hold DIFFERENT
-    units from every other level, so this warning's predicate is about a
-    different fault than either group-axis code covers."""
+    """The sibling exclusion: `sweep.baseline` fixing `arm: control` renders a
+    baseline condition and `arm`'s own `control` product row to the same
+    `values` — real units, genuinely shared, by the same once-per-run
+    assignment argument as the test above. `validate` collects rather than
+    aborting, so this check DOES see the pair; it stays silent because `arm`
+    is exactly the axis `sweep.baseline` fixes, which is `E-SWEEP-BASELINE-
+    GROUP`'s own trigger, not because that code's refusal makes the pair
+    unreachable."""
     found = codes(
         write_config(
             {
@@ -7359,6 +7367,67 @@ def test_a_baseline_fixing_a_group_level_is_not_this_warning_either(write_config
     )
     assert "E-SWEEP-BASELINE-GROUP" in found
     assert "W-SWEEP-CONDITION-DUPLICATE" not in found
+
+
+def test_a_group_axis_duplicate_that_is_not_the_sharp_codes_own_shape_still_warns(
+    write_config,
+):
+    """The false negative a reviewer measured: `groups` axis levels are
+    DISTINCT (`control`, `treatment` — no repeated string, so `E-SWEEP-LEVEL-
+    DUPLICATE` is silent) and no `baseline` fixes `arm` at all (so
+    `E-SWEEP-BASELINE-GROUP` is silent too), yet `grid.analysis.method`
+    repeats `pearson`, so `arm=control__method=pearson` is rendered twice —
+    same arm, same method, same units, same parameters, two directories.
+    Neither group-axis code reaches this shape, so an exclusion keyed on "a
+    group axis is involved" rather than on "this exact pair is one of the two
+    sharp codes' own findings" silences a real duplicate. `validate` reports
+    two such pairs (`arm=control` twice and `arm=treatment` twice); this
+    checks the first."""
+    found = messages_by_code(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in found
+    assert "E-SWEEP-BASELINE-GROUP" not in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    message = found["W-SWEEP-CONDITION-DUPLICATE"]
+    assert message.count("arm=control__method=pearson") == 2
+
+
+def test_a_baseline_and_group_axis_together_still_report_the_unrelated_grid_duplicate(
+    write_config,
+):
+    """The second measured false negative: `sweep.baseline` fixes
+    `analysis.method`, not `arm` — `arm` is never baseline-fixed, so
+    `E-SWEEP-BASELINE-GROUP` never triggers — while `grid.analysis.method`
+    again repeats `pearson`. The baseline condition for `arm=control` and the
+    grid's first `arm=control__method=pearson` row resolve to identical
+    `values`, and the exclusion must not eat this pair just because `arm` is
+    a group axis both conditions carry: `arm` here is neither `E-SWEEP-LEVEL-
+    DUPLICATE`'s nor `E-SWEEP-BASELINE-GROUP`'s trigger, so nothing already
+    reports it."""
+    found = messages_by_code(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-GROUP" not in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    message = found["W-SWEEP-CONDITION-DUPLICATE"]
+    assert "arm=control__baseline" in message
+    assert "arm=control__method=pearson" in message
 
 
 _UNITS_WITH_DX = {"from": "index.csv", "key": "patient_id", "attributes": ["dx_family"]}

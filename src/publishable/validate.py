@@ -4208,7 +4208,49 @@ def _check_sampled_values(
             break
 
 
-def _warn_duplicate_conditions(conditions: list[Any], c: Collector) -> None:
+def _group_axes_already_erred(
+    sweep: dict[str, Any], group_axes: list[str]
+) -> tuple[dict[str, set[str]], set[str]]:
+    """The two shapes `E-SWEEP-LEVEL-DUPLICATE` and `E-SWEEP-BASELINE-GROUP`
+    already own, computed from the raw declaration rather than from `expand`'s
+    output — `_warn_duplicate_conditions` needs to know which specific
+    (axis, level) collisions already have a sharper, dedicated finding, and
+    that fact lives in the declaration, not in any one pair of conditions.
+
+    Returns `(duplicated_levels, baseline_fixed_axes)`: `duplicated_levels`
+    maps an axis's `by` name to the set of level strings its own `levels`
+    list repeats — `E-SWEEP-LEVEL-DUPLICATE`'s own trigger, entry by entry;
+    `baseline_fixed_axes` is the group axis names `sweep.baseline` fixes —
+    `E-SWEEP-BASELINE-GROUP`'s own trigger. Non-string entries are skipped
+    rather than raising: `_check_shape`'s job, not this one's, and a
+    malformed entry contributes no (axis, level) pair either check could have
+    fired on.
+    """
+    duplicated_levels: dict[str, set[str]] = {}
+    for entry in sweep.get("groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        by = entry.get("by")
+        levels = entry.get("levels")
+        if not isinstance(by, str) or not isinstance(levels, list):
+            continue
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for level in levels:
+            if not isinstance(level, str):
+                continue
+            if level in seen:
+                dupes.add(level)
+            seen.add(level)
+        if dupes:
+            duplicated_levels[by] = dupes
+    baseline_fixed_axes = {p for p in (sweep.get("baseline") or {}) if p in group_axes}
+    return duplicated_levels, baseline_fixed_axes
+
+
+def _warn_duplicate_conditions(
+    conditions: list[Any], sweep: dict[str, Any], group_axes: list[str], c: Collector
+) -> None:
     """`W-SWEEP-CONDITION-DUPLICATE` — two conditions resolving to the same
     `values` over the same units.
 
@@ -4222,24 +4264,30 @@ def _warn_duplicate_conditions(conditions: list[Any], c: Collector) -> None:
     conditions — and is blind to which mode produced either one.
 
     `contrasts.differing_axes` gives "same `values`" over the union of both
-    sides' keys, which is sufficient for "same units" whenever NEITHER
-    condition carries a group axis: a `grid`/`paired`/`ablate`/parameter-
-    `baseline` path only ever sets a parameter, never selects a unit, so equal
-    `values` there is equal units by construction. It is NOT sufficient once a
-    `sweep.groups` axis is involved — measured against `E-SWEEP-LEVEL-
-    DUPLICATE`'s own giant comment: two conditions carrying the identical
-    level render byte-identical units under `assign.method: by_attribute`, but
-    a `random` draw overwrites and a `blocked` draw accumulates, so whether
-    the units actually collide depends on an assignment method `validate`
-    cannot see the outcome of at this point. `Condition.selectors` marks
-    exactly the paths a group axis produced (`expand`'s own answer to "which
-    mode produced this cell"), so this check is gated on **neither** condition
-    carrying one — which is what keeps `E-SWEEP-LEVEL-DUPLICATE`'s repeated
-    level and `E-SWEEP-BASELINE-GROUP`'s baseline-fixes-a-level shape (both
-    measured: `expand` renders equal `values` for both) out of this warning.
-    Those two codes already have the sharper, assignment-independent answer
-    for their own shapes; this one is deliberately narrower and does not
-    duplicate them.
+    sides' keys, and that IS "same units" here, including for a `sweep.groups`
+    axis: `cli._resolved_group_axes` calls `units.assignment_for` exactly
+    ONCE per declared axis, over that axis's whole `levels` list, and every
+    condition carrying a given level looks up the SAME resulting
+    `ArmPlan.members[level]` — measured by calling `assignment_for` directly.
+    Two conditions naming the identical level therefore always share units,
+    under `by_attribute`, `random` or `blocked` alike; there is no assignment-
+    method uncertainty for this check to hide behind, and an earlier version
+    of this function and its `reference.md` row both claimed one.
+
+    So the group axes a duplicate pair shares are **not** grounds to skip it.
+    What IS grounds to skip it: the pair is already `E-SWEEP-LEVEL-
+    DUPLICATE`'s or `E-SWEEP-BASELINE-GROUP`'s own finding, which `validate`
+    reports separately and more specifically. `validate` collects rather than
+    aborting, so a config those checks refuse still reaches this one — it is
+    not "unreachable", it is "already explained". `_group_axes_already_erred`
+    names exactly the (axis, level) pairs those two checks own: a level a
+    `groups` entry's own `levels` list repeats, or an axis `sweep.baseline`
+    fixes. A candidate pair is skipped only when EVERY group axis it shares
+    an equal value on is one of those two — a pair colliding on a `groups`
+    axis that is not itself duplicated or baseline-fixed (two conditions
+    landing on the same, once-declared level, crossed with an unrelated
+    parameter-axis collision) shares no axis with either sharper check and is
+    exactly the shape this warning exists to catch.
 
     Reported **once**, for the first duplicated pair in condition order, on
     `W-DATA-CLUSTER-UNDECLARED`'s own shape — the remedy is one sentence
@@ -4251,13 +4299,19 @@ def _warn_duplicate_conditions(conditions: list[Any], c: Collector) -> None:
     Core reports; it does not deduplicate — dropping a condition would change
     what executed without the record saying so.
     """
+    duplicated_levels, baseline_fixed_axes = _group_axes_already_erred(sweep, group_axes)
     for j in range(1, len(conditions)):
         for i in range(j):
-            if conditions[i].selectors or conditions[j].selectors:
-                continue  # a group axis is involved — `E-SWEEP-LEVEL-DUPLICATE` /
-                # `E-SWEEP-BASELINE-GROUP`'s own shapes, not this warning's
             if differing_axes(conditions[i], conditions[j]):
                 continue
+            shared_group_axes = conditions[i].selectors & conditions[j].selectors
+            if shared_group_axes and all(
+                axis in baseline_fixed_axes
+                or conditions[i].values.get(axis) in duplicated_levels.get(axis, set())
+                for axis in shared_group_axes
+            ):
+                continue  # `E-SWEEP-LEVEL-DUPLICATE` / `E-SWEEP-BASELINE-GROUP`'s
+                # own finding for this exact pair — not duplicated here
             c.warn(
                 "W-SWEEP-CONDITION-DUPLICATE",
                 "sweep",
@@ -4947,7 +5001,7 @@ def _check_sweep(
                 "`sweep` entirely",
             )
         _check_sampled_values(sample, spec, conditions, c)
-        _warn_duplicate_conditions(conditions, c)
+        _warn_duplicate_conditions(conditions, sweep, group_axes, c)
 
     # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
     # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
