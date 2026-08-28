@@ -6526,12 +6526,6 @@ through to `cli.py`'s hypothesis-evaluation phase for a per-condition metric, th
 change `E-DATA-WEIGHT-CONTRAST`'s weighted-Welch gap and the cross-run correction-family entry above
 both describe as real but not free.
 
-**Why open.** The charter is complete and no slice follows, so this is what the project ships with:
-under a declared correction method, a `compare: {to: constant}` hypothesis's bound test is never
-answerable and comes back `supported: null`; only `evaluate_on: observed` is usable there. Under
-`correction: none` the bound test works fine on the raw interval, exactly as it does for every other
-form.
-
 **AMENDED 2026-08-28 (Task 6, `correctable-condition-metric` slice): narrowed, not closed.** The
 slice's Task 5 built exactly the `Member` this entry's "Proposed resolution" called for, for three
 of the four rows in the design's Decision 1 table: a recorded column with no declared `resample`
@@ -6539,9 +6533,15 @@ of the four rows in the design's Decision 1 table: a recorded column with no dec
 `resample` (carries the pool), and a derived metric with a declared `resample` (carries the pool).
 For all three, `hypotheses.evaluate` now rebuilds a real corrected bound at the family's own level,
 and `evaluate_on: ci95_lower`/`ci95_upper` is answerable exactly as it is for a `vs_baseline`
-comparison or a declared contrast. The fourth row — a derived metric with no declared `resample` —
-was never this gap: it has no raw interval either, so there was nothing to correct before this slice
-and nothing to correct after it.
+comparison or a declared contrast. The fourth row's conclusion holds and its stated
+trigger does not. A metric with no raw interval has nothing to correct, before this slice and after
+it — but a derived metric with no declared `statistics.resample` is not such a metric: core resamples
+a derived metric whenever a `compute` callable and a seed exist, declared or not, so the row's named
+case has a percentile interval like every other resampled one. What actually reaches the no-interval
+state is a resample that produced no usable interval — every draw degenerate, or a draw count below
+the floor — which is how Task 5's own row-4 test reaches it. (Corrected 2026-08-28 by the branch's
+fix wave; the design spec's Decision 1 table is a dated record and is corrected by an appended
+ledger note rather than an edit.)
 
 **The residual case, and why it stays open.** A recorded column under BOTH `weight_by` and
 `cluster_by` still gets no `Member`, and still comes back `corrected_unavailable`. Its raw interval
@@ -6552,5 +6552,11 @@ combination is reachable specifically because `E-DATA-WEIGHT-CLUSTER-CONTRAST` o
 contrast, and a `{to: constant}` hypothesis names no contrast, so `validate` never sees the
 combination it would otherwise refuse. Closing it needs the same shape of change the "Proposed
 resolution" above described — a new construction and a new `Member` field — so it is still real but
-not free, and no slice follows to do it.
+not free. The charter is complete and no slice follows, so this is what the project ships with: for
+that one combination the bound test is not answerable and comes back `supported: null`, and
+`evaluate_on: observed` is the usable form there. Everywhere else — including under `correction:
+none`, where nothing is corrected for anyone — the bound test works exactly as it does for a
+`vs_baseline` comparison or a declared contrast. (The entry's original "Why open" paragraph said the
+bound test was never answerable at all; that was true when filed and false after Task 5, so the fix
+wave deleted it rather than rewriting it.)
 

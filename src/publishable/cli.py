@@ -4080,13 +4080,6 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             resample_fns_by_key: dict[
                 tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
             ] = {}
-            # One (condition, recording step) -> {metric name: pool}, the
-            # evidence `stats.summarize_step` hands back beside a metric's
-            # interval and this loop pops off before it reaches `aggregated`.
-            # Kept here rather than discarded so a condition's own metric can
-            # later have a `correction.Member` built from the same draws its
-            # raw interval came from — never written to `run.yaml` itself.
-            pools_by_key: dict[tuple[int, str], dict[str, list[float]]] = {}
             for cond in conditions:
                 recording_steps = {
                     r.execution.step_name
@@ -4400,7 +4393,6 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                         for metric_key, metric in step_summary.items()
                         if "pool" in metric
                     }
-                    pools_by_key[(cond.index, step_name)] = step_pools
                     # G2 task 5: one `Member` per condition metric, so a
                     # `compare: {to: constant}` hypothesis's bound test is
                     # answerable at the hypothesis family's own level instead of
@@ -4445,10 +4437,15 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                     #   clustered siblings delegate the same way, so the
                     #   corrected bound is the same arithmetic at a smaller α
                     #   rather than a counterpart in name only.
-                    # - anything else — a derived metric that was never
-                    #   resampled — has no raw interval either (`ci95: null`),
-                    #   so there is nothing to correct and the honest
-                    #   `corrected_unavailable` stays exactly there.
+                    # - anything else — a metric whose resample produced no
+                    #   usable interval (every draw degenerate, or a draw
+                    #   count below the floor), or one that came back with no
+                    #   numeric value at all — has no raw interval either
+                    #   (`ci95: null`), so there is nothing to correct and the
+                    #   honest `corrected_unavailable` stays exactly there. An
+                    #   undeclared `statistics.resample` is NOT what lands a
+                    #   metric here: a derived metric is resampled whenever a
+                    #   `compute` callable and a seed exist, declared or not.
                     #
                     # The key question is asked directly rather than through
                     # `metric_key in derived`: a derived key is one with no
@@ -4900,8 +4897,8 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                             # (`reference.md` § Reporting strata; no `Member` is
                             # built for one, above), so its pool has no later
                             # consumer — popped and discarded here rather than
-                            # kept in a `pools_by_key`-shaped cache nothing would
-                            # ever read, and popped regardless so it cannot ride
+                            # carried into a per-(condition, step) cache nothing
+                            # would ever read, and popped regardless so it cannot ride
                             # into `by_block`/`run.yaml` the way a parent block's
                             # pool cannot ride into `aggregated`.
                             for level_metric in level_summary.values():

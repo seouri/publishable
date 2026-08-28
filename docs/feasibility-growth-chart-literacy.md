@@ -2274,8 +2274,11 @@ better number — and `compare: {to: constant, value: 0.5}` on that condition-sc
 a real corrected bound under a declared correction method, because core builds a correctable `Member`
 for it: `auroc` is derived under E2's declared `statistics.resample`, which is exactly the row of
 [the design's Decision 1 table](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)
-that gets the pool. The claim can be written directly on `step03_compare.auroc_count_only` rather than
-routed through a `summary`-step `Estimate`. What [the filed limitation](superpowers/spec-defects.md)
+that gets the pool. The claim could be written directly on that condition-scoped `auroc` — the one
+`growth_label`'s `aggregate` derives — rather than routed through a `summary`-step `Estimate`.
+`step03_compare.auroc_count_only`, which E2's `h1` names today, IS that `Estimate`: the config
+carries no `compare` block at all there, so the rewrite this finding describes is a change to the
+config, not a re-reading of it (see the dated re-check below, which measured exactly that). What [the filed limitation](superpowers/spec-defects.md)
 still costs a real claim its place in the family is narrower now: only a recorded column carried
 under both `weight_by` and `cluster_by` — E2 declares neither — still has no `Member` and still comes
 back `supported: null` on a bound.

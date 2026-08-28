@@ -29539,3 +29539,119 @@ def test_a_weighted_clustered_condition_metric_gets_no_member(tmp_path, capsys, 
     assert "ci95_corrected" in observed
     assert observed["ci95_corrected"] is None
     assert verdict["supported"] is None
+
+
+_CO_FAMILY_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        # Baseline records `i`, the swept arm records `2i`, so the paired
+        # per-unit DIFFERENCES are `i` — bit-identical to the baseline
+        # condition's own recorded column. That identity is the whole fixture:
+        # it makes the `vs_baseline` comparison member and the baseline's own
+        # condition member carry the same `delta` and the same raw interval,
+        # hence the same evidence ratio, hence a genuine tie in
+        # `correction.rank_family` that only `declaration_index` can break.
+        factor = 2.0 if cfg.parameters.analysis.method == "spearman" else 1.0
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": factor * float(i)}})
+        return {{"n_units": len(units)}}
+"""
+
+
+def test_a_comparison_and_a_condition_metric_in_one_family_rank_by_declaration_order(
+    tmp_path, capsys, monkeypatch
+):
+    """One hypothesis family holding BOTH kinds of member — a `vs_baseline`
+    comparison and a condition's own `compare: {to: constant}` metric — and the
+    Holm re-rank the design's amended Decision 5 permits itself.
+
+    This is the case nothing else in the suite instantiates: every other
+    constant-referenced test declares a pure-constant family, so the offset
+    `cli` applies when it appends the condition members
+    (`declaration_index=len(comparison_members) + i`) is never exercised
+    against a comparison member's own reassigned `0..n−1`. Mutating that offset
+    to a bare `= i` leaves `test_cli.py test_hypotheses.py test_correction.py`
+    fully green without this test.
+
+    **Why a tie is the only thing that can detect it.** `declaration_index` is
+    the THIRD element of `rank_family`'s key, so it decides nothing unless the
+    evidence ratios are equal — and a collision alone is still not enough,
+    because `sorted` is stable and `family_members_` is built in the
+    hypotheses' own declaration order. So the constant hypothesis is declared
+    FIRST here: correct indices (comparison 0, baseline's condition member 1)
+    put the comparison at rank 1, while the collided pair (both 0) falls back
+    to list order and puts the CONDITION member at rank 1. The two arms
+    therefore swap which hypothesis reads α/2 and which reads α, and the two
+    intervals differ, so the swap is visible rather than a no-op.
+
+    Both corrected bounds are computed from `stats.t_over_units` rather than
+    pinned as literals: the fixture makes the comparison's `diffs` and the
+    baseline column's values the same vector `0..39`, so the test knows exactly
+    what each member must be carrying and a member carrying anything else
+    cannot land on either number.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.stats import t_over_units
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _CO_FAMILY_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            # Declared first on purpose — see the docstring.
+            _constant_hypothesis("baseline_positive", "baseline", "pred"),
+            {
+                "id": "spearman_beats_baseline",
+                "kind": "confirmatory",
+                "statement": "spearman's per-unit values exceed the baseline's",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0,
+                "evaluate_on": "ci95_lower",
+            },
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    assert set(verdicts) == {"baseline_positive", "spearman_beats_baseline"}
+    # Both kinds really are counted into one family of two — otherwise the
+    # ranking below would be a fact about two families of one.
+    for verdict in verdicts.values():
+        assert verdict["family_size"] == 2
+        assert verdict["family"] == {"hypotheses": 2}
+        assert verdict["supported"] is True
+    values = [float(i) for i in range(40)]
+    raw = t_over_units(values)
+    tighter = t_over_units(values, confidence=1.0 - 0.05 / 2)
+    assert raw is not None and tighter is not None
+    assert (tighter.low, tighter.high) != (raw.low, raw.high)
+    # The two members carry the same evidence, so the tie is real: the
+    # comparison's raw interval is the baseline column's raw interval.
+    assert tuple(verdicts["baseline_positive"]["observed"]["ci95"]) == pytest.approx(
+        (raw.low, raw.high)
+    )
+    assert tuple(verdicts["spearman_beats_baseline"]["observed"]["ci95"]) == pytest.approx(
+        (raw.low, raw.high)
+    )
+    # Rank 1 (α/2, the tighter interval) goes to the COMPARISON member, whose
+    # declaration index is lower; the condition member, appended after the
+    # comparisons, takes rank 2 and α. Under the `= i` mutation these swap.
+    assert tuple(
+        verdicts["spearman_beats_baseline"]["observed"]["ci95_corrected"]
+    ) == pytest.approx((tighter.low, tighter.high))
+    assert tuple(verdicts["baseline_positive"]["observed"]["ci95_corrected"]) == pytest.approx(
+        (raw.low, raw.high)
+    )

@@ -420,11 +420,16 @@ def evaluate(
             # member was ever built. Now it fires only where there is
             # genuinely nothing to correct:
             #
-            # - the metric's own raw interval is `null` — a derived metric
-            #   that was never resampled, or a step that returned no numeric
+            # - the metric's own raw interval is `null` — a resample that
+            #   produced no usable interval (every draw degenerate, or a draw
+            #   count below the floor), or a step that returned no numeric
             #   value for it — so there is no evidence at all to rebuild a
             #   bound from, the same honest gap `W-STATS-CORRECTED-THIN`
-            #   reports for a family too large for its resample's draws.
+            #   reports for a family too large for its resample's draws. An
+            #   UNDECLARED `statistics.resample` is not what puts a metric
+            #   here: a derived metric is resampled whenever a `compute`
+            #   callable and a seed exist, declared or not, so it has a
+            #   percentile interval like any other.
             # - a recorded column under BOTH `weight_by` and `cluster_by`:
             #   its raw interval is `weighted_t_over_units_clustered`, and
             #   this build has no paired construction of that shape and no

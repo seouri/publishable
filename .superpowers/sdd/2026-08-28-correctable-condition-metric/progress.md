@@ -270,3 +270,42 @@ only — `spec-defects.md` and `hypotheses.py`'s comment. The design spec keeps 
 an appended correction here instead: retro-editing the record would destroy the evidence that the
 slice's own reasoning was wrong at the point it was written, which is the finding worth keeping.
 Cost if wrong: a reader of the spec meets row 4's false cause and must follow the pointer here.
+
+## Fix wave (2026-08-28) — correction appended for Decision 1's row 4, and what else the sweep found
+**This replaces the fourth row of Decision 1's table in
+`docs/superpowers/specs/2026-08-28-correctable-condition-metric-design.md`, and the sentence below
+that table beginning "The fourth row is not a refusal this slice makes."** Both are left standing in
+the spec as the dated record of what was decided; this is the correction.
+
+Row 4 reads "Derived, no declared `resample` → `derived_interval` is `None` → none at all → nothing
+to correct." **Its conclusion is right and its stated cause is false.** Core resamples a derived
+metric whenever a `compute` callable and a seed exist — `stats.summarize_step`'s derived branch gates
+on `compute is not None and seed is not None`, never on `resample_columns`, and `cli` builds a
+`resample_fns` closure for every key `aggregate` returned — so a derived metric with no declared
+`statistics.resample` has a `percentile_over_units` interval like any other resampled one, gets a
+pool, gets a `Member`, and is correctable. It is row 3, not row 4.
+
+What actually reaches the no-raw-interval state is **a resample that produced no usable interval** —
+every draw degenerate, or a draw count below the floor — or a metric that came back with no numeric
+value at all. T5's own row-4 test
+(`test_a_condition_metric_with_no_raw_interval_still_gets_no_member`) reaches it through
+`resample_draws: 0`, i.e. all-degenerate draws, which is why the test was right while the prose was
+wrong.
+
+**Live homes corrected:** `docs/superpowers/spec-defects.md` (the AMENDED paragraph's last sentence)
+and `src/publishable/hypotheses.py`'s new `corrected_unavailable` comment — both named in the
+fix-wave brief — **plus a third the brief did not name**: `src/publishable/cli.py`'s condition-member
+loop comment, third bullet, which read "anything else — a derived metric that was never resampled —
+has no raw interval either". The brief's sweep missed it because the phrase wraps across two comment
+lines; found by a newline-normalised sweep, which is CLAUDE.md's *a `grep -F` for a phrase cannot
+match the phrase once it wraps* paying for itself.
+
+**F1's judgment call, recorded because the brief asked for one.** `fdr_bh` is *not* a third exception
+alongside the two `Member`-shaped ones. It is a **prior condition on the whole promise**: `_level_for`
+returns `None` for it, so no member of any kind — a `vs_baseline` delta and a declared contrast
+included — carries a corrected bound under BH. `reference.md` now says the promise under `holm` or
+`bonferroni` and names BH separately as a property of the method rather than of the constant form,
+which is also what § Statistical reporting's four-reason list already said and what
+`experimental-designs.md` § Mistakes core prevents says from the other end ("`fdr_bh` adjusts the
+p-value and reports no interval"). Cost if wrong: a reader under BH expects a corrected bound the
+build has never produced for anyone.
