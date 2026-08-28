@@ -227,3 +227,14 @@ patterns built from the claim's meaning, found no fifth home and no hedging, re-
 mutation and confirmed the new test fails for the right reason, and verified the third no-Member
 path (`metric_key == "by"`) is real at `cli.py:4466`.
 Task 6: complete (commits a108433..cc3d2fc, 1 fix round, review clean; suite 3544 passed, 1 skipped, 2 xfailed; ruff, format and mypy clean)
+Task 7: complete (commit c6c51d6). Whole-branch re-run 3544 passed / 1 skipped / 2 xfailed; ruff,
+format and mypy clean. Oracle re-checked green on its own line. Both consistency passes clean over
+the four documents. Fifteen configs: 13 clean, e05c-fixed-n and e08-ordering each one
+W-DATA-CLUSTER-UNDECLARED (the retracted gap, expected). § Executability appended, not edited.
+Ruling: T7's E2 reading ACCEPTED and it corrects my brief — I wrote the brief expecting E2's
+hypothesis to become answerable on a bound, and it does not, because e02's h1 carries NO `compare`
+block at all: it names a `summary`-scope Estimate, so `verdict_rests_on: reported` and this slice's
+Member construction never governs it. The brief said a contrary reading would be "a finding about
+this slice"; it is instead a finding about the brief. What the slice actually buys E2 is an option:
+the condition-scoped `auroc` could now carry `compare: {to: constant, value: 0.5}` and get a real
+corrected bound. Cost if wrong: none to the code — the misreading was mine and is now recorded.
