@@ -238,3 +238,15 @@ Member construction never governs it. The brief said a contrary reading would be
 this slice"; it is instead a finding about the brief. What the slice actually buys E2 is an option:
 the condition-scoped `auroc` could now carry `compare: {to: constant, value: 0.5}` and get a real
 corrected bound. Cost if wrong: none to the code — the misreading was mine and is now recorded.
+Post-T7, outside the branch: the slice retired a refusal, and a sibling repo rested a decision on it.
+`2026-08-28-gcl-measurement/src/growth_chart/steps/step03_compare.py`'s module docstring justified
+routing E2's above-chance claim through a summary Estimate by asserting core "builds no correctable
+member for a condition's own value" — false as of T5, and that repo installs publishable editable off
+this working tree, so it was false against the code it runs. Rewritten to name both live routes and
+what each buys; the routing itself is unchanged. Swept both sibling repos and the analysis for other
+homes of the claim: none (step04_compare's `supported: null` is the absent-metric case, still true;
+the analysis's own entries already record the rewrite as deliberately not made). Committed there as
+e245d24; 179 tests green.
+Ruling: fixed rather than filed — a comment justifying a live decision with a retired refusal is the
+single most-repeated defect in this repo's record, and the sibling repo is where the next reader
+looks. Cost if wrong: a docstring rewrite in a scratch repo, revertible from one commit.
